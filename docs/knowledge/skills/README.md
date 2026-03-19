@@ -49,3 +49,10 @@ If your RAG uses Vectorize with **iam-platform**, upload the skill to that bucke
 ```
 
 Then trigger Re-index memory from the Agent dashboard (or wait for the next index run).
+
+## Systematic sync (no babysitting)
+
+To trigger uploads automatically so you don't have to remember:
+
+- **After every pull:** Use a git post-merge hook that runs `./scripts/populate-autorag.sh` when `docs/knowledge/` or `scripts/populate-autorag.sh` changed. See **docs/AUTORAG_SYNC.md** for the exact hook and cron options.
+- **On a schedule:** Add a daily cron job that runs `./scripts/populate-autorag.sh` from the repo root (see docs/AUTORAG_SYNC.md). Then open Cloudflare Dashboard → AI Search → iam-autorag → **Sync** when you want vectors updated.

@@ -14,5 +14,37 @@ Before touching either function, paste the full current code and wait for approv
 - NEVER use getAuthUser() to distinguish login vs connection flows
 
 ## Other Locked Files
-- wrangler.toml -- never modify without Sam confirming
-- wrangler.production.toml -- never modify without Sam confirming
+- Repo root `wrangler.production.toml` (main worker) -- never modify without Sam confirming
+- Main worker deploy never uses a repo-root `wrangler.toml` for production; use `wrangler.production.toml` only as configured in this project.
+
+## ABSOLUTE DEPLOY RULES — NEVER DEVIATE
+
+MCP server deploys:
+- Worker name: inneranimalmedia-mcp-server (EXACT — no variations)
+- Path in this monorepo: `inneranimalmedia-mcp-server/`
+- Command: `npx wrangler deploy` (from `inneranimalmedia-mcp-server/` repo root only)
+- `inneranimalmedia-mcp-server/wrangler.toml` field `name` MUST be `inneranimalmedia-mcp-server` — verify before every deploy
+- If `wrangler.toml` is missing or `name` is wrong: STOP and tell Sam
+
+Main worker deploys:
+- Worker name: inneranimalmedia
+- Repo: march1st-inneranimalmedia/ (this repo)
+- Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
+- Never use plain `npx wrangler deploy` at this repo root (wrong worker / config)
+
+FORBIDDEN ACTIONS — these require Sam's explicit approval in chat:
+- Creating any new Cloudflare Worker
+- Creating any new D1 database
+- Creating any new R2 bucket
+- Running `wrangler secret put` or touching any secret
+- Deploying any worker not named `inneranimalmedia` or `inneranimalmedia-mcp-server`
+
+If Cursor is about to create a new Cloudflare resource that did not exist before, STOP completely and ask Sam: "I'm about to create [X]. Is this intentional?"
+
+When Sam restricts scope to main worker + R2 only (no MCP deploy), only these are allowed:
+```bash
+./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/mcp.html --file=dashboard/mcp.html --content-type=text/html --remote -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/mcp-workflows-panel.js --file=static/dashboard/mcp-workflows-panel.js --content-type=application/javascript --remote -c wrangler.production.toml
+```
+Never overwrite `agent-sam/static/dashboard/agent/agent-dashboard.js` except from the Vite build output. There is no Worker named `inneranimalmedia-mcp` (that string may appear as a service id in D1 only).

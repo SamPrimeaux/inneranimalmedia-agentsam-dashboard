@@ -3,7 +3,7 @@
  * Protocol: JSON-RPC 2.0 over HTTP; response as SSE line "data: <JSON>".
  * Auth: Bearer token via env.MCP_AUTH_TOKEN.
  *
- * Usage: Copy to mcp-server/src/index.js (back up the current bundle first),
+ * Usage: Lives in inneranimalmedia-mcp-server/src/index.js (this repo).
  * or set main to this file in wrangler.jsonc. Add R2 binding for r2_write (see below).
  */
 
@@ -42,6 +42,41 @@ function textContent(text) {
   return { content: [{ type: 'text', text: String(text) }] };
 }
 
+/** Delegate to inneranimalmedia worker builtins only (X-IAM-MCP-Proxy avoids MCP loop). */
+async function invokeViaMainWorker(env, toolName, args) {
+  const base = (env.MAIN_WORKER_BASE_URL || 'https://inneranimalmedia.com').replace(/\/$/, '');
+  const token = env.MCP_AUTH_TOKEN;
+  if (!token) return { errorText: 'MCP_AUTH_TOKEN not configured for proxy' };
+  const res = await fetch(base + '/api/mcp/invoke', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: 'Bearer ' + token,
+      'X-IAM-MCP-Proxy': '1',
+    },
+    body: JSON.stringify({ tool_name: toolName, params: args || {} }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 404) {
+    const msg = String(data.error || '');
+    if (/not found|not available/i.test(msg)) return { notImplemented: true };
+    return { errorText: msg || 'invoke 404' };
+  }
+  if (!res.ok) {
+    return { errorText: String(data.error || data.detail || 'invoke failed ' + res.status) };
+  }
+  if (data.error) return { errorText: String(data.error) };
+  const r = data.result;
+  if (typeof r === 'string') return { result: r };
+  if (r == null) return { result: '' };
+  try {
+    return { result: JSON.stringify(r, null, 2) };
+  } catch (_) {
+    return { result: String(r) };
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -50,7 +85,7 @@ export default {
     if (path === '/') {
       return new Response(
         JSON.stringify({
-          service: 'mcp-server',
+          service: 'inneranimalmedia-mcp-server',
           status: 'ok',
           mcp_endpoint: MCP_ROUTE,
           auth: 'Bearer token required',
@@ -196,7 +231,16 @@ export default {
             result = textContent((data.stdout || '') + (data.stderr ? '\nSTDERR: ' + data.stderr : '') || '(no output)');
           }
         } else if (name === 'knowledge_search') {
-          result = textContent('knowledge_search: Implement via AI.autorag or Vectorize in main worker; MCP stub only.');
+          const proxied = await invokeViaMainWorker(env, name, args);
+          if (proxied.notImplemented) {
+            return Response.json({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32601, message: `Tool not implemented: ${name}` },
+            });
+          }
+          if (proxied.errorText) result = textContent(proxied.errorText);
+          else result = textContent(proxied.result ?? '');
         } else if (name === 'list_clients') {
           if (!env.DB) {
             result = textContent('Error: DB not configured');
@@ -230,7 +274,16 @@ export default {
             else result = textContent('Deploy: npx wrangler deploy (from repo root). Set secrets first.');
           }
         } else {
-          result = textContent('Unknown tool: ' + name);
+          const proxied = await invokeViaMainWorker(env, name, args);
+          if (proxied.notImplemented) {
+            return Response.json({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32601, message: `Tool not implemented: ${name}` },
+            });
+          }
+          if (proxied.errorText) result = textContent(proxied.errorText);
+          else result = textContent(proxied.result ?? '');
         }
       } catch (e) {
         result = textContent('Error: ' + (e?.message ?? String(e)));

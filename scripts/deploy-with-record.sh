@@ -23,8 +23,10 @@ if [[ -f "$ENV_FILE" ]]; then
   source "$ENV_FILE"
   set +a
 fi
+[[ -f "$HOME/IAM_SECRETS.env" ]] && set -a && source "$HOME/IAM_SECRETS.env" && set +a
 export TRIGGERED_BY
 export DEPLOYMENT_NOTES
+export DEPLOY_VERSION
 
 # Auto-increment ?v= in agent.html before R2 upload
 CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html | head -1 | grep -o '[0-9]*')
@@ -43,7 +45,7 @@ echo "Uploading source files for AI indexing..."
 find agent-dashboard/src -type f \( -name "*.jsx" -o -name "*.js" \) | while read -r file; do
   ./scripts/with-cloudflare-env.sh npx wrangler r2 object put "agent-sam/source/${file}" --file="${file}" --content-type="application/javascript" --config wrangler.production.toml --remote
 done
-find mcp-server/src -type f -name "*.js" | while read -r file; do
+find inneranimalmedia-mcp-server/src -type f -name "*.js" | while read -r file; do
   ./scripts/with-cloudflare-env.sh npx wrangler r2 object put "agent-sam/source/${file}" --file="${file}" --content-type="application/javascript" --config wrangler.production.toml --remote
 done
 find docs -type f -name "*.md" 2>/dev/null | while read -r file; do
@@ -63,3 +65,17 @@ DEPLOY_SECONDS=$((DEPLOY_END - DEPLOY_START))
 export DEPLOY_SECONDS
 echo "Deploy finished in ${DEPLOY_SECONDS}s. Recording in D1..."
 ./scripts/post-deploy-record.sh
+
+# Also log to deployments table (Overview "Recent Deployments" widget) when token is set
+if [[ -n "$DEPLOY_TRACKING_TOKEN" ]]; then
+  GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  VERSION="${DEPLOY_VERSION:-deploy-$(date +%s)}"
+  DESC="${DEPLOYMENT_NOTES:-${TRIGGERED_BY:-npm run deploy}}"
+  DESC_ESC="${DESC//\"/\\\"}"
+  VER_ESC="${VERSION//\"/\\\"}"
+  curl -s -X POST "https://inneranimalmedia.com/api/deployments/log" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $DEPLOY_TRACKING_TOKEN" \
+    -d "{\"version\":\"$VER_ESC\",\"description\":\"$DESC_ESC\",\"git_hash\":\"$GIT_HASH\",\"timestamp\":\"$TIMESTAMP\",\"status\":\"success\",\"deployed_by\":\"${TRIGGERED_BY:-deploy-with-record}\",\"environment\":\"production\",\"duration_seconds\":$DEPLOY_SECONDS}" > /dev/null 2>&1 && echo "Logged to deployments (Overview widget)." || true
+fi

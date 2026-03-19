@@ -15,7 +15,7 @@ This repo is the single source of truth for the **Agent Sam** dashboard, the Clo
 | `time-tracking-dashboard/` | Vite + React time-tracking UI. Build output uploaded to R2 `static/dashboard/time-tracking/`. |
 | `public-homepage/` | Homepage source. **R2 bucket:** `inneranimalmedia-assets`, **key:** `index-v3.html`. Served at `/` and `/index.html`. See `public-homepage/README.md` for upload commands. |
 | `public-pages/` | Marketing pages: `about.html`, `contact.html`, `pricing.html`, `process.html`. Served from **inneranimalmedia-assets** via worker `PUBLIC_ROUTES`. URLs: `/about`, `/contact`, `/services` (pricing), `/work` (process). Upload to R2 **inneranimalmedia-assets** with same filenames; no worker deploy needed for content-only changes. |
-| `mcp-server/` | InnerAnimalMedia MCP server source. Deploys as a separate Cloudflare Worker. Endpoint: `https://mcp.inneranimalmedia.com/mcp`. Protocol 2024-11-05. Cursor config: `.cursor/mcp.json` (server key `inneranimalmedia`). See **MCP and terminal** below. |
+| `inneranimalmedia-mcp-server/` | InnerAnimalMedia MCP server source. Worker name **inneranimalmedia-mcp-server** (see `wrangler.toml`). Endpoint: `https://mcp.inneranimalmedia.com/mcp`. Protocol 2024-11-05. Cursor config: `.cursor/mcp.json` (server key `inneranimalmedia`). See **MCP and terminal** below. |
 | `server/` | Terminal server (Node + node-pty, WebSocket). Used for in-browser terminal and Agent tool execution. Run locally with `./server/run-terminal-server.sh`; production may use a tunnel (see `server/tunnel.yml.example`). Not part of the main worker deploy. |
 | `scripts/` | Deploy, R2 uploads, env loading, overnight pipeline. Key scripts below. |
 | `migrations/` | D1 SQL migrations. Apply via wrangler when schema changes. |
@@ -66,7 +66,7 @@ URLs: `https://inneranimalmedia.com/dashboard/<name>` (e.g. `/dashboard/agent`, 
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
   ```
   Success: SSE output with `"serverInfo":{"name":"InnerAnimalMedia MCP","version":"1.0.0"}` and `"protocolVersion":"2024-11-05"`.
-- **Deploy MCP:** From `mcp-server/`: `npx wrangler deploy` (separate from main worker). Config: `mcp-server/wrangler.jsonc`.
+- **Deploy MCP:** From `inneranimalmedia-mcp-server/`: `npx wrangler deploy` (separate from main worker). Config: `inneranimalmedia-mcp-server/wrangler.toml` (`name = "inneranimalmedia-mcp-server"`).
 - **Reference:** `docs/MCP_CURSOR_TERMINAL_SYNC.md` and `.cursor/rules/mcp-reference.mdc`.
 
 ### Terminal server (PTY)

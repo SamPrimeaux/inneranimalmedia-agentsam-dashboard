@@ -6,7 +6,7 @@ The project is configured to use the Inner Animal MCP server from Cursor with Be
 
 - **Config:** `.cursor/mcp.json` (gitignored; copy from `.cursor/mcp.json.example` and set your token).
 - **Server:** `https://mcp.inneranimalmedia.com/mcp`
-- **Auth:** `Authorization: Bearer <MCP_AUTH_TOKEN>`. The same token is set as `MCP_AUTH_TOKEN` on the main worker and the mcp-server worker.
+- **Auth:** `Authorization: Bearer <MCP_AUTH_TOKEN>`. The same token is set as `MCP_AUTH_TOKEN` on the main worker and the **inneranimalmedia-mcp-server** worker.
 
 After changing `.cursor/mcp.json`, fully restart Cursor so MCP servers reload.
 

@@ -8,7 +8,7 @@ BUCKET="autorag"
 WRANGLER_CMD="./scripts/with-cloudflare-env.sh npx wrangler r2 object put"
 REMOTE="-c wrangler.production.toml --remote"
 
-echo "Populating autorag bucket with 4 knowledge files..."
+echo "Populating autorag bucket with knowledge files..."
 
 # 1. Worker architecture
 cat > /tmp/worker-core.md << 'EOF'
@@ -140,8 +140,38 @@ EOF
 
 $WRANGLER_CMD $BUCKET/context/active-priorities.md --file=/tmp/active-priorities.md --content-type=text/markdown $REMOTE
 
+# 5. Frontend design skill (from repo)
+if [ -f "docs/knowledge/skills/frontend-design.md" ]; then
+  $WRANGLER_CMD $BUCKET/knowledge/skills/frontend-design.md --file=docs/knowledge/skills/frontend-design.md --content-type=text/markdown $REMOTE
+  echo "Uploaded frontend-design skill"
+fi
+
+# 6. Skill creator skill (from repo)
+if [ -f "docs/knowledge/skills/skill-creator.md" ]; then
+  $WRANGLER_CMD $BUCKET/knowledge/skills/skill-creator.md --file=docs/knowledge/skills/skill-creator.md --content-type=text/markdown $REMOTE
+  echo "Uploaded skill-creator skill"
+fi
+
+# 7. Web artifacts builder skill (from repo)
+if [ -f "docs/knowledge/skills/web-artifacts-builder.md" ]; then
+  $WRANGLER_CMD $BUCKET/knowledge/skills/web-artifacts-builder.md --file=docs/knowledge/skills/web-artifacts-builder.md --content-type=text/markdown $REMOTE
+  echo "Uploaded web-artifacts-builder skill"
+fi
+
+# 8. Webapp testing skill (from repo)
+if [ -f "docs/knowledge/skills/webapp-testing.md" ]; then
+  $WRANGLER_CMD $BUCKET/knowledge/skills/webapp-testing.md --file=docs/knowledge/skills/webapp-testing.md --content-type=text/markdown $REMOTE
+  echo "Uploaded webapp-testing skill"
+fi
+
+# 9. Theme factory skill (from repo)
+if [ -f "docs/knowledge/skills/theme-factory.md" ]; then
+  $WRANGLER_CMD $BUCKET/knowledge/skills/theme-factory.md --file=docs/knowledge/skills/theme-factory.md --content-type=text/markdown $REMOTE
+  echo "Uploaded theme-factory skill"
+fi
+
 echo ""
-echo "Uploaded 4 knowledge files to autorag bucket"
+echo "Uploaded knowledge files to autorag bucket"
 echo ""
 echo "Next: Go to AI Search dashboard -> iam-autorag -> Sync"
 echo "Then: deploy approved"

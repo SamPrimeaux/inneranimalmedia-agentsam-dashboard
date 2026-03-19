@@ -1,0 +1,2092 @@
+<!-- CMS Editor: shell-integrated, R2/D1-backed. Uses /api/cms/deployments, /api/cms/assets -->
+<style>
+    .cms-editor {
+      --primary: var(--accent);
+      --primary-hover: var(--accent-hover);
+      --surface-base: var(--bg-canvas);
+      --surface-elevated: var(--bg-elevated);
+      --text-primary: var(--text-primary);
+      --text-secondary: var(--text-secondary);
+      --text-inverse: #fff;
+      --border-subtle: var(--border);
+      --border-default: var(--border);
+      --accent: var(--accent);
+      --danger: var(--error);
+      --success: var(--success);
+      --warning: var(--warning);
+    }
+
+    .cms-editor {
+      display: flex;
+      flex-direction: column;
+      height: calc(100dvh - 120px);
+      height: calc(100vh - 120px);
+      min-height: 360px;
+      max-width: 100%;
+      margin: 0 auto;
+      box-sizing: border-box;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    /* Top Bar */
+    .editor-topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--surface-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0.625rem 1rem;
+      flex-shrink: 0;
+    }
+
+    .topbar-row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .topbar-group {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .topbar-select {
+      padding: 0.5rem 0.75rem;
+      background: var(--surface-base);
+      border: 1px solid var(--border-default);
+      border-radius: 0.375rem;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      min-width: 140px;
+    }
+
+    .topbar-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-left: auto;
+    }
+
+    /* Status Badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.375rem 0.75rem;
+      background: var(--surface-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.375rem;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: var(--text-secondary);
+    }
+
+    .status-dot.saved {
+      background: var(--success);
+    }
+
+    .status-dot.unsaved {
+      background: var(--warning);
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--text-inverse);
+    }
+
+    .btn-primary:active {
+      background: var(--primary-hover);
+    }
+
+    .btn-secondary {
+      background: var(--surface-base);
+      color: var(--text-primary);
+      border: 1px solid var(--border-default);
+    }
+
+    .btn-secondary:active {
+      background: var(--surface-elevated);
+    }
+
+    .btn-icon {
+      padding: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 2rem;
+    }
+
+    .btn-icon:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Main Layout */
+    .editor-main {
+      flex: 1 1 0;
+      min-height: 0;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Panels */
+    .editor-panel {
+      width: 0;
+      background: var(--surface-base);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.3s ease;
+    }
+
+    .editor-panel.open {
+      width: 320px;
+    }
+
+    .panel-right {
+      border-right: none;
+      border-left: 1px solid var(--border-subtle);
+    }
+
+    .panel-header {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface-elevated);
+    }
+
+    .panel-title {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .cms-assets-block {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .cms-assets-block h4 {
+      margin: 0 0 0.75rem 0;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .cms-assets-tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .cms-assets-tab {
+      padding: 0.375rem 0.75rem;
+      font-size: 0.75rem;
+      border: 1px solid var(--border-default);
+      background: var(--surface-elevated);
+      color: var(--text-secondary);
+      border-radius: 0.25rem;
+      cursor: pointer;
+    }
+
+    .cms-assets-tab.active {
+      background: var(--primary);
+      color: var(--text-inverse);
+      border-color: var(--primary);
+    }
+
+    .cms-assets-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.5rem;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .cms-asset-thumb {
+      aspect-ratio: 1;
+      border-radius: 0.375rem;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+      background: var(--surface-elevated);
+      cursor: pointer;
+    }
+
+    .cms-asset-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .cms-asset-thumb .no-img {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      color: var(--text-secondary);
+    }
+
+    .cms-upload-zone {
+      border: 2px dashed var(--border-default);
+      border-radius: 0.5rem;
+      padding: 1rem;
+      text-align: center;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      margin-bottom: 0.75rem;
+    }
+
+    .cms-upload-zone:hover {
+      border-color: var(--primary);
+      color: var(--text-primary);
+    }
+
+    .panel-close {
+      width: 1.75rem;
+      height: 1.75rem;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 1.25rem;
+      cursor: pointer;
+      border-radius: 0.25rem;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .panel-close:active {
+      background: var(--border-subtle);
+    }
+
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Canvas */
+    .editor-canvas {
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      background: #94A3B8;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .canvas-wrapper {
+      min-height: min(100%, 400px);
+      padding: 1rem;
+      display: flex;
+      justify-content: center;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .canvas-page {
+      width: 100%;
+      max-width: 900px;
+      min-height: 400px;
+      background: white;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+      box-sizing: border-box;
+    }
+
+    .canvas-empty {
+      padding: 4rem 2rem;
+      text-align: center;
+      color: #64748B;
+    }
+
+    .canvas-empty-icon {
+      width: 4rem;
+      height: 4rem;
+      margin: 0 auto 1.5rem;
+      border: 3px dashed currentColor;
+      border-radius: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      opacity: 0.5;
+    }
+
+    .canvas-empty h3 {
+      margin: 0 0 0.5rem 0;
+      color: #0F172A;
+      font-size: 1.25rem;
+    }
+
+    .canvas-empty p {
+      margin: 0;
+      font-size: 0.875rem;
+    }
+
+    /* Section */
+    .canvas-section {
+      position: relative;
+      margin: 1rem;
+      padding: 2rem 1rem;
+      border: 2px solid transparent;
+      border-radius: 0.5rem;
+      transition: all 0.2s;
+    }
+
+    .canvas-section:hover {
+      border-color: #CBD5E1;
+      background: rgba(148, 163, 184, 0.02);
+    }
+
+    .canvas-section.selected {
+      border-color: var(--primary);
+      background: rgba(79, 70, 229, 0.02);
+    }
+
+    .section-controls {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      display: flex;
+      gap: 0.25rem;
+      opacity: 0;
+      transition: opacity 0.2s;
+      background: white;
+      padding: 0.25rem;
+      border-radius: 0.375rem;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .canvas-section:hover .section-controls {
+      opacity: 1;
+    }
+
+    .control-btn {
+      width: 2rem;
+      height: 2rem;
+      background: white;
+      border: 1px solid #CBD5E1;
+      border-radius: 0.25rem;
+      color: #475569;
+      font-size: 0.875rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .control-btn:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .control-btn.danger:hover {
+      background: var(--danger);
+      border-color: var(--danger);
+    }
+
+    .section-label {
+      display: inline-block;
+      margin-bottom: 0.5rem;
+      padding: 0.25rem 0.5rem;
+      background: var(--surface-elevated);
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      border-radius: 0.25rem;
+    }
+
+    /* Template Search */
+    .template-search {
+      margin-bottom: 1rem;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 0.625rem;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 0.375rem;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+    }
+
+    /* Template Category */
+    .template-category {
+      margin-bottom: 1.5rem;
+    }
+
+    .category-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      background: var(--surface-elevated);
+      border-radius: 0.5rem;
+      cursor: pointer;
+      margin-bottom: 0.75rem;
+      transition: background 0.2s;
+    }
+
+    .category-header:active {
+      background: var(--border-subtle);
+    }
+
+    .category-label {
+      flex: 1;
+      font-weight: 500;
+      font-size: 0.875rem;
+    }
+
+    .category-count {
+      font-size: 0.75rem;
+      padding: 0.125rem 0.5rem;
+      background: rgba(79, 70, 229, 0.1);
+      color: var(--primary);
+      border-radius: 999px;
+    }
+
+    .category-arrow {
+      font-size: 0.75rem;
+      transition: transform 0.2s;
+    }
+
+    .template-category.collapsed .category-arrow {
+      transform: rotate(-90deg);
+    }
+
+    .template-grid {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .template-category.collapsed .template-grid {
+      display: none;
+    }
+
+    /* Template Card */
+    .template-card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 0.5rem;
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .template-card:hover {
+      border-color: var(--border-default);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+
+    .template-card:active {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(79,70,229,0.2);
+    }
+
+    .template-preview {
+      aspect-ratio: 16/9;
+      background: linear-gradient(135deg, var(--surface-base) 0%, var(--surface-elevated) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--border-default);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .template-info {
+      padding: 0.75rem;
+    }
+
+    .template-name {
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      color: var(--text-primary);
+    }
+
+    .template-add {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--primary);
+      color: var(--text-inverse);
+      border: none;
+      border-radius: 0.375rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .template-add:active {
+      background: var(--primary-hover);
+    }
+
+    /* Settings Form */
+    .settings-empty {
+      padding: 3rem 1.5rem;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .settings-form {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .form-label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .form-input,
+    .form-textarea,
+    .form-select {
+      width: 100%;
+      padding: 0.625rem;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 0.375rem;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      font-family: inherit;
+    }
+
+    .form-textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+
+    /* Panel Toggles (Mobile) */
+    .panel-toggles {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 90;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .toggle-btn {
+      width: 3.5rem;
+      height: 3.5rem;
+      background: var(--accent, var(--primary));
+      color: var(--text-inverse);
+      border: none;
+      border-radius: 50%;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      transition: all 0.2s;
+    }
+
+    .toggle-btn:active {
+      transform: scale(0.95);
+    }
+
+    .toggle-icon {
+      font-size: 1.25rem;
+      line-height: 1;
+      transition: transform 0.3s ease;
+    }
+
+    .toggle-btn.active .toggle-icon {
+      transform: rotate(45deg);
+    }
+
+    .toggle-label {
+      font-size: 0.625rem;
+      margin-top: 0.125rem;
+      font-weight: 500;
+    }
+
+    /* History Modal */
+    .history-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: none;
+    }
+
+    .history-modal.open {
+      display: flex;
+    }
+
+    .modal-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-content {
+      position: relative;
+      margin: auto;
+      background: var(--surface-base);
+      border-radius: 0.5rem;
+      max-width: 90%;
+      width: 600px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .modal-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .modal-close {
+      width: 2rem;
+      height: 2rem;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 1.5rem;
+      cursor: pointer;
+      border-radius: 0.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-close:hover {
+      background: var(--surface-elevated);
+    }
+
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+    }
+
+    .history-table {
+      width: 100%;
+      font-size: 0.875rem;
+    }
+
+    .history-table th {
+      text-align: left;
+      padding: 0.5rem;
+      border-bottom: 2px solid var(--border-subtle);
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .history-table td {
+      padding: 0.75rem 0.5rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .history-badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      background: var(--surface-elevated);
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    .btn-small {
+      padding: 0.375rem 0.75rem;
+      font-size: 0.75rem;
+      border: none;
+      border-radius: 0.25rem;
+      background: var(--primary);
+      color: var(--text-inverse);
+      cursor: pointer;
+    }
+
+    .btn-small:hover {
+      background: var(--primary-hover);
+    }
+
+    /* Preview Modal */
+    .preview-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: none;
+    }
+
+    .preview-modal.open {
+      display: flex;
+    }
+
+    .preview-modal .modal-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+    }
+
+    .preview-modal .modal-content {
+      position: relative;
+      margin: auto;
+      background: var(--surface-base);
+      border-radius: 0.5rem;
+      width: 95%;
+      max-width: 900px;
+      height: 85vh;
+      max-height: 800px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .preview-toolbar {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
+    }
+
+    .preview-device-btns {
+      display: flex;
+      gap: 0.25rem;
+    }
+
+    .preview-device-btn {
+      padding: 0.375rem 0.75rem;
+      font-size: 0.75rem;
+      border: 1px solid var(--border-default);
+      background: var(--surface-elevated);
+      color: var(--text-primary);
+      border-radius: 0.25rem;
+      cursor: pointer;
+    }
+
+    .preview-device-btn.active {
+      background: var(--primary);
+      color: var(--text-inverse);
+      border-color: var(--primary);
+    }
+
+    .preview-url-wrap {
+      flex: 1;
+      min-width: 180px;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .preview-url-input {
+      flex: 1;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8125rem;
+      border: 1px solid var(--border-default);
+      border-radius: 0.375rem;
+      background: var(--surface-elevated);
+      color: var(--text-primary);
+    }
+
+    .preview-frame-wrap {
+      flex: 1;
+      min-height: 0;
+      padding: 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      background: #1e293b;
+    }
+
+    .preview-frame-wrap.device-mobile {
+      padding: 1rem;
+    }
+
+    .preview-frame-wrap.device-mobile .preview-iframe {
+      width: 375px;
+      max-width: 100%;
+      height: 667px;
+      border-radius: 24px;
+      border: 8px solid #0f172a;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+
+    .preview-frame-wrap.device-tablet .preview-iframe {
+      width: 768px;
+      max-width: 100%;
+      height: 1024px;
+      max-height: 80vh;
+      border-radius: 12px;
+      border: 4px solid #0f172a;
+    }
+
+    .preview-frame-wrap.device-desktop .preview-iframe {
+      width: 100%;
+      height: 100%;
+      min-height: 400px;
+      border-radius: 8px;
+    }
+
+    .preview-iframe {
+      background: white;
+      border: none;
+    }
+
+    @media (max-width: 767px) {
+      .preview-modal .modal-content {
+        width: 100%;
+        height: 95vh;
+        max-height: none;
+      }
+
+      .preview-frame-wrap.device-mobile .preview-iframe {
+        width: 100%;
+        height: 100%;
+        min-height: 500px;
+      }
+    }
+
+    /* Responsive - Tablet */
+    @media (min-width: 768px) {
+      .editor-topbar {
+        padding: 1rem 1.5rem;
+      }
+
+      .topbar-row {
+        flex-wrap: nowrap;
+      }
+
+      .panel-toggles {
+        display: none;
+      }
+
+      .editor-panel {
+        position: relative;
+        width: 280px;
+      }
+
+      .editor-panel.open {
+        width: 280px;
+      }
+
+      .canvas-wrapper {
+        padding: 2rem;
+      }
+
+      .canvas-section {
+        padding: 2rem;
+      }
+    }
+
+    /* Responsive - Desktop */
+    @media (min-width: 1024px) {
+      .editor-panel {
+        width: 300px;
+      }
+
+      .editor-panel.open {
+        width: 300px;
+      }
+
+      .canvas-wrapper {
+        padding: 3rem;
+      }
+    }
+
+    /* Responsive - Large */
+    @media (min-width: 1440px) {
+      .editor-panel {
+        width: 320px;
+      }
+
+      .editor-panel.open {
+        width: 320px;
+      }
+    }
+
+    /* Mobile Specific - prioritized */
+    @media (max-width: 767px) {
+      .cms-editor {
+        min-height: 300px;
+        height: calc(100dvh - 100px);
+        height: calc(100vh - 100px);
+      }
+
+      .editor-topbar {
+        padding: 0.5rem 0.75rem;
+        flex-shrink: 0;
+      }
+
+      .topbar-row {
+        gap: 0.5rem;
+      }
+
+      .btn {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.8125rem;
+        min-height: 40px;
+      }
+
+      .btn-icon {
+        min-width: 40px;
+        min-height: 40px;
+      }
+
+      .topbar-select {
+        font-size: 0.8125rem;
+        min-width: 110px;
+        min-height: 40px;
+      }
+
+      .status-badge {
+        font-size: 0.7rem;
+      }
+
+      .canvas-wrapper {
+        padding: 0.5rem;
+        min-height: 280px;
+      }
+
+      .canvas-page {
+        box-shadow: none;
+        min-height: 280px;
+      }
+
+      .canvas-section {
+        margin: 0.5rem;
+        padding: 1.25rem 0.75rem;
+      }
+
+      .section-controls {
+        opacity: 1;
+        top: 0.25rem;
+        right: 0.25rem;
+      }
+
+      .control-btn {
+        min-width: 36px;
+        min-height: 36px;
+      }
+
+      .editor-panel {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        max-width: min(90vw, 320px);
+        transform: translateX(-100%);
+        z-index: 150;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
+      }
+
+      .editor-panel.open {
+        transform: translateX(0);
+        width: min(90vw, 320px);
+      }
+
+      .panel-right {
+        left: auto;
+        right: 0;
+        transform: translateX(100%);
+      }
+
+      .panel-right.open {
+        transform: translateX(0);
+      }
+
+      .panel-close {
+        display: flex;
+      }
+
+      .panel-toggles {
+        bottom: max(1rem, env(safe-area-inset-bottom));
+      }
+    }
+  </style>
+
+<div class="cms-editor">
+  
+  <!-- Top Bar -->
+  <div class="editor-topbar">
+    <div class="topbar-row">
+      <!-- Page Selector -->
+      <div class="topbar-group">
+        <select class="topbar-select" id="page-select">
+          <option value="">Select Page...</option>
+          <option value="index">/ (Home)</option>
+          <option value="work">/work</option>
+          <option value="about">/about</option>
+          <option value="services">/services</option>
+          <option value="contact">/contact</option>
+          <option value="privacy">/privacy</option>
+          <option value="terms">/terms</option>
+          <option value="pricing">/pricing</option>
+        </select>
+
+        <div class="status-badge">
+          <span class="status-dot saved"></span>
+          <span id="status-text">Saved</span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="topbar-actions">
+        <!-- History Controls -->
+        <div class="topbar-group">
+          <button class="btn btn-icon btn-secondary" id="undo-btn" disabled title="Undo">
+            &#8630;
+          </button>
+          <button class="btn btn-icon btn-secondary" id="redo-btn" disabled title="Redo">
+            &#8631;
+          </button>
+          <button class="btn btn-icon btn-secondary" id="history-btn" title="View History">
+            &#8942;
+          </button>
+        </div>
+
+        <!-- Main Actions -->
+        <button class="btn btn-secondary" id="preview-btn">Preview</button>
+        <button class="btn btn-secondary" id="save-btn">Save Draft</button>
+        <button class="btn btn-primary" id="publish-btn">Publish</button>
+        <button class="btn btn-primary" id="deploy-live-btn" style="background: var(--success);" title="Deploy to inneranimalmedia.com (ASSETS)">Deploy to live</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Editor -->
+  <div class="editor-main">
+    
+    <!-- Left Panel - Templates -->
+    <div class="editor-panel" id="templates-panel">
+      <div class="panel-header">
+        <h3 class="panel-title">Add Sections</h3>
+        <button class="panel-close" id="close-templates">&times;</button>
+      </div>
+
+      <div class="panel-content">
+        <div class="template-search">
+          <input type="text" class="search-input" placeholder="Search sections..." id="template-search">
+        </div>
+
+        <!-- Hero Sections -->
+        <div class="template-category" data-category="hero">
+          <div class="category-header">
+            <span class="category-label">Hero Sections</span>
+            <span class="category-count">2</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="hero-full">
+              <div class="template-preview">H1</div>
+              <div class="template-info">
+                <div class="template-name">Full Screen Hero</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+            <div class="template-card" data-template="hero-split">
+              <div class="template-preview">H2</div>
+              <div class="template-info">
+                <div class="template-name">Split Hero</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Features -->
+        <div class="template-category" data-category="features">
+          <div class="category-header">
+            <span class="category-label">Features</span>
+            <span class="category-count">2</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="features-grid">
+              <div class="template-preview">F1</div>
+              <div class="template-info">
+                <div class="template-name">3 Column Grid</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+            <div class="template-card" data-template="features-list">
+              <div class="template-preview">F2</div>
+              <div class="template-info">
+                <div class="template-name">Icon List</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="template-category" data-category="cta">
+          <div class="category-header">
+            <span class="category-label">Call to Action</span>
+            <span class="category-count">2</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="cta-centered">
+              <div class="template-preview">C1</div>
+              <div class="template-info">
+                <div class="template-name">Centered CTA</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+            <div class="template-card" data-template="cta-side">
+              <div class="template-preview">C2</div>
+              <div class="template-info">
+                <div class="template-name">Side by Side</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Testimonials -->
+        <div class="template-category" data-category="testimonials">
+          <div class="category-header">
+            <span class="category-label">Testimonials</span>
+            <span class="category-count">1</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="testimonials-grid">
+              <div class="template-preview">T</div>
+              <div class="template-info">
+                <div class="template-name">Card Grid</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gallery -->
+        <div class="template-category" data-category="gallery">
+          <div class="category-header">
+            <span class="category-label">Gallery</span>
+            <span class="category-count">2</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="gallery-grid">
+              <div class="template-preview">G1</div>
+              <div class="template-info">
+                <div class="template-name">Image Grid</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+            <div class="template-card" data-template="gallery-banner">
+              <div class="template-preview">G2</div>
+              <div class="template-info">
+                <div class="template-name">Full Width Banner</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text -->
+        <div class="template-category" data-category="text">
+          <div class="category-header">
+            <span class="category-label">Text Content</span>
+            <span class="category-count">2</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="text-rich">
+              <div class="template-preview">TXT</div>
+              <div class="template-info">
+                <div class="template-name">Rich Content</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+            <div class="template-card" data-template="text-columns">
+              <div class="template-preview">T2</div>
+              <div class="template-info">
+                <div class="template-name">Two Column</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Forms -->
+        <div class="template-category" data-category="form">
+          <div class="category-header">
+            <span class="category-label">Forms</span>
+            <span class="category-count">1</span>
+            <span class="category-arrow">&#9662;</span>
+          </div>
+          <div class="template-grid">
+            <div class="template-card" data-template="form-contact">
+              <div class="template-preview">FORM</div>
+              <div class="template-info">
+                <div class="template-name">Contact Form</div>
+                <button class="template-add">Add to Page</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="editor-canvas">
+      <div class="canvas-wrapper">
+        <div class="canvas-page" id="canvas-page">
+          
+          <div class="canvas-empty">
+            <div class="canvas-empty-icon">+</div>
+            <h3>Start Building Your Page</h3>
+            <p>Add sections from the library to begin</p>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel - Settings -->
+    <div class="editor-panel panel-right" id="settings-panel">
+      <div class="panel-header">
+        <h3 class="panel-title">Settings</h3>
+        <button class="panel-close" id="close-settings">&times;</button>
+      </div>
+
+      <div class="panel-content">
+        
+        <div class="settings-empty" id="settings-empty">
+          Select a section to edit its settings
+        </div>
+
+        <div class="settings-form" id="settings-form" style="display: none;">
+          <!-- Dynamic settings will be inserted here -->
+        </div>
+
+        <!-- Page Settings -->
+        <div class="settings-form" id="page-settings">
+          <h4 style="margin: 0 0 1rem 0; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Page Settings</h4>
+          
+          <div class="form-group">
+            <label class="form-label">Page Title</label>
+            <input type="text" class="form-input" id="page-title" placeholder="Page title">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Meta Description</label>
+            <textarea class="form-textarea" id="page-description" placeholder="SEO description"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Page URL</label>
+            <input type="text" class="form-input" id="page-url" placeholder="/about">
+          </div>
+          <p style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Deploy to live writes to inneranimalmedia-assets (inneranimalmedia.com).</p>
+        </div>
+
+        <!-- Assets (cms_assets + r2_objects) -->
+        <div class="cms-assets-block">
+          <h4>Assets</h4>
+          <div class="cms-assets-tabs">
+            <button type="button" class="cms-assets-tab active" data-tab="cms">CMS</button>
+            <button type="button" class="cms-assets-tab" data-tab="r2">R2</button>
+            <button type="button" class="cms-assets-tab" data-tab="iam">IAM</button>
+          </div>
+          <div id="cms-assets-pane">
+            <div class="cms-upload-zone" id="cms-upload-zone">Drop or click to upload</div>
+            <input type="file" id="cms-file-input" accept="image/*,.pdf,.svg,.webp" style="display:none">
+            <div class="cms-assets-grid" id="cms-assets-grid"></div>
+          </div>
+          <div id="r2-assets-pane" style="display:none;">
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin: 0 0 0.5rem 0;">From agent-sam (r2_objects). <a href="/dashboard/cloud" target="_blank" style="color: var(--primary);">Cloud</a> to inventory.</p>
+            <button type="button" class="btn btn-secondary" id="r2-assets-load" style="font-size: 0.75rem; padding: 0.375rem 0.75rem;">Load R2 assets</button>
+            <div class="cms-assets-grid" id="r2-assets-grid" style="margin-top: 0.5rem;"></div>
+          </div>
+          <div id="iam-assets-pane" style="display:none;">
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin: 0 0 0.5rem 0;">inneranimalmedia-assets (live site). Use on inneranimalmedia.com.</p>
+            <input type="text" id="iam-prefix" placeholder="Prefix e.g. images/" class="form-input" style="font-size: 0.75rem; padding: 0.375rem; margin-bottom: 0.5rem;">
+            <button type="button" class="btn btn-secondary" id="iam-assets-load" style="font-size: 0.75rem; padding: 0.375rem 0.75rem;">Load IAM assets</button>
+            <div class="cms-upload-zone" id="iam-upload-zone" style="margin-top: 0.5rem;">Upload to IAM</div>
+            <input type="file" id="iam-file-input" accept="image/*,.pdf,.svg,.webp,.html,.css,.js" style="display:none">
+            <input type="text" id="iam-upload-path" placeholder="Path e.g. images/hero.jpg" class="form-input" style="font-size: 0.75rem; padding: 0.375rem; margin-top: 0.5rem;">
+            <div class="cms-assets-grid" id="iam-assets-grid" style="margin-top: 0.5rem;"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Mobile Panel Toggles -->
+  <div class="panel-toggles">
+    <button class="toggle-btn" id="toggle-templates">
+      <span class="toggle-icon">+</span>
+      <span class="toggle-label">Sections</span>
+    </button>
+    <button class="toggle-btn" id="toggle-settings">
+      <span class="toggle-icon">&#9881;</span>
+      <span class="toggle-label">Settings</span>
+    </button>
+  </div>
+
+</div>
+
+<!-- History Modal -->
+<div class="history-modal" id="history-modal">
+  <div class="modal-overlay" id="history-overlay"></div>
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title">Deployment History (24 Hours)</h3>
+      <button class="modal-close" id="close-history">&times;</button>
+    </div>
+    <div class="modal-body">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Action</th>
+            <th>User</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="history-list">
+          <tr><td colspan="4" style="color: var(--text-secondary);">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Preview Modal -->
+<div class="preview-modal" id="preview-modal">
+  <div class="modal-overlay" id="preview-overlay"></div>
+  <div class="modal-content">
+    <div class="preview-toolbar">
+      <div class="preview-device-btns">
+        <button type="button" class="preview-device-btn active" data-device="mobile">Mobile</button>
+        <button type="button" class="preview-device-btn" data-device="tablet">Tablet</button>
+        <button type="button" class="preview-device-btn" data-device="desktop">Desktop</button>
+      </div>
+      <div class="preview-url-wrap">
+        <input type="url" class="preview-url-input" id="preview-url-input" placeholder="Paste R2/public URL to preview deployed">
+        <button type="button" class="btn btn-secondary" id="preview-load-url">Load URL</button>
+        <button type="button" class="btn btn-secondary" id="preview-refresh-draft" title="Reload draft">Refresh draft</button>
+      </div>
+      <button type="button" class="modal-close" id="close-preview">&times;</button>
+    </div>
+    <div class="preview-frame-wrap device-mobile" id="preview-frame-wrap">
+      <iframe id="preview-iframe" class="preview-iframe" title="Live preview"></iframe>
+    </div>
+  </div>
+</div>
+
+<script>
+  // State
+  let currentSections = [];
+  let selectedSection = null;
+  let isDirty = false;
+  let historyStack = [];
+  let historyIndex = -1;
+
+  // Elements
+  const templatesPanel = document.getElementById('templates-panel');
+  const settingsPanel = document.getElementById('settings-panel');
+  const toggleTemplates = document.getElementById('toggle-templates');
+  const toggleSettings = document.getElementById('toggle-settings');
+  const closeTemplates = document.getElementById('close-templates');
+  const closeSettings = document.getElementById('close-settings');
+  const canvasPage = document.getElementById('canvas-page');
+  const historyModal = document.getElementById('history-modal');
+  const historyBtn = document.getElementById('history-btn');
+  const closeHistory = document.getElementById('close-history');
+  const historyOverlay = document.getElementById('history-overlay');
+
+  // Panel Toggles
+  toggleTemplates.addEventListener('click', () => {
+    const isOpen = templatesPanel.classList.contains('open');
+    
+    if (isOpen) {
+      templatesPanel.classList.remove('open');
+      toggleTemplates.classList.remove('active');
+      toggleTemplates.querySelector('.toggle-icon').textContent = '+';
+      toggleTemplates.querySelector('.toggle-label').textContent = 'Sections';
+    } else {
+      templatesPanel.classList.add('open');
+      settingsPanel.classList.remove('open');
+      toggleSettings.classList.remove('active');
+      toggleTemplates.classList.add('active');
+      toggleTemplates.querySelector('.toggle-icon').textContent = '×';
+      toggleTemplates.querySelector('.toggle-label').textContent = 'Close';
+    }
+  });
+
+  toggleSettings.addEventListener('click', () => {
+    const isOpen = settingsPanel.classList.contains('open');
+    
+    if (isOpen) {
+      settingsPanel.classList.remove('open');
+      toggleSettings.classList.remove('active');
+      toggleSettings.querySelector('.toggle-icon').textContent = '⚙';
+      toggleSettings.querySelector('.toggle-label').textContent = 'Settings';
+    } else {
+      settingsPanel.classList.add('open');
+      templatesPanel.classList.remove('open');
+      toggleTemplates.classList.remove('active');
+      toggleSettings.classList.add('active');
+      toggleSettings.querySelector('.toggle-icon').textContent = '×';
+      toggleSettings.querySelector('.toggle-label').textContent = 'Close';
+    }
+  });
+
+  closeTemplates.addEventListener('click', () => {
+    templatesPanel.classList.remove('open');
+    toggleTemplates.classList.remove('active');
+    toggleTemplates.querySelector('.toggle-icon').textContent = '+';
+    toggleTemplates.querySelector('.toggle-label').textContent = 'Sections';
+  });
+
+  closeSettings.addEventListener('click', () => {
+    settingsPanel.classList.remove('open');
+    toggleSettings.classList.remove('active');
+    toggleSettings.querySelector('.toggle-icon').textContent = '⚙';
+    toggleSettings.querySelector('.toggle-label').textContent = 'Settings';
+  });
+
+  // Category Toggles
+  document.querySelectorAll('.category-header').forEach(header => {
+    header.addEventListener('click', () => {
+      header.parentElement.classList.toggle('collapsed');
+    });
+  });
+
+  // Add Section
+  document.querySelectorAll('.template-add').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const card = btn.closest('.template-card');
+      const templateId = card.dataset.template;
+      addSection(templateId);
+    });
+  });
+
+  function addSection(templateId) {
+    const templates = {
+      'hero-full': { type: 'hero', name: 'Full Screen Hero', data: { heading: 'Your Heading', subheading: 'Supporting text', cta: 'Get Started', image_url: '' } },
+      'hero-split': { type: 'hero', name: 'Split Hero', data: { heading: 'Your Heading', description: 'Description', cta: 'Learn More', image_url: '' } },
+      'features-grid': { type: 'features', name: '3 Column Grid', data: { heading: 'Features', features: [{ title: 'Feature 1' }, { title: 'Feature 2' }, { title: 'Feature 3' }] } },
+      'features-list': { type: 'features', name: 'Icon List', data: { heading: 'Features', items: ['Item 1', 'Item 2'] } },
+      'cta-centered': { type: 'cta', name: 'Centered CTA', data: { heading: 'Ready to start?', cta: 'Get Started' } },
+      'cta-side': { type: 'cta', name: 'Side by Side', data: { heading: 'Get Started', cta: 'Contact Us' } },
+      'testimonials-grid': { type: 'testimonials', name: 'Card Grid', data: { heading: 'Testimonials' } },
+      'gallery-grid': { type: 'gallery', name: 'Image Grid', data: { heading: 'Gallery', image_url: '' } },
+      'gallery-banner': { type: 'gallery', name: 'Full Width Banner', data: { heading: 'Banner', image_url: '' } },
+      'text-rich': { type: 'text', name: 'Rich Content', data: { heading: 'Content', body: 'Your text here' } },
+      'text-columns': { type: 'text', name: 'Two Column', data: { heading: 'Two Columns' } },
+      'form-contact': { type: 'form', name: 'Contact Form', data: { heading: 'Contact Us' } }
+    };
+
+    const template = templates[templateId];
+    if (!template) return;
+
+    const section = {
+      id: 'section_' + Date.now(),
+      type: template.type,
+      name: template.name,
+      data: template.data,
+      order: currentSections.length
+    };
+
+    currentSections.push(section);
+    renderCanvas();
+    markDirty();
+  }
+
+  function renderCanvas() {
+    if (currentSections.length === 0) {
+      canvasPage.innerHTML = `
+        <div class="canvas-empty">
+          <div class="canvas-empty-icon">+</div>
+          <h3>Start Building Your Page</h3>
+          <p>Add sections from the library to begin</p>
+        </div>
+      `;
+      return;
+    }
+
+    canvasPage.innerHTML = currentSections.map(section => {
+      var h = section.data.heading || 'Heading';
+      var sub = section.data.subheading || section.data.description || section.data.body || 'Content';
+      var cta = section.data.cta;
+      var img = section.data.image_url;
+      var imgHtml = img ? '<div style="margin-bottom:1rem;"><img src="' + escapeHtml(img) + '" alt="" style="max-width:100%;height:auto;max-height:200px;object-fit:cover;border-radius:0.5rem;"></div>' : '';
+      return '<div class="canvas-section ' + (selectedSection && selectedSection.id === section.id ? 'selected' : '') + '" data-section-id="' + section.id + '">' +
+        '<div class="section-label">' + escapeHtml(section.name) + '</div>' +
+        '<div class="section-controls">' +
+        '<button class="control-btn" data-action="move-up" data-id="' + section.id + '">&#8593;</button>' +
+        '<button class="control-btn" data-action="move-down" data-id="' + section.id + '">&#8595;</button>' +
+        '<button class="control-btn" data-action="edit" data-id="' + section.id + '">&#9998;</button>' +
+        '<button class="control-btn danger" data-action="delete" data-id="' + section.id + '">&#10005;</button>' +
+        '</div>' +
+        '<div style="text-align: center; padding: 2rem 1rem;">' +
+        imgHtml +
+        '<h2 style="font-size: 1.5rem; margin-bottom: 0.75rem;">' + escapeHtml(h) + '</h2>' +
+        '<p style="color: var(--text-secondary);">' + escapeHtml(sub) + '</p>' +
+        (cta ? '<button style="margin-top: 1rem; padding: 0.75rem 1.5rem; background: var(--primary); color: var(--text-inverse); border: none; border-radius: 0.5rem;">' + escapeHtml(cta) + '</button>' : '') +
+        '</div></div>';
+    }).join('');
+    canvasPage.querySelectorAll('.control-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = btn.dataset.id;
+        var action = btn.dataset.action;
+        if (action === 'move-up') moveSection(id, 'up');
+        else if (action === 'move-down') moveSection(id, 'down');
+        else if (action === 'edit') editSection(id);
+        else if (action === 'delete') deleteSection(id);
+      });
+    });
+  }
+
+  function editSection(id) {
+    selectedSection = currentSections.find(s => s.id === id);
+    renderCanvas();
+    showSettings(selectedSection);
+  }
+
+  function deleteSection(id) {
+    if (!confirm('Delete this section?')) return;
+    currentSections = currentSections.filter(s => s.id !== id);
+    renderCanvas();
+    markDirty();
+  }
+
+  function moveSection(id, direction) {
+    const index = currentSections.findIndex(s => s.id === id);
+    if (direction === 'up' && index > 0) {
+      [currentSections[index], currentSections[index - 1]] = [currentSections[index - 1], currentSections[index]];
+    } else if (direction === 'down' && index < currentSections.length - 1) {
+      [currentSections[index], currentSections[index + 1]] = [currentSections[index + 1], currentSections[index]];
+    }
+    renderCanvas();
+    markDirty();
+  }
+
+  function showSettings(section) {
+    var empty = document.getElementById('settings-empty');
+    var form = document.getElementById('settings-form');
+    empty.style.display = 'none';
+    form.style.display = 'flex';
+    var entries = Object.entries(section.data).filter(function(e) {
+      var v = e[1];
+      return v == null || typeof v === 'string' || typeof v === 'number';
+    });
+    form.innerHTML = '<h4 style="margin: 0 0 1rem 0; font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Section Settings</h4>' +
+      entries.map(function(e) {
+        var key = e[0];
+        var value = e[1];
+        var val = value == null ? '' : String(value);
+        return '<div class="form-group"><label class="form-label">' + formatLabel(key) + '</label>' +
+          '<input type="text" class="form-input" value="' + escapeHtml(val) + '" data-key="' + escapeHtml(key) + '"></div>';
+      }).join('');
+    form.querySelectorAll('input').forEach(function(input) {
+      input.addEventListener('input', function(e) {
+        var key = e.target.dataset.key;
+        section.data[key] = e.target.value;
+        renderCanvas();
+        markDirty();
+      });
+    });
+  }
+
+  function formatLabel(key) {
+    return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+  }
+
+  function markDirty() {
+    isDirty = true;
+    document.getElementById('status-text').textContent = 'Unsaved';
+    document.querySelector('.status-dot').classList.remove('saved');
+    document.querySelector('.status-dot').classList.add('unsaved');
+  }
+
+  // History
+  historyBtn.addEventListener('click', () => {
+    historyModal.classList.add('open');
+  });
+
+  closeHistory.addEventListener('click', () => {
+    historyModal.classList.remove('open');
+  });
+
+  historyOverlay.addEventListener('click', () => {
+    historyModal.classList.remove('open');
+  });
+
+  // Preview
+  const previewModal = document.getElementById('preview-modal');
+  const previewIframe = document.getElementById('preview-iframe');
+  const previewFrameWrap = document.getElementById('preview-frame-wrap');
+  const previewUrlInput = document.getElementById('preview-url-input');
+
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function generatePreviewHTML() {
+    var title = (document.getElementById('page-title') && document.getElementById('page-title').value) || 'Preview';
+    var desc = (document.getElementById('page-description') && document.getElementById('page-description').value) || '';
+    var html = '<!DOCTYPE html><html lang="en"><head>
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(title) + '</title>';
+    if (desc) html += '<meta name="description" content="' + escapeHtml(desc) + '">';
+    html += '<style>*,*::before,*::after{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;line-height:1.5;color:#0f172a;background:#fff}.section{padding:2rem 1rem;max-width:900px;margin:0 auto}.features{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}@media(max-width:767px){.section{padding:1.25rem 0.75rem}.features{grid-template-columns:1fr}}h1,h2{margin:0 0 0.5rem}p{margin:0 0 1rem;color:#64748b}.cta{margin-top:1rem;padding:0.75rem 1.5rem;background:#4f46e5;color:#fff;border:none;border-radius:0.5rem;font-size:1rem;cursor:pointer}</style></head><body>';
+    if (!currentSections.length) {
+      html += '<div class="section"><p>No sections yet. Add sections and preview again.</p></div>';
+    } else {
+      currentSections.forEach(function(s) {
+        var h = s.data.heading || 'Heading';
+        var sub = s.data.subheading || s.data.description || s.data.body || 'Content';
+        var cta = s.data.cta;
+        var img = s.data.image_url;
+        var features = s.data.features;
+        html += '<section class="section">';
+        if (img) html += '<div style="margin-bottom:1rem;"><img src="' + escapeHtml(img) + '" alt="" style="max-width:100%;height:auto;max-height:300px;object-fit:cover;border-radius:0.5rem;"></div>';
+        html += '<h2>' + escapeHtml(h) + '</h2>';
+        if (features && Array.isArray(features)) {
+          html += '<div class="features">';
+          features.forEach(function(f) { html += '<div><h3>' + escapeHtml(f.title || f) + '</h3></div>'; });
+          html += '</div>';
+        } else {
+          html += '<p>' + escapeHtml(sub) + '</p>';
+        }
+        if (cta) html += '<button class="cta">' + escapeHtml(cta) + '</button>';
+        html += '</section>';
+      });
+    }
+    html += '</body></html>';
+    return html;
+  }
+
+  document.getElementById('preview-btn').addEventListener('click', function() {
+    previewUrlInput.value = '';
+    previewModal.classList.add('open');
+    previewIframe.src = 'about:blank';
+    previewIframe.onload = function() {
+      try {
+        var d = previewIframe.contentDocument;
+        if (d) { d.open(); d.write(generatePreviewHTML()); d.close(); }
+      } catch (e) {}
+      previewIframe.onload = null;
+    };
+  });
+
+  document.getElementById('close-preview').addEventListener('click', function() {
+    previewModal.classList.remove('open');
+  });
+  document.getElementById('preview-overlay').addEventListener('click', function() {
+    previewModal.classList.remove('open');
+  });
+
+  document.querySelectorAll('.preview-device-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.preview-device-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      previewFrameWrap.className = 'preview-frame-wrap device-' + btn.dataset.device;
+    });
+  });
+
+  document.getElementById('preview-load-url').addEventListener('click', function() {
+    var url = previewUrlInput.value.trim();
+    if (!url) return;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;
+    previewIframe.src = url;
+  });
+
+  document.getElementById('preview-refresh-draft').addEventListener('click', function() {
+    previewUrlInput.value = '';
+    previewIframe.src = 'about:blank';
+    previewIframe.onload = function() {
+      try {
+        var d = previewIframe.contentDocument;
+        if (d) { d.open(); d.write(generatePreviewHTML()); d.close(); }
+      } catch (e) {}
+      previewIframe.onload = null;
+    };
+  });
+
+  function getProjectId() {
+    try {
+      return sessionStorage.getItem('currentWorkspace') || (document.getElementById('workspaceSelect') && document.getElementById('workspaceSelect').value) || '';
+    } catch (e) { return ''; }
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.credentials = 'same-origin';
+    return fetch(path, opts);
+  }
+
+  function saveDeployment(action, agentName) {
+    var pageId = document.getElementById('page-select').value || 'page_' + Date.now();
+    var projectId = getProjectId();
+    if (!pageId || !projectId) {
+      alert('Select a page and workspace first.');
+      return Promise.resolve();
+    }
+    var snapshot = {
+      sections: currentSections,
+      timestamp: Date.now(),
+      page_title: document.getElementById('page-title') && document.getElementById('page-title').value,
+      page_description: document.getElementById('page-description') && document.getElementById('page-description').value,
+      page_url: document.getElementById('page-url') && document.getElementById('page-url').value
+    };
+    return api('/api/cms/deployments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        page_id: pageId,
+        project_id: projectId,
+        action: action,
+        sections_snapshot: JSON.stringify(snapshot),
+        user_id: 'user-sam-primeaux',
+        agent_name: agentName || null
+      })
+    }).then(function(r) { return r.json(); }).then(function() {
+      isDirty = false;
+      document.getElementById('status-text').textContent = 'Saved';
+      document.querySelector('.status-dot').classList.add('saved');
+      document.querySelector('.status-dot').classList.remove('unsaved');
+      loadDeploymentHistory().then(function(list) {
+        historyStack = list;
+        historyIndex = list.length - 1;
+        updateUndoRedoButtons();
+      });
+    }).catch(function() { alert('Save failed.'); });
+  }
+
+  function loadDeploymentHistory() {
+    var pageId = document.getElementById('page-select').value;
+    if (!pageId) return Promise.resolve([]);
+    return api('/api/cms/deployments/' + encodeURIComponent(pageId) + '?hours=24').then(function(r) { return r.json(); }).then(function(list) { return Array.isArray(list) ? list : []; }).catch(function() { return []; });
+  }
+
+  function updateUndoRedoButtons() {
+    var undoBtn = document.getElementById('undo-btn');
+    var redoBtn = document.getElementById('redo-btn');
+    if (undoBtn) undoBtn.disabled = historyIndex <= 0;
+    if (redoBtn) redoBtn.disabled = historyIndex >= historyStack.length - 1 || historyStack.length === 0;
+  }
+
+  function restoreSnapshot(snapshot) {
+    var data;
+    try { data = typeof snapshot.sections_snapshot === 'string' ? JSON.parse(snapshot.sections_snapshot) : snapshot.sections_snapshot; } catch (e) { return; }
+    if (data && data.sections) currentSections = data.sections;
+    renderCanvas();
+    markDirty();
+  }
+
+  document.getElementById('undo-btn').addEventListener('click', function() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      restoreSnapshot(historyStack[historyIndex]);
+      updateUndoRedoButtons();
+    }
+  });
+  document.getElementById('redo-btn').addEventListener('click', function() {
+    if (historyIndex < historyStack.length - 1) {
+      historyIndex++;
+      restoreSnapshot(historyStack[historyIndex]);
+      updateUndoRedoButtons();
+    }
+  });
+
+  document.getElementById('save-btn').addEventListener('click', function() {
+    var pageId = document.getElementById('page-select').value;
+    if (!pageId) document.getElementById('page-select').value = 'page_' + Date.now();
+    saveDeployment('save_draft');
+  });
+
+  document.getElementById('publish-btn').addEventListener('click', function() {
+    if (!confirm('Publish this page live?')) return;
+    var pageId = document.getElementById('page-select').value;
+    if (!pageId) document.getElementById('page-select').value = 'page_' + Date.now();
+    saveDeployment('publish');
+  });
+
+  historyBtn.addEventListener('click', function() {
+    loadDeploymentHistory().then(function(list) {
+      historyStack = list;
+      historyIndex = list.length - 1;
+      var tbody = document.getElementById('history-list');
+      if (!tbody) return;
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color: var(--text-secondary);">No history yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = list.map(function(h, i) {
+        var time = h.deployed_at ? new Date(h.deployed_at * 1000).toLocaleString() : '-';
+        return '<tr><td>' + time + '</td><td><span class="history-badge">' + (h.action || 'Save') + '</span></td><td>' + (h.user_id || 'System') + '</td><td><button class="btn-small" data-idx="' + i + '">Restore</button></td></tr>';
+      }).join('');
+      tbody.querySelectorAll('.btn-small').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(btn.dataset.idx, 10);
+          var h = historyStack[idx];
+          if (h && h.sections_snapshot) {
+            restoreSnapshot(h);
+            historyModal.classList.remove('open');
+          }
+        });
+      });
+    });
+    historyModal.classList.add('open');
+  });
+
+  document.getElementById('page-select').addEventListener('change', function() {
+    loadDeploymentHistory().then(function(list) {
+      historyStack = list;
+      historyIndex = list.length - 1;
+      if (list.length) restoreSnapshot(list[list.length - 1]);
+      updateUndoRedoButtons();
+    });
+  });
+
+  loadDeploymentHistory().then(function(list) {
+    historyStack = list;
+    historyIndex = list.length - 1;
+    if (list.length) restoreSnapshot(list[list.length - 1]);
+    updateUndoRedoButtons();
+  });
+
+  if (window.innerWidth >= 768) {
+    templatesPanel.classList.add('open');
+    settingsPanel.classList.add('open');
+  }
+
+  // Assets: CMS + R2
+  var cmsAssetsTab = document.querySelector('.cms-assets-tab[data-tab="cms"]');
+  var r2AssetsTab = document.querySelector('.cms-assets-tab[data-tab="r2"]');
+  var iamAssetsTab = document.querySelector('.cms-assets-tab[data-tab="iam"]');
+  var cmsAssetsPane = document.getElementById('cms-assets-pane');
+  var r2AssetsPane = document.getElementById('r2-assets-pane');
+  var iamAssetsPane = document.getElementById('iam-assets-pane');
+  var cmsAssetsGrid = document.getElementById('cms-assets-grid');
+  var r2AssetsGrid = document.getElementById('r2-assets-grid');
+  var iamAssetsGrid = document.getElementById('iam-assets-grid');
+
+  function setAssetsTab(tab) {
+    [cmsAssetsTab, r2AssetsTab, iamAssetsTab].forEach(function(t) { if (t) t.classList.remove('active'); });
+    [cmsAssetsPane, r2AssetsPane, iamAssetsPane].forEach(function(p) { if (p) p.style.display = 'none'; });
+    if (tab === 'cms') { if (cmsAssetsTab) cmsAssetsTab.classList.add('active'); if (cmsAssetsPane) cmsAssetsPane.style.display = ''; }
+    else if (tab === 'r2') { if (r2AssetsTab) r2AssetsTab.classList.add('active'); if (r2AssetsPane) r2AssetsPane.style.display = ''; }
+    else if (tab === 'iam') { if (iamAssetsTab) iamAssetsTab.classList.add('active'); if (iamAssetsPane) iamAssetsPane.style.display = ''; }
+  }
+  if (cmsAssetsTab) cmsAssetsTab.addEventListener('click', function() { setAssetsTab('cms'); });
+  if (r2AssetsTab) r2AssetsTab.addEventListener('click', function() { setAssetsTab('r2'); });
+  if (iamAssetsTab) iamAssetsTab.addEventListener('click', function() { setAssetsTab('iam'); });
+
+  function loadCmsAssets() {
+    cmsAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Loading...</div>';
+    api('/api/cms/assets?limit=24').then(function(r) { return r.json(); }).then(function(d) {
+      var list = d.assets || [];
+      if (!list.length) {
+        cmsAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">No CMS assets yet.</div>';
+        return;
+      }
+      cmsAssetsGrid.innerHTML = list.map(function(a) {
+        var url = a.thumbnail_url || a.url || '';
+        var isImg = (a.mime_type || '').indexOf('image/') === 0;
+        return '<div class="cms-asset-thumb" data-url="' + escapeHtml(url) + '" title="' + escapeHtml(a.filename || a.id) + '">' +
+          (isImg ? '<img src="' + escapeHtml(url) + '" alt="">' : '<div class="no-img">file</div>') + '</div>';
+      }).join('');
+      cmsAssetsGrid.querySelectorAll('.cms-asset-thumb').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var url = el.dataset.url;
+          if (url && selectedSection && selectedSection.data) {
+            selectedSection.data.image_url = url;
+            renderCanvas();
+            markDirty();
+          } else if (url) {
+            navigator.clipboard.writeText(url).then(function() {});
+          }
+        });
+      });
+    }).catch(function() {
+      cmsAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Failed to load.</div>';
+    });
+  }
+
+  document.getElementById('cms-upload-zone').addEventListener('click', function() { document.getElementById('cms-file-input').click(); });
+  document.getElementById('cms-file-input').addEventListener('change', function(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('tenant_slug', 'default');
+    api('/api/cms/assets', { method: 'POST', body: fd }).then(function(r) { return r.json(); }).then(function() { loadCmsAssets(); }).catch(function() {});
+    e.target.value = '';
+  });
+
+  document.getElementById('r2-assets-load').addEventListener('click', function() {
+    r2AssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Loading...</div>';
+    api('/api/cloud/r2/buckets/agent-sam/objects?prefix=dashboard-uploads/').then(function(r) { return r.json(); }).then(function(d) {
+      var list = (d.objects || []).filter(function(o) {
+        var ct = (o.content_type || '').toLowerCase();
+        return ct.indexOf('image/') === 0 || ct === 'application/pdf' || /\.(svg|webp)$/i.test(o.object_key || '');
+      }).slice(0, 24);
+      var origin = window.location.origin;
+      if (!list.length) {
+        r2AssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">No image assets. Run Cloud > Inventory on agent-sam.</div>';
+        return;
+      }
+      r2AssetsGrid.innerHTML = list.map(function(o) {
+        var key = o.object_key || '';
+        var url = key.startsWith('dashboard-uploads/') ? origin + '/uploads/' + key.replace(/^dashboard-uploads\//, '') : '';
+        var isImg = (o.content_type || '').indexOf('image/') === 0;
+        return '<div class="cms-asset-thumb" data-url="' + escapeHtml(url) + '" title="' + escapeHtml(key) + '">' +
+          (isImg ? '<img src="' + escapeHtml(url) + '" alt="">' : '<div class="no-img">file</div>') + '</div>';
+      }).join('');
+      r2AssetsGrid.querySelectorAll('.cms-asset-thumb').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var url = el.dataset.url;
+          if (url && selectedSection && selectedSection.data) {
+            selectedSection.data.image_url = url;
+            renderCanvas();
+            markDirty();
+          } else if (url) {
+            navigator.clipboard.writeText(url).then(function() {});
+          }
+        });
+      });
+    }).catch(function() {
+      r2AssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Failed. Ensure agent-sam is inventoried in Cloud.</div>';
+    });
+  });
+
+  document.getElementById('iam-assets-load').addEventListener('click', function() {
+    var prefix = (document.getElementById('iam-prefix') && document.getElementById('iam-prefix').value) || '';
+    iamAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Loading...</div>';
+    var url = '/api/cms/assets/iam?limit=48';
+    if (prefix) url += '&prefix=' + encodeURIComponent(prefix);
+    api(url).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) {
+        iamAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">' + escapeHtml(d.error) + '</div>';
+        return;
+      }
+      var list = d.objects || [];
+      if (!list.length) {
+        iamAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">No assets. Use prefix or upload.</div>';
+        return;
+      }
+      var imgList = list.filter(function(o) {
+        var ct = (o.content_type || '').toLowerCase();
+        var k = o.key || '';
+        return ct.indexOf('image/') === 0 || /\.(svg|webp|ico|png|jpg|jpeg|gif)$/i.test(k);
+      }).slice(0, 24);
+      iamAssetsGrid.innerHTML = imgList.map(function(o) {
+        var url = o.url || '';
+        return '<div class="cms-asset-thumb" data-url="' + escapeHtml(url) + '" title="' + escapeHtml(o.key) + '"><img src="' + escapeHtml(url) + '" alt="" onerror="this.parentElement.innerHTML=\'<div class=no-img>img</div>\'"></div>';
+      }).join('');
+      iamAssetsGrid.querySelectorAll('.cms-asset-thumb').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var url = el.dataset.url;
+          if (url && selectedSection && selectedSection.data) {
+            selectedSection.data.image_url = url;
+            renderCanvas();
+            markDirty();
+          } else if (url) {
+            navigator.clipboard.writeText(url).then(function() {});
+          }
+        });
+      });
+    }).catch(function() {
+      iamAssetsGrid.innerHTML = '<div style="grid-column:1/-1;font-size:0.75rem;color:var(--text-secondary);">Failed. Use inneranimalmedia.com.</div>';
+    });
+  });
+
+  document.getElementById('iam-upload-zone').addEventListener('click', function() { document.getElementById('iam-file-input').click(); });
+  document.getElementById('iam-file-input').addEventListener('change', function(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var path = (document.getElementById('iam-upload-path') && document.getElementById('iam-upload-path').value) || '';
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('path', path);
+    api('/api/cms/assets/iam', { method: 'POST', body: fd }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) return;
+      document.getElementById('iam-assets-load').click();
+    }).catch(function() {});
+    e.target.value = '';
+  });
+
+  document.getElementById('deploy-live-btn').addEventListener('click', function() {
+    var slug = document.getElementById('page-select').value;
+    if (!slug) { alert('Select a page first.'); return; }
+    if (!confirm('Deploy this page to inneranimalmedia.com?')) return;
+    var html = generatePreviewHTML();
+    var fullHtml = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] || '' + '</head><body>' + (html.match(/<body[^>]*>([\s\S]*?)<\/body>/)?.[1] || html) + '</body></html>';
+    var body = html;
+    try {
+      var bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/);
+      if (bodyMatch) body = bodyMatch[1];
+    } catch (e) {}
+    api('/api/cms/deploy-page', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: slug, html: html })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.error) { alert('Deploy failed: ' + d.error); return; }
+      alert('Deployed to ' + (d.url || ''));
+    }).catch(function() { alert('Deploy failed.'); });
+  });
+
+  loadCmsAssets();
+</script>

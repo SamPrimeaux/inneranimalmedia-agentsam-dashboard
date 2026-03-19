@@ -1,0 +1,671 @@
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<!-- static/dashboard/images-content.html -->
+<!-- Image library: Cloudflare Images API — list, sort, upload (file/URL), delete -->
+
+<style>
+.images-page { padding: 0; }
+.images-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.images-toolbar label { font-size: 13px; color: var(--text-secondary); margin-right: 4px; }
+.images-toolbar select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.images-toolbar .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; background: var(--accent); color: #fff; cursor: pointer; }
+.images-toolbar .btn:hover { background: var(--accent-hover); }
+.images-toolbar .btn-secondary { background: var(--bg-canvas); color: var(--text-primary); border: 1px solid var(--border); }
+.images-toolbar .btn-secondary:hover { background: var(--border); }
+.images-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+}
+.images-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.images-card:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.images-card-dark {
+  background: var(--bg-canvas);
+  border-color: var(--border);
+}
+.images-card-dark .images-card-name,
+.images-card-dark .images-card-date {
+  color: var(--text-primary);
+}
+.images-card-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: var(--bg-canvas);
+}
+.images-card-note {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  background: rgba(59,130,246,0.9);
+  color: #fff;
+}
+.images-card-info { padding: 10px 12px; }
+.images-card-name { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.images-card-date { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.images-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 12px 0;
+}
+.images-pagination button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.images-pagination button:hover:not(:disabled) { background: var(--bg-canvas); border-color: var(--accent); }
+.images-pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+.images-pagination span { font-size: 13px; color: var(--text-secondary); }
+.images-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 300;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.images-modal-backdrop.open { display: flex; }
+.images-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.15);
+  padding: 24px;
+}
+.images-modal img { width: 100%; height: auto; border-radius: 8px; background: var(--bg-canvas); }
+.images-modal h3 { font-size: 16px; margin: 16px 0 8px 0; color: var(--text-primary); }
+.images-modal .meta { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.images-modal label { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 10px; margin-bottom: 4px; }
+.images-modal input[type="text"], .images-modal textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.images-modal textarea { min-height: 60px; resize: vertical; }
+.images-modal-variants {
+  margin-top: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-canvas);
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+}
+.images-modal-variants-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.images-modal-variant-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.images-modal-variant-row code {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.images-modal-variant-row button {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 11px;
+  cursor: pointer;
+}
+.images-modal-variant-row button:hover {
+  background: var(--bg-canvas);
+}
+.images-modal-live-flag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+}
+.images-modal-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.images-modal-actions .btn { padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; }
+.images-modal-actions .btn-primary { background: var(--accent); color: #fff; }
+.images-modal-actions .btn-danger { background: var(--error); color: #fff; }
+.images-upload-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  z-index: 301;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.images-upload-backdrop.open { display: flex; }
+.images-upload-modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+.images-upload-modal h3 { font-size: 18px; margin-bottom: 16px; color: var(--text-primary); }
+.images-upload-modal label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.images-upload-modal input[type="text"], .images-upload-modal input[type="file"] { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-size: 14px; margin-bottom: 12px; }
+.images-upload-modal .row { display: flex; gap: 10px; margin-top: 16px; }
+.images-upload-modal .btn { flex: 1; padding: 10px; border-radius: 8px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; }
+.images-upload-modal .btn-primary { background: var(--accent); color: #fff; }
+.images-upload-modal .btn-secondary { background: var(--bg-canvas); color: var(--text-primary); border: 1px solid var(--border); }
+.images-empty { text-align: center; padding: 48px 24px; color: var(--text-secondary); font-size: 14px; }
+.images-loading { text-align: center; padding: 48px 24px; color: var(--text-secondary); font-size: 14px; }
+.images-error { padding: 16px; border-radius: 8px; background: rgba(239,68,68,0.1); color: var(--error); font-size: 14px; margin-bottom: 16px; }
+</style>
+
+<div class="images-page">
+  <div class="page-header">
+    <h1 class="page-title">Images</h1>
+    <p class="page-subtitle">Cloudflare Images library — view, sort, upload, and delete. Access all your images in one place.</p>
+  </div>
+
+  <div class="images-toolbar">
+    <label for="imagesSort">Sort</label>
+    <select id="imagesSort">
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="name-az">Name A–Z</option>
+      <option value="name-za">Name Z–A</option>
+    </select>
+    <label for="imagesPerPage">Per page</label>
+    <select id="imagesPerPage">
+      <option value="50">50</option>
+      <option value="100" selected>100</option>
+      <option value="200">200</option>
+    </select>
+    <label for="imagesTenant">Tenant</label>
+    <select id="imagesTenant">
+      <option value="all" selected>All tenants</option>
+    </select>
+    <button type="button" class="btn" id="imagesUploadBtn">Upload</button>
+  </div>
+
+  <div id="imagesError" class="images-error" style="display: none;"></div>
+  <div id="imagesLoading" class="images-loading">Loading…</div>
+  <div id="imagesGridWrap" style="display: none;">
+    <div id="imagesGrid" class="images-grid"></div>
+    <div class="images-pagination">
+      <button type="button" id="imagesPrev" disabled>Previous</button>
+      <span id="imagesPageInfo">Page 1</span>
+      <button type="button" id="imagesNext">Next</button>
+    </div>
+  </div>
+  <div id="imagesEmpty" class="images-empty" style="display: none;">No images yet. Upload a file or add from URL.</div>
+</div>
+
+<!-- Detail modal -->
+<div id="imagesModalBackdrop" class="images-modal-backdrop" aria-hidden="true">
+  <div class="images-modal" id="imagesModal">
+    <img id="imagesModalImg" src="" alt="">
+    <h3 id="imagesModalName">—</h3>
+    <p class="meta" id="imagesModalMeta">—</p>
+    <label for="imagesModalDisplayName">Display name (local only)</label>
+    <input type="text" id="imagesModalDisplayName" placeholder="Friendly name used in this dashboard…">
+    <div id="imagesModalVariants" class="images-modal-variants" style="display: none;">
+      <div class="images-modal-variants-title">Variants</div>
+      <div id="imagesModalVariantsList"></div>
+    </div>
+    <div class="images-modal-live-flag">
+      <input type="checkbox" id="imagesModalIsLive">
+      <label for="imagesModalIsLive" style="margin: 0;">Mark as live customer asset</label>
+    </div>
+    <div class="images-modal-live-flag">
+      <input type="checkbox" id="imagesModalDarkBg">
+      <label for="imagesModalDarkBg" style="margin: 0;">Use dark card background for light / white logos</label>
+    </div>
+    <label for="imagesModalNotes">Notes / usage (where this is used)</label>
+    <textarea id="imagesModalNotes" placeholder="Example: New Iberia Church of Christ · homepage hero · do not delete."></textarea>
+    <div class="images-modal-actions">
+      <button type="button" class="btn btn-primary" id="imagesModalCopy">Copy URL</button>
+      <a id="imagesModalOpen" href="#" target="_blank" rel="noopener" class="btn btn-primary">Open</a>
+      <button type="button" class="btn btn-primary" id="imagesModalSaveNote">Save note</button>
+      <button type="button" class="btn btn-danger" id="imagesModalDelete">Delete</button>
+      <button type="button" class="btn btn-secondary" id="imagesModalClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Upload modal -->
+<div id="imagesUploadBackdrop" class="images-upload-backdrop" aria-hidden="true">
+  <div class="images-upload-modal">
+    <h3>Upload image</h3>
+    <label>From URL</label>
+    <input type="text" id="imagesUploadUrl" placeholder="https://…">
+    <label>Or choose file</label>
+    <input type="file" id="imagesUploadFile" accept="image/*">
+    <div class="row">
+      <button type="button" class="btn btn-secondary" id="imagesUploadCancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="imagesUploadSubmit">Upload</button>
+    </div>
+    <p id="imagesUploadStatus" style="font-size: 13px; color: var(--text-secondary); margin-top: 12px; display: none;"></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var base = window.location.origin;
+  var currentPage = 1;
+  var perPage = 100;
+  var allImages = [];
+  var sortValue = 'newest';
+  var notesMap = {};
+  var currentTenant = 'all';
+  function getNoteFor(id) {
+    return notesMap[id] || null;
+  }
+  function setNoteFor(id, payload) {
+    notesMap[id] = payload;
+  }
+
+  function esc(s) { return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
+
+  function sortedList() {
+    var list = allImages.slice();
+    if (currentTenant && currentTenant !== 'all') {
+      list = list.filter(function (img) {
+        return img.meta && img.meta.tenant_slug === currentTenant;
+      });
+    }
+    if (sortValue === 'newest') list.sort(function (a, b) { return (b.uploaded || '').localeCompare(a.uploaded || ''); });
+    else if (sortValue === 'oldest') list.sort(function (a, b) { return (a.uploaded || '').localeCompare(b.uploaded || ''); });
+    else if (sortValue === 'name-az') list.sort(function (a, b) { return (a.filename || a.id || '').localeCompare(b.filename || b.id || ''); });
+    else if (sortValue === 'name-za') list.sort(function (a, b) { return (b.filename || b.id || '').localeCompare(a.filename || a.id || ''); });
+    return list;
+  }
+
+  function showError(msg, appendHint) {
+    var el = document.getElementById('imagesError');
+    if (!el) return;
+    if (!msg) { el.innerHTML = ''; el.style.display = 'none'; return; }
+    var hint = appendHint !== false ? ' Ensure CLOUDFLARE_IMAGES_TOKEN has Images: Edit and your account has Cloudflare Images enabled.' : '';
+    el.innerHTML = msg + (hint ? '<br><span style="font-size:12px; opacity:0.9;">' + hint + '</span>' : '');
+    el.style.display = 'block';
+  }
+
+  function loadPage() {
+    document.getElementById('imagesLoading').style.display = 'block';
+    document.getElementById('imagesGridWrap').style.display = 'none';
+    document.getElementById('imagesEmpty').style.display = 'none';
+    showError('');
+    fetch(base + '/api/images?page=' + currentPage + '&per_page=1000', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        document.getElementById('imagesLoading').style.display = 'none';
+        if (d.error || d.code) {
+          var msg = d.error || (d.code === 'UNAUTHORIZED' ? 'Sign in required.' : 'Failed to load images.');
+          showError(msg, d.code === 'CF_IMAGES_ERROR' || d.code === 'NOT_CONFIGURED');
+          document.getElementById('imagesEmpty').style.display = 'block';
+          document.getElementById('imagesEmpty').textContent = msg;
+          return;
+        }
+        allImages = (d.images || []).map(function (img) {
+          if (img.meta && img.id) {
+            notesMap[img.id] = {
+              label: img.meta.label || '',
+              isLive: !!img.meta.is_live,
+              bg: img.meta.preferred_bg || '',
+              notes: img.meta.notes || '',
+            };
+          }
+          return img;
+        });
+        if (d.accountHash) {
+          document.body.setAttribute('data-account-hash', d.accountHash);
+        }
+        renderGrid();
+      })
+      .catch(function (e) {
+        document.getElementById('imagesLoading').style.display = 'none';
+        showError('Network error: ' + e.message);
+        document.getElementById('imagesEmpty').style.display = 'block';
+      });
+  }
+
+  function loadTenants() {
+    var sel = document.getElementById('imagesTenant');
+    if (!sel) return;
+    fetch(base + '/api/cms/tenants', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !Array.isArray(d.tenants)) return;
+        d.tenants.forEach(function (t) {
+          if (!t || !t.slug) return;
+          var opt = document.createElement('option');
+          opt.value = t.slug;
+          opt.textContent = t.name || t.slug;
+          sel.appendChild(opt);
+        });
+      })
+      .catch(function () {});
+  }
+
+  function renderGrid() {
+    var list = sortedList();
+    perPage = Math.max(10, parseInt(document.getElementById('imagesPerPage').value, 10) || 100);
+    var start = (currentPage - 1) * perPage;
+    var slice = list.slice(start, start + perPage);
+    var grid = document.getElementById('imagesGrid');
+    if (!list.length) {
+      document.getElementById('imagesGridWrap').style.display = 'none';
+      document.getElementById('imagesEmpty').style.display = 'block';
+      return;
+    }
+    document.getElementById('imagesEmpty').style.display = 'none';
+    document.getElementById('imagesGridWrap').style.display = 'block';
+    grid.innerHTML = slice.map(function (img) {
+      var thumb = img.thumbnail || img.url || '';
+      var name = img.filename || img.id || '—';
+      var date = img.uploaded ? new Date(img.uploaded).toLocaleDateString() : '—';
+      var note = getNoteFor(img.id || '');
+      var badge = '';
+      if (note && (note.isLive || (note.notes && note.notes.trim()))) {
+        badge = '<div class="images-card-note">' + (note.isLive ? 'Live asset' : 'Note') + '</div>';
+      }
+      var classes = 'images-card';
+      if (note && note.bg === 'dark') classes += ' images-card-dark';
+      return '<div class="' + classes + '" style="position:relative;" data-id="' + esc(img.id) + '">' +
+        badge +
+        '<img class="images-card-thumb" src="' + (thumb || '') + '" alt="" loading="lazy" onerror="this.style.background=\'var(--bg-canvas)\';this.alt=\'?\';" />' +
+        '<div class="images-card-info"><div class="images-card-name">' + esc(name) + '</div><div class="images-card-date">' + esc(date) + '</div></div></div>';
+    }).join('');
+
+    document.getElementById('imagesPrev').disabled = currentPage <= 1;
+    document.getElementById('imagesNext').disabled = start + slice.length >= list.length;
+    document.getElementById('imagesPageInfo').textContent = 'Page ' + currentPage + ' · ' + list.length + ' total';
+
+    grid.querySelectorAll('.images-card').forEach(function (card) {
+      card.addEventListener('click', function () {
+        var id = card.getAttribute('data-id');
+        var img = (allImages || []).find(function (x) { return x.id === id; }) || { id: id };
+        openDetail(img);
+      });
+    });
+  }
+
+  function buildVariantsHtml(img) {
+    var html = '';
+    var variants = img.variants || [];
+    if (!variants.length) return '';
+    variants.forEach(function (v, idx) {
+      var label = 'Variant ' + (idx + 1);
+      html += '<div class="images-modal-variant-row">' +
+        '<code>' + esc(label) + '</code>' +
+        '<button type="button" data-variant-copy="' + esc(v) + '">Copy</button>' +
+        '<button type="button" data-variant-open="' + esc(v) + '">Open</button>' +
+        '</div>';
+    });
+    return html;
+  }
+
+  function wireVariantButtons() {
+    var wrap = document.getElementById('imagesModalVariants');
+    if (!wrap) return;
+    wrap.querySelectorAll('[data-variant-copy]').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var url = btn.getAttribute('data-variant-copy');
+        if (!url || !navigator.clipboard) return;
+        navigator.clipboard.writeText(url).then(function () {
+          var t = btn.textContent;
+          btn.textContent = 'Copied';
+          setTimeout(function () { btn.textContent = 'Copy'; }, 1200);
+        });
+      });
+    });
+    wrap.querySelectorAll('[data-variant-open]').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var url = btn.getAttribute('data-variant-open');
+        if (!url) return;
+        window.open(url, '_blank', 'noopener');
+      });
+    });
+  }
+
+  function openDetail(img) {
+    var backdrop = document.getElementById('imagesModalBackdrop');
+    var accountHash = document.body.getAttribute('data-account-hash') || '';
+    var fullUrl = img.url || (accountHash && img.id ? ('https://imagedelivery.net/' + accountHash + '/' + img.id + '/public') : '');
+    var baseName = img.filename || img.id || '—';
+    var note = getNoteFor(img.id || '') || {};
+    document.getElementById('imagesModalImg').src = fullUrl;
+    document.getElementById('imagesModalName').textContent = baseName;
+    document.getElementById('imagesModalMeta').textContent = 'Uploaded: ' + (img.uploaded ? new Date(img.uploaded).toLocaleString() : '—');
+    document.getElementById('imagesModalDisplayName').value = note.label || '';
+    document.getElementById('imagesModalIsLive').checked = !!note.isLive;
+    document.getElementById('imagesModalDarkBg').checked = note.bg === 'dark';
+    document.getElementById('imagesModalNotes').value = note.notes || '';
+
+    var variantsHtml = buildVariantsHtml(img);
+    var variantsBox = document.getElementById('imagesModalVariants');
+    var variantsList = document.getElementById('imagesModalVariantsList');
+    if (variantsHtml && variantsBox && variantsList) {
+      variantsBox.style.display = 'block';
+      variantsList.innerHTML = variantsHtml;
+      wireVariantButtons();
+    } else if (variantsBox) {
+      variantsBox.style.display = 'none';
+    }
+    document.getElementById('imagesModalOpen').href = fullUrl;
+    document.getElementById('imagesModalCopy').onclick = function () {
+      navigator.clipboard && navigator.clipboard.writeText(fullUrl).then(function () {
+        var btn = document.getElementById('imagesModalCopy');
+        var t = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = t; }, 1500);
+      });
+    };
+    document.getElementById('imagesModalDelete').onclick = function () {
+      if (!confirm('Delete this image? This cannot be undone.')) return;
+      fetch(base + '/api/images/' + encodeURIComponent(img.id), { method: 'DELETE', credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) { closeDetail(); loadPage(); }
+          else alert(d.error || 'Delete failed');
+        })
+        .catch(function (e) { alert('Error: ' + e.message); });
+    };
+    document.getElementById('imagesModalSaveNote').onclick = function () {
+      var payload = {
+        label: document.getElementById('imagesModalDisplayName').value || '',
+        is_live: !!document.getElementById('imagesModalIsLive').checked,
+        preferred_bg: document.getElementById('imagesModalDarkBg').checked ? 'dark' : '',
+        notes: document.getElementById('imagesModalNotes').value || '',
+        builds: '',
+      };
+      var btn = document.getElementById('imagesModalSaveNote');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      fetch(base + '/api/images/' + encodeURIComponent(img.id) + '/meta', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d || !d.ok || !d.meta) throw new Error(d && d.error || 'Save failed');
+        setNoteFor(img.id || '', {
+          label: d.meta.label || payload.label || '',
+          isLive: !!d.meta.is_live,
+          bg: d.meta.preferred_bg || payload.preferred_bg || '',
+          notes: d.meta.notes || payload.notes || '',
+        });
+        renderGrid();
+        btn.textContent = 'Saved';
+        setTimeout(function () { btn.textContent = 'Save note'; }, 1200);
+      }).catch(function (e) {
+        btn.textContent = 'Error';
+        alert('Failed to save note: ' + e.message);
+        setTimeout(function () { btn.textContent = 'Save note'; }, 1500);
+      }).finally(function () {
+        btn.disabled = false;
+      });
+    };
+    document.getElementById('imagesModalClose').onclick = closeDetail;
+    backdrop.classList.add('open');
+    backdrop.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeDetail() {
+    document.getElementById('imagesModalBackdrop').classList.remove('open');
+    document.getElementById('imagesModalBackdrop').setAttribute('aria-hidden', 'true');
+  }
+
+  document.getElementById('imagesModalBackdrop').addEventListener('click', function (e) {
+    if (e.target === this) closeDetail();
+  });
+
+  document.getElementById('imagesSort').addEventListener('change', function () {
+    sortValue = this.value;
+    currentPage = 1;
+    renderGrid();
+  });
+  document.getElementById('imagesPerPage').addEventListener('change', function () {
+    perPage = Math.max(10, parseInt(this.value, 10) || 100);
+    currentPage = 1;
+    renderGrid();
+  });
+  document.getElementById('imagesTenant').addEventListener('change', function () {
+    currentTenant = this.value || 'all';
+    currentPage = 1;
+    renderGrid();
+  });
+  document.getElementById('imagesPrev').addEventListener('click', function () {
+    if (currentPage > 1) { currentPage--; renderGrid(); }
+  });
+  document.getElementById('imagesNext').addEventListener('click', function () {
+    var list = sortedList();
+    if ((currentPage * perPage) < list.length) { currentPage++; renderGrid(); }
+  });
+
+  document.getElementById('imagesUploadBtn').addEventListener('click', function () {
+    document.getElementById('imagesUploadBackdrop').classList.add('open');
+    document.getElementById('imagesUploadUrl').value = '';
+    document.getElementById('imagesUploadFile').value = '';
+    document.getElementById('imagesUploadStatus').style.display = 'none';
+  });
+  document.getElementById('imagesUploadCancel').addEventListener('click', function () {
+    document.getElementById('imagesUploadBackdrop').classList.remove('open');
+  });
+  document.getElementById('imagesUploadBackdrop').addEventListener('click', function (e) {
+    if (e.target === this) document.getElementById('imagesUploadBackdrop').classList.remove('open');
+  });
+
+  document.getElementById('imagesUploadSubmit').addEventListener('click', function () {
+    var urlInput = document.getElementById('imagesUploadUrl').value.trim();
+    var fileInput = document.getElementById('imagesUploadFile').files[0];
+    var statusEl = document.getElementById('imagesUploadStatus');
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Uploading…';
+    if (urlInput) {
+      fetch(base + '/api/images', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlInput })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok && d.image) {
+            statusEl.textContent = 'Uploaded: ' + (d.image.filename || d.image.id);
+            allImages.unshift(d.image);
+            renderGrid();
+            setTimeout(function () {
+              document.getElementById('imagesUploadBackdrop').classList.remove('open');
+              statusEl.style.display = 'none';
+            }, 1200);
+          } else {
+            statusEl.textContent = 'Error: ' + (d.error || 'Upload failed');
+            statusEl.style.color = 'var(--error)';
+          }
+        })
+        .catch(function (e) {
+          statusEl.textContent = 'Error: ' + e.message;
+          statusEl.style.color = 'var(--error)';
+        });
+      return;
+    }
+    if (fileInput) {
+      var fd = new FormData();
+      fd.append('file', fileInput);
+      fetch(base + '/api/images', { method: 'POST', credentials: 'same-origin', body: fd })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok && d.image) {
+            statusEl.textContent = 'Uploaded: ' + (d.image.filename || d.image.id);
+            allImages.unshift(d.image);
+            renderGrid();
+            setTimeout(function () {
+              document.getElementById('imagesUploadBackdrop').classList.remove('open');
+              statusEl.style.display = 'none';
+            }, 1200);
+          } else {
+            statusEl.textContent = 'Error: ' + (d.error || 'Upload failed');
+            statusEl.style.color = 'var(--error)';
+          }
+        })
+        .catch(function (e) {
+          statusEl.textContent = 'Error: ' + e.message;
+          statusEl.style.color = 'var(--error)';
+        });
+      return;
+    }
+    statusEl.textContent = 'Enter a URL or choose a file.';
+    statusEl.style.color = 'var(--warning)';
+  });
+
+  loadTenants();
+  loadPage();
+})();
+</script>

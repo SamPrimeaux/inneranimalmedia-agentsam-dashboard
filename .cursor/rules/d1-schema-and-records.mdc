@@ -1,0 +1,25 @@
+---
+description: When working with D1, migrations, or backfilling metrics/cost data: suggest exact SQL or changes first, then wait for user approval before executing; use canonical tables and docs/API_METRICS_AND_AGENT_COST_TRACKING.md and docs/memory/AGENT_MEMORY_SCHEMA_AND_RECORDS.md for schema and backfill.
+globs: "*.sql,**/migrations/**"
+alwaysApply: true
+---
+
+# D1, schema, and records (metrics/cost) workflow
+
+## Behavior
+
+1. **Suggest first:** For any D1 write (INSERT/UPDATE/DELETE), migration, or schema change, propose the exact SQL or change and which table/file. Do not run migrations or execute D1 commands until the user approves.
+2. **Wait for approval:** Only after the user explicitly confirms (e.g. "accept", "yes", "go ahead", "you can handle it", "approved") should you:
+   - run wrangler d1 execute, or
+   - write the migration file and give the exact command to run, or
+   - provide the precise curl/API call for the user to execute.
+3. **Be capable:** Once approved, actually perform the work (create the migration, run the command, or give the exact runnable instruction). Do not only give vague suggestions.
+4. **Consolidate tables:** Prefer reusing or extending canonical tables instead of creating new ones. Canonical tables include: `agent_telemetry`, `spend_ledger`, `project_time_entries`, `agent_sessions`, `agent_messages`, `ai_models`, `cloudflare_deployments`, `projects`. Goal: eliminate dupes and overlapping tables; keep tables properly populated.
+5. **Document deploys in cloudflare_deployments:** When an agent runs a deploy (`npm run deploy` or `./scripts/deploy-with-record.sh`), the agent must document it by setting `TRIGGERED_BY=agent` and optionally `DEPLOYMENT_NOTES='brief description'` so the deploy is attributed correctly in the DB. Example: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='AI Gateway + R2 upload' npm run deploy`.
+
+## Reference docs (in this repo)
+
+- **docs/memory/AGENT_MEMORY_SCHEMA_AND_RECORDS.md** — Canonical tables, backfill/correction workflow, and quick reference.
+- **docs/API_METRICS_AND_AGENT_COST_TRACKING.md** — Full API metrics and agent cost tracking: `agent_telemetry` (tokens), `spend_ledger` ($ gauge), `project_time_entries` (time), and how to backfill/correct data.
+
+Use these when the user asks to backfill data, fix costs, add metrics, or change D1 schema so the AI can give accurate, executable guidance and then run the work after approval.

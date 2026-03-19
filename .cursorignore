@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wrangler/
+agent-dashboard/node_modules/
+agent-dashboard/dist/
+*.lock
+*.log

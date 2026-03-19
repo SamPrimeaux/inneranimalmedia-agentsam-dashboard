@@ -1,0 +1,122 @@
+---
+alwaysApply: true
+---
+
+# SAM PRIMEAUX — IAM PLATFORM HARD RULES
+# These rules apply to EVERY task, no exceptions, no interpretations.
+
+---
+
+## DEPLOY RULES — ABSOLUTE
+
+- NEVER run `wrangler deploy` without Sam typing exactly: **deploy approved**
+- NEVER run `deploy-to-r2.sh` without Sam typing exactly: **deploy approved**
+- NEVER run `npm run build` and upload to R2 as part of an autonomous action
+- If Sam says "stop" or "wait": run `git status` immediately and stop all work
+- If Sam asks what you changed: list every file, every line range, every modification before doing anything else
+
+---
+
+## FILE PROTECTION — NEVER TOUCH WITHOUT EXPLICIT LINE-BY-LINE APPROVAL
+
+These files require Sam to say the exact filename + "approved" before any edit:
+
+- `worker.js` — handleGoogleOAuthCallback and handleGitHubOAuthCallback are locked forever. Breaking these locks ALL users out.
+- `FloatingPreviewPanel.jsx` — surgical edits only. Never rewrite. State line numbers first.
+- `agent.html` — never rewrite. One tag at a time with approval.
+- `wrangler.production.toml` — never touch. Any binding change kills the site.
+
+---
+
+## BEFORE ANY FILE CHANGE — REQUIRED SEQUENCE
+
+1. State the file path
+2. State the exact line numbers you intend to change
+3. State what the current code is
+4. State what you will change it to
+5. Wait for Sam to say "approved" or "go"
+6. Only then make the change
+
+No exceptions. Not even for "small" changes.
+
+---
+
+## DOCUMENTATION — REQUIRED AFTER EVERY TASK
+
+After completing ANY task, you MUST write a session log entry to `docs/cursor-session-log.md`.
+
+### Format (copy exactly):
+
+```
+## [DATE] [SHORT TITLE]
+
+### What was asked
+[1-2 sentences]
+
+### Files changed
+- `path/to/file.js` lines 142-156: [what changed and why]
+- `path/to/other.jsx` lines 23-27: [what changed and why]
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: not touched per rules
+- [any other file you considered but skipped]
+
+### Deploy status
+- Built: yes/no
+- R2 uploaded: yes/no — files: [list]
+- Worker deployed: yes/no — version ID: [id]
+- Deploy approved by Sam: yes/no
+
+### What is live now
+[1-2 sentences describing current production state]
+
+### Known issues / next steps
+- [list anything broken, pending, or deferred]
+```
+
+If `docs/cursor-session-log.md` does not exist, create it first.
+Append — never overwrite.
+
+---
+
+## CODE RULES
+
+- Zero hardcoded hex colors in JSX or CSS — CSS vars only (e.g. `var(--color-primary)`)
+- Zero hardcoded hex colors in inline styles
+- No emojis anywhere in code, UI, or comments
+- No wholesale file rewrites — surgical edits only
+- When editing JSX: state line numbers first, edit only those lines
+
+---
+
+## WHAT "SURGICAL EDIT" MEANS
+
+A surgical edit means:
+- You open the file
+- You find the exact lines to change
+- You change only those lines
+- You leave everything else untouched
+
+A surgical edit does NOT mean:
+- Rewriting the component from scratch "to be cleaner"
+- Reorganizing imports
+- Renaming variables
+- "Improving" unrelated code while you're in the file
+
+---
+
+## IF SOMETHING BREAKS
+
+1. Stop immediately
+2. Run `git status` and paste output to Sam
+3. Run `git diff` and paste output to Sam  
+4. Do NOT attempt to fix it autonomously
+5. Wait for Sam's instructions
+
+---
+
+## REMINDER
+
+Sam is a solo operator. Every broken deploy costs hours of recovery time.
+A skipped documentation step means lost context that cannot be recovered.
+These rules exist because autonomous deploys destroyed a full day of work on 2026-03-11.

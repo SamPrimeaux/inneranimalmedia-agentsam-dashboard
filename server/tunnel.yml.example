@@ -1,0 +1,14 @@
+# Cloudflare Tunnel config for IAM Terminal Server (optional)
+# Use with: cloudflared tunnel run iam-terminal
+# Create tunnel first: cloudflared tunnel create iam-terminal
+# Then add this config and run: cloudflared tunnel run iam-terminal
+#
+# Ingress: forward traffic from your tunnel hostname to localhost:3099 (terminal server)
+
+tunnel: iam-terminal
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: iam-terminal.YOUR_TUNNEL_DOMAIN.cfargotunnel.com
+    service: http://127.0.0.1:3099
+  - service: http_status:404

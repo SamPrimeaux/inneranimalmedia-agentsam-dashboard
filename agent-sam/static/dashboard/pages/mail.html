@@ -1,0 +1,503 @@
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<div class="mail-page">
+  <div class="mail-header-row">
+    <h1 class="page-title mail-page-title">Mail</h1>
+    <button type="button" class="mail-cta-compose" id="mailComposeBtn">
+      <svg class="mail-cta-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+      Compose
+    </button>
+  </div>
+
+  <div class="mail-layout">
+    <aside class="mail-left">
+      <section class="mail-side-section">
+        <div class="mail-side-label">From</div>
+        <div id="mailIdentitiesList">
+          <div class="mail-side-loading">Loading…</div>
+        </div>
+      </section>
+      <section class="mail-side-section">
+        <div class="mail-side-label">Folders</div>
+        <div class="mail-folders">
+          <button type="button" class="mail-folder mail-folder-inbox active" data-folder="inbox">Inbox</button>
+          <button type="button" class="mail-folder mail-folder-sent" data-folder="sent">Sent</button>
+          <button type="button" class="mail-folder mail-folder-archive" data-folder="archive">Archive</button>
+        </div>
+      </section>
+      <section class="mail-side-section mail-side-templates">
+        <div class="mail-side-label">Templates</div>
+        <div id="mailTemplatesList">
+          <div class="mail-side-loading">Loading…</div>
+        </div>
+      </section>
+      <section class="mail-side-section">
+        <div class="mail-side-label">Reminders</div>
+        <button type="button" class="mail-folder" id="mailMorningEmailBtn" style="width:100%;text-align:left;justify-content:flex-start;" title="Receive one morning to-do email at 8:00 UTC">Email me in the morning</button>
+      </section>
+    </aside>
+
+    <div class="mail-center">
+      <div class="mail-search-wrap">
+        <svg class="mail-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" class="mail-search" id="mailSearch" placeholder="Search mail">
+      </div>
+      <div id="mailList" class="mail-list">
+        <div class="mail-list-loading">Loading…</div>
+      </div>
+      <div class="mail-load-more-wrap" id="mailLoadMoreWrap" style="display:none;">
+        <button type="button" class="mail-load-more" id="mailLoadMore">Load more</button>
+      </div>
+    </div>
+
+    <div class="mail-right">
+      <div id="mailEmpty" class="mail-empty">Select a message</div>
+      <div id="mailDetail" class="mail-detail" style="display:none;">
+        <div class="mail-detail-header">
+          <div class="mail-detail-meta">
+            <span class="mail-detail-from" id="mailDetailFrom"></span>
+            <span class="mail-detail-to" id="mailDetailTo"></span>
+            <span class="mail-detail-date" id="mailDetailDate"></span>
+          </div>
+          <div class="mail-detail-subject" id="mailDetailSubject"></div>
+        </div>
+        <div class="mail-detail-body" id="mailDetailBody"></div>
+        <div class="mail-detail-actions">
+          <button type="button" class="mail-action-btn" id="mailReplyBtn">Reply</button>
+          <button type="button" class="mail-action-btn" id="mailForwardBtn">Forward</button>
+          <button type="button" class="mail-action-btn" id="mailArchiveBtn">Archive</button>
+          <button type="button" class="mail-action-btn" id="mailDeleteBtn">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Compose modal -->
+<div id="mailComposeModal" class="mail-modal" style="display:none;" aria-hidden="true">
+  <div class="mail-modal-backdrop" id="mailComposeBackdrop"></div>
+  <div class="mail-modal-box">
+    <div class="mail-modal-title">New message</div>
+    <div class="mail-form-row">
+      <label class="mail-form-label">From</label>
+      <select class="mail-form-select" id="composeFrom"></select>
+    </div>
+    <div class="mail-form-row">
+      <label class="mail-form-label">To</label>
+      <input type="text" class="mail-form-input" id="composeTo" placeholder="recipient@example.com">
+    </div>
+    <div class="mail-form-row">
+      <label class="mail-form-label">Subject</label>
+      <input type="text" class="mail-form-input" id="composeSubject" placeholder="Subject">
+    </div>
+    <div class="mail-form-row">
+      <label class="mail-form-label">Template (optional)</label>
+      <select class="mail-form-select" id="composeTemplate">
+        <option value="">— None —</option>
+      </select>
+    </div>
+    <div class="mail-form-row">
+      <label class="mail-form-label">Body</label>
+      <div class="mail-form-body" id="composeBody" contenteditable="true"></div>
+    </div>
+    <div class="mail-modal-actions">
+      <button type="button" class="mail-modal-cancel" id="mailComposeCancel">Cancel</button>
+      <button type="button" class="mail-modal-send" id="mailComposeSend">Send</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.mail-page { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.mail-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 2px; }
+.mail-page-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.mail-cta-compose {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 18px; border: none; border-radius: 24px;
+  background: var(--accent); color: #fff;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+.mail-cta-compose:hover { filter: brightness(1.08); box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+.mail-cta-compose:active { transform: scale(0.98); }
+.mail-cta-icon { flex-shrink: 0; }
+.mail-layout { display: flex; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated); overflow: hidden; }
+.mail-left { width: 180px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 10px 8px; overflow-y: auto; }
+.mail-side-section { margin-bottom: 16px; }
+.mail-side-templates { margin-bottom: 0; }
+.mail-side-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; padding-left: 10px; }
+.mail-side-loading { font-size: 12px; color: var(--text-secondary); padding: 6px 10px; }
+.mail-identity-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 10px; border: none; border-radius: 6px; background: none;
+  font-size: 13px; color: var(--text-primary); cursor: pointer; margin-bottom: 1px;
+}
+.mail-identity-item:hover { background: var(--bg-canvas); }
+.mail-identity-item.active { background: rgba(59,130,246,0.12); color: var(--accent); }
+.mail-identity-item.all { font-weight: 600; }
+.mail-identity-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.mail-folders { display: flex; flex-direction: column; gap: 1px; }
+.mail-folder {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; border: none; border-radius: 6px; background: none;
+  font-size: 13px; color: var(--text-primary); cursor: pointer;
+}
+.mail-folder:hover { background: var(--bg-canvas); }
+.mail-folder.active { font-weight: 600; }
+.mail-folder-inbox.active { background: rgba(59,130,246,0.12); color: var(--accent); }
+.mail-folder-sent.active { background: rgba(34,197,94,0.12); color: var(--success, #22c55e); }
+.mail-folder-archive.active { background: rgba(107,114,128,0.15); color: var(--text-secondary); }
+.mail-template-item {
+  display: block; width: 100%; text-align: left; padding: 6px 10px; border: none; border-radius: 6px;
+  background: none; font-size: 12px; color: var(--text-secondary); cursor: pointer; margin-bottom: 1px;
+}
+.mail-template-item:hover { background: var(--bg-canvas); color: var(--text-primary); }
+.mail-center { width: 320px; flex-shrink: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.mail-search-wrap { position: relative; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.mail-search-icon { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); pointer-events: none; }
+.mail-search { width: 100%; padding: 8px 12px 8px 36px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--bg-canvas); color: var(--text-primary); }
+.mail-search::placeholder { color: var(--text-secondary); }
+.mail-list { flex: 1; overflow-y: auto; min-height: 0; }
+.mail-list-loading { padding: 16px; font-size: 13px; color: var(--text-secondary); }
+.mail-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; transition: background 0.12s;
+}
+.mail-row:hover { background: var(--bg-canvas); }
+.mail-row.selected { background: rgba(59,130,246,0.08); }
+.mail-row.unread { border-left: 3px solid var(--accent); }
+.mail-row.unread .mail-row-subject { font-weight: 600; }
+.mail-row-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; margin-top: 5px; }
+.mail-row.unread .mail-row-dot { display: block; }
+.mail-row-content { flex: 1; min-width: 0; }
+.mail-row-from { font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; }
+.mail-row-subject { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mail-row-snippet { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.mail-row-date { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; white-space: nowrap; }
+.mail-load-more-wrap { padding: 10px; text-align: center; border-top: 1px solid var(--border); }
+.mail-load-more { padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font-size: 12px; cursor: pointer; }
+.mail-load-more:hover { background: var(--bg-canvas); }
+.mail-right { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 16px; background: var(--bg-canvas); }
+.mail-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--text-secondary); }
+.mail-detail { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.mail-detail-header { border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+.mail-detail-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.mail-detail-subject { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.mail-detail-body { flex: 1; overflow-y: auto; font-size: 14px; line-height: 1.5; color: var(--text-primary); }
+.mail-detail-body iframe { max-width: 100%; }
+.mail-detail-actions { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.mail-action-btn { padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font-size: 13px; cursor: pointer; }
+.mail-action-btn:hover { background: var(--bg-canvas); }
+.mail-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.mail-modal-backdrop { position: absolute; inset: 0; background: var(--bg-overlay, rgba(0,0,0,0.4)); }
+.mail-modal-box { position: relative; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; background: var(--bg-elevated); border-radius: 16px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); border: 1px solid var(--border); }
+.mail-modal-title { font-size: 17px; font-weight: 700; margin-bottom: 18px; color: var(--text-primary); }
+.mail-form-row { margin-bottom: 12px; }
+.mail-form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+.mail-form-input, .mail-form-select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: var(--bg-canvas); color: var(--text-primary); }
+.mail-form-body { min-height: 140px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; overflow-y: auto; background: var(--bg-canvas); color: var(--text-primary); }
+.mail-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.mail-modal-cancel { padding: 10px 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font-size: 14px; cursor: pointer; }
+.mail-modal-send { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+</style>
+
+<script>
+(function () {
+  var state = {
+    identities: [],
+    templates: [],
+    folder: 'inbox',
+    fromFilter: '',
+    search: '',
+    limit: 50,
+    offset: 0,
+    messages: [],
+    selectedId: null,
+    selectedMessage: null
+  };
+
+  function esc(s) { if (s == null) return ''; return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  var MAIL_IDENTITY_COLORS = ['#3b82f6', '#22c55e', '#eab308', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+  function identityColor(addr) {
+    if (!addr) return MAIL_IDENTITY_COLORS[0];
+    var h = 0; for (var i = 0; i < addr.length; i++) h = ((h << 5) - h) + addr.charCodeAt(i); h = Math.abs(h);
+    return MAIL_IDENTITY_COLORS[h % MAIL_IDENTITY_COLORS.length];
+  }
+  function relativeTime(d) {
+    if (!d) return '';
+    var date = new Date(d);
+    var now = new Date();
+    var diff = (now - date) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+    return date.toLocaleDateString();
+  }
+
+  function showToast(msg, type) {
+    var t = document.createElement('div');
+    t.className = 'mail-toast ' + (type || '');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2000;padding:12px 18px;border-radius:10px;background:var(--bg-elevated);border:1px solid var(--border);font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,0.15);';
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 3000);
+  }
+
+  function loadIdentities() {
+    fetch('/api/mail/identities').then(function (r) { return r.json(); }).then(function (d) {
+      state.identities = d.data || [];
+      var el = document.getElementById('mailIdentitiesList');
+      var byDomain = {};
+      state.identities.forEach(function (i) {
+        var dom = i.domain || 'other';
+        if (!byDomain[dom]) byDomain[dom] = [];
+        byDomain[dom].push(i);
+      });
+      var html = '<button type="button" class="mail-identity-item all active" data-from="">All</button>';
+      Object.keys(byDomain).sort().forEach(function (dom) {
+        byDomain[dom].forEach(function (i) {
+          var color = identityColor(i.address);
+          html += '<button type="button" class="mail-identity-item" data-from="' + esc(i.address) + '">' +
+            '<span class="mail-identity-dot" style="background:' + color + '"></span>' +
+            '<span>' + esc(i.display_name || i.address) + '</span></button>';
+        });
+      });
+      el.innerHTML = html;
+      el.querySelectorAll('.mail-identity-item').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          el.querySelectorAll('.mail-identity-item').forEach(function (b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+          state.fromFilter = btn.getAttribute('data-from') || '';
+          state.offset = 0;
+          loadInbox();
+        });
+      });
+    }).catch(function () {
+      document.getElementById('mailIdentitiesList').innerHTML = '<span class="mail-side-loading">Failed to load</span>';
+    });
+  }
+
+  function loadTemplates() {
+    fetch('/api/mail/templates').then(function (r) { return r.json(); }).then(function (d) {
+      state.templates = d.data || [];
+      var el = document.getElementById('mailTemplatesList');
+      if (!state.templates.length) { el.innerHTML = '<span class="mail-side-loading">No templates</span>'; return; }
+      var html = state.templates.map(function (t) {
+        return '<button type="button" class="mail-template-item" data-id="' + esc(t.id) + '" data-subject="' + esc(t.subject || '') + '" data-body="">' + esc(t.name || t.id) + '</button>';
+      }).join('');
+      el.innerHTML = html;
+      el.querySelectorAll('.mail-template-item').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var t = state.templates.find(function (x) { return String(x.id) === btn.getAttribute('data-id'); });
+          if (t) {
+            if (t.subject) document.getElementById('composeSubject').value = t.subject;
+            if (t.body_html) document.getElementById('composeBody').innerHTML = t.body_html;
+            else if (t.body) document.getElementById('composeBody').innerHTML = t.body;
+          }
+        });
+      });
+    }).catch(function () {
+      document.getElementById('mailTemplatesList').innerHTML = '<span class="mail-side-loading">Failed to load</span>';
+    });
+  }
+
+  function loadInbox(append) {
+    var listEl = document.getElementById('mailList');
+    if (!append) {
+      state.offset = 0;
+      listEl.innerHTML = '<div class="mail-list-loading">Loading…</div>';
+    }
+    var q = '?folder=' + encodeURIComponent(state.folder) + '&limit=' + state.limit + '&offset=' + state.offset;
+    if (state.search) q += '&search=' + encodeURIComponent(state.search);
+    if (state.fromFilter) q += '&from_filter=' + encodeURIComponent(state.fromFilter);
+    fetch('/api/mail/inbox' + q).then(function (r) { return r.json(); }).then(function (d) {
+      var data = d.data || [];
+      if (!append) state.messages = []; 
+      state.messages = append ? state.messages.concat(data) : data;
+      state.offset += data.length;
+      renderList();
+      document.getElementById('mailLoadMoreWrap').style.display = (data.length >= state.limit ? 'block' : 'none');
+    }).catch(function () {
+      listEl.innerHTML = '<div class="mail-list-loading">Failed to load messages.</div>';
+    });
+  }
+
+  function renderList() {
+    var listEl = document.getElementById('mailList');
+    if (!state.messages.length) {
+      listEl.innerHTML = '<div class="mail-list-loading">No messages in this folder.</div>';
+      document.getElementById('mailLoadMoreWrap').style.display = 'none';
+      return;
+    }
+    listEl.innerHTML = state.messages.map(function (m) {
+      var unread = !m.is_read;
+      var subj = esc(m.subject || '(No subject)');
+      var snippet = esc((m.snippet || '').slice(0, 80));
+      var from = esc(m.from_email || m.from || '');
+      var date = relativeTime(m.created_at);
+      return '<div class="mail-row' + (unread ? ' unread' : '') + '" data-id="' + esc(m.id) + '">' +
+        '<span class="mail-row-dot" style="display:' + (unread ? 'block' : 'none') + '"></span>' +
+        '<div class="mail-row-content">' +
+        '<div class="mail-row-from">' + from + '</div>' +
+        '<div class="mail-row-subject">' + subj + '</div>' +
+        '<div class="mail-row-snippet">' + snippet + '</div>' +
+        '</div>' +
+        '<span class="mail-row-date">' + esc(date) + '</span></div>';
+    }).join('');
+    listEl.querySelectorAll('.mail-row').forEach(function (row) {
+      row.addEventListener('click', function () {
+        var id = row.getAttribute('data-id');
+        state.selectedId = id;
+        state.selectedMessage = state.messages.find(function (m) { return m.id === id; });
+        document.getElementById('mailEmpty').style.display = 'none';
+        document.getElementById('mailDetail').style.display = 'block';
+        document.getElementById('mailDetailFrom').textContent = 'From: ' + (state.selectedMessage && (state.selectedMessage.from_email || state.selectedMessage.from) || '');
+        document.getElementById('mailDetailTo').textContent = 'To: ' + (state.selectedMessage && state.selectedMessage.to || '');
+        document.getElementById('mailDetailDate').textContent = state.selectedMessage && state.selectedMessage.created_at ? new Date(state.selectedMessage.created_at).toLocaleString() : '';
+        document.getElementById('mailDetailSubject').textContent = state.selectedMessage && state.selectedMessage.subject ? state.selectedMessage.subject : '(No subject)';
+        var bodyEl = document.getElementById('mailDetailBody');
+        bodyEl.innerHTML = (state.selectedMessage && state.selectedMessage.body_html) ? state.selectedMessage.body_html : '<p style="color:var(--text-secondary);">No body</p>';
+        listEl.querySelectorAll('.mail-row').forEach(function (r) { r.classList.remove('selected'); });
+        row.classList.add('selected');
+        if (state.selectedMessage && !state.selectedMessage.is_read) {
+          fetch('/api/mail/' + encodeURIComponent(id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_read: true })
+          }).then(function () {
+            row.classList.remove('unread');
+            row.querySelector('.mail-row-dot').style.display = 'none';
+            row.querySelector('.mail-row-subject').classList.remove('mail-row-subject-bold');
+            if (state.selectedMessage) state.selectedMessage.is_read = true;
+          });
+        }
+      });
+    });
+  }
+
+  function openCompose(opts) {
+    opts = opts || {};
+    document.getElementById('composeFrom').innerHTML = state.identities.map(function (i) {
+      return '<option value="' + esc(i.address) + '">' + esc(i.display_name || i.address) + '</option>';
+    }).join('');
+    document.getElementById('composeTo').value = opts.to || '';
+    document.getElementById('composeSubject').value = opts.subject || '';
+    var sel = document.getElementById('composeTemplate');
+    sel.innerHTML = '<option value="">— None —</option>' + (state.templates.map(function (t) {
+      return '<option value="' + esc(t.id) + '" data-subject="' + esc(t.subject || '') + '">' + esc(t.name || t.id) + '</option>';
+    }).join(''));
+    sel.selectedIndex = 0;
+    document.getElementById('composeBody').innerHTML = opts.body || '';
+    document.getElementById('mailComposeModal').style.display = 'flex';
+    document.getElementById('mailComposeModal').setAttribute('aria-hidden', 'false');
+  }
+
+  function closeCompose() {
+    document.getElementById('mailComposeModal').style.display = 'none';
+    document.getElementById('mailComposeModal').setAttribute('aria-hidden', 'true');
+  }
+
+  document.querySelectorAll('.mail-folder').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.mail-folder').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      state.folder = btn.getAttribute('data-folder');
+      state.offset = 0;
+      loadInbox();
+    });
+  });
+
+  document.getElementById('mailComposeBtn').addEventListener('click', function () { openCompose(); });
+  document.getElementById('mailComposeBackdrop').addEventListener('click', closeCompose);
+  document.getElementById('mailComposeCancel').addEventListener('click', closeCompose);
+  var morningBtn = document.getElementById('mailMorningEmailBtn');
+  if (morningBtn) {
+    morningBtn.addEventListener('click', function () {
+      fetch('/api/schedule-morning-email', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok || d.message) showToast(d.message || 'You\'ll get one morning email at 8:00 UTC.', 'success');
+          else showToast(d.error || 'Request failed', 'error');
+        })
+        .catch(function () { showToast('Request failed', 'error'); });
+    });
+  }
+  document.getElementById('composeTemplate').addEventListener('change', function () {
+    var opt = this.options[this.selectedIndex];
+    if (!opt || !opt.value) return;
+    var t = state.templates.find(function (x) { return String(x.id) === opt.value; });
+    if (t) {
+      if (t.subject) document.getElementById('composeSubject').value = t.subject;
+      if (t.body_html) document.getElementById('composeBody').innerHTML = t.body_html;
+      else if (t.body) document.getElementById('composeBody').innerHTML = t.body;
+    }
+  });
+  document.getElementById('mailReplyBtn').addEventListener('click', function () {
+    if (!state.selectedMessage) return;
+    openCompose({
+      to: state.selectedMessage.from_email || state.selectedMessage.from,
+      subject: (state.selectedMessage.subject || '').indexOf('Re:') === 0 ? state.selectedMessage.subject : 'Re: ' + (state.selectedMessage.subject || '')
+    });
+  });
+  document.getElementById('mailForwardBtn').addEventListener('click', function () {
+    if (!state.selectedMessage) return;
+    openCompose({
+      subject: (state.selectedMessage.subject || '').indexOf('Fwd:') === 0 ? state.selectedMessage.subject : 'Fwd: ' + (state.selectedMessage.subject || '')
+    });
+  });
+  document.getElementById('mailArchiveBtn').addEventListener('click', function () {
+    if (!state.selectedId) return;
+    fetch('/api/mail/' + encodeURIComponent(state.selectedId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: 'archive' })
+    }).then(function (r) {
+      if (r.ok) {
+        showToast('Archived', 'success');
+        state.messages = state.messages.filter(function (m) { return m.id !== state.selectedId; });
+        state.selectedId = null;
+        state.selectedMessage = null;
+        document.getElementById('mailEmpty').style.display = 'flex';
+        document.getElementById('mailDetail').style.display = 'none';
+        renderList();
+      }
+    });
+  });
+  document.getElementById('mailComposeSend').addEventListener('click', function () {
+    var from = document.getElementById('composeFrom').value;
+    var to = document.getElementById('composeTo').value.trim();
+    var subject = document.getElementById('composeSubject').value.trim();
+    var html = document.getElementById('composeBody').innerHTML;
+    if (!from || !to || !subject) { showToast('From, To and Subject required', 'error'); return; }
+    fetch('/api/mail/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: from, to: to, subject: subject, html: html, text: document.getElementById('composeBody').innerText || '' })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.success) {
+        showToast('Sent', 'success');
+        closeCompose();
+        if (state.folder === 'sent') loadInbox();
+      } else {
+        showToast(d.error || 'Send failed', 'error');
+      }
+    }).catch(function () {
+      showToast('Send failed', 'error');
+    });
+  });
+
+  document.getElementById('mailLoadMore').addEventListener('click', function () { loadInbox(true); });
+  document.getElementById('mailSearch').addEventListener('input', function () {
+    clearTimeout(window._mailSearchT);
+    window._mailSearchT = setTimeout(function () {
+      state.search = document.getElementById('mailSearch').value.trim();
+      state.offset = 0;
+      loadInbox();
+    }, 300);
+  });
+
+  loadIdentities();
+  loadTemplates();
+  loadInbox();
+})();
+</script>

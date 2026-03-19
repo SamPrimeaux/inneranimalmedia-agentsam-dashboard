@@ -1,0 +1,896 @@
+<style>
+  /* ============================================================
+     DRAW PAGE - Fragment injected into IAM shell
+     FIX 1: Outer wrapper uses .draw-excal-wrap so shell's
+             .main-content:has(.draw-excal-wrap) applies (flex fill).
+     FIX 2: Wrapper fills shell content: flex:1 1 0, min-height:0,
+             no fixed vh (so it respects shell's main content area).
+     FIX 3: padding-right so library panel doesn't overlap shell chrome;
+             padding-bottom so AI toolbar sits above shell footer.
+     FIX 4: Explicit height chain so Excalidraw gets a real pixel height.
+     ============================================================ */
+
+  .draw-page-wrap.draw-excal-wrap {
+    position: relative;
+    width: 100%;
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-canvas, #f5f6f8);
+    box-sizing: border-box;
+    /* Keep library panel and AI toolbar inside shell chrome */
+    padding-right: 12px;
+    padding-bottom: 56px;
+  }
+
+
+  /* React will mount Excalidraw here and only here */
+  #excalidraw-canvas-root {
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+    width: 100%;
+  }
+
+
+  /* Excalidraw theme overrides: nav-bar color continuity */
+  #excalidraw-canvas-root .excalidraw {
+    --default-bg-color:           var(--bg-canvas, #f5f6f8);
+    --color-bg-container:         var(--bg-canvas, #f5f6f8);
+    --island-bg-color:            var(--bg-nav, #1f2937);
+    --island-bg-color-alt:        var(--bg-nav, #1f2937);
+    --popup-bg-color:             var(--bg-elevated, #f9fafb);
+    --popup-secondary-bg-color:   var(--bg-canvas, #f5f6f8);
+    --popup-text-color:           var(--text-primary, #111827);
+    --color-on-surface:           var(--text-nav, #fff);
+    --default-border-color:       var(--border-nav, rgba(255,255,255,0.2));
+    --color-surface-high:         var(--border-nav, rgba(255,255,255,0.15));
+    --input-bg-color:             var(--bg-elevated, #f9fafb);
+    --input-border-color:         var(--border, #e5e7eb);
+    --button-gray-1:              rgba(255,255,255,0.08);
+    --button-gray-2:              var(--border-nav, rgba(255,255,255,0.2));
+    --button-gray-3:              rgba(255,255,255,0.25);
+    --sidebar-bg-color:           var(--bg-nav, #1f2937);
+    --sidebar-border-color:       var(--border-nav, rgba(255,255,255,0.2));
+    --icon-fill-color:            var(--text-nav, #fff);
+    --keybinding-color:           var(--text-nav-muted, rgba(255,255,255,0.75));
+    --color-gray-80:              var(--text-nav, #fff);
+    --color-gray-70:              var(--text-nav-muted, rgba(255,255,255,0.75));
+  }
+
+
+  /* Toolbars / islands / menus: match nav bar */
+  #excalidraw-canvas-root .excalidraw .Stack_horizontal,
+  #excalidraw-canvas-root .excalidraw [class*="App-menu"],
+  #excalidraw-canvas-root .excalidraw [class*="island"],
+  #excalidraw-canvas-root .excalidraw [class*="App-"],
+  #excalidraw-canvas-root .excalidraw [class*="Toolbar"],
+  #excalidraw-canvas-root .excalidraw [class*="toolbar"],
+  #excalidraw-canvas-root .excalidraw [class*="Menu"],
+  #excalidraw-canvas-root .excalidraw [class*="menu"] {
+    background: var(--bg-nav, #1f2937) !important;
+    border-color: var(--border-nav, rgba(255,255,255,0.2)) !important;
+    color: var(--text-nav, #fff) !important;
+  }
+
+
+  /* Buttons and icons */
+  #excalidraw-canvas-root .excalidraw button,
+  #excalidraw-canvas-root .excalidraw [class*="ToolButton"],
+  #excalidraw-canvas-root .excalidraw .IconButton {
+    color: var(--text-nav, #fff) !important;
+  }
+  #excalidraw-canvas-root .excalidraw svg {
+    fill: var(--text-nav, #fff);
+    color: var(--text-nav, #fff) !important;
+  }
+  #excalidraw-canvas-root .excalidraw [class*="App-"] svg,
+  #excalidraw-canvas-root .excalidraw [class*="Toolbar"] svg,
+  #excalidraw-canvas-root .excalidraw [class*="toolbar"] svg {
+    fill: var(--text-nav, #fff) !important;
+    color: var(--text-nav, #fff) !important;
+  }
+  #excalidraw-canvas-root .excalidraw button:hover,
+  #excalidraw-canvas-root .excalidraw .IconButton:hover {
+    background: rgba(255,255,255,0.12) !important;
+    color: var(--text-nav, #fff) !important;
+  }
+  #excalidraw-canvas-root .excalidraw button[aria-pressed="true"],
+  #excalidraw-canvas-root .excalidraw .IconButton[aria-pressed="true"] {
+    background: var(--accent, #3b82f6) !important;
+    color: #fff !important;
+  }
+
+
+  /* Footer / zoom pill */
+  #excalidraw-canvas-root .excalidraw [class*="footer"],
+  #excalidraw-canvas-root .excalidraw [class*="Footer"],
+  #excalidraw-canvas-root .excalidraw [class*="zoom"],
+  #excalidraw-canvas-root .excalidraw [class*="pill"] {
+    background: var(--bg-nav, #1f2937) !important;
+    border-color: var(--border-nav, rgba(255,255,255,0.2));
+    color: var(--text-nav, #fff);
+  }
+  #excalidraw-canvas-root .excalidraw [class*="footer"] button,
+  #excalidraw-canvas-root .excalidraw [class*="Footer"] button,
+  #excalidraw-canvas-root .excalidraw [class*="footer"] svg,
+  #excalidraw-canvas-root .excalidraw [class*="Footer"] svg {
+    color: var(--text-nav, #fff) !important;
+    fill: var(--text-nav, #fff);
+  }
+
+
+  /* Inputs */
+  #excalidraw-canvas-root .excalidraw input,
+  #excalidraw-canvas-root .excalidraw [contenteditable="true"] {
+    color: var(--text-nav, #fff) !important;
+    background: rgba(255,255,255,0.1) !important;
+    border-color: var(--border-nav, rgba(255,255,255,0.2));
+  }
+  #excalidraw-canvas-root .excalidraw input::placeholder {
+    color: var(--text-nav-muted, rgba(255,255,255,0.6));
+  }
+
+
+  /* Library / sidebar drawer */
+  #excalidraw-canvas-root .excalidraw [class*="Library"],
+  #excalidraw-canvas-root .excalidraw [class*="library"],
+  #excalidraw-canvas-root .excalidraw [class*="Sidebar"],
+  #excalidraw-canvas-root .excalidraw [class*="sidebar"] {
+    background: var(--bg-nav, #1f2937) !important;
+    border-color: var(--border-nav, rgba(255,255,255,0.2)) !important;
+    color: var(--text-nav, #fff) !important;
+  }
+  #excalidraw-canvas-root .excalidraw [class*="Library"] button,
+  #excalidraw-canvas-root .excalidraw [class*="Library"] input,
+  #excalidraw-canvas-root .excalidraw [class*="Library"] svg,
+  #excalidraw-canvas-root .excalidraw [class*="library"] button,
+  #excalidraw-canvas-root .excalidraw [class*="library"] input,
+  #excalidraw-canvas-root .excalidraw [class*="library"] svg,
+  #excalidraw-canvas-root .excalidraw [class*="Sidebar"] button,
+  #excalidraw-canvas-root .excalidraw [class*="Sidebar"] input,
+  #excalidraw-canvas-root .excalidraw [class*="Sidebar"] svg {
+    color: var(--text-nav, #fff) !important;
+    fill: var(--text-nav, #fff);
+    border-color: var(--border-nav, rgba(255,255,255,0.2));
+  }
+
+
+  /* Storage selector - top-right overlay */
+  .draw-storage-bar {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-nav, #1f2937);
+    border: 1px solid var(--border-nav, rgba(255,255,255,0.2));
+    border-radius: 6px;
+    padding: 5px 10px;
+    pointer-events: all;
+  }
+  .draw-storage-bar label {
+    color: var(--text-nav-muted, rgba(255,255,255,0.7));
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .draw-storage-bar select {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--border-nav, rgba(255,255,255,0.2));
+    border-radius: 4px;
+    color: var(--text-nav, #fff);
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .draw-library-hint {
+    font-size: 11px;
+    color: var(--text-nav-muted, rgba(255,255,255,0.6));
+    white-space: nowrap;
+    display: none;
+  }
+
+
+  /* AI workflow panel - bottom center, above shell footer (padding-bottom on wrap reserves space) */
+  .draw-ai-panel {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    background: var(--bg-nav, #1f2937);
+    border: 1px solid var(--border-nav, rgba(255,255,255,0.2));
+    border-radius: 8px;
+    padding: 6px 10px;
+    pointer-events: all;
+  }
+  .draw-ai-panel button {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--border-nav, rgba(255,255,255,0.2));
+    border-radius: 4px;
+    color: var(--text-nav, #fff);
+    padding: 5px 11px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .draw-ai-panel button:hover { background: rgba(255,255,255,0.16); }
+  .draw-ai-panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .draw-ai-panel .draw-ai-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border-nav, rgba(255,255,255,0.2));
+  }
+
+
+  /* Load error state */
+  #draw-load-error {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: var(--bg-nav, #1f2937);
+    color: var(--text-nav, #fff);
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+    z-index: 200;
+  }
+  #draw-load-error strong { font-size: 16px; }
+  #draw-load-error p { margin: 0; font-size: 13px; color: var(--text-nav-muted, rgba(255,255,255,0.7)); max-width: 360px; }
+  #draw-load-error button {
+    margin-top: 4px;
+    background: var(--accent, #3b82f6);
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    padding: 7px 16px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+
+  /* Save status toast */
+  #draw-save-status {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 60;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  #draw-save-status.visible { opacity: 1; }
+  #draw-save-status.ok { background: #16a34a; color: #fff; }
+  #draw-save-status.err { background: #dc2626; color: #fff; }
+</style>
+
+
+<!-- =========================================================
+     DRAW PAGE MARKUP
+     draw-page-wrap.draw-excal-wrap (flex column, fills shell main)
+       ├── #excalidraw-canvas-root   ← React mounts here ONLY
+       ├── .draw-storage-bar         ← absolute overlay, safe from React
+       ├── .draw-ai-panel            ← absolute overlay, above footer
+       ├── #draw-load-error          ← error state overlay
+     └── #draw-save-status           ← toast
+     ========================================================= -->
+<div class="draw-page-wrap draw-excal-wrap" id="draw-page-wrap">
+
+
+  <!-- React mount target: clean div, no extra children -->
+  <div id="excalidraw-canvas-root"></div>
+
+
+  <!-- Storage backend selector (top-right) -->
+  <div class="draw-storage-bar">
+    <label for="storageBackend">Save to:</label>
+    <select id="storageBackend" aria-label="Storage backend">
+      <option value="local">Local Browser</option>
+      <option value="cloudflare">Inner Animal Cloud</option>
+      <option value="google-drive">Google Drive</option>
+      <option value="github">GitHub Gists</option>
+    </select>
+    <span id="drawLibraryHint" class="draw-library-hint"></span>
+  </div>
+
+
+  <!-- AI generation panel (bottom-center, above shell footer) -->
+  <div class="draw-ai-panel">
+    <button type="button" id="btnGenerateFromConvo">From Chat</button>
+    <div class="draw-ai-sep"></div>
+    <button type="button" id="btnCreateUml">UML</button>
+    <button type="button" id="btnCreateMockup">Mockup</button>
+    <button type="button" id="btnCreateWireframe">Wireframe</button>
+  </div>
+
+
+  <!-- Error state (hidden until needed) -->
+  <div id="draw-load-error" role="alert" aria-live="polite">
+    <strong>Draw failed to load</strong>
+    <p id="draw-error-msg">Check the browser console (F12) for errors.</p>
+    <button onclick="location.reload()">Reload page</button>
+  </div>
+
+
+  <!-- Save status toast -->
+  <div id="draw-save-status"></div>
+
+
+</div>
+
+
+<!-- Excalidraw prod CSS -->
+<link rel="stylesheet" href="https://esm.sh/@excalidraw/excalidraw@0.18.0/dist/prod/index.css" />
+
+
+<!-- Asset path for Excalidraw's internal asset loading -->
+<script nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+  window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw@0.18.0/dist/prod/";
+</script>
+
+
+<!-- Shim: replace unload listener with pagehide to suppress deprecation warning -->
+<script nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+(function () {
+  var origAdd = EventTarget.prototype.addEventListener;
+  var origRem = EventTarget.prototype.removeEventListener;
+  var map = new WeakMap();
+  EventTarget.prototype.addEventListener = function (type, fn, opts) {
+    if (type === 'unload' && this === window) {
+      var wrapped = function (e) { if (!e.persisted) fn.call(window, e); };
+      if (!map.has(fn)) map.set(fn, wrapped);
+      return origAdd.call(this, 'pagehide', wrapped, opts);
+    }
+    return origAdd.apply(this, arguments);
+  };
+  EventTarget.prototype.removeEventListener = function (type, fn, opts) {
+    if (type === 'unload' && this === window) {
+      var wrapped = map.get(fn);
+      if (wrapped) { map.delete(fn); return origRem.call(this, 'pagehide', wrapped, opts); }
+    }
+    return origRem.apply(this, arguments);
+  };
+})();
+</script>
+
+
+<!-- Import map: pin React versions -->
+<script type="importmap" nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+{
+  "imports": {
+    "react":           "https://esm.sh/react@18.2.0",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "react-dom":       "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client":"https://esm.sh/react-dom@18.2.0/client"
+  }
+}
+</script>
+
+
+<!-- =========================================================
+     STORAGE HELPERS
+     getStoredScene / setStoredScene on window so Excalidraw
+     module script can call them (separate script tag = same
+     window scope, no module isolation issues).
+     ========================================================= -->
+<script nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+(function () {
+  var IDB_NAME  = 'draw-storage';
+  var IDB_STORE = 'scenes';
+  var LS_KEY    = 'dashboard-draw-scene';
+
+
+  function getBackend() {
+    var el = document.getElementById('storageBackend');
+    return el ? el.value : 'local';
+  }
+  function getProjectId() {
+    return localStorage.getItem('currentProject') || 'default';
+  }
+  function openIDB() {
+    return new Promise(function (res, rej) {
+      try {
+        var r = indexedDB.open(IDB_NAME, 1);
+        r.onerror = rej;
+        r.onsuccess = function () { res(r.result); };
+        r.onupgradeneeded = function () {
+          r.result.createObjectStore(IDB_STORE, { keyPath: 'projectId' });
+        };
+      } catch (e) { rej(e); }
+    });
+  }
+
+
+  window.getStoredScene = function () {
+    var projectId = getProjectId();
+    return openIDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx  = db.transaction(IDB_STORE, 'readonly');
+        var req = tx.objectStore(IDB_STORE).get(projectId);
+        req.onsuccess = function () {
+          var row = req.result;
+          if (row && row.scene && row.scene.elements && row.scene.appState) {
+            if (!Array.isArray(row.scene.appState.collaborators))
+              row.scene.appState.collaborators = [];
+            resolve(row.scene);
+          } else {
+            // IDB miss — try localStorage fallback
+            try {
+              var raw = localStorage.getItem(LS_KEY);
+              if (raw) {
+                var d = JSON.parse(raw);
+                if (d.elements && d.appState) {
+                  if (!Array.isArray(d.appState.collaborators))
+                    d.appState.collaborators = [];
+                  resolve(d); return;
+                }
+              }
+            } catch (_) {}
+            resolve(null);
+          }
+        };
+        req.onerror = reject;
+      });
+    }).catch(function () {
+      // IDB unavailable — localStorage only
+      try {
+        var raw = localStorage.getItem(LS_KEY);
+        if (raw) {
+          var d = JSON.parse(raw);
+          if (d.elements && d.appState) {
+            if (!Array.isArray(d.appState.collaborators))
+              d.appState.collaborators = [];
+            return d;
+          }
+        }
+      } catch (_) {}
+      return null;
+    });
+  };
+
+
+  window.setStoredScene = function (data) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch (_) {}
+    var projectId = getProjectId();
+    openIDB().then(function (db) {
+      var tx  = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put({ projectId: projectId, scene: data, updatedAt: Date.now() });
+    }).catch(function () {});
+    if (getBackend() !== 'local' && typeof window.drawExportAndSaveToRemote === 'function') {
+      window.drawExportAndSaveToRemote();
+    }
+  };
+
+
+  window.getCurrentProjectId = getProjectId;
+
+
+  // Save status toast helper
+  window.showSaveStatus = function (ok) {
+    var el = document.getElementById('draw-save-status');
+    if (!el) return;
+    el.textContent = ok ? 'Saved' : 'Save failed';
+    el.className = 'visible ' + (ok ? 'ok' : 'err');
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.className = ''; }, 2200);
+  };
+
+
+  // Remote export helper
+  var exportTimer;
+  window.drawExportAndSaveToRemote = function () {
+    clearTimeout(exportTimer);
+    exportTimer = setTimeout(function () {
+      var api = window.__excalidrawApi;
+      if (!api || typeof api.exportToBlob !== 'function') return;
+      api.exportToBlob().then(function (blob) {
+        var reader = new FileReader();
+        reader.onloadend = function () {
+          var backend = getBackend();
+          var url = '/api/draw/save';
+          if (backend === 'google-drive') url = '/api/draw/save-google';
+          else if (backend === 'github')  url = '/api/draw/save-github';
+          fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              projectId: getProjectId(),
+              canvasData: reader.result,
+              timestamp: Date.now()
+            }),
+            credentials: 'include'
+          }).then(function (r) { window.showSaveStatus(r.ok); });
+        };
+        reader.readAsDataURL(blob);
+      }).catch(function () {});
+    }, 1500);
+  };
+
+
+  // Persist storage backend choice
+  var sel = document.getElementById('storageBackend');
+  if (sel) {
+    var saved = localStorage.getItem('drawStorageBackend');
+    if (saved) sel.value = saved;
+    sel.addEventListener('change', function () {
+      localStorage.setItem('drawStorageBackend', sel.value);
+    });
+  }
+})();
+</script>
+
+
+<!-- =========================================================
+     MAIN EXCALIDRAW MODULE
+     ========================================================= -->
+<script type="module" nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+(function () {
+  var LIBRARIES_BASE = (location.origin || '') + '/static/dashboard/draw-libraries';
+
+
+  // Watchdog: if Excalidraw hasn't mounted in 8s, show error
+  var watchdog = setTimeout(function () {
+    var root = document.getElementById('excalidraw-canvas-root');
+    if (!root || root.querySelector('.excalidraw')) return; // mounted fine
+    showError('Excalidraw did not mount. Check console (F12) — likely a network/CDN issue loading esm.sh.');
+  }, 8000);
+
+
+  function showError(msg) {
+    var el = document.getElementById('draw-load-error');
+    var msgEl = document.getElementById('draw-error-msg');
+    if (el)    el.style.display = 'flex';
+    if (msgEl) msgEl.textContent = msg || 'Check console (F12).';
+  }
+
+
+  function loadAllLibraries(loadLibraryFromBlob, mergeLibraryItems) {
+    return fetch(LIBRARIES_BASE + '/manifest.json', { credentials: 'include', cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('manifest ' + r.status);
+        return r.json();
+      })
+      .then(function (manifest) {
+        var list = (manifest.libraries || []);
+        if (!list.length) return [];
+        return Promise.all(list.map(function (name) {
+          return fetch(LIBRARIES_BASE + '/' + encodeURIComponent(name), {
+            credentials: 'include', cache: 'no-store'
+          })
+            .then(function (res) { return res.ok ? res.blob() : null; })
+            .then(function (blob) {
+              if (!blob) return [];
+              return loadLibraryFromBlob(blob, 'published')
+                .then(function (data) { return data.libraryItems || []; });
+            })
+            .catch(function () { return []; });
+        })).then(function (arrays) {
+          return arrays.reduce(function (acc, items) {
+            return mergeLibraryItems(acc, items || []);
+          }, []);
+        });
+      })
+      .catch(function (err) {
+        console.warn('[Draw] Libraries manifest not found:', err && err.message);
+        var hint = document.getElementById('drawLibraryHint');
+        if (hint) {
+          hint.textContent = 'Could not load cloud libraries.';
+          hint.style.display = 'inline';
+          hint.style.color = 'var(--warning, #f59e0b)';
+        }
+        return [];
+      });
+  }
+
+
+  Promise.all([
+    import('https://esm.sh/react@18.2.0'),
+    import('https://esm.sh/react-dom@18.2.0/client'),
+    import('https://esm.sh/@excalidraw/excalidraw@0.18.0?deps=react@18.2.0,react-dom@18.2.0&bundle-deps')
+  ]).then(function (mods) {
+    clearTimeout(watchdog);
+
+
+    var React          = mods[0].default || mods[0];
+    var createRoot     = mods[1].createRoot;
+    var ExcalidrawMod  = mods[2];
+    var Excalidraw              = ExcalidrawMod.Excalidraw;
+    var loadLibraryFromBlob     = ExcalidrawMod.loadLibraryFromBlob;
+    var mergeLibraryItems       = ExcalidrawMod.mergeLibraryItems;
+    var parseLibraryTokensFromUrl = ExcalidrawMod.parseLibraryTokensFromUrl;
+
+
+    if (!Excalidraw) {
+      showError('Excalidraw export not found in module. CDN may have changed.');
+      return;
+    }
+
+
+    var mountEl = document.getElementById('excalidraw-canvas-root');
+    if (!mountEl) { showError('#excalidraw-canvas-root not found in DOM.'); return; }
+
+
+    // Load saved scene + libraries in parallel
+    var scenePromise = (typeof window.getStoredScene === 'function')
+      ? Promise.resolve().then(function () { return window.getStoredScene(); })
+      : Promise.resolve(null);
+
+
+    var libPromise = loadAllLibraries(loadLibraryFromBlob, mergeLibraryItems);
+
+
+    Promise.all([scenePromise, libPromise]).then(function (results) {
+      var scene        = results[0];
+      var libraryItems = results[1] || [];
+
+
+      var initialData = {
+        libraryItems: libraryItems
+      };
+      if (scene) {
+        initialData.elements = scene.elements;
+        initialData.appState = scene.appState;
+      }
+
+
+      // Update library hint
+      var hint = document.getElementById('drawLibraryHint');
+      if (hint && libraryItems.length) {
+        hint.textContent = libraryItems.length + ' libs loaded';
+        hint.style.display = 'inline';
+        hint.style.color = '';
+      }
+
+
+      var excalApi = null;
+
+
+      function onApiReady(api) {
+        excalApi = api;
+        window.__excalidrawApi = api;
+
+
+        // Push libraries into the running instance
+        if (libraryItems.length) {
+          setTimeout(function () {
+            api.updateLibrary({
+              libraryItems: libraryItems,
+              openLibraryMenu: false,
+              defaultStatus: 'published'
+            }).catch(function () {});
+          }, 400);
+        }
+
+
+        // Handle #-based library install URLs (excalidraw.com share links)
+        if (location.hash && parseLibraryTokensFromUrl) {
+          try {
+            var tokens = parseLibraryTokensFromUrl();
+            if (tokens && tokens.libraryUrl) {
+              fetch(tokens.libraryUrl, { mode: 'cors' })
+                .then(function (r) { return r.ok ? r.blob() : null; })
+                .then(function (blob) {
+                  if (!blob) return;
+                  return loadLibraryFromBlob(blob, 'published').then(function (data) {
+                    var items = data.libraryItems || [];
+                    if (items.length) {
+                      api.updateLibrary({ libraryItems: items, merge: true, openLibraryMenu: true });
+                    }
+                    location.hash = '';
+                  });
+                })
+                .catch(function () { location.hash = ''; });
+            }
+          } catch (_) {}
+        }
+      }
+
+
+      var root = createRoot(mountEl);
+      root.render(
+        React.createElement(Excalidraw, {
+          excalidrawAPI: onApiReady,
+          initialData: initialData,
+          onChange: function (elements, appState) {
+            if (typeof window.setStoredScene === 'function') {
+              window.setStoredScene({ elements: elements, appState: appState });
+            }
+          }
+        })
+      );
+
+
+    }).catch(function (err) {
+      console.error('[Draw] Init error:', err);
+      showError((err && err.message) ? err.message : 'Init failed. Check console.');
+    });
+
+
+  }).catch(function (err) {
+    clearTimeout(watchdog);
+    console.error('[Draw] Module load error:', err);
+    showError('Failed to load Excalidraw from CDN. '
+      + ((err && err.message) ? err.message : '')
+      + ' — check network/CSP and try refreshing.');
+  });
+})();
+</script>
+
+
+<!-- =========================================================
+     AI WORKFLOW PANEL LOGIC
+     ========================================================= -->
+<script nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
+(function () {
+  function getApi() { return window.__excalidrawApi || null; }
+
+
+  function setDisabled(on) {
+    ['btnGenerateFromConvo','btnCreateUml','btnCreateMockup','btnCreateWireframe'].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.disabled = on;
+    });
+  }
+
+
+  function getCurrentConversation() {
+    return fetch('/api/agent/conversations', { credentials: 'include' })
+      .then(function (r) { return r.ok ? r.json() : { conversations: [] }; })
+      .then(function (d) {
+        var list = (d.conversations || []);
+        if (!list.length) return null;
+        var latest = list[0];
+        return fetch('/api/agent/conversations/' + encodeURIComponent(latest.id), { credentials: 'include' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (!data || !data.messages) return null;
+            return { conversationId: latest.id, messages: data.messages, title: latest.title };
+          });
+      });
+  }
+
+
+  function renderAIGenerated(visualData, generationType) {
+    var api = getApi();
+    if (!api) return;
+
+
+    if (visualData.type === 'mermaid') {
+      var content = visualData.content || '';
+      if (!content) return;
+      var el = document.createElement('div');
+      el.setAttribute('data-mermaid-preview', '1');
+      el.style.cssText = 'position:absolute;left:80px;top:80px;max-width:520px;padding:14px 16px;background:var(--bg-elevated,#f9fafb);border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;color:var(--text-primary,#111);z-index:10;box-shadow:0 2px 12px rgba(0,0,0,0.15);';
+      el.textContent = content;
+      var wrap = document.getElementById('excalidraw-canvas-root');
+      if (wrap) {
+        var prev = wrap.querySelector('[data-mermaid-preview]');
+        if (prev) prev.remove();
+        wrap.appendChild(el);
+      }
+      if (generationType) window.__drawGenerationType = generationType;
+      window.showSaveStatus && window.showSaveStatus(true);
+      return;
+    }
+
+
+    if (visualData.type === 'shapes' && Array.isArray(visualData.items)) {
+      var existing = api.getSceneElements();
+      var maxX = 0, maxY = 0;
+      existing.forEach(function (e) {
+        if (e.x + (e.width || 0) > maxX) maxX = e.x + (e.width || 0);
+        if (e.y + (e.height || 0) > maxY) maxY = e.y + (e.height || 0);
+      });
+      var ox = maxX + 40;
+      var oy = maxY < 80 ? 80 : maxY + 40;
+      var seed = Math.floor(Math.random() * 1e9);
+      var newEls = visualData.items.map(function (it, j) {
+        return {
+          id: 'ai_' + (seed + j),
+          type: it.type === 'text' ? 'text' : 'rectangle',
+          x: (it.x || 0) + ox,
+          y: (it.y || 0) + oy,
+          width:  Math.max(20, it.w || 100),
+          height: Math.max(20, it.h || 40),
+          angle: 0,
+          strokeColor: '#1e1e1e',
+          backgroundColor: it.type === 'text' ? 'transparent' : '#e8e8e8',
+          fillStyle: 'solid',
+          strokeWidth: 2,
+          roundness: { type: 1 },
+          seed: seed + j,
+          version: 1,
+          versionNonce: seed + j
+        };
+      });
+      api.updateScene({ elements: existing.concat(newEls) });
+      if (generationType) window.__drawGenerationType = generationType;
+      window.showSaveStatus && window.showSaveStatus(true);
+    }
+  }
+
+
+  function callGenerateEndpoint(url, bodyExtra) {
+    setDisabled(true);
+    getCurrentConversation().then(function (conv) {
+      if (!conv || !conv.messages.length) {
+        alert('No agent conversation found. Use the Agent page first to create context.');
+        setDisabled(false);
+        return;
+      }
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ conversation_id: conv.conversationId }, bodyExtra || {})),
+        credentials: 'include'
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) { if (data) renderAIGenerated(data, data.generation_type); })
+        .catch(function () { window.showSaveStatus && window.showSaveStatus(false); });
+    }).finally(function () { setDisabled(false); });
+  }
+
+
+  function generateFromConvo() {
+    setDisabled(true);
+    getCurrentConversation().then(function (conv) {
+      if (!conv) {
+        alert('No agent conversation found.');
+        setDisabled(false);
+        return;
+      }
+      return fetch('/api/draw/analyze-conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: conv.conversationId }),
+        credentials: 'include'
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (analysis) {
+          var intent = (analysis && analysis.intent) || 'wireframe';
+          var url = intent === 'uml'    ? '/api/draw/generate-uml'
+                  : intent === 'mockup' ? '/api/draw/generate-mockup'
+                  :                       '/api/draw/generate-wireframe';
+          return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversation_id: conv.conversationId, requirements: analysis && analysis.requirements }),
+            credentials: 'include'
+          }).then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) { if (data) renderAIGenerated(data, data.generation_type); });
+        });
+    }).finally(function () { setDisabled(false); });
+  }
+
+
+  document.getElementById('btnGenerateFromConvo').addEventListener('click', generateFromConvo);
+  document.getElementById('btnCreateUml').addEventListener('click', function () {
+    callGenerateEndpoint('/api/draw/generate-uml');
+  });
+  document.getElementById('btnCreateMockup').addEventListener('click', function () {
+    callGenerateEndpoint('/api/draw/generate-mockup');
+  });
+  document.getElementById('btnCreateWireframe').addEventListener('click', function () {
+    callGenerateEndpoint('/api/draw/generate-wireframe');
+  });
+})();
+</script>

@@ -1,0 +1,36 @@
+---
+description: Before deploying the worker, any changed file under dashboard/ that is served from R2 must be uploaded to agent-sam first. Enforces R2 upload step so dashboard pages stay in sync.
+globs: "dashboard/**"
+alwaysApply: true
+---
+
+# Dashboard files and R2 before deploy
+
+## Mandatory step
+
+**Any change to a file under `dashboard/` that is served from R2 must be followed by an R2 upload of that file before deploying the worker.** Otherwise the live site will serve stale dashboard pages.
+
+## When this applies
+
+- You edited or added any file under `dashboard/` (e.g. `dashboard/cloud.html`, `dashboard/agent.html`, `dashboard/chats.html`, etc.).
+- You are about to run `npm run deploy` or `./scripts/deploy-with-record.sh`.
+
+## What to do
+
+1. **Before running deploy**, for each changed file under `dashboard/` that is served from R2 (HTML and any other static assets that live at `static/dashboard/`):
+   - Upload it to bucket **agent-sam** at key **static/dashboard/<filename>**.
+2. **Command** (from repo root). **Always include `--remote`** — without it, uploads go to local R2 only and production is unchanged:
+
+   ```bash
+   ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/<filename> --file=dashboard/<filename> --content-type=text/html --remote -c wrangler.production.toml
+   ```
+
+   For example, after changing `dashboard/cloud.html`:
+
+   ```bash
+   ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/cloud.html --file=dashboard/cloud.html --content-type=text/html --remote -c wrangler.production.toml
+   ```
+
+3. **Then** run deploy.
+
+Do not deploy the worker until the relevant dashboard file(s) have been uploaded to R2. This keeps every page you touch in sync with production.

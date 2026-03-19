@@ -1,0 +1,9 @@
+# Approval before deploy
+
+Before making any file changes that affect production, uploading to R2, or running wrangler deploy/secret commands:
+
+1. Show a complete diff of all planned changes.
+2. Explicitly ask for approval.
+3. Never deploy or upload autonomously — wait for the user to say "approved" (or equivalent) before executing deploy/upload.
+
+This applies to every agent session in this project.

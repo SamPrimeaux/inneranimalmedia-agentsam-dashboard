@@ -1,0 +1,14 @@
+---
+alwaysApply: true
+---
+
+# HARD RULES — read before every action
+
+- NEVER deploy without Sam typing "deploy approved"
+- NEVER rewrite FloatingPreviewPanel.jsx — surgical edits only, line numbers first
+- NEVER rewrite worker.js auth/OAuth handlers
+- NEVER rewrite agent.html
+- Before any file change: state file + line numbers + what changes. Wait for approval.
+- No emojis anywhere in code or UI
+- No hex colors in JSX/CSS — CSS vars only
+- If Sam says stop: run git status and stop

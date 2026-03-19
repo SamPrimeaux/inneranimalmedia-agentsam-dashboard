@@ -1,0 +1,27 @@
+{
+  "name": "iam-pty",
+  "version": "1.0.1",
+  "main": "server.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:report-upload": "playwright test && ./scripts/upload-playwright-report-to-r2.sh",
+    "start": "node server.js",
+    "deploy": "./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@cloudflare/playwright": "^1.1.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "wrangler": "^4.75.0"
+  },
+  "type": "module"
+}

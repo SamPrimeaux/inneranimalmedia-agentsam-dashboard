@@ -1,0 +1,1044 @@
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<div id="pipelines-list-panel">
+  <div class="page-header pipelines-page-header">
+    <div>
+      <h1 class="page-title">Pipelines</h1>
+      <p class="page-subtitle">Build, test, and deploy workflows. Run on push, schedule, or manually.</p>
+    </div>
+    <button type="button" class="btn btn-primary" id="pipelines-new">+ New Pipeline</button>
+  </div>
+
+  <!-- Connected Cloudflare Pipelines streams (event ingest) -->
+  <div class="card pipelines-streams-card" style="margin-bottom: 24px;">
+    <h3 class="pipelines-analytics-title" style="margin-bottom: 12px;">Connected streams</h3>
+    <p style="font-size: 13px; color: var(--text-secondary); margin: 0 0 16px 0;">Event streams configured in this Worker. Send events via HTTP or from code using the binding.</p>
+    <div class="pipelines-stream-list">
+      <div class="pipelines-stream-item card" style="padding: 16px; margin-bottom: 12px; background: var(--bg-elevated); border: 1px solid var(--border);">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px;">
+          <strong style="color: var(--text-primary);">inneranimalpro_stream</strong>
+          <code style="font-size: 12px; color: var(--text-secondary);">7907f409b0d444b9a09c901fbdf05f1f</code>
+          <span style="font-size: 12px; color: var(--text-secondary);">Sink: inneranimalpro_sink</span>
+        </div>
+        <details style="font-size: 13px;">
+          <summary style="cursor: pointer; color: var(--accent); margin-bottom: 8px;">Send via HTTP (curl)</summary>
+          <pre id="pipelines-curl-block" style="margin: 0; padding: 12px; background: var(--bg-canvas); border-radius: 8px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;">curl -X POST https://7907f409b0d444b9a09c901fbdf05f1f.ingest.cloudflare.com \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -d '[{"user_id":"sample_user_id","event_name":"sample_event_name"}]'</pre>
+          <button type="button" class="btn pipelines-copy-btn" data-copy-target="pipelines-curl-block" style="margin-top: 8px; font-size: 12px;">Copy</button>
+        </details>
+        <details style="font-size: 13px; margin-top: 8px;">
+          <summary style="cursor: pointer; color: var(--accent); margin-bottom: 8px;">From Worker (binding)</summary>
+          <pre id="pipelines-binding-block" style="margin: 0; padding: 12px; background: var(--bg-canvas); border-radius: 8px; overflow-x: auto; font-size: 12px; white-space: pre-wrap;">await env.INNERANIMALPRO_STREAM.send([
+  { user_id: "sample_user_id", event_name: "sample_event_name" }
+]);</pre>
+          <button type="button" class="btn pipelines-copy-btn" data-copy-target="pipelines-binding-block" style="margin-top: 8px; font-size: 12px;">Copy</button>
+        </details>
+        <div style="margin-top: 12px;">
+          <button type="button" class="btn btn-primary" id="pipelines-stream-send-test" style="font-size: 13px;">Send test event</button>
+          <span id="pipelines-stream-send-status" style="margin-left: 10px; font-size: 13px; color: var(--text-secondary);"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="pipelines-analytics" class="pipelines-analytics card">
+    <h3 class="pipelines-analytics-title">Pipeline analytics</h3>
+    <div class="pipelines-kpis">
+      <div class="pipeline-kpi"><span class="pipeline-kpi-value" id="pipelines-kpi-total">0</span><span class="pipeline-kpi-label">Pipelines</span></div>
+      <div class="pipeline-kpi"><span class="pipeline-kpi-value" id="pipelines-kpi-runs">0</span><span class="pipeline-kpi-label">Total runs</span></div>
+      <div class="pipeline-kpi"><span class="pipeline-kpi-value pipeline-kpi-success" id="pipelines-kpi-success">0%</span><span class="pipeline-kpi-label">Success rate</span></div>
+      <div class="pipeline-kpi"><span class="pipeline-kpi-value pipeline-kpi-fail" id="pipelines-kpi-failed">0</span><span class="pipeline-kpi-label">Failed</span></div>
+    </div>
+    <div class="pipelines-24h-row" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-secondary);">
+      <strong style="color: var(--text-primary);">Last 24h:</strong>
+      <span id="pipelines-24h-runs">—</span> runs
+      <span style="margin-left: 12px;">Last run: <span id="pipelines-24h-last">—</span></span>
+      <span style="margin-left: 12px;">Success rate: <span id="pipelines-24h-rate">—</span></span>
+      <span id="pipelines-24h-updated" style="margin-left: 12px; font-size: 12px; color: var(--text-muted);"></span>
+    </div>
+    <div class="pipelines-chart-wrap">
+      <p class="pipelines-chart-label">Runs per pipeline (top 12)</p>
+      <div id="pipelines-chart-bars" class="pipelines-chart-bars"></div>
+    </div>
+  </div>
+
+  <div class="pipelines-toolbar">
+    <h2 class="pipelines-section-title" id="pipelines-section-title">MY PIPELINES (<span id="pipelines-total">0</span>)</h2>
+    <div class="pipelines-filters">
+      <button type="button" class="btn pipelines-filter-btn active" data-filter="">All</button>
+      <button type="button" class="btn pipelines-filter-btn" data-filter="active">Active</button>
+      <label for="pipelines-status" class="pipelines-status-label">Last run</label>
+      <select id="pipelines-status">
+        <option value="">Any</option>
+        <option value="success">Success</option>
+        <option value="failed">Failed</option>
+        <option value="running">Running</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="pipelines-list" class="pipelines-list">
+    <div id="pipelines-empty" class="pipelines-empty card">
+      <p class="pipelines-empty-title">No workflow pipelines yet</p>
+      <p class="pipelines-empty-desc">Workflow pipelines (build, test, deploy) will appear here. Your event stream is listed in <strong>Connected streams</strong> above.</p>
+      <button type="button" class="btn btn-primary" id="pipelines-create-first">Create pipeline</button>
+    </div>
+    <div id="pipelines-cards" class="pipelines-cards" style="display: none;"></div>
+  </div>
+</div>
+
+<div id="pipelines-detail" class="pipelines-detail" style="display: none;">
+  <div class="pipelines-detail-header">
+    <div class="pipelines-detail-title-row">
+      <button type="button" class="btn pipelines-back-btn" id="pipelines-back-to-list">← Back to Pipelines</button>
+      <h2 class="pipelines-detail-name" id="pipelines-detail-name">—</h2>
+      <button type="button" class="btn btn-primary" id="pipelines-detail-run">Run Pipeline</button>
+    </div>
+    <p class="pipelines-detail-meta" id="pipelines-detail-meta"></p>
+  </div>
+  <div id="pipelines-detail-error" class="card pipelines-detail-error" style="display: none;"></div>
+  <div class="pipelines-detail-tabs">
+    <button type="button" class="pipelines-tab active" data-tab="overview">Overview</button>
+    <button type="button" class="pipelines-tab" data-tab="stages">Stages</button>
+    <button type="button" class="pipelines-tab" data-tab="executions">Executions</button>
+  </div>
+  <div id="pipelines-tab-overview" class="pipelines-tab-panel card">
+    <h3 style="font-size:15px;margin:0 0 12px 0;color:var(--text-primary);">Overview</h3>
+    <p id="pipelines-detail-desc" style="font-size:14px;color:var(--text-secondary);margin:0 0 16px 0;"></p>
+    <div id="pipelines-detail-stats" style="display:flex;flex-wrap:wrap;gap:16px;font-size:14px;color:var(--text-secondary);"></div>
+  </div>
+  <div id="pipelines-tab-stages" class="pipelines-tab-panel card" style="display:none;">
+    <h3 style="font-size:15px;margin:0 0 12px 0;color:var(--text-primary);">Stages</h3>
+    <ul id="pipelines-stages-list" style="margin:0;padding-left:20px;font-size:14px;color:var(--text-primary);"></ul>
+    <p id="pipelines-stages-empty" style="display:none;color:var(--text-secondary);font-size:14px;margin:8px 0 0 0;">No stages defined.</p>
+  </div>
+  <div id="pipelines-tab-executions" class="pipelines-tab-panel card" style="display:none;">
+    <div style="padding: 12px 16px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: 13px;">Executions (last 50)</div>
+    <div style="overflow-x: auto;">
+      <table class="pipelines-executions-table">
+        <thead>
+          <tr>
+            <th>Execution ID</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Completed</th>
+            <th>Error</th>
+            <th>Result summary</th>
+          </tr>
+        </thead>
+        <tbody id="pipelines-executions-tbody"></tbody>
+      </table>
+    </div>
+    <div id="pipelines-executions-empty" style="display: none; padding: 24px; text-align: center; color: var(--text-secondary); font-size: 14px;">No executions yet.</div>
+  </div>
+</div>
+
+<div id="pipelines-run-modal" class="pipelines-modal" style="display:none;">
+  <div class="pipelines-modal-inner card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <h3 style="font-size:18px;margin:0;color:var(--text-primary);">Run: <span id="pipelines-run-modal-title">—</span></h3>
+      <button type="button" class="btn pipelines-modal-close" id="pipelines-run-modal-close">×</button>
+    </div>
+    <p style="font-size:13px;color:var(--text-secondary);margin:0 0 16px 0;">Optional: set variables for this run. Leave blank to use defaults.</p>
+    <div id="pipelines-run-variables"></div>
+    <div style="margin-top:16px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text-primary);cursor:pointer;">
+        <input type="checkbox" id="pipelines-run-dry" />
+        <span>Dry run (preview only, don't make changes)</span>
+      </label>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:24px;">
+      <button type="button" class="btn" id="pipelines-run-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="pipelines-run-submit">Run Pipeline</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .pipelines-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .pipelines-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .pipelines-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .pipelines-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pipelines-filter-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .pipelines-filter-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+  .pipelines-filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pipelines-status-label { font-size: 13px; color: var(--text-secondary); margin: 0; }
+  .pipelines-filters select {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .pipelines-analytics {
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    border-radius: 12px;
+  }
+  .pipelines-analytics-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 16px 0;
+  }
+  .pipelines-kpis {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (min-width: 600px) {
+    .pipelines-kpis { grid-template-columns: repeat(4, 1fr); }
+  }
+  .pipeline-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .pipeline-kpi-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .pipeline-kpi-success { color: var(--success); }
+  .pipeline-kpi-fail { color: var(--error); }
+  .pipeline-kpi-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .pipelines-chart-wrap { margin-top: 8px; }
+  .pipelines-chart-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 12px 0;
+  }
+  .pipelines-chart-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .pipeline-chart-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+  }
+  .pipeline-chart-name {
+    width: 140px;
+    min-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+  }
+  .pipeline-chart-bar-wrap {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    background: var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .pipeline-chart-bar {
+    height: 100%;
+    border-radius: 6px;
+    background: var(--accent);
+    transition: width 0.3s ease;
+  }
+  .pipeline-chart-bar.fail { background: var(--error); }
+  .pipeline-chart-count { color: var(--text-secondary); min-width: 2em; text-align: right; }
+
+  .pipelines-list { min-height: 200px; }
+  .pipelines-empty {
+    text-align: center;
+    padding: 48px 24px;
+    max-width: 420px;
+    margin: 0 auto;
+  }
+  .pipelines-empty-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+  .pipelines-empty-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+  .pipelines-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  @media (min-width: 900px) {
+    .pipelines-cards {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .pipeline-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 20px;
+    min-height: 200px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+  }
+  .pipeline-card::before,
+  .pipeline-card::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 30px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .pipeline-card > * { position: relative; z-index: 2; }
+  .pipeline-card[data-outline="running"]::before {
+    inset: -2px;
+    border-radius: 30px;
+    border: 2px solid transparent;
+    border-top-color: #22c55e;
+    animation: pipeline-outline-rotate 1.2s linear infinite;
+  }
+  .pipeline-card[data-outline="failing"]::before {
+    inset: -2px;
+    border-radius: 30px;
+    border: 2px solid transparent;
+    border-top-color: #22c55e;
+    border-right-color: #22c55e;
+    border-bottom-color: #22c55e;
+    animation: pipeline-outline-stop 0.5s ease-out forwards;
+  }
+  .pipeline-card[data-outline="failing"]::after {
+    inset: auto auto 8px 50%;
+    width: 10px;
+    height: 10px;
+    margin-left: -5px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 0 2px var(--bg-elevated);
+  }
+  @keyframes pipeline-outline-rotate {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pipeline-outline-stop {
+    to { transform: rotate(270deg); }
+  }
+  .pipeline-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  }
+  .pipeline-card-top {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+  }
+  .pipeline-card-head {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .pipeline-card-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pipeline-card-name a { color: inherit; text-decoration: none; }
+  .pipeline-card-name a:hover { text-decoration: underline; }
+  .pipeline-card-head .pipeline-badge { flex-shrink: 0; }
+  .pipeline-card-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 8px 0 0 0;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    width: 100%;
+  }
+  .pipeline-card-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .pipeline-card-warning {
+    font-size: 12px;
+    color: var(--error);
+    margin-top: 6px;
+  }
+  .pipeline-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .pipeline-card-actions .btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .pipeline-card-actions .btn:hover {
+    background: var(--bg-canvas);
+    border-color: var(--accent);
+  }
+  .pipeline-card-actions .btn-run {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+  }
+  .pipeline-card-actions .btn-run:hover { background: var(--accent-hover); }
+  .pipeline-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .pipeline-badge.success { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+  .pipeline-badge.failed { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+  .pipeline-badge.running { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
+  .pipeline-badge.pending { background: rgba(107, 114, 128, 0.15); color: var(--text-secondary); }
+  .pipeline-badge.active { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+
+  .pipelines-detail-header { margin-bottom: 24px; }
+  .pipelines-detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .pipelines-back-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 8px 14px;
+    font-size: 14px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .pipelines-back-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+  .pipelines-detail-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+  }
+  .pipelines-detail-meta { font-size: 13px; color: var(--text-secondary); margin: 0; }
+  .pipelines-detail-error {
+    margin-bottom: 16px;
+    padding: 16px;
+    color: var(--error);
+  }
+  .pipelines-executions-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .pipelines-executions-table th {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+  .pipelines-executions-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    vertical-align: top;
+  }
+  .pipelines-executions-table tr:last-child td { border-bottom: none; }
+  .pipelines-executions-table .exec-error,
+  .pipelines-executions-table .exec-summary {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pipelines-detail-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+  }
+  .pipelines-tab {
+    padding: 8px 16px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .pipelines-tab:hover { color: var(--text-primary); }
+  .pipelines-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .pipelines-tab-panel { padding: 20px; margin-bottom: 16px; }
+  .pipelines-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .pipelines-modal-inner {
+    max-width: 480px;
+    width: 100%;
+    max-height: 90vh;
+    overflow: auto;
+  }
+  .pipelines-modal-close {
+    background: transparent;
+    border: none;
+    font-size: 24px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .pipelines-modal-close:hover { color: var(--text-primary); }
+  .pipelines-run-var { margin-bottom: 12px; }
+  .pipelines-run-var label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+  .pipelines-run-var input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-size: 14px; }
+</style>
+
+<script>
+(function () {
+  var base = window.location.origin;
+  var listPanel = document.getElementById('pipelines-list-panel');
+  var detailPanel = document.getElementById('pipelines-detail');
+  var listEl = document.getElementById('pipelines-list');
+  var emptyEl = document.getElementById('pipelines-empty');
+  var cardsEl = document.getElementById('pipelines-cards');
+  var statusSelect = document.getElementById('pipelines-status');
+  var pipelines = [];
+
+  function getLogsId() {
+    var params = new URLSearchParams(window.location.search);
+    return params.get('logs') || '';
+  }
+
+  function showListView() {
+    if (listPanel) listPanel.style.display = '';
+    if (detailPanel) detailPanel.style.display = 'none';
+  }
+
+  function showDetailView() {
+    if (listPanel) listPanel.style.display = 'none';
+    if (detailPanel) detailPanel.style.display = 'block';
+  }
+
+  var pipelinesTotal = 0;
+
+  var pipelinesStats = null;
+
+  function load() {
+    fetch(base + '/api/pipelines', { credentials: 'include' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        pipelines = (d && d.pipelines) ? d.pipelines : [];
+        pipelinesTotal = (d && d.total != null) ? d.total : pipelines.length;
+        pipelinesStats = (d && d.stats) ? d.stats : null;
+        render();
+        loadStreamMetrics();
+      })
+      .catch(function () {
+        pipelines = [];
+        pipelinesTotal = 0;
+        pipelinesStats = null;
+        render();
+      });
+  }
+
+  function loadStreamMetrics() {
+    fetch(base + '/api/pipelines/streams/metrics', { credentials: 'include' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var runsEl = document.getElementById('pipelines-24h-runs');
+        var lastEl = document.getElementById('pipelines-24h-last');
+        var rateEl = document.getElementById('pipelines-24h-rate');
+        var updatedEl = document.getElementById('pipelines-24h-updated');
+        if (runsEl) runsEl.textContent = (d && d.pipeline_runs_24h != null) ? String(d.pipeline_runs_24h) : '—';
+        if (lastEl) {
+          if (d && d.pipeline_last_run_at) {
+            var t = new Date(d.pipeline_last_run_at);
+            lastEl.textContent = isNaN(t.getTime()) ? d.pipeline_last_run_at : t.toLocaleString();
+          } else {
+            lastEl.textContent = '—';
+          }
+        }
+        if (rateEl) rateEl.textContent = (d && d.pipeline_success_rate_24h != null) ? (d.pipeline_success_rate_24h + '%') : '—';
+        if (updatedEl) updatedEl.textContent = '(updated ' + new Date().toLocaleTimeString() + ')';
+      })
+      .catch(function () {
+        var runsEl = document.getElementById('pipelines-24h-runs');
+        var lastEl = document.getElementById('pipelines-24h-last');
+        var rateEl = document.getElementById('pipelines-24h-rate');
+        if (runsEl) runsEl.textContent = '—';
+        if (lastEl) lastEl.textContent = '—';
+        if (rateEl) rateEl.textContent = '—';
+      });
+  }
+
+  function badgeStatus(p) {
+    var s = (p.last_execution_status || p.status || '').toLowerCase();
+    if (s === 'success' || s === 'completed') return 'success';
+    if (s === 'failed' || s === 'error') return 'failed';
+    if (s === 'running') return 'running';
+    if (s === 'active') return 'success';
+    return 'pending';
+  }
+
+  function executionBadgeClass(status) {
+    var s = (status || '').toLowerCase();
+    if (s === 'success' || s === 'completed') return 'success';
+    if (s === 'failed' || s === 'error') return 'failed';
+    if (s === 'running') return 'running';
+    return 'pending';
+  }
+
+  function displayStatus(p) {
+    return p.last_execution_status || p.status || 'pending';
+  }
+
+  function truncate(str, len) {
+    if (str == null || str === '') return '';
+    str = String(str);
+    return str.length <= (len || 80) ? str : str.slice(0, len || 80) + '…';
+  }
+
+  function escapeHtml(str) {
+    if (str == null || str === '') return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? iso : d.toLocaleString();
+  }
+
+  var currentDetailPipelineId = null;
+  var currentDetailPipeline = null;
+  var currentDetailExecutions = [];
+
+  function showDetailTab(tabName) {
+    document.querySelectorAll('.pipelines-tab').forEach(function (t) {
+      t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
+    });
+    document.querySelectorAll('.pipelines-tab-panel').forEach(function (p) {
+      var id = p.id;
+      var show = (id === 'pipelines-tab-overview' && tabName === 'overview') ||
+        (id === 'pipelines-tab-stages' && tabName === 'stages') ||
+        (id === 'pipelines-tab-executions' && tabName === 'executions');
+      p.style.display = show ? 'block' : 'none';
+    });
+  }
+
+  function loadDetailView(id) {
+    var nameEl = document.getElementById('pipelines-detail-name');
+    var metaEl = document.getElementById('pipelines-detail-meta');
+    var errorEl = document.getElementById('pipelines-detail-error');
+    var tbody = document.getElementById('pipelines-executions-tbody');
+    var emptyExec = document.getElementById('pipelines-executions-empty');
+    var runBtn = document.getElementById('pipelines-detail-run');
+
+    if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+    if (nameEl) nameEl.textContent = 'Loading…';
+    if (metaEl) metaEl.textContent = '';
+    if (tbody) tbody.innerHTML = '';
+    if (emptyExec) emptyExec.style.display = 'none';
+    currentDetailPipelineId = id;
+
+    Promise.all([
+      fetch(base + '/api/pipelines/' + encodeURIComponent(id), { credentials: 'include' }).then(function (r) { return r.json(); }),
+      fetch(base + '/api/pipelines/' + encodeURIComponent(id) + '/executions', { credentials: 'include' }).then(function (r) { return r.json(); })
+    ]).then(function (results) {
+      var pipeline = results[0];
+      var execData = results[1];
+      if (pipeline && pipeline.error) {
+        if (errorEl) { errorEl.textContent = pipeline.error === 'Not found' ? 'Pipeline not found.' : pipeline.error; errorEl.style.display = 'block'; }
+        if (nameEl) nameEl.textContent = '—';
+        if (runBtn) runBtn.disabled = true;
+        return;
+      }
+      currentDetailPipeline = pipeline;
+      currentDetailExecutions = (execData && execData.executions) ? execData.executions : [];
+      var executions = currentDetailExecutions;
+
+      if (nameEl) nameEl.textContent = pipeline && pipeline.name ? pipeline.name : 'Unnamed pipeline';
+      if (metaEl) metaEl.textContent = 'Trigger: ' + (pipeline && (pipeline.trigger || pipeline.trigger_event) ? (pipeline.trigger || pipeline.trigger_event) : 'Manual');
+
+      var descEl = document.getElementById('pipelines-detail-desc');
+      if (descEl) descEl.textContent = pipeline && pipeline.description ? pipeline.description : 'No description.';
+      var statsEl = document.getElementById('pipelines-detail-stats');
+      if (statsEl) {
+        var successCount = executions.filter(function (e) { var s = (e.status || '').toLowerCase(); return s === 'completed' || s === 'success'; }).length;
+        var failedCount = executions.filter(function (e) { var s = (e.status || '').toLowerCase(); return s === 'failed' || s === 'error'; }).length;
+        var totalRuns = executions.length;
+        var successRate = totalRuns > 0 ? Math.round((successCount / totalRuns) * 100) : 0;
+        var lastRun = executions[0] ? formatDate(executions[0].started_at) : 'Never';
+        statsEl.innerHTML = 'Status: <strong>' + (pipeline.status || 'active') + '</strong> &nbsp;|&nbsp; Total runs: <strong>' + totalRuns + '</strong> &nbsp;|&nbsp; Success rate: <strong>' + successRate + '%</strong> &nbsp;|&nbsp; Last run: <strong>' + lastRun + '</strong>';
+      }
+
+      var stagesList = document.getElementById('pipelines-stages-list');
+      var stagesEmpty = document.getElementById('pipelines-stages-empty');
+      var stages = (pipeline && pipeline.stages) ? pipeline.stages : [];
+      if (stagesList) {
+        if (Array.isArray(stages) && stages.length > 0) {
+          stagesEmpty.style.display = 'none';
+          stagesList.style.display = 'block';
+          stagesList.innerHTML = stages.map(function (s, i) {
+            var name = (typeof s === 'object' && s.name) ? s.name : (typeof s === 'string' ? s : 'Stage ' + (i + 1));
+            var agent = (typeof s === 'object' && (s.agent || s.provider || s.model)) ? (s.agent || s.provider || s.model) : '';
+            var duration = (typeof s === 'object' && s.duration) ? s.duration + 's' : '';
+            return '<li>' + escapeHtml(name) + (agent ? ' &nbsp;<span style="color:var(--text-secondary);">' + escapeHtml(agent) + '</span>' : '') + (duration ? ' &nbsp;' + duration : '') + '</li>';
+          }).join('');
+        } else {
+          stagesList.style.display = 'none';
+          if (stagesEmpty) stagesEmpty.style.display = 'block';
+        }
+      }
+
+      if (runBtn) {
+        runBtn.disabled = false;
+        runBtn.onclick = function () {
+          var modal = document.getElementById('pipelines-run-modal');
+          document.getElementById('pipelines-run-modal-title').textContent = pipeline && pipeline.name ? pipeline.name : 'Pipeline';
+          var varsContainer = document.getElementById('pipelines-run-variables');
+          var vars = (pipeline && pipeline.variables && typeof pipeline.variables === 'object') ? pipeline.variables : {};
+          var keys = Object.keys(vars);
+          if (keys.length === 0) {
+            varsContainer.innerHTML = '<p style="font-size:13px;color:var(--text-secondary);margin:0;">No variables defined for this pipeline.</p>';
+          } else {
+            varsContainer.innerHTML = keys.map(function (k) {
+              var v = vars[k];
+              var label = (typeof v === 'object' && v && v.label) ? v.label : k;
+              var placeholder = (typeof v === 'object' && v && v.default != null) ? String(v.default) : '';
+              return '<div class="pipelines-run-var"><label>' + escapeHtml(label) + '</label><input type="text" data-var="' + escapeHtml(k) + '" placeholder="' + escapeHtml(placeholder) + '" /></div>';
+            }).join('');
+          }
+          document.getElementById('pipelines-run-dry').checked = false;
+          if (modal) modal.style.display = 'flex';
+        };
+      }
+
+      showDetailTab('executions');
+      if (executions.length === 0) {
+        if (emptyExec) emptyExec.style.display = 'block';
+      } else {
+        if (emptyExec) emptyExec.style.display = 'none';
+        if (tbody) {
+          tbody.innerHTML = executions.map(function (e) {
+            var badgeClass = executionBadgeClass(e.status);
+            return '<tr>' +
+              '<td>' + escapeHtml(e.id || '—') + '</td>' +
+              '<td><span class="pipeline-badge ' + badgeClass + '">' + escapeHtml(e.status || '—') + '</span></td>' +
+              '<td>' + formatDate(e.started_at) + '</td>' +
+              '<td>' + formatDate(e.completed_at) + '</td>' +
+              '<td class="exec-error" title="' + escapeHtml(e.error_message || '') + '">' + escapeHtml(truncate(e.error_message, 60)) + '</td>' +
+              '<td class="exec-summary" title="' + escapeHtml(e.result_summary || '') + '">' + escapeHtml(truncate(e.result_summary, 60)) + '</td>' +
+              '</tr>';
+          }).join('');
+        }
+      }
+    }).catch(function (err) {
+      if (errorEl) { errorEl.textContent = 'Failed to load pipeline or executions.'; errorEl.style.display = 'block'; }
+      if (nameEl) nameEl.textContent = '—';
+      if (runBtn) runBtn.disabled = true;
+    });
+  }
+
+  document.querySelectorAll('.pipelines-tab').forEach(function (t) {
+    t.addEventListener('click', function () { showDetailTab(t.getAttribute('data-tab')); });
+  });
+
+  document.getElementById('pipelines-run-modal-close') && document.getElementById('pipelines-run-modal-close').addEventListener('click', function () {
+    document.getElementById('pipelines-run-modal').style.display = 'none';
+  });
+  document.getElementById('pipelines-run-cancel') && document.getElementById('pipelines-run-cancel').addEventListener('click', function () {
+    document.getElementById('pipelines-run-modal').style.display = 'none';
+  });
+  document.getElementById('pipelines-run-submit') && document.getElementById('pipelines-run-submit').addEventListener('click', function () {
+    var id = currentDetailPipelineId;
+    if (!id) return;
+    var variables = {};
+    document.querySelectorAll('#pipelines-run-variables input[data-var]').forEach(function (inp) {
+      var k = inp.getAttribute('data-var');
+      if (k && inp.value.trim() !== '') variables[k] = inp.value.trim();
+    });
+    var dryRun = document.getElementById('pipelines-run-dry') && document.getElementById('pipelines-run-dry').checked;
+    document.getElementById('pipelines-run-modal').style.display = 'none';
+    fetch(base + '/api/pipelines/' + encodeURIComponent(id) + '/run', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variables: variables, dry_run: dryRun })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.status === 'started') loadDetailView(id);
+    });
+  });
+
+  function updateAnalytics(list, stats) {
+    var totalPipelines = list.length;
+    var totalRuns = 0;
+    var totalSuccess = 0;
+    var totalFailed = 0;
+    if (stats && (stats.total_pipelines != null || stats.total_runs != null)) {
+      totalPipelines = Number(stats.total_pipelines) ?? list.length;
+      totalRuns = Number(stats.total_runs) || 0;
+      totalFailed = Number(stats.failed) || 0;
+      totalSuccess = totalRuns - totalFailed;
+    } else {
+      list.forEach(function (p) {
+        totalRuns += Number(p.execution_count) || 0;
+        totalSuccess += Number(p.success_count) || 0;
+        totalFailed += Number(p.failed_count) || 0;
+      });
+    }
+    var successRate = (stats && stats.success_rate != null) ? Number(stats.success_rate) : (totalRuns > 0 ? Math.round((totalSuccess / totalRuns) * 100) : 0);
+    var kpiTotal = document.getElementById('pipelines-kpi-total');
+    var kpiRuns = document.getElementById('pipelines-kpi-runs');
+    var kpiSuccess = document.getElementById('pipelines-kpi-success');
+    var kpiFailed = document.getElementById('pipelines-kpi-failed');
+    var chartEl = document.getElementById('pipelines-chart-bars');
+    if (kpiTotal) kpiTotal.textContent = String(totalPipelines);
+    if (kpiRuns) kpiRuns.textContent = String(totalRuns);
+    if (kpiSuccess) kpiSuccess.textContent = successRate + '%';
+    if (kpiFailed) kpiFailed.textContent = String(totalFailed);
+    if (!chartEl) return;
+    var sorted = list.slice().sort(function (a, b) { return (Number(b.execution_count) || 0) - (Number(a.execution_count) || 0); });
+    var top = sorted.slice(0, 12);
+    var maxRuns = Math.max(1, top.reduce(function (m, p) { return Math.max(m, Number(p.execution_count) || 0); }, 0));
+    chartEl.innerHTML = top.map(function (p) {
+      var runs = Number(p.execution_count) || 0;
+      var failed = Number(p.failed_count) || 0;
+      var pct = maxRuns > 0 ? (runs / maxRuns) * 100 : 0;
+      var failPct = runs > 0 ? (failed / runs) * 100 : 0;
+      return '<div class="pipeline-chart-row">' +
+        '<span class="pipeline-chart-name" title="' + escapeHtml(p.name || '') + '">' + escapeHtml(p.name || 'Unnamed') + '</span>' +
+        '<div class="pipeline-chart-bar-wrap">' +
+          '<div class="pipeline-chart-bar' + (failPct >= 50 ? ' fail' : '') + '" style="width:' + pct + '%"></div>' +
+        '</div>' +
+        '<span class="pipeline-chart-count">' + runs + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  function render() {
+    var statusFilter = (statusSelect && statusSelect.value) || '';
+    var activeFilter = (document.querySelector('.pipelines-filter-btn.active') || {}).getAttribute && document.querySelector('.pipelines-filter-btn.active').getAttribute('data-filter') || '';
+    var filtered = pipelines.filter(function (p) {
+      if (activeFilter === 'active') {
+        var s = (p.status || '').toLowerCase();
+        if (s !== 'active' && s !== '') return false;
+      }
+      if (statusFilter) {
+        var last = (p.last_execution_status || p.status || '').toLowerCase();
+        if (last !== statusFilter) return false;
+      }
+      return true;
+    });
+
+    var totalEl = document.getElementById('pipelines-total');
+    if (totalEl) totalEl.textContent = String(pipelinesTotal);
+    updateAnalytics(pipelines, pipelinesStats);
+
+    if (filtered.length === 0) {
+      emptyEl.style.display = 'block';
+      cardsEl.style.display = 'none';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    cardsEl.style.display = 'grid';
+    cardsEl.innerHTML = filtered.map(function (p) {
+      var badgeClass = badgeStatus(p);
+      var runs = p.execution_count > 0
+        ? (p.failed_count > 0 ? p.execution_count + ' executions (' + p.failed_count + ' failed)' : p.execution_count + ' executions')
+        : 'No runs yet';
+      var warning = '';
+      if ((p.last_execution_status || '').toLowerCase() === 'failed' && p.last_error_message) {
+        warning = '<div class="pipeline-card-warning">Error: ' + escapeHtml(truncate(p.last_error_message, 50)) + '</div>';
+      }
+      var outline = '';
+      var lastStatus = (p.last_execution_status || p.status || '').toLowerCase();
+      if (lastStatus === 'running') outline = 'running';
+      else if (lastStatus === 'failed' || lastStatus === 'error') outline = 'failing';
+      return '<div class="pipeline-card" data-id="' + (p.id || '') + '" data-outline="' + outline + '">' +
+        '<div class="pipeline-card-top">' +
+          '<div class="pipeline-card-head">' +
+            '<span class="pipeline-card-name">' + (p.name || 'Unnamed pipeline') + '</span>' +
+            '<span class="pipeline-badge ' + badgeClass + '">' + displayStatus(p) + '</span>' +
+            '<p class="pipeline-card-desc">' + escapeHtml(p.description || 'No description.') + '</p>' +
+            warning +
+          '</div>' +
+        '</div>' +
+        '<div class="pipeline-card-meta">' +
+          'Last run: ' + (p.last_run || 'Never') + '  •  ' + runs + '  •  ' + (p.trigger || 'Manual') +
+        '</div>' +
+        '<div class="pipeline-card-actions">' +
+          '<button type="button" class="btn btn-run" data-id="' + (p.id || '') + '">Run</button>' +
+          '<button type="button" class="btn btn-logs" data-id="' + (p.id || '') + '">View Executions</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    cardsEl.querySelectorAll('.btn-run').forEach(function (btn) {
+      var id = btn.getAttribute('data-id');
+      btn.addEventListener('click', function () {
+        if (!id) return;
+        btn.disabled = true;
+        fetch(base + '/api/pipelines/' + encodeURIComponent(id) + '/run', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        }).then(function (r) { return r.json(); }).then(function (d) {
+          btn.disabled = false;
+          if (d && d.status === 'started') {
+            var card = Array.prototype.find.call(cardsEl.querySelectorAll('.pipeline-card'), function (c) { return c.getAttribute('data-id') === id; });
+            if (card) card.setAttribute('data-outline', 'running');
+            load();
+          }
+        }).catch(function () { btn.disabled = false; });
+      });
+    });
+    cardsEl.querySelectorAll('.btn-logs').forEach(function (btn) {
+      var id = btn.getAttribute('data-id');
+      btn.addEventListener('click', function () { if (id) window.location.href = '/dashboard/pipelines?logs=' + encodeURIComponent(id); });
+    });
+  }
+
+  document.getElementById('pipelines-back-to-list') && document.getElementById('pipelines-back-to-list').addEventListener('click', function () {
+    window.location.href = '/dashboard/pipelines';
+  });
+
+  document.querySelectorAll('.pipelines-filter-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.pipelines-filter-btn').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      render();
+    });
+  });
+  if (statusSelect) statusSelect.addEventListener('change', render);
+  document.getElementById('pipelines-new') && document.getElementById('pipelines-new').addEventListener('click', function () {
+    console.log('New pipeline');
+  });
+  document.getElementById('pipelines-create-first') && document.getElementById('pipelines-create-first').addEventListener('click', function () {
+    console.log('Create pipeline');
+  });
+
+  document.querySelectorAll('.pipelines-copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-copy-target');
+      var el = id ? document.getElementById(id) : null;
+      if (!el) return;
+      var text = el.textContent || '';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { btn.textContent = 'Copied!'; setTimeout(function () { btn.textContent = 'Copy'; }, 2000); }).catch(function () { btn.textContent = 'Copy'; });
+      } else {
+        btn.textContent = 'Copy';
+      }
+    });
+  });
+
+  var streamSendBtn = document.getElementById('pipelines-stream-send-test');
+  var streamSendStatus = document.getElementById('pipelines-stream-send-status');
+  if (streamSendBtn && streamSendStatus) {
+    streamSendBtn.addEventListener('click', function () {
+      streamSendStatus.textContent = 'Sending…';
+      streamSendBtn.disabled = true;
+      fetch(base + '/api/pipelines/streams/send', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ user_id: 'dashboard_test', event_name: 'pipelines_test_event', ts: new Date().toISOString() }])
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        streamSendStatus.textContent = d.success ? 'Sent ' + (d.sent || 1) + ' event(s).' : (d.error || 'Failed');
+        streamSendStatus.style.color = d.success ? 'var(--success)' : 'var(--error)';
+      }).catch(function () {
+        streamSendStatus.textContent = 'Request failed';
+        streamSendStatus.style.color = 'var(--error)';
+      }).finally(function () { streamSendBtn.disabled = false; });
+    });
+  }
+
+  var logsId = getLogsId();
+  if (logsId) {
+    showDetailView();
+    loadDetailView(logsId);
+  } else {
+    showListView();
+    load();
+  }
+  loadStreamMetrics();
+  setInterval(load, 30000);
+  setInterval(loadStreamMetrics, 30000);
+})();
+</script>

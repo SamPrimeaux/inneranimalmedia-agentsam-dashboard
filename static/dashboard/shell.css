@@ -1,0 +1,34 @@
+/* Shared shell: topbar and dropdowns above page content on all dashboard pages */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: var(--bg-nav);
+  border-bottom: 1px solid var(--border-nav);
+  height: 60px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 20px;
+  min-width: 0;
+  overflow: visible;
+}
+
+.main-content {
+  position: relative;
+  z-index: 1;
+}
+
+.topbar-right,
+.profile-wrap,
+.clock-wrap,
+.search-wrap {
+  position: relative;
+}
+
+.search-dropdown,
+.profile-dropdown,
+#clock-dropdown,
+#notifications-dropdown {
+  z-index: 1100;
+}

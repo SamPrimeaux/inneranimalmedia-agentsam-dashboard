@@ -1,0 +1,37 @@
+---
+description: At the start of a new Cursor session, read current D1 state (priorities, build progress, roadmap) and confirm before making code changes. Keeps Agent Sam and the nightly digest accurate.
+globs: "*"
+alwaysApply: true
+---
+
+# Session start: D1 context before coding
+
+## For new Cursor sessions
+
+Before starting work, read these from the D1 database and confirm what you read before touching any code:
+
+1. **Active priorities**  
+   `SELECT value FROM agent_memory_index WHERE key = 'active_priorities'`
+
+2. **Build progress**  
+   `SELECT value FROM agent_memory_index WHERE key = 'build_progress'`
+
+3. **Roadmap steps (IAM dashboard plan)**  
+   `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v1' ORDER BY order_index`
+
+4. **Today's to-do (realtime production list)**  
+   `SELECT value FROM agent_memory_index WHERE key = 'today_todo'`
+
+Then confirm what you read before touching any code.
+
+## When you finish a roadmap step
+
+Update state so Agent Sam and tonight's digest stay accurate:
+
+```sql
+UPDATE roadmap_steps
+SET status='completed', updated_at=datetime('now')
+WHERE id IN ('step_whatever_you_finished');
+```
+
+Update `agent_memory_index` to match (user maintains keys like `active_priorities`, `build_progress`, and `today_todo`). Tomorrow's Agent Sam and tonight's digest will then reflect accurate state.

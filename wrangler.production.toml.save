@@ -1,0 +1,197 @@
+name = "inneranimalmedia"
+main = "worker.js"
+compatibility_date = "2026-01-20"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+
+############################
+# ROUTES / DOMAINS
+############################
+
+routes = [
+  { pattern = "inneranimalmedia.com/*", zone_name = "inneranimalmedia.com" },
+  { pattern = "www.inneranimalmedia.com/*", zone_name = "inneranimalmedia.com" },
+  { pattern = "webhooks.inneranimalmedia.com/*", zone_name = "inneranimalmedia.com" }
+]
+
+############################
+# WORKERS AI
+############################
+
+[ai]
+binding = "AI"
+
+############################
+# BROWSER (Puppeteer)
+############################
+
+[browser]
+binding = "MYBROWSER"
+
+############################
+# R2 BUCKETS
+############################
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "inneranimalmedia-assets"
+
+[[r2_buckets]]
+binding = "CAD_ASSETS"
+bucket_name = "splineicons"
+
+[[r2_buckets]]
+binding = "DASHBOARD"
+bucket_name = "agent-sam"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "iam-platform"
+
+############################
+# D1 DATABASE
+############################
+
+[[d1_databases]]
+binding = "DB"
+database_name = "inneranimalmedia-business"
+database_id = "cf87b717-d4e2-4cf8-bab0-a81268e32d49"
+
+############################
+# HYPERDRIVE
+############################
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "9108dd6499bb44c286e4eb298c6ffafb"
+
+############################
+# VECTORIZE
+############################
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ai-search-inneranimalmedia-aisearch"
+
+############################
+# KV NAMESPACES
+############################
+
+[[kv_namespaces]]
+binding = "KV"
+id = "09438d5e4f664bf78467a15af7743c44"
+
+[[kv_namespaces]]
+binding = "SESSION_CACHE"
+id = "dc87920b0a9247979a213c09df9a0234"
+
+############################
+# DURABLE OBJECTS
+############################
+
+[[durable_objects.bindings]]
+name = "IAM_COLLAB"
+class_name = "IAMCollaborationSession"
+
+[[durable_objects.bindings]]
+name = "CHESS_SESSION"
+class_name = "ChessRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["IAMCollaborationSession"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["ChessRoom"]
+
+############################
+# QUEUES
+############################
+
+[[queues.producers]]
+binding = "MY_QUEUE"
+queue = "74b3155b36334b69852411c083d50322"
+
+[[queues.consumers]]
+queue = "74b3155b36334b69852411c083d50322"
+
+############################
+# ANALYTICS ENGINE
+############################
+
+[[analytics_engine_datasets]]
+binding = "WAE"
+dataset = "inneranimalmedia"
+
+############################
+# CRONS
+############################
+
+[triggers]
+crons = [
+  "5 14 * * 1",
+  "0 9 * * *",
+  "0 8 * * *",
+  "0 4 * * *",
+  "0 3 * * *",
+  "0 14 * * *"
+]
+
+############################
+# PLAIN ENV VARS
+############################
+
+[vars]
+CLOUDFLARE_ACCOUNT_ID = "ede6590ac0d2fb7daf155b35653457b2"
+CLOUDFLARE_IMAGES_ACCOUNT_HASH = "g7wf09fCONpnidkRnR_5vw"
+GITHUB_CLIENT_ID = "Ov23li6BZYxjVtGUWibX"
+GOOGLE_CLIENT_ID = "427617292678-gf3u47lpf876q7miq31hel2ms6tcr2f8.apps.googleusercontent.com"
+TENANT_ID = "tenant_sam_primeaux"
+
+############################
+# OBSERVABILITY (logs + traces for production debugging)
+############################
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+destinations = [ "meauxbility-central-analytics" ]
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+destinations = [ "inneranimalmedia-selfhosted" ]
+persist = true
+head_sampling_rate = 1
+
+[[tail_consumers]]
+service = "inneranimalmedia-tail"
+
+cat ~/Downloads/march1st-inneranimalmedia/wrangler.production.toml
+cat >> ~/Downloads/march1st-inneranimalmedia/wrangler.production.toml << 'EOF'
+
+[[routes]]
+pattern = "inneranimalmedia.com/*"
+zone_name = "inneranimalmedia.com"
+custom_domain = true
+
+[[routes]]
+pattern = "www.inneranimalmedia.com/*"
+zone_name = "inneranimalmedia.com"
+custom_domain = true
+
+[[routes]]
+pattern = "webhooks.inneranimalmedia.com/*"
+zone_name = "inneranimalmedia.com"
+custom_domain = true
+EOF
+
+
+

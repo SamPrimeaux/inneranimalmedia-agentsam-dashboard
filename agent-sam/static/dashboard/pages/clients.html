@@ -1,0 +1,55 @@
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<div class="page-header" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;">
+    <div style="display: flex; gap: 10px;">
+        <button type="button" class="btn btn-primary" id="clientsNewBtn">+ New Client</button>
+        <button type="button" class="btn" style="background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-primary);" id="clientsExportBtn">Export CSV</button>
+        <button type="button" class="btn" style="background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-primary);" id="clientsExportPdfBtn">Export PDF</button>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 16px;">
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
+        <input type="text" id="clientsSearch" placeholder="Search clients…" style="flex: 1; min-width: 180px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-canvas); color: var(--text-primary); font-size: 14px;">
+        <select id="clientsFilter" style="padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font-size: 14px;">
+            <option value="all">All</option>
+            <option value="active">Active</option>
+        </select>
+        <select id="clientsSort" style="padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font-size: 14px;">
+            <option value="mrr">Sort: MRR</option>
+            <option value="name">Sort: Name</option>
+        </select>
+    </div>
+</div>
+
+<div id="clientsTotalMrr" class="card" style="margin-bottom: 16px; font-size: 18px; font-weight: 600; color: var(--accent);">No MRR yet. Clients below support full CRUD (edit, delete, document).</div>
+
+<div id="clientsCardGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
+    <div style="padding: 24px; text-align: center; color: var(--text-secondary);">Loading…</div>
+</div>
+
+<!-- New Client modal -->
+<div id="clientsModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px;">
+    <div class="card" style="max-width: 440px; width: 100%;">
+        <h3 style="margin-bottom: 16px; font-size: 18px;">New Client</h3>
+        <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">Name</label>
+            <input type="text" id="clientNameInput" placeholder="Client name" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-canvas); color: var(--text-primary);">
+        </div>
+        <div style="margin-bottom: 12px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">Status</label>
+            <select id="clientStatusInput" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary);">
+                <option value="active">Active</option>
+                <option value="pipeline">Pipeline</option>
+                <option value="onboarding">Onboarding</option>
+                <option value="inactive">Inactive</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
+            <button type="button" class="btn" id="clientModalCancel" style="background: transparent; border: 1px solid var(--border); color: var(--text-secondary);">Cancel</button>
+            <button type="button" class="btn btn-primary" id="clientModalSave">Save</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/dashboard-dock.js"><\/script>
+<script src="/static/dashboard/clients.js"></script>

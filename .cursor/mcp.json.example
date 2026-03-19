@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright-mcp": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp"]
+    },
+    "inneranimal-mcp": {
+      "url": "https://mcp.inneranimalmedia.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_AUTH_TOKEN"
+      }
+    }
+  }
+}

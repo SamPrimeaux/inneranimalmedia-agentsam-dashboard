@@ -1,0 +1,16 @@
+# Agent Cursor Rules (Agent Sam / next session)
+
+1. **NEVER trust compiled context cache for table existence.**  
+   Always verify with: `SELECT name FROM sqlite_master WHERE name='table_name';`
+
+2. **NEVER modify worker.js during UI-only tasks.**
+
+3. **NEVER deploy without explicit "deploy approved" confirmation.**
+
+4. **After every deploy**, run:
+   ```bash
+   cp worker.js ~/Downloads/agentsam-clean/worker.js && cd ~/Downloads/agentsam-clean && git add -A && git commit -m "sync" && git push
+   ```
+
+5. **ai_knowledge_base_chunks EXISTS in D1** — verified via D1 Studio 2026-03-12.  
+   Do not say it doesn't exist.

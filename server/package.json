@@ -1,0 +1,13 @@
+{
+  "name": "iam-terminal-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node terminal.js",
+    "dev": "node --watch terminal.js"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

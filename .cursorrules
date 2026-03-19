@@ -1,0 +1,18 @@
+# CRITICAL -- NEVER VIOLATE THESE RULES
+
+## Locked Auth Routes -- DO NOT MODIFY WITHOUT EXPLICIT APPROVAL
+- handleGoogleOAuthCallback -> /auth/callback/google
+- handleGitHubOAuthCallback -> /api/oauth/github/callback
+Breaking these locks ALL users out of the dashboard.
+Before touching either function, paste the full current code and wait for approval.
+
+## OAuth Flow Architecture
+- Both flows use KV SESSION_CACHE for state storage
+- connectDrive: true in KV state = Google Drive connection from agent popup
+- connectGitHub: true in KV state = GitHub connection from agent popup  
+- No flag present = login flow -> must redirect to /dashboard after session creation
+- NEVER use getAuthUser() to distinguish login vs connection flows
+
+## Other Locked Files
+- wrangler.toml -- never modify without Sam confirming
+- wrangler.production.toml -- never modify without Sam confirming

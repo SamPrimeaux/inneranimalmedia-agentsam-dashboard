@@ -1,0 +1,22 @@
+# Env / secrets — never commit
+.env
+.env.local
+.env.*.local
+.env.cloudflare
+
+# Cursor MCP config (may contain MCP_AUTH_TOKEN)
+.cursor/mcp.json
+
+# Dependencies
+node_modules/
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# OS
+.DS_Store
+
+.dev.vars*
+!.dev.vars.example
+!.env.example

@@ -1,0 +1,756 @@
+<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();</script>
+<div class="page-header tools-header">
+  <div>
+    <h1 class="page-title">Dev Tools</h1>
+    <p class="page-subtitle">9 pre-built tools · inneranimalmedia-business · cf87b717</p>
+  </div>
+  <button type="button" class="btn btn-primary tools-new-prompt-btn" id="toolsNewPromptBtn">New Prompt</button>
+</div>
+
+<div class="card tools-global-bar">
+  <div class="tools-global-bar-top">
+    <div class="tools-provider-tabs" role="tablist" aria-label="AI provider">
+      <button type="button" class="tools-tab active" data-provider="workers_ai">Workers AI</button>
+      <button type="button" class="tools-tab" data-provider="openai">OpenAI</button>
+      <button type="button" class="tools-tab" data-provider="anthropic">Anthropic</button>
+    </div>
+    <div class="tools-health-dots">
+      <span class="tools-health-item" data-key="workers_ai">
+        <span class="dot skeleton"></span><span class="label">Workers AI</span>
+      </span>
+      <span class="tools-health-item" data-key="openai">
+        <span class="dot skeleton"></span><span class="label">OpenAI</span>
+      </span>
+      <span class="tools-health-item" data-key="anthropic">
+        <span class="dot skeleton"></span><span class="label">Anthropic</span>
+      </span>
+      <span class="tools-health-item" data-key="vectorize">
+        <span class="dot skeleton"></span><span class="label">Vectorize: meauxos-knowledge-base</span>
+      </span>
+    </div>
+  </div>
+  <div class="tools-global-bar-bottom">
+    <textarea id="toolsGlobalPrompt" class="tools-global-textarea" rows="3" placeholder="Ask agent_sam to design or update this dashboard, run D1 queries, or inspect deployments…"></textarea>
+  </div>
+</div>
+
+<div class="tools-grid">
+  <!-- Agent Sam -->
+  <div class="tools-card" data-tool="agent">
+    <div class="tools-card-band"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b5557284-485e-4305-2c5a-49c6acf99a00/avatar" alt="Agent Sam icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>Agent Sam</h3>
+            <span class="tools-badge tools-badge-ok" id="badge-agent">online</span>
+          </div>
+          <p class="tools-card-tagline"><code>agent_sam · dashboard assistant</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-action="agent-run-global">Run with prompt</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Details</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="agent">
+      <label class="tools-panel-label">Prompt</label>
+      <textarea rows="3" class="tools-panel-textarea" data-agent-textarea></textarea>
+      <div class="tools-panel-footer">
+        <button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local">Send to /api/agent/run</button>
+        <span class="tools-panel-hint">Uses the same context as the Agent page.</span>
+      </div>
+      <pre class="tools-panel-output" data-output="agent"></pre>
+    </div>
+  </div>
+
+  <!-- Hyperdrive -->
+  <div class="tools-card" data-tool="hyperdrive">
+    <div class="tools-card-band tools-card-band-blue"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/c2eec95d-98c4-48ed-0394-45ae2f632300/avatar" alt="Hyperdrive icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>Hyperdrive</h3>
+            <span class="tools-badge tools-badge-neutral" id="badge-hyperdrive">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>cf hyperdrive · connection configs</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Configs</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="hyperdrive">
+      <p class="tools-panel-label">Hyperdrive configurations</p>
+      <p class="tools-panel-text" id="hyperdriveSummary">Loading from /api/tools/status…</p>
+    </div>
+  </div>
+
+  <!-- D1 Studio -->
+  <div class="tools-card" data-tool="d1">
+    <div class="tools-card-band tools-card-band-green"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/d1864d11-4485-4a38-1849-168f567aa200/avatar" alt="D1 icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>D1 Studio</h3>
+            <span class="tools-badge tools-badge-neutral" id="badge-d1">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>cf87b717-d4e2-4cf8-bab0-a81268e32d49 · inneranimalmedia-business</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-action="d1-run">Run query</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Console</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="d1">
+      <label class="tools-panel-label">SQL · POST /api/d1/query</label>
+      <textarea rows="4" class="tools-panel-textarea" data-d1-sql>SELECT name, deployment_status, created_at FROM worker_registry ORDER BY created_at DESC LIMIT 20;</textarea>
+      <div class="tools-panel-footer">
+        <span class="tools-panel-hint">Database: inneranimalmedia-business (cf87b717).</span>
+      </div>
+      <pre class="tools-panel-output" data-output="d1"></pre>
+    </div>
+  </div>
+
+  <!-- DeployOps -->
+  <div class="tools-card" data-tool="deployops">
+    <div class="tools-card-band tools-card-band-red"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/611ea0dd-fcae-4997-8a4f-1d4a69fa9d00/avatar" alt="DeployOps icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>DeployOps</h3>
+            <span class="tools-badge tools-badge-neutral skeleton-pill" id="badge-deployops">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>worker_registry · failed deployments</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Recent</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="deployops">
+      <p class="tools-panel-label">Failed deployments</p>
+      <p class="tools-panel-text" id="deployopsSummary">Loading from /api/tools/status…</p>
+    </div>
+  </div>
+
+  <!-- Services -->
+  <div class="tools-card" data-tool="services">
+    <div class="tools-card-band tools-card-band-purple"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/adb8e5ab-0f86-47d4-487e-4a444a7e1e00/avatar" alt="Services icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>MCP Services</h3>
+            <span class="tools-badge tools-badge-neutral skeleton-pill" id="badge-services">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>mcp_services · is_active=1</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Catalog</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="services">
+      <p class="tools-panel-label">Services overview</p>
+      <p class="tools-panel-text" id="servicesSummary">Loading from /api/tools/status…</p>
+    </div>
+  </div>
+
+  <!-- Tenants -->
+  <div class="tools-card" data-tool="tenants">
+    <div class="tools-card-band tools-card-band-teal"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b158fce7-8824-48a3-70d9-d114a7dd3600/avatar" alt="Tenants icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>Tenants</h3>
+            <span class="tools-badge tools-badge-neutral skeleton-pill" id="badge-tenants">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>iam_clients · status='active'</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Summary</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="tenants">
+      <p class="tools-panel-label">Active tenants</p>
+      <p class="tools-panel-text" id="tenantsSummary">Loading from /api/tools/status…</p>
+    </div>
+  </div>
+
+  <!-- Activity -->
+  <div class="tools-card" data-tool="activity">
+    <div class="tools-card-band tools-card-band-amber"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ae210967-379f-4e63-9204-518edf7a5800/avatar" alt="Activity icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>Activity</h3>
+            <span class="tools-badge tools-badge-ok" id="badge-activity">wired</span>
+          </div>
+          <p class="tools-card-tagline"><code>audit_logs · /dashboard/activity</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <a href="/dashboard/activity" class="btn btn-secondary btn-sm">Open log</a>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="activity">
+      <p class="tools-panel-text">Activity is managed on the Activity page. This card is a quick launch shortcut.</p>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="tools-card" data-tool="settings">
+    <div class="tools-card-band tools-card-band-slate"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b10d6496-0776-4f78-1ffa-4bcbcee51900/avatar" alt="Settings icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>Settings</h3>
+            <span class="tools-badge tools-badge-ok" id="badge-settings">live</span>
+          </div>
+          <p class="tools-card-tagline"><code>/dashboard/user-settings · /api/settings/*</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <a href="/dashboard/user-settings" class="btn btn-secondary btn-sm">Open settings</a>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="settings">
+      <p class="tools-panel-text">User, org, and API token settings live under User Settings.</p>
+    </div>
+  </div>
+
+  <!-- DO Functions / Vector search -->
+  <div class="tools-card" data-tool="vector">
+    <div class="tools-card-band tools-card-band-indigo"></div>
+    <div class="tools-card-body">
+      <div class="tools-card-main">
+        <img class="tools-card-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ad1e2269-844c-41bc-790a-ea72302bf000/avatar" alt="DO Functions icon">
+        <div class="tools-card-text">
+          <div class="tools-card-title-row">
+            <h3>DO Functions</h3>
+            <span class="tools-badge tools-badge-neutral skeleton-pill" id="badge-vector">checking…</span>
+          </div>
+          <p class="tools-card-tagline"><code>Vectorize · meauxos-knowledge-base</code></p>
+        </div>
+      </div>
+      <div class="tools-card-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-action="vector-search">Search</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-toggle="panel">Console</button>
+      </div>
+    </div>
+    <div class="tools-card-panel" data-panel="vector">
+      <label class="tools-panel-label">Query · POST /api/vectorize/search</label>
+      <textarea rows="3" class="tools-panel-textarea" data-vector-query>Find any DO Functions or deployment docs related to inneranimal-dashboard.</textarea>
+      <pre class="tools-panel-output" data-output="vector"></pre>
+    </div>
+  </div>
+</div>
+
+<style>
+  .tools-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .tools-new-prompt-btn {
+    white-space: nowrap;
+  }
+  .tools-global-bar {
+    margin-top: 16px;
+    margin-bottom: 20px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tools-global-bar-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .tools-provider-tabs {
+    display: inline-flex;
+    border-radius: 999px;
+    padding: 3px;
+    background: color-mix(in srgb, var(--bg-canvas) 96%, transparent);
+  }
+  .tools-tab {
+    border: none;
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text-secondary);
+  }
+  .tools-tab.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .tools-health-dots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .tools-health-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tools-health-item .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--border);
+  }
+  .tools-health-item .dot.ok {
+    background: var(--success);
+  }
+  .tools-health-item .dot.off {
+    background: var(--error);
+  }
+  .tools-health-item .dot.skeleton {
+    background: var(--border);
+    opacity: 0.7;
+    animation: tools-pulse 1.2s ease-in-out infinite;
+  }
+  .tools-global-textarea {
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: 14px;
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+  }
+  .tools-card {
+    position: relative;
+    border-radius: 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .tools-card-band {
+    height: 4px;
+    background: linear-gradient(90deg, #3b82f6, #22c55e);
+  }
+  .tools-card-band-blue { background: linear-gradient(90deg, #0ea5e9, #6366f1); }
+  .tools-card-band-green { background: linear-gradient(90deg, #22c55e, #16a34a); }
+  .tools-card-band-red { background: linear-gradient(90deg, #f97316, #ef4444); }
+  .tools-card-band-purple { background: linear-gradient(90deg, #a855f7, #6366f1); }
+  .tools-card-band-teal { background: linear-gradient(90deg, #14b8a6, #22c55e); }
+  .tools-card-band-amber { background: linear-gradient(90deg, #facc15, #f97316); }
+  .tools-card-band-slate { background: linear-gradient(90deg, #64748b, #0f172a); }
+  .tools-card-band-indigo { background: linear-gradient(90deg, #4f46e5, #0ea5e9); }
+  .tools-card-body {
+    padding: 14px 16px 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .tools-card-main {
+    display: flex;
+    gap: 10px;
+  }
+  .tools-card-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 11px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .tools-card-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .tools-card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tools-card-title-row h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+  .tools-card-tagline {
+    margin: 4px 0 0 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tools-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .tools-badge-ok {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: var(--success);
+  }
+  .tools-badge-neutral {
+    background: rgba(148, 163, 184, 0.12);
+    border-color: rgba(148, 163, 184, 0.4);
+    color: var(--text-secondary);
+  }
+  .tools-badge-alert {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.4);
+    color: var(--error);
+  }
+  .btn-sm {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .btn.btn-secondary {
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+  }
+  .btn.btn-secondary:hover {
+    background: var(--border);
+  }
+  .tools-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .tools-card-panel {
+    border-top: 1px solid var(--border);
+    padding: 10px 14px 12px 14px;
+    display: none;
+    background: var(--bg-canvas);
+  }
+  .tools-card-panel.open {
+    display: block;
+  }
+  .tools-panel-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 6px 0;
+  }
+  .tools-panel-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .tools-panel-textarea {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    font-size: 13px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .tools-panel-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    gap: 8px;
+  }
+  .tools-panel-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .tools-panel-output {
+    margin-top: 8px;
+    max-height: 200px;
+    overflow: auto;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
+  .skeleton-pill {
+    animation: tools-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes tools-pulse {
+    0% { opacity: 0.4; }
+    50% { opacity: 1; }
+    100% { opacity: 0.4; }
+  }
+  @media (max-width: 640px) {
+    .tools-global-bar-top {
+      align-items: flex-start;
+    }
+    .tools-health-dots {
+      justify-content: flex-start;
+    }
+  }
+</style>
+
+<script>
+(function () {
+  var base = window.location.origin;
+  var state = {
+    provider: 'workers_ai',
+  };
+
+  var tabs = document.querySelectorAll('.tools-tab');
+  tabs.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tabs.forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      state.provider = btn.getAttribute('data-provider');
+    });
+  });
+
+  var newPromptBtn = document.getElementById('toolsNewPromptBtn');
+  var globalPrompt = document.getElementById('toolsGlobalPrompt');
+  if (newPromptBtn && globalPrompt) {
+    newPromptBtn.addEventListener('click', function () {
+      globalPrompt.value = '';
+      globalPrompt.focus();
+    });
+  }
+
+  function updateHealthDots(data) {
+    var health = (data && data.ai) || {};
+    var map = {
+      workers_ai: !!health.workers_ai,
+      openai: !!health.openai_configured,
+      anthropic: !!health.anthropic_configured,
+      vectorize: !!health.vectorize_configured,
+    };
+    Object.keys(map).forEach(function (key) {
+      var el = document.querySelector('.tools-health-item[data-key=\"' + key + '\"] .dot');
+      if (!el) return;
+      el.classList.remove('skeleton', 'ok', 'off');
+      el.classList.add(map[key] ? 'ok' : 'off');
+    });
+  }
+
+  function setBadge(id, text, variant) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('tools-badge-ok', 'tools-badge-neutral', 'tools-badge-alert', 'skeleton-pill');
+    if (variant) el.classList.add(variant);
+  }
+
+  function openPanel(name) {
+    var panel = document.querySelector('.tools-card-panel[data-panel=\"' + name + '\"]');
+    if (panel) panel.classList.add('open');
+  }
+
+  function togglePanel(btn) {
+    var card = btn.closest('.tools-card');
+    if (!card) return;
+    var name = card.getAttribute('data-tool');
+    var panel = document.querySelector('.tools-card-panel[data-panel=\"' + name + '\"]');
+    if (!panel) return;
+    panel.classList.toggle('open');
+  }
+
+  document.querySelectorAll('[data-toggle=\"panel\"]').forEach(function (btn) {
+    btn.addEventListener('click', function () { togglePanel(btn); });
+  });
+
+  function safeJson(val) {
+    try { return JSON.stringify(val, null, 2); } catch (_) { return String(val); }
+  }
+
+  // Actions: agent run, D1 query, vector search
+  document.querySelectorAll('[data-action=\"agent-run-global\"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var prompt = (globalPrompt && globalPrompt.value.trim()) || '';
+      if (!prompt) {
+        if (globalPrompt) globalPrompt.focus();
+        return;
+      }
+      var out = document.querySelector('[data-output=\"agent\"]');
+      var panelArea = document.querySelector('[data-agent-textarea]');
+      if (panelArea && !panelArea.value) panelArea.value = prompt;
+      btn.disabled = true;
+      if (out) { out.textContent = 'Running /api/agent/run…'; }
+      fetch(base + '/api/agent/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt, prefer_provider: state.provider })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!out) return;
+        if (d.ok && d.message && d.message.content) out.textContent = d.message.content;
+        else if (d.ok && d.text) out.textContent = d.text;
+        else out.textContent = d.error || 'No response';
+      }).catch(function (e) {
+        if (out) out.textContent = 'Error: ' + e.message;
+      }).finally(function () { btn.disabled = false; });
+    });
+  });
+
+  document.querySelectorAll('[data-action=\"agent-run-local\"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.tools-card');
+      var ta = card && card.querySelector('[data-agent-textarea]');
+      var prompt = ta ? ta.value.trim() : '';
+      if (!prompt) { if (ta) ta.focus(); return; }
+      var out = card && card.querySelector('[data-output=\"agent\"]');
+      btn.disabled = true;
+      if (out) out.textContent = 'Running /api/agent/run…';
+      fetch(base + '/api/agent/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt, prefer_provider: state.provider })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!out) return;
+        if (d.ok && d.message && d.message.content) out.textContent = d.message.content;
+        else if (d.ok && d.text) out.textContent = d.text;
+        else out.textContent = d.error || 'No response';
+      }).catch(function (e) {
+        if (out) out.textContent = 'Error: ' + e.message;
+      }).finally(function () { btn.disabled = false; });
+    });
+  });
+
+  document.querySelectorAll('[data-action=\"d1-run\"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.tools-card');
+      var sqlEl = card && card.querySelector('[data-d1-sql]');
+      var sql = sqlEl ? sqlEl.value.trim() : '';
+      if (!sql) { if (sqlEl) sqlEl.focus(); return; }
+      var out = card && card.querySelector('[data-output=\"d1\"]');
+      btn.disabled = true;
+      if (out) out.textContent = 'Running /api/d1/query…';
+      fetch(base + '/api/d1/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ database_id: 'cf87b717-d4e2-4cf8-bab0-a81268e32d49', sql: sql })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!out) return;
+        if (d.ok) out.textContent = safeJson(d);
+        else out.textContent = 'Error: ' + (d.error || 'Query failed');
+      }).catch(function (e) {
+        if (out) out.textContent = 'Error: ' + e.message;
+      }).finally(function () { btn.disabled = false; });
+    });
+  });
+
+  document.querySelectorAll('[data-action=\"vector-search\"]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.tools-card');
+      var qEl = card && card.querySelector('[data-vector-query]');
+      var q = qEl ? qEl.value.trim() : '';
+      if (!q) { if (qEl) qEl.focus(); return; }
+      var out = card && card.querySelector('[data-output=\"vector\"]');
+      btn.disabled = true;
+      if (out) out.textContent = 'Searching via /api/vectorize/search…';
+      fetch(base + '/api/vectorize/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!out) return;
+        if (d.ok) out.textContent = safeJson(d);
+        else out.textContent = 'Error: ' + (d.error || 'Search failed');
+      }).catch(function (e) {
+        if (out) out.textContent = 'Error: ' + e.message;
+      }).finally(function () { btn.disabled = false; });
+    });
+  });
+
+  // Status loader
+  fetch(base + '/api/tools/status').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) return;
+    updateHealthDots(d);
+
+    var failed = typeof d.deployops_failed === 'number' ? d.deployops_failed : null;
+    if (failed != null) {
+      if (failed > 0) {
+        setBadge('badge-deployops', failed + ' failed', 'tools-badge-alert');
+        var el = document.getElementById('deployopsSummary');
+        if (el) el.textContent = 'There are ' + failed + ' failed deployments in worker_registry.';
+        openPanel('deployops');
+      } else {
+        setBadge('badge-deployops', '0 failed', 'tools-badge-ok');
+        var el2 = document.getElementById('deployopsSummary');
+        if (el2) el2.textContent = 'No failed deployments in worker_registry.';
+      }
+    }
+
+    if (typeof d.tenants_active === 'number') {
+      setBadge('badge-tenants', d.tenants_active + ' active', 'tools-badge-ok');
+      var ts = document.getElementById('tenantsSummary');
+      if (ts) ts.textContent = d.tenants_active + ' active tenants in iam_clients.';
+    }
+
+    if (typeof d.services_active === 'number') {
+      setBadge('badge-services', d.services_active + ' active', d.services_active > 0 ? 'tools-badge-ok' : 'tools-badge-neutral');
+      var ss = document.getElementById('servicesSummary');
+      if (ss) ss.textContent = d.services_active + ' active services in mcp_services.';
+    }
+
+    if (typeof d.d1_count === 'number') {
+      setBadge('badge-d1', d.d1_count + ' dbs', 'tools-badge-ok');
+      var ds = document.getElementById('hyperdriveSummary');
+      if (ds && typeof d.hyperdrive_count === 'number') {
+        ds.textContent = d.hyperdrive_count + ' Hyperdrive configs · ' + d.d1_count + ' D1 databases (or configured).';
+      }
+    }
+
+    if (typeof d.hyperdrive_count === 'number') {
+      setBadge('badge-hyperdrive', d.hyperdrive_count + ' configs', 'tools-badge-ok');
+      var hs = document.getElementById('hyperdriveSummary');
+      if (hs && !hs.textContent.includes('Hyperdrive')) {
+        hs.textContent = d.hyperdrive_count + ' Hyperdrive configs detected for this account.';
+      }
+    }
+
+    if (d.ai && d.ai.vectorize_configured) {
+      setBadge('badge-vector', 'configured', 'tools-badge-ok');
+    } else {
+      setBadge('badge-vector', 'optional', 'tools-badge-neutral');
+    }
+  }).catch(function () {
+    // Leave skeletons; page will still work.
+  });
+})();
+</script>

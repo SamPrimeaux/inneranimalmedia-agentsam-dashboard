@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contact | Inner Animal Media</title>
+  <style>
+    :root{--bg-light:#F3F6FA;--navy:#0A1B29;--glass-bg:rgba(243,246,250,0.8);--glass-border:rgba(10,27,41,0.1);--primary:#167BFC;--radius:16px;--brand-navy:#1E293B;--brand-teal:#1FAAAD;--brand-blue:#2563EB;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Inter,-apple-system,sans-serif;color:var(--navy);background:var(--bg-light);}
+    [data-theme='dark'] body{background:#0d1520;color:#e2e8f0;}
+    .glass-header{position:fixed;top:0;left:0;right:0;z-index:1000;height:88px;display:flex;align-items:center;justify-content:center;background:rgba(5,5,8,0.7);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,0.05);transition:background 0.5s,border-color 0.5s;}
+    .glass-header.light-mode{background:rgba(255,255,255,0.85);border-bottom:1px solid rgba(30,41,59,0.08);}
+    .header-inner{width:100%;max-width:1280px;padding:0 24px;display:flex;align-items:center;justify-content:space-between;}
+    .header-logo-wrap{display:block;width:80px;height:80px;transition:transform 0.2s;}
+    .header-logo-wrap:hover{transform:scale(1.05);}
+    .header-logo{width:100%;height:100%;object-fit:contain;}
+    .header-logo-dark{display:block;}.header-logo-light{display:none;}
+    .glass-header.light-mode .header-logo-dark{display:none;}.glass-header.light-mode .header-logo-light{display:block;}
+    .glass-header .nav{display:flex;align-items:center;gap:40px;}
+    .nav-link{color:#94A3B8;text-decoration:none;font-size:14px;font-weight:500;transition:color 0.3s;}
+    .nav-link:hover{color:#fff;}
+    .nav-link.active{color:#2563EB;font-weight:700;}
+    .glass-header.light-mode .nav-link{color:#64748B;}
+    .glass-header.light-mode .nav-link:hover{color:#2563EB;}
+    .header-right-desk{display:flex;align-items:center;gap:12px;}
+    .header-cta{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:var(--primary);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;font-family:inherit;transition:opacity 0.2s,transform 0.2s;}
+    .header-cta:hover{opacity:0.92;transform:translateY(-1px);}
+    .header-cta img{width:28px;height:28px;border-radius:50%;object-fit:cover;}
+    @media(max-width:768px){.header-right-desk .nav-link-text{display:none;}}
+    .hamburger-btn{display:none;width:48px;height:48px;padding:0;border:none;background:transparent;cursor:pointer;flex-direction:column;align-items:center;justify-content:center;gap:6px;border-radius:12px;transition:background 0.2s;}
+    .hamburger-btn:hover{background:rgba(255,255,255,0.08);}
+    .glass-header.light-mode .hamburger-btn:hover{background:rgba(10,27,41,0.06);}
+    @media(max-width:768px){.glass-header .nav,.header-right-desk{display:none;}.hamburger-btn{display:flex;}}
+    .footer-bottom-r2 a{color:var(--brand-teal);text-decoration:none;font-weight:600;}
+    .footer-bottom-r2 a:hover{color:#fff;}
+    .hamburger-btn .bar{display:block;width:24px;height:2px;background:#fff;border-radius:1px;transition:transform 0.3s,opacity 0.3s;}
+    .glass-header.light-mode .hamburger-btn .bar{background:#0A1B29;}
+    .hamburger-btn.active .bar:nth-child(1){transform:translateY(8px) rotate(45deg);}
+    .hamburger-btn.active .bar:nth-child(2){opacity:0;}
+    .hamburger-btn.active .bar:nth-child(3){transform:translateY(-8px) rotate(-45deg);}
+    .sidenav-overlay{position:fixed;inset:0;z-index:998;background:rgba(5,5,8,0.4);backdrop-filter:blur(4px);opacity:0;visibility:hidden;transition:opacity 0.3s,visibility 0.3s;}
+    .sidenav-overlay.active{opacity:1;visibility:visible;}
+    .mobile-menu{position:fixed;top:0;right:0;bottom:0;z-index:999;width:min(320px,85vw);background:rgba(10,27,41,0.92);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-left:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;justify-content:center;align-items:center;gap:28px;padding:88px 24px 48px;transform:translateX(100%);transition:transform 0.35s ease-out;}
+    .mobile-menu.active{transform:translateX(0);}
+    .mobile-menu a{font-size:1.5rem;font-weight:700;color:#fff;text-decoration:none;}
+    .mobile-menu a:hover,.mobile-menu a.active{color:#2563EB;}
+    .mobile-menu .copyright{position:absolute;bottom:32px;font-size:13px;color:#94A3B8;}
+    footer{background:var(--brand-navy);color:#fff;margin-top:128px;padding-top:192px;padding-bottom:64px;border-top:1px solid rgba(255,255,255,0.05);position:relative;}
+    .footer-content{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:64px;max-width:1280px;margin:0 auto;padding:0 24px;}
+    .footer-brand .footer-logo{width:160px;height:160px;object-fit:contain;margin-bottom:32px;display:block;}
+    .footer-brand p{font-size:14px;color:rgba(255,255,255,0.6);line-height:1.6;max-width:280px;}
+    .footer-sig-below{display:flex;justify-content:center;align-items:center;padding-top:32px;padding-bottom:24px;}
+    .footer-sig-below img{height:200px;width:auto;object-fit:contain;opacity:0.9;}
+    .footer-column h4{font-size:12px;font-weight:700;color:var(--brand-teal);text-transform:uppercase;letter-spacing:0.15em;margin-bottom:24px;}
+    .footer-column ul{list-style:none;padding:0;margin:0;}
+    .footer-column li{margin-bottom:16px;}
+    .footer-column a{color:rgba(255,255,255,0.6);text-decoration:none;font-size:14px;transition:color 0.2s;}
+    .footer-column a:hover{color:#fff;}
+    .footer-column a.active{color:var(--brand-teal);font-weight:600;}
+    .footer-bottom-wrap{width:100%;border-top:1px solid rgba(255,255,255,0.1);margin-top:96px;}
+    .footer-bottom-r2{padding-top:40px;max-width:1280px;margin-left:auto;margin-right:auto;padding-left:24px;padding-right:24px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;font-size:12px;color:rgba(255,255,255,0.5);}
+    @media(max-width:1024px){.footer-content{grid-template-columns:1fr 1fr;}}
+    .footer-cta{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:var(--primary);color:#fff;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;font-family:inherit;transition:opacity 0.2s,transform 0.2s;}
+    .footer-cta:hover{opacity:0.92;transform:translateY(-1px);}
+    .footer-cta img{width:24px;height:24px;border-radius:50%;object-fit:cover;}
+    @media(max-width:768px){.footer-content{grid-template-columns:1fr;gap:48px;}.footer-bottom-r2{flex-direction:column;text-align:center;}.footer-sig-below img{height:120px;}}
+    .contact-modal{position:fixed;inset:0;background:rgba(10,27,43,0.85);backdrop-filter:blur(10px);display:none;align-items:center;justify-content:center;z-index:9999;padding:24px;}
+    .contact-modal.active{display:flex;}
+    .modal-content{background:#fff;border-radius:18px;padding:64px;max-width:600px;width:100%;box-shadow:0 30px 80px rgba(10,27,43,0.18);position:relative;max-height:90vh;overflow-y:auto;}
+    .modal-close{position:absolute;top:24px;right:24px;background:none;border:none;font-size:28px;color:#51607A;cursor:pointer;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:8px;}
+    .modal-close:hover{background:rgba(10,27,43,0.1);color:#0B1220;}
+    .modal-content h2{font-size:32px;font-weight:700;margin-bottom:12px;color:#0B1220;}
+    .modal-content > .modal-subtitle{color:#51607A;font-size:16px;margin-bottom:64px;}
+    .contact-form{display:flex;flex-direction:column;gap:24px;}
+    .contact-form .form-row{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+    .contact-form .form-group{display:flex;flex-direction:column;gap:8px;}
+    .contact-form .form-group label{font-size:14px;font-weight:600;color:#0B1220;}
+    .contact-form .form-group input,.contact-form .form-group select,.contact-form .form-group textarea{width:100%;padding:14px 16px;border:1px solid rgba(10,27,43,0.1);border-radius:12px;background:#F6F8FC;color:#0B1220;font-family:inherit;font-size:15px;box-sizing:border-box;}
+    .contact-form .form-submit{margin-top:12px;padding:14px 24px;background:#167BFC;color:white;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;}
+    @media(max-width:768px){.contact-form .form-row{grid-template-columns:1fr;}.modal-content{padding:32px 24px;}}
+    .chat-fab{position:fixed;bottom:24px;right:24px;z-index:9998;cursor:pointer;width:52px;height:52px;border-radius:50%;background:var(--primary);color:#fff;border:none;box-shadow:0 4px 16px rgba(22,123,252,0.4);display:flex;align-items:center;justify-content:center;}
+    .chat-fab:hover{transform:scale(1.06);}
+    .chat-fab svg{width:26px;height:26px;}
+    .chat-panel{display:none;position:fixed;bottom:24px;right:24px;z-index:9999;width:360px;max-width:calc(100vw - 48px);height:480px;max-height:70vh;background:rgba(255,255,255,0.85);backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.12);border:1px solid var(--glass-border);flex-direction:column;overflow:hidden;}
+    .chat-panel.open{display:flex;}
+    .chat-header{padding:14px 16px;border-bottom:1px solid var(--glass-border);display:flex;align-items:center;gap:12px;}
+    .chat-header .chat-icon{width:24px;height:24px;}
+    .chat-header strong{flex:1;}
+    .chat-close{background:none;border:none;font-size:1.5rem;cursor:pointer;}
+    .chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;}
+    .chat-msg{max-width:85%;padding:10px 14px;border-radius:12px;font-size:0.9rem;}
+    .chat-msg.user{align-self:flex-end;background:var(--primary);color:#fff;}
+    .chat-msg.bot{align-self:flex-start;background:#fff;border:1px solid var(--glass-border);}
+    .chat-form{display:flex;gap:8px;padding:12px;border-top:1px solid var(--glass-border);}
+    .chat-form input{flex:1;padding:10px 14px;border:1px solid var(--glass-border);border-radius:8px;}
+    .chat-form button{padding:10px 18px;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;}
+  </style>
+  <style>
+.contact-page{max-width:960px;margin:0 auto;padding:120px 24px 80px;}
+.contact-hero{text-align:center;margin-bottom:48px;}
+.contact-hero h1{font-size:clamp(2rem,4vw,2.75rem);font-weight:700;line-height:1.2;margin-bottom:16px;color:var(--navy);}
+[data-theme='dark'] .contact-hero h1{color:#e2e8f0;}
+.contact-hero-lead{font-size:1.125rem;line-height:1.65;color:#51607A;}
+[data-theme='dark'] .contact-hero-lead{color:#94a3b8;}
+.contact-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-bottom:48px;}
+@media(max-width:768px){.contact-cards{grid-template-columns:1fr;}}
+.contact-card{background:var(--glass-bg);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:24px;}
+[data-theme='dark'] .contact-card{background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.08);}
+.contact-card-icon{width:48px;height:48px;color:var(--brand-teal);margin-bottom:16px;}
+.contact-card-icon svg{width:100%;height:100%;}
+.contact-card h3{font-size:1.125rem;margin-bottom:8px;}
+.contact-card p{font-size:0.95rem;color:#51607A;margin-bottom:12px;}
+[data-theme='dark'] .contact-card p{color:#94a3b8;}
+.contact-card a{color:var(--primary);font-weight:600;}
+.contact-card-time{display:block;font-size:0.8rem;color:#64748B;margin-top:8px;}
+.contact-form-section{margin-bottom:48px;}
+.contact-form-glass{background:var(--glass-bg);backdrop-filter:blur(12px);border:1px solid var(--glass-border);border-radius:var(--radius);padding:32px;}
+[data-theme='dark'] .contact-form-glass{background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.08);}
+.contact-form-glass h2{margin-bottom:24px;}
+.form-message{padding:12px 16px;border-radius:8px;margin-bottom:16px;}
+.form-success{background:rgba(34,197,94,0.15);color:#15803d;}
+.form-error{background:rgba(239,68,68,0.15);color:#b91c1c;}
+.field-error{font-size:0.85rem;color:#b91c1c;margin-top:4px;}
+.form-group-checkbox .checkbox-label{display:flex;align-items:flex-start;gap:10px;cursor:pointer;}
+.form-group-checkbox input[type=checkbox]{margin-top:4px;}
+.form-submit:disabled{opacity:0.6;cursor:not-allowed;}
+.contact-company{display:grid;grid-template-columns:1fr 1fr;gap:32px;}
+@media(max-width:600px){.contact-company{grid-template-columns:1fr;}}
+.contact-company h3{font-size:1.125rem;margin-bottom:12px;}
+.contact-address,.contact-hours{line-height:1.6;}
+.contact-note{font-size:0.9rem;color:#64748B;margin-top:12px;}
+</style>
+<style id="uniform-header">
+  nav{position:sticky;top:0;left:0;width:100%;height:100px;background:rgba(255,255,255,0.82);backdrop-filter:blur(20px) saturate(1.6);-webkit-backdrop-filter:blur(20px) saturate(1.6);border-bottom:1px solid rgba(0,0,0,0.06);z-index:1000;display:flex;align-items:center;justify-content:space-between;padding:0 48px;}
+  .nav-logo{display:flex;align-items:center;gap:0}.nav-logo img{height:64px;width:auto;border-radius:8px}
+  .nav-links{display:flex;align-items:center;gap:8px}.nav-link{font-size:14px;font-weight:500;color:#6b7280;padding:8px 20px;border-radius:6px;transition:color .2s,background .2s;letter-spacing:.01em;text-decoration:none}.nav-link:hover{color:#111827;background:rgba(0,0,0,0.04)}.nav-link.active{color:#111827;font-weight:600}
+  .nav-right{display:flex;align-items:center;gap:14px}.nav-signup{font-size:14px;font-weight:600;background:#111827;color:#fff;padding:9px 22px;border-radius:8px;transition:background .2s,transform .15s;letter-spacing:.01em;display:inline-block;text-decoration:none}.nav-signup:hover{background:#1f2937;transform:translateY(-1px);color:#fff}
+  .nav-hamburger{display:none;width:40px;height:40px;border:none;background:transparent;cursor:pointer;padding:0;margin:0;flex-direction:column;justify-content:center;align-items:center;gap:5px;transition:opacity .2s,background .2s}.nav-hamburger:hover{background:rgba(0,0,0,0.04)}
+  .nav-hamburger span{width:20px;height:2px;background:#1E293B;border-radius:1px;transition:transform .25s ease,opacity .25s ease}
+  .nav-hamburger.open span:nth-child(1){transform:rotate(45deg) translateY(7px)}.nav-hamburger.open span:nth-child(2){opacity:0}.nav-hamburger.open span:nth-child(3){transform:rotate(-45deg) translateY(-7px)}
+  .nav-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.2);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:998;opacity:0;pointer-events:none;transition:opacity .3s ease}.nav-overlay.open{opacity:1;pointer-events:auto}
+  .nav-sidenav{position:fixed;top:0;right:0;width:50vw;max-width:320px;height:100vh;background:rgba(255,255,255,0.82);backdrop-filter:blur(20px) saturate(1.6);-webkit-backdrop-filter:blur(20px) saturate(1.6);border-left:1px solid rgba(0,0,0,0.06);box-shadow:-4px 0 24px rgba(0,0,0,0.08);transform:translateX(100%);transition:transform .35s cubic-bezier(0.4,0,0.2,1);z-index:999;overflow-y:auto}.nav-sidenav.open{transform:translateX(0)}
+  .nav-sidenav .sidenav-content{padding:80px 24px 32px;display:flex;flex-direction:column;gap:8px}.nav-sidenav .sidenav-content a{font-size:16px;font-weight:500;color:#374151;text-decoration:none;padding:12px 16px;border-radius:8px;transition:background .2s,color .2s}.nav-sidenav .sidenav-content a:hover{background:rgba(0,0,0,0.04);color:#111827}
+  .nav-sidenav .sidenav-signup{margin-top:24px;padding-top:20px;border-top:1px solid rgba(0,0,0,0.08)}.nav-sidenav .sidenav-signup .nav-signup{display:inline-block;text-align:center;color:#fff}.nav-sidenav .sidenav-signup .nav-signup:hover{color:#fff}
+  @media(max-width:680px){nav{height:70px;padding:0 18px}.nav-links{display:none}.nav-signup{display:none}.nav-hamburger{display:flex}}
+</style>
+</head>
+<body>
+
+  <nav id="mainNav">
+    <a href="/" class="nav-logo">
+      <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/11f6af46-0a3c-482a-abe8-83edc5a8a200/avatar" alt="Inner Animal Media">
+    </a>
+    <div class="nav-links">
+      <a href="/" class="nav-link">Home</a>
+      <a href="/work" class="nav-link">Work</a>
+      <a href="/about" class="nav-link">About</a>
+      <a href="/services" class="nav-link">Services</a>
+      <a href="/contact" class="nav-link active">Contact</a>
+    </div>
+    <div class="nav-right">
+      <a href="/auth/signup" class="nav-signup">Sign Up</a>
+      <button type="button" class="nav-hamburger" id="navHamburger" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+    </div>
+  </nav>
+  <div class="nav-overlay" id="navOverlay" aria-hidden="true"></div>
+  <aside class="nav-sidenav" id="navSidenav" aria-hidden="true">
+    <div class="sidenav-content">
+      <a href="/">Home</a>
+      <a href="/work">Work</a>
+      <a href="/about">About</a>
+      <a href="/services">Services</a>
+      <a href="/contact" class="active">Contact</a>
+      <div class="sidenav-signup"><a href="/auth/signup" class="nav-signup">Sign Up</a></div>
+    </div>
+  </aside>
+<main class="contact-page">
+    <section class="contact-hero">
+      <h1>Let&apos;s Build Something Together</h1>
+      <p class="contact-hero-lead">Whether you need a custom web platform, AI-powered tools, or edge infrastructure—we&apos;re here to help.</p>
+    </section>
+
+    <section class="contact-cards">
+      <div class="contact-card glass-card">
+        <div class="contact-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg>
+        </div>
+        <h3>Start a Project</h3>
+        <p>Ready to build your SaaS platform or custom application?</p>
+        <a href="mailto:sales@inneranimalmedia.com">sales@inneranimalmedia.com</a>
+        <span class="contact-card-time">Within 24 hours</span>
+      </div>
+      <div class="contact-card glass-card">
+        <div class="contact-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+        </div>
+        <h3>Get Support</h3>
+        <p>Existing client? We&apos;re here to help with technical issues.</p>
+        <a href="mailto:support@inneranimalmedia.com">support@inneranimalmedia.com</a>
+        <span class="contact-card-time">Within 4 hours</span>
+      </div>
+      <div class="contact-card glass-card">
+        <div class="contact-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </div>
+        <h3>Partner With Us</h3>
+        <p>Interested in collaboration or have another inquiry?</p>
+        <a href="mailto:hello@inneranimalmedia.com">hello@inneranimalmedia.com</a>
+        <span class="contact-card-time">Within 48 hours</span>
+      </div>
+    </section>
+
+    <section class="contact-form-section">
+      <div class="contact-form-glass">
+        <h2>Send Us a Message</h2>
+        <div id="formSuccess" class="form-message form-success" role="alert" style="display:none;"></div>
+        <div id="formError" class="form-message form-error" role="alert" style="display:none;"></div>
+        <form id="contactForm" class="contact-form" novalidate>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="contact-name">Full Name *</label>
+              <input type="text" id="contact-name" name="name" required maxlength="200" autocomplete="name">
+              <span class="field-error" id="err-name"></span>
+            </div>
+            <div class="form-group">
+              <label for="contact-email">Email Address *</label>
+              <input type="email" id="contact-email" name="email" required maxlength="320" autocomplete="email">
+              <span class="field-error" id="err-email"></span>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="contact-company">Company Name</label>
+              <input type="text" id="contact-company" name="company" maxlength="200" autocomplete="organization">
+            </div>
+            <div class="form-group">
+              <label for="contact-phone">Phone Number</label>
+              <input type="tel" id="contact-phone" name="phone" maxlength="30" autocomplete="tel">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="contact-type">Project Type *</label>
+              <select id="contact-type" name="projectType" required>
+                <option value="">Select type</option>
+                <option value="New Website/Application">New Website/Application</option>
+                <option value="SaaS Platform Development">SaaS Platform Development</option>
+                <option value="Cloudflare Migration">Cloudflare Migration</option>
+                <option value="AI Integration">AI Integration</option>
+                <option value="Technical Support">Technical Support</option>
+                <option value="Partnership Opportunity">Partnership Opportunity</option>
+                <option value="Other">Other</option>
+              </select>
+              <span class="field-error" id="err-projectType"></span>
+            </div>
+            <div class="form-group">
+              <label for="contact-budget">Budget Range</label>
+              <select id="contact-budget" name="budget">
+                <option value="">Select range</option>
+                <option value="Under $5,000">Under $5,000</option>
+                <option value="$5,000 - $15,000">$5,000 - $15,000</option>
+                <option value="$15,000 - $50,000">$15,000 - $50,000</option>
+                <option value="$50,000+">$50,000+</option>
+                <option value="Not sure yet">Not sure yet</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="contact-message">Message *</label>
+            <textarea id="contact-message" name="message" required rows="5" minlength="10" maxlength="10000" placeholder="Tell us about your project or question."></textarea>
+            <span class="field-error" id="err-message"></span>
+          </div>
+          <div class="form-group form-group-checkbox">
+            <label class="checkbox-label">
+              <input type="checkbox" id="contact-agree" name="agreeToTerms" required>
+              <span>I agree to the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a></span>
+            </label>
+            <span class="field-error" id="err-agree"></span>
+          </div>
+          <button type="submit" class="form-submit" id="contactSubmit" disabled>Send Message</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="contact-company">
+      <div class="contact-company-col">
+        <h3>Where We&apos;re Based</h3>
+        <p class="contact-address">
+          Inner Animal Media<br>
+          Lafayette, Louisiana 70592<br>
+          United States
+        </p>
+        <p class="contact-note">Remote-first team serving clients nationwide.</p>
+      </div>
+      <div class="contact-company-col">
+        <h3>When We&apos;re Available</h3>
+        <p class="contact-hours">
+          Monday – Friday: 9:00 AM – 6:00 PM CST<br>
+          Saturday – Sunday: Limited availability
+        </p>
+        <p class="contact-note">Emergency support available 24/7 for active clients.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-brand">
+        <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/dbb316af-9c97-4959-f09f-bf58b2783d00/small" alt="Inner Animal Media" class="footer-logo" width="160" height="160">
+        <p>Edge-first infrastructure. Glassmorphic design. Built for scale.</p>
+      </div>
+      <div class="footer-column">
+        <h4>Products</h4>
+        <ul>
+          <li><a href="/dashboard">MeauxIDE</a></li>
+          <li><a href="/meauxcad">MeauxCAD</a></li>
+          <li><a href="/games">MeauxGame</a></li>
+          <li><a href="/pricing">Pricing</a></li>
+        </ul>
+      </div>
+      <div class="footer-column">
+        <h4>Company</h4>
+        <ul>
+          <li><a href="/work">Work</a></li>
+          <li><a href="/services">Services</a></li>
+          <li><a href="/about">About</a></li>
+          <li><a href="/contact" class="active">Contact</a></li>
+        </ul>
+      </div>
+      <div class="footer-column">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/privacy">Privacy</a></li>
+          <li><a href="/terms">Terms</a></li>
+          <li><a href="/auth-signin.html">Log in</a></li>
+          
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom-wrap">
+      <div class="footer-bottom-r2">
+        <p>© 2026 Inner Animal Media. All rights reserved.</p>
+        
+      </div>
+      <div class="footer-sig-below" aria-hidden="true">
+        <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/238de9d1-a470-4fe5-5424-9182f4bc0500/small" alt="">
+      </div>
+    </div>
+  </footer>
+
+  <button type="button" class="chat-fab" id="agentSamFab" aria-label="Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+  <div class="chat-panel" id="chatPanel">
+    <div class="chat-header">
+      <svg class="chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <strong>Chat</strong>
+      <button type="button" class="chat-close" id="chatClose" aria-label="Close">×</button>
+    </div>
+    <div class="chat-messages" id="chatMessages"></div>
+    <form class="chat-form" id="agentSamForm">
+      <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <script>
+    (function(){
+      var theme=localStorage.getItem('theme')||'light';
+      document.documentElement.setAttribute('data-theme',theme);
+      var hamburger=document.getElementById('navHamburger');var overlay=document.getElementById('navOverlay');var sidenav=document.getElementById('navSidenav');
+      function closeMenu(){if(hamburger)hamburger.classList.remove('open');if(overlay)overlay.classList.remove('open');if(sidenav){sidenav.classList.remove('open');sidenav.setAttribute('aria-hidden','true');}}
+      function openMenu(){if(hamburger)hamburger.classList.add('open');if(overlay)overlay.classList.add('open');if(sidenav){sidenav.classList.add('open');sidenav.setAttribute('aria-hidden','false');}}
+      if(hamburger&&sidenav){hamburger.addEventListener('click',function(){if(hamburger.classList.contains('open'))closeMenu();else openMenu();});if(overlay)overlay.addEventListener('click',closeMenu);sidenav.querySelectorAll('a').forEach(function(a){a.addEventListener('click',closeMenu);});}
+      var contactModal=document.getElementById('contactModal');
+      if(contactModal){
+        function closeModal(){ contactModal.classList.remove('active'); document.body.style.overflow=''; }
+        document.getElementById('contactModalClose')&&document.getElementById('contactModalClose').addEventListener('click',closeModal);
+        contactModal.addEventListener('click',function(e){ if(e.target===contactModal) closeModal(); });
+        var modalForm=contactModal.querySelector('form');
+        if(modalForm) modalForm.addEventListener('submit',function(e){
+          e.preventDefault();
+          var fd=new FormData(modalForm);
+          fetch('/api/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fd.get('name'),email:fd.get('email'),projectType:fd.get('projectType'),budget:fd.get('budget'),message:fd.get('message')})})
+            .then(function(r){ if(r.ok){ alert('Message sent. We will get back to you soon.'); modalForm.reset(); closeModal(); } else throw new Error(); })
+            .catch(function(){ alert('Something went wrong. Try hello@inneranimalmedia.com'); });
+        });
+      }
+      var fab=document.getElementById('agentSamFab'), panel=document.getElementById('chatPanel'), closeBtn=document.getElementById('chatClose');
+      var form=document.getElementById('agentSamForm'), input=document.getElementById('chatInput'), messages=document.getElementById('chatMessages');
+      if(fab&&panel&&form&&input&&messages){
+        function addMsg(text,isUser){ var d=document.createElement('div'); d.className='chat-msg '+(isUser?'user':'bot'); d.textContent=text; messages.appendChild(d); messages.scrollTop=messages.scrollHeight; }
+        fab.addEventListener('click',function(){ panel.classList.add('open'); fab.style.display='none'; });
+        closeBtn&&closeBtn.addEventListener('click',function(){ panel.classList.remove('open'); fab.style.display=''; });
+        form.addEventListener('submit',function(e){ e.preventDefault(); var msg=input.value.trim(); if(!msg)return; addMsg(msg,true); input.value='';
+          fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})})
+            .then(function(r){ return r.json(); }).then(function(d){ addMsg(d.reply||'No reply.',false); }).catch(function(){ addMsg('Could not reach chat.',false); });
+        });
+      }
+    })();
+  </script>
+<script>
+(function(){
+  var form=document.getElementById('contactForm');
+  if(!form) return;
+  var submitBtn=document.getElementById('contactSubmit');
+  var formSuccess=document.getElementById('formSuccess');
+  var formError=document.getElementById('formError');
+  var errIds=['err-name','err-email','err-projectType','err-message','err-agree'];
+  function showErr(id,msg){ var el=document.getElementById(id); if(el){ el.textContent=msg||''; } }
+  function validate(){
+    var name=(document.getElementById('contact-name').value||'').trim();
+    var email=(document.getElementById('contact-email').value||'').trim();
+    var projectType=(document.getElementById('contact-type').value||'').trim();
+    var message=(document.getElementById('contact-message').value||'').trim();
+    var agree=document.getElementById('contact-agree').checked;
+    errIds.forEach(function(id){ showErr(id,''); });
+    var ok=name&&email&&projectType&&message.length>=10&&agree;
+    if(submitBtn) submitBtn.disabled=!ok;
+    return ok;
+  }
+  form.querySelectorAll('input,select,textarea').forEach(function(el){ el.addEventListener('input',validate); el.addEventListener('change',validate); });
+  validate();
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    if(formSuccess) formSuccess.style.display='none';
+    if(formError) formError.style.display='none';
+    errIds.forEach(function(id){ showErr(id,''); });
+    var fd=new FormData(form);
+    var body={name:fd.get('name'),email:fd.get('email'),company:fd.get('company')||'',phone:fd.get('phone')||'',projectType:fd.get('projectType'),budget:fd.get('budget')||'',message:fd.get('message'),agreeToTerms:!!fd.get('agreeToTerms')};
+    if(submitBtn) submitBtn.disabled=true;
+    fetch('/api/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, data:d }; }); })
+      .then(function(res){
+        if(res.ok){
+          if(formSuccess){ formSuccess.textContent="Message sent! We'll get back to you within "+(res.data.responseTime||'24 hours')+"."; formSuccess.style.display='block'; }
+          form.reset();
+          validate();
+        } else {
+          if(formError){ formError.textContent=res.data.error||'Something went wrong. Please try again or email hello@inneranimalmedia.com'; formError.style.display='block'; }
+          validate();
+        }
+      })
+      .catch(function(){
+        if(formError){ formError.textContent='Something went wrong. Please try again or email hello@inneranimalmedia.com'; formError.style.display='block'; }
+        validate();
+      });
+  });
+})();
+</script>
+</body>
+</html>

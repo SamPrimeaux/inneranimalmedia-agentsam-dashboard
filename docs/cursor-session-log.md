@@ -4577,3 +4577,36 @@ After agent-dashboard.js / .css / agent.html R2 puts, INSERT OR REPLACE into `da
 
 ### Deploy status
 - Worker deployed: no.
+
+## 2026-03-21 GitHub sync v64 to v114 + D1 documentation rows
+
+### What was asked
+One-time catch-up: append `.gitignore`, verify no secrets staged, commit and push to `origin/main`, log sync in D1 (`deployments`, `ci_di_workflow_runs`), update `github_repositories` for primary repo.
+
+### Files changed
+- `.gitignore` lines 25-34: appended built-artifact ignore (`agent-dashboard/dist/`), `.git/cursor/`, deploy temp logs and `*.tmp`.
+- Stopped tracking `agent-dashboard/dist/*` via `git rm --cached` so R2-built assets are not in git (aligns with new ignore).
+- Commit `348e1e3`: 72 files changed (full working tree per user procedure); push to `https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git`.
+
+### Files NOT changed (and why)
+- `worker.js` OAuth handlers: not touched.
+- `FloatingPreviewPanel.jsx`: not touched per rules.
+- `iam-pty` repo: not touched (separate repo, user instruction).
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (no deploy)
+
+### D1 (remote `inneranimalmedia-business`)
+- `deployments`: inserted `id` `github-sync-348e1e3`, version `github-sync-v114`.
+- `ci_di_workflow_runs`: inserted `github_sync` milestone row (id `github-sync-<epoch>`).
+- `github_repositories`: updated row `SamPrimeaux/inneranimalmedia-agentsam-dashboard`.
+
+### What is live now
+`main` at `348e1e3` on GitHub; local branch clean; production worker unchanged by this task.
+
+### Known issues / next steps
+- GitHub Dependabot reports 10 vulnerabilities on the default branch (3 high, 7 moderate); review when convenient.
+- STEP 2 grep matched `.env.example`, `.env.cloudflare.example`, and `migrations/143_secret_audit_log_created_at.sql` (templates / migration name only), not live secrets.

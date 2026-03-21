@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import FloatingPreviewPanel from "./FloatingPreviewPanel";
 import AnimatedStatusText from "./AnimatedStatusText";
 import ExecutionPlanCard from "./ExecutionPlanCard";
@@ -8,6 +8,15 @@ const SpeechRecognitionAPI =
   typeof window !== "undefined"
     ? window.SpeechRecognition || window.webkitSpeechRecognition
     : null;
+
+/** True if string looks like a shell one-liner (for slash-picker instant /run). */
+function looksLikeShellCommandText(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  return /^(wrangler|npm|npx|pnpm|yarn|git|node|bash|sh\s|cd|curl|tee|cat|ls|echo|mkdir|rm|cp|mv|chmod|export|source|\.\/|#!)/i.test(
+    t
+  );
+}
 
 const WELCOME_COMMANDS = [
   {
@@ -193,12 +202,20 @@ function TerminalOutputCard({ message, onOpenTerminal }) {
     : isRunning
       ? "var(--accent)"
       : "var(--border)";
+  const cardClass = [
+    "terminal-output-card",
+    isRunning && "terminal-output-card--running",
+    isError && "terminal-output-card--error",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
+      className={cardClass}
       style={{
         background: "var(--bg-canvas)",
-        border: `1px solid ${borderColor}`,
+        border: isRunning ? undefined : `1px solid ${borderColor}`,
         borderRadius: 6,
         margin: "6px 0",
         overflow: "hidden",
@@ -242,8 +259,10 @@ function TerminalOutputCard({ message, onOpenTerminal }) {
           $ {message.command}
         </span>
         {isRunning && (
-          <span style={{ fontSize: 10, color: "var(--accent)", animation: "spPulse 1s infinite" }}>
-            running...
+          <span className="terminal-output-card__dots" aria-hidden="true">
+            <span className="terminal-output-card__dot" />
+            <span className="terminal-output-card__dot" />
+            <span className="terminal-output-card__dot" />
           </span>
         )}
         {!isRunning && (
@@ -270,7 +289,7 @@ function TerminalOutputCard({ message, onOpenTerminal }) {
             wordBreak: "break-all",
           }}
         >
-          {message.output || (isRunning ? "..." : "(no output)")}
+          {message.output || (isRunning ? "" : "(no output)")}
         </div>
       )}
       {!isRunning && (
@@ -279,6 +298,217 @@ function TerminalOutputCard({ message, onOpenTerminal }) {
             display: "flex",
             gap: 6,
             padding: "6px 12px",
+            borderTop: expanded ? "1px solid var(--border)" : "none",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenTerminal) onOpenTerminal();
+            }}
+            style={{
+              fontSize: 10,
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            View in Terminal
+          </button>
+          <button
+            type="button"
+            onClick={() => navigator.clipboard?.writeText(message.output || "")}
+            style={{
+              fontSize: 10,
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            Copy
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const GIT_ACTION_TYPES = ["git_status", "git_commit", "git_push", "git_pull"];
+
+function normalizeTerminalCommand(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  return raw
+    .replace(/^\$\s*/, "")
+    .replace(/^\//, "")
+    .trim();
+}
+
+/** Classify a shell command string as a git action, or null. */
+function classifyGitTerminalCommand(rawCommand) {
+  const c = normalizeTerminalCommand(rawCommand);
+  if (!/^git\s+/i.test(c)) return null;
+  const rest = c.replace(/^git\s+/i, "").trim();
+  if (/^status(\s|$)/i.test(rest)) return "git_status";
+  if (/^commit(\s|$)/i.test(rest)) return "git_commit";
+  if (/^push(\s|$)/i.test(rest)) return "git_push";
+  if (/^pull(\s|$)/i.test(rest)) return "git_pull";
+  return null;
+}
+
+function resolveGitActionType(msg) {
+  if (!msg) return null;
+  if (GIT_ACTION_TYPES.includes(msg.type)) return msg.type;
+  if (msg.type === "terminal_output") return classifyGitTerminalCommand(msg.command);
+  return null;
+}
+
+/** One-line summary from git stdout/stderr for card header (terminal_execute / local terminal). */
+function parseGitOutputSummary(gitType, output, command) {
+  const text = (output || "").trim();
+  const firstLine = text.split(/\r?\n/).find((l) => l.trim()) || "";
+  if (!text) return command ? normalizeTerminalCommand(command).slice(0, 80) : "";
+
+  if (gitType === "git_status") {
+    const onBranch = text.match(/^On branch (\S+)/m);
+    if (onBranch) return `On branch ${onBranch[1]}`;
+    const porcelain = text.match(/^## ([^\s]+(?:\s+[^\n]+)?)/m);
+    if (porcelain) return porcelain[1].trim();
+    return firstLine.slice(0, 120);
+  }
+  if (gitType === "git_commit") {
+    const branchLine = text.match(/^\s*\[([^\]\n]+)\]/m);
+    if (branchLine) return branchLine[1].trim().slice(0, 120);
+    const nFiles = text.match(/(\d+)\s+files?\s+changed/i);
+    if (nFiles) return `${nFiles[1]} files changed`;
+    return firstLine.slice(0, 120);
+  }
+  if (gitType === "git_push") {
+    if (/everything up-to-date/i.test(text)) return "Everything up-to-date";
+    const branch = text.match(/^\s*To\s+[^\n]+\s*\n\s*([^\n]+)/m);
+    if (branch) return branch[1].trim().slice(0, 120);
+    return firstLine.slice(0, 120);
+  }
+  if (gitType === "git_pull") {
+    if (/already up to date/i.test(text)) return "Already up to date";
+    const ff = text.match(/Fast-forward/i);
+    if (ff) return "Fast-forward";
+    const merge = text.match(/Merge made/i);
+    if (merge) return "Merge completed";
+    return firstLine.slice(0, 120);
+  }
+  return firstLine.slice(0, 120);
+}
+
+const GIT_ACTION_CARD_LABEL = {
+  git_status: "Git · status",
+  git_commit: "Git · commit",
+  git_push: "Git · push",
+  git_pull: "Git · pull",
+};
+
+function GitActionCard({ message, gitType, onOpenTerminal }) {
+  const [expanded, setExpanded] = useState(true);
+  const isRunning = message.status === "running";
+  const isError = message.status === "error";
+  const borderColor = isError
+    ? "var(--danger, var(--color-danger))"
+    : isRunning
+      ? "var(--accent)"
+      : "var(--border)";
+  const summary = parseGitOutputSummary(gitType, message.output, message.command);
+  const headerLabel = GIT_ACTION_CARD_LABEL[gitType] || "Git";
+
+  return (
+    <div
+      style={{
+        background: "var(--bg-canvas)",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 6,
+        margin: "6px 0",
+        overflow: "hidden",
+        maxWidth: "100%",
+      }}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 12px",
+          background: "var(--bg-elevated)",
+          borderBottom: expanded ? "1px solid var(--border)" : "none",
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>{headerLabel}</span>
+        <span
+          style={{
+            flex: 1,
+            fontSize: 11,
+            fontFamily: "monospace",
+            color: "var(--text-primary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={summary || undefined}
+        >
+          $ {message.command}
+          {summary && !isRunning ? (
+            <span style={{ color: "var(--text-muted)", fontWeight: 400 }}> · {summary}</span>
+          ) : null}
+        </span>
+        {isRunning && (
+          <span style={{ fontSize: 10, color: "var(--accent)", animation: "spPulse 1s infinite" }}>
+            running...
+          </span>
+        )}
+        {!isRunning && (
+          <span style={{ fontSize: 10, color: isError ? "var(--danger, var(--color-danger))" : "var(--success, var(--color-success))" }}>
+            {isError ? "error" : "done"}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{expanded ? "^" : "v"}</span>
+      </div>
+      {expanded && (
+        <div
+          style={{
+            maxHeight: 220,
+            overflowY: "auto",
+            padding: "8px 12px",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.6,
+            background: "var(--bg-canvas)",
+            color: "var(--text-primary)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {message.output || (isRunning ? "..." : "(no output)")}
+        </div>
+      )}
+      {!isRunning && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            padding: "8px 12px",
             borderTop: expanded ? "1px solid var(--border)" : "none",
           }}
         >
@@ -489,6 +719,8 @@ export default function AgentDashboard() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("terminal");
   const [availableCommands, setAvailableCommands] = useState([]);
+  const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
+  const [slashPickerSuppressed, setSlashPickerSuppressed] = useState(false);
   const [panelWidthPct, setPanelWidthPct] = useState(() => {
     try {
       const v = localStorage.getItem("iam_panel_width");
@@ -625,15 +857,38 @@ export default function AgentDashboard() {
       .then((data) => {
         const list = Array.isArray(data) ? data : data.messages ?? [];
         if (list.length > 0) {
-          setMessages(
-            list.map((m) => ({
+          setMessages((prev) => {
+            const fetched = list.map((m) => ({
               id: m.id,
               role: m.role,
               content: m.content || "",
               provider: m.provider || null,
               created_at: m.created_at ? m.created_at * 1000 : Date.now(),
-            }))
-          );
+            }));
+            const prevUsers = prev.filter((x) => x.role === "user");
+            const userIdxs = fetched
+              .map((x, i) => (x.role === "user" ? i : -1))
+              .filter((i) => i >= 0);
+            for (let k = 0; k < userIdxs.length; k++) {
+              const pm = prevUsers[k];
+              const fi = userIdxs[k];
+              if (!pm) break;
+              const hasPrevAttach =
+                (pm.attachedImageUrls && pm.attachedImageUrls.length > 0) ||
+                (pm.attachedImagePreviews && pm.attachedImagePreviews.length > 0);
+              const hasFetchedAttach =
+                (fetched[fi].attachedImageUrls && fetched[fi].attachedImageUrls.length > 0) ||
+                (fetched[fi].attachedImagePreviews && fetched[fi].attachedImagePreviews.length > 0);
+              if (hasPrevAttach && !hasFetchedAttach) {
+                fetched[fi] = {
+                  ...fetched[fi],
+                  ...(pm.attachedImageUrls?.length ? { attachedImageUrls: pm.attachedImageUrls } : {}),
+                  ...(pm.attachedImagePreviews?.length ? { attachedImagePreviews: pm.attachedImagePreviews } : {}),
+                };
+              }
+            }
+            return fetched;
+          });
         }
       })
       .catch(() => {});
@@ -854,6 +1109,30 @@ export default function AgentDashboard() {
       .catch(() => setAvailableCommands([]));
   }, []);
 
+  const slashFilterToken = useMemo(() => {
+    const line = (input.split("\n")[0] || "").trimEnd();
+    if (!line.startsWith("/")) return "";
+    return line.slice(1).split(/\s+/)[0].toLowerCase();
+  }, [input]);
+
+  const filteredSlashCommands = useMemo(() => {
+    if (!slashFilterToken) return availableCommands;
+    return availableCommands.filter((cmd) => {
+      const slug = String(cmd.slug || "").toLowerCase();
+      const name = String(cmd.name || "").toLowerCase();
+      return slug.includes(slashFilterToken) || name.includes(slashFilterToken);
+    });
+  }, [availableCommands, slashFilterToken]);
+
+  useEffect(() => {
+    const line = (input.split("\n")[0] || "").trimEnd();
+    if (!line.startsWith("/")) setSlashPickerSuppressed(false);
+  }, [input]);
+
+  useEffect(() => {
+    setSlashHighlightIndex(0);
+  }, [slashFilterToken]);
+
   // ── Split-pane drag (mouse + touch) ──────────────────────────────────────
   const onDragStart = useCallback(() => setDragging(true), []);
   useEffect(() => {
@@ -1011,12 +1290,12 @@ export default function AgentDashboard() {
   };
 
   // ── Send message ──────────────────────────────────────────────────────────
-  const canSend = input.trim() || attachedImages.length > 0 || attachedFiles.length > 0;
-
-  const sendMessage = async () => {
+  const sendMessage = async (textOverride) => {
     if (isLoading || agentState !== AGENT_STATES.IDLE) return;
-    if (!canSend) return;
-    const trimmedInput = input.trim();
+    const raw = typeof textOverride === "string" ? textOverride : input;
+    const trimmedInput = raw.trim();
+    const hasAttachments = attachedImages.length > 0 || attachedFiles.length > 0;
+    if (!trimmedInput && !hasAttachments) return;
     const text =
       trimmedInput ||
       (attachedImages.length ? "(image attached)" : "(files attached)");
@@ -1094,7 +1373,9 @@ export default function AgentDashboard() {
       provider: null,
       created_at: Date.now(),
       attachedImagePreviews: attachedImages.length ? attachedImages.map((img) => img.dataUrl).filter(Boolean) : undefined,
-      attachedImageUrls: attachedImages.length ? attachedImages.map((img) => img.url).filter(Boolean) : undefined,
+      attachedImageUrls: attachedImages.length
+        ? attachedImages.map((img) => img.url || img.dataUrl).filter(Boolean)
+        : undefined,
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
@@ -1332,6 +1613,30 @@ export default function AgentDashboard() {
       setAgentState(AGENT_STATES.IDLE);
       setAgentStateContext({});
     }
+  };
+
+  const applySlashCommandSelection = (cmd) => {
+    const slugRaw = String(cmd.slug || cmd.name || "").trim();
+    const slugKey = (slugRaw.startsWith("/") ? slugRaw.slice(1) : slugRaw).toLowerCase();
+    const ct = String(cmd.command_text || "").trim();
+    const instantSlugs = new Set(["deploy", "deploy-full", "tail", "db-health"]);
+    const instant =
+      ct &&
+      (instantSlugs.has(slugKey) ||
+        slugKey.startsWith("bash-") ||
+        slugKey.startsWith("wrangler-") ||
+        looksLikeShellCommandText(ct));
+    setSlashPickerSuppressed(false);
+    setSlashHighlightIndex(0);
+    setInput("");
+    if (instant) {
+      void sendMessage(`/run ${ct}`);
+    } else if (ct) {
+      setInput(ct);
+    } else {
+      setInput(slugRaw.startsWith("/") ? slugRaw : `/${slugRaw}`);
+    }
+    setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
   const stopGeneration = () => {
@@ -1710,6 +2015,17 @@ export default function AgentDashboard() {
   const queueCurrent = queueStatus?.current ?? null;
   const queueCount = queueStatus?.queue_count ?? 0;
   const showQueueIndicator = !queueDismissed && (queueCurrent || queueCount > 0);
+
+  const slashFirstLine = (input.split("\n")[0] || "").trimEnd();
+  const showSlashPicker =
+    agentState === AGENT_STATES.IDLE &&
+    slashFirstLine.startsWith("/") &&
+    availableCommands.length > 0 &&
+    !slashPickerSuppressed;
+  const slashSafeIndex =
+    filteredSlashCommands.length > 0
+      ? Math.min(Math.max(0, slashHighlightIndex), filteredSlashCommands.length - 1)
+      : 0;
 
   return (
     <div
@@ -2158,7 +2474,15 @@ export default function AgentDashboard() {
               </div>
             ) : (
               <>
-                {messages.map((msg) => (
+                {messages.map((msg) => {
+                  const gitActionType = resolveGitActionType(msg);
+                  const userImageSrcs =
+                    msg.role === "user"
+                      ? msg.attachedImageUrls?.length
+                        ? msg.attachedImageUrls
+                        : msg.attachedImagePreviews || []
+                      : [];
+                  return (
                   <div
                     key={msg.id}
                     style={{
@@ -2200,7 +2524,16 @@ export default function AgentDashboard() {
                         overflowX: "hidden",
                       }}
                     >
-                      {msg.type === "terminal_output" && (
+                      {gitActionType ? (
+                        <GitActionCard
+                          message={msg}
+                          gitType={gitActionType}
+                          onOpenTerminal={() => {
+                            setActiveTab("terminal");
+                            setPreviewOpen(true);
+                          }}
+                        />
+                      ) : msg.type === "terminal_output" ? (
                         <TerminalOutputCard
                           message={msg}
                           onOpenTerminal={() => {
@@ -2208,9 +2541,40 @@ export default function AgentDashboard() {
                             setPreviewOpen(true);
                           }}
                         />
-                      )}
+                      ) : null}
                       {msg.type === "deploy_status" && <DeployStatusPill message={msg} />}
-                      {msg.type !== "terminal_output" && msg.type !== "deploy_status" && (
+                      {userImageSrcs.length > 0 && (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "8px",
+                            flexWrap: "wrap",
+                            marginBottom: "10px",
+                            padding: "8px",
+                            background: "var(--bg-elevated)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "8px",
+                          }}
+                        >
+                          {userImageSrcs.map((src, i) => (
+                            <img
+                              key={i}
+                              src={src}
+                              alt=""
+                              style={{
+                                maxWidth: "120px",
+                                maxHeight: "120px",
+                                objectFit: "cover",
+                                borderRadius: "6px",
+                                border: "1px solid var(--color-border)",
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {msg.type !== "terminal_output" &&
+                        msg.type !== "deploy_status" &&
+                        !gitActionType && (
                         <div
                           style={{
                             fontSize: "13px",
@@ -2221,20 +2585,6 @@ export default function AgentDashboard() {
                           }}
                         >
                           {msg.content}
-                        </div>
-                      )}
-                      {msg.role === "user" && msg.attachedImagePreviews?.length > 0 && (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                          {msg.attachedImagePreviews.map((dataUrl, i) => (
-                            <img key={i} src={dataUrl} alt="" style={{ maxWidth: 120, maxHeight: 120, objectFit: "cover", borderRadius: 6, border: "1px solid var(--color-border)" }} />
-                          ))}
-                        </div>
-                      )}
-                      {msg.role === "user" && msg.attachedImageUrls?.length > 0 && (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                          {msg.attachedImageUrls.map((url, i) => (
-                            <img key={i} src={url} alt="" style={{ maxWidth: 120, maxHeight: 120, objectFit: "cover", borderRadius: 6, border: "1px solid var(--color-border)" }} />
-                          ))}
                         </div>
                       )}
                       {msg.generatedCode && (msg.language === "bash" || msg.language === "sh" || msg.language === "shell") && (
@@ -2474,7 +2824,8 @@ export default function AgentDashboard() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
 
                 {isLoading && (
                   <div
@@ -2691,7 +3042,7 @@ export default function AgentDashboard() {
               onDragLeave={onDragLeaveFiles}
             >
               <div
-                className="agent-input-container"
+                className="agent-input-container agent-input-bar-wrap"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -2708,6 +3059,64 @@ export default function AgentDashboard() {
                   boxSizing: "border-box",
                 }}
               >
+                {showSlashPicker && (
+                  <div
+                    role="listbox"
+                    aria-label="Slash commands"
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: "calc(100% + 8px)",
+                      maxHeight: "calc(8 * 44px)",
+                      overflowY: "auto",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: "8px",
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                      zIndex: 1002,
+                    }}
+                  >
+                    {filteredSlashCommands.length === 0 ? (
+                      <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--text-muted)" }}>
+                        No matching commands
+                      </div>
+                    ) : (
+                      filteredSlashCommands.map((cmd, idx) => {
+                        const slugLabel = String(cmd.slug || cmd.name || "command").trim() || "command";
+                        const desc = String(cmd.description || "").trim();
+                        const selected = idx === slashSafeIndex;
+                        return (
+                          <div
+                            key={`${slugLabel}-${cmd.name || ""}-${idx}`}
+                            role="option"
+                            aria-selected={selected}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => applySlashCommandSelection(cmd)}
+                            onMouseEnter={() => setSlashHighlightIndex(idx)}
+                            style={{
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              borderBottom: "1px solid var(--color-border)",
+                              background: selected ? "var(--bg-canvas)" : "transparent",
+                              color: "var(--color-text)",
+                            }}
+                          >
+                            <div style={{ fontWeight: 600, fontFamily: "monospace", fontSize: 11 }}>
+                              /{slugLabel.startsWith("/") ? slugLabel.slice(1) : slugLabel}
+                            </div>
+                            {desc ? (
+                              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2, lineHeight: 1.35 }}>
+                                {desc}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
                 {isDraggingOver && (
                   <div
                     style={{
@@ -3153,6 +3562,33 @@ export default function AgentDashboard() {
                     }
                   }}
                   onKeyDown={(e) => {
+                    if (showSlashPicker) {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setSlashPickerSuppressed(true);
+                        return;
+                      }
+                      if (filteredSlashCommands.length > 0) {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setSlashHighlightIndex((i) =>
+                            Math.min(filteredSlashCommands.length - 1, i + 1)
+                          );
+                          return;
+                        }
+                        if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setSlashHighlightIndex((i) => Math.max(0, i - 1));
+                          return;
+                        }
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          const cmd = filteredSlashCommands[slashSafeIndex];
+                          if (cmd) applySlashCommandSelection(cmd);
+                          return;
+                        }
+                      }
+                    }
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       sendMessage();
@@ -3716,6 +4152,33 @@ export default function AgentDashboard() {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
         }
+        @keyframes termCardBorderPulse {
+          0%, 100% { border-color: var(--accent); }
+          50% { border-color: var(--color-border); }
+        }
+        @keyframes termDotPulse {
+          0%, 80%, 100% { opacity: 0.28; transform: scale(0.88); }
+          40% { opacity: 1; transform: scale(1); }
+        }
+        .terminal-output-card--running {
+          border: 1px solid var(--accent);
+          animation: termCardBorderPulse 1.4s ease-in-out infinite;
+        }
+        .terminal-output-card__dots {
+          display: inline-flex;
+          gap: 4px;
+          align-items: center;
+          flex-shrink: 0;
+        }
+        .terminal-output-card__dot {
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: var(--accent);
+          animation: termDotPulse 1.2s ease-in-out infinite;
+        }
+        .terminal-output-card__dot:nth-child(2) { animation-delay: 0.2s; }
+        .terminal-output-card__dot:nth-child(3) { animation-delay: 0.4s; }
         .iam-viewer-icon-strip {
           min-height: 0;
         }

@@ -449,7 +449,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading…</div>
               ) : deploymentsError ? (
                 <div style={{ fontSize: 11, color: "var(--severity-critical, #ef4444)" }}>{deploymentsError}</div>
-              ) : !deployments?.cloudflare_deployments?.length ? (
+              ) : !deployments?.deployments?.length ? (
                 <div style={{ fontSize: 11, color: "var(--text-muted)" }}>No deploys yet</div>
               ) : (
                 <div style={{ overflow: "auto", maxHeight: 220 }}>
@@ -464,7 +464,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(deployments.cloudflare_deployments || []).map((r, i) => (
+                      {(deployments.deployments || []).map((r, i) => (
                         <tr key={i} className="rh" style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                           <td style={{ padding: "6px 8px", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 120 }}>{r.worker_name}</td>
                           <td style={{ padding: "6px 8px", color: "var(--text-muted)" }}>{r.environment}</td>

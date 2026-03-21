@@ -48,3 +48,19 @@ When Sam restricts scope to main worker + R2 only (no MCP deploy), only these ar
 ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/mcp-workflows-panel.js --file=static/dashboard/mcp-workflows-panel.js --content-type=application/javascript --remote -c wrangler.production.toml
 ```
 Never overwrite `agent-sam/static/dashboard/agent/agent-dashboard.js` except from the Vite build output. There is no Worker named `inneranimalmedia-mcp` (that string may appear as a service id in D1 only).
+
+## SCOPE ENFORCEMENT (non-negotiable)
+
+- When given a file to change, ONLY change that file
+- If you find related issues in OTHER files, list them as "Found in [file]: [issue]" but DO NOT touch them
+- Never build, rebuild, or upload files not explicitly named
+- Never run npm install, npm build, or R2 uploads unless explicitly told to
+- Never touch overview-dashboard/, dist/, or R2 unless the prompt says "deploy frontend" or "upload to R2"
+- One file per change unless prompt explicitly says "also fix in [other file]"
+- If scope expands beyond what was asked, STOP and ask "I found X in Y file, should I fix that too?"
+
+MANDATORY before any deploy:
+
+- List every file changed
+- List every file uploaded to R2
+- If either list has files not mentioned in the prompt, stop and confirm before proceeding

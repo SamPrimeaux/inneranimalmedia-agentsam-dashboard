@@ -105,14 +105,11 @@ dataset = "inneranimalmedia"
 
 [triggers]
 crons = [
-  "0 6 * * *",
-  "5 14 * * 1",
-  "0 9 * * *",
-  "0 8 * * *",
-  "0 4 * * *",
-  "0 3 * * *",
-  "0 14 * * *",
-  "30 13 * * *"
+  "0 6 * * *",    # RAG/knowledge sync — real handler exists
+  "30 13 * * *",  # Daily plan email — real handler exists
+  "0 9 * * *",    # FinancialCommand stub — real handler added today
+  "*/30 * * * *", # Queue processor + overnight progress — handler exists, was missing
+  "0 0 * * *"     # Daily digest email — handler exists, was missing
 ]
 
 [vars]

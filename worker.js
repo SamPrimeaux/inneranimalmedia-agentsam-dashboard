@@ -370,7 +370,7 @@ const worker = {
         return handleDeploymentsRecent(request, env);
       }
 
-      // ----- API: Internal record-deploy (one row in cloudflare_deployments) -----
+      // ----- API: Internal record-deploy (one row in deployments) -----
       if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/record-deploy') {
         const secret = env.INTERNAL_API_SECRET;
         if (!secret) {
@@ -392,8 +392,8 @@ const worker = {
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         try {
           env.DB.prepare(
-            `INSERT INTO cloudflare_deployments (deployment_id, worker_name, project_name, deployment_type, environment, status, deployment_url, preview_url, triggered_by, deployed_at, created_at, build_time_seconds, deploy_time_seconds, deployment_notes) VALUES (?, 'inneranimalmedia', 'inneranimalmedia', 'worker', 'production', 'success', 'https://inneranimalmedia.meauxbility.workers.dev', 'https://www.inneranimalmedia.com', ?, datetime('now'), datetime('now'), 0, 0, ?)`
-          ).bind(deployId, triggeredBy, notes).run();
+            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES (?, datetime('now'), ?, '', 'Internal record-deploy (API)', 'success', ?, 'production', 0, 'inneranimalmedia', ?, ?)`
+          ).bind(deployId, deployId, triggeredBy, triggeredBy, notes).run();
           return jsonResponse({ ok: true, deployment_id: deployId });
         } catch (e) {
           console.error('[record-deploy]', e?.message ?? e);
@@ -2338,10 +2338,10 @@ function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileC
   return buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob);
 }
 
-/** Filter tools by mode: Ask/Plan default to no tools; Agent gets all; Debug gets only terminal/log/read tools. */
+/** Filter tools by mode: Plan mode has no tools; Ask and Agent get all (subject to panel policy); Debug gets only terminal/log/read tools. */
 function filterToolsByMode(mode, toolDefinitions) {
   if (!Array.isArray(toolDefinitions)) return [];
-  if (mode === 'ask' || mode === 'plan') return [];
+  if (mode === 'plan') return [];
   if (mode === 'debug') {
     const debugToolNames = new Set(['terminal_execute', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search']);
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
@@ -2753,15 +2753,38 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
     const toolResults = [];
     for (const tc of toolCalls) {
       const toolName = tc.name ?? tc.function?.name ?? tc.functionCall?.name;
+      const functionCall = tc.functionCall;
       let params = {};
       try {
-        params = tc.input ?? JSON.parse(tc.function?.arguments ?? '{}') ?? tc.functionCall?.args ?? {};
-      } catch (_) {}
+        if (functionCall != null && functionCall.args != null && typeof functionCall.args === 'object') {
+          params = { ...functionCall.args };
+        } else if (tc.input != null && typeof tc.input === 'object') {
+          params = tc.input;
+        } else {
+          const fa = tc.function?.arguments;
+          if (fa != null && String(fa).trim() !== '') {
+            params = JSON.parse(fa);
+          }
+        }
+      } catch (_) {
+        params = {};
+      }
+      if (provider === 'google' && params && typeof params.args === 'object' && params.args !== null && !Array.isArray(params.args)) {
+        const pk = Object.keys(params);
+        if (pk.length === 1 && pk[0] === 'args') {
+          params = { ...params.args };
+        }
+      }
+
+      if (provider === 'google' && functionCall) {
+        console.log('[Gemini args debug]', JSON.stringify(functionCall.args));
+      }
 
       let resultText = `Tool ${toolName} not implemented`;
 
       if (toolName === 'terminal_execute') {
-        const command = params.command ?? '';
+        const cmdRaw = params.command;
+        const command = typeof cmdRaw === 'string' ? cmdRaw : (cmdRaw == null ? '' : String(cmdRaw));
         try {
           const termResult = await runTerminalCommand(env, request, command, conversationId ?? null);
           resultText = termResult.output ?? 'No output';
@@ -2770,7 +2793,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = `Terminal error: ${e.message}`;
         }
       } else if (toolName === 'd1_query') {
-        const sql = (params.query ?? '').trim();
+        const sql = (params.query ?? params.sql ?? '').trim();
         const normalized = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').trim().toUpperCase();
         if (!normalized.startsWith('SELECT')) {
           resultText = 'Only SELECT queries allowed via d1_query';
@@ -2779,7 +2802,11 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             const rows = await env.DB.prepare(sql).all();
             resultText = JSON.stringify(rows.results ?? []);
           } catch (e) {
-            resultText = `D1 error: ${e.message}`;
+            let msg = `D1 error: ${e.message}`;
+            if (msg.includes('no such table')) {
+              msg += '\n\nUse the deployments table for worker deploy history. Example: SELECT id, version, status, timestamp FROM deployments ORDER BY timestamp DESC LIMIT 3';
+            }
+            resultText = msg;
           }
         }
       } else if (toolName === 'd1_write') {
@@ -2955,9 +2982,86 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
+      } else if (toolName === 'r2_write' && env.R2) {
+        const key = params.key || params.path;
+        if (!key) { resultText = 'r2_write: key required'; }
+        else { await env.R2.put(key, params.body ?? ''); resultText = `Written: ${key}`; }
+      } else if (toolName === 'r2_search' && env.R2) {
+        const listed = await env.R2.list({ prefix: params.prefix || '', limit: params.limit || 20 });
+        resultText = JSON.stringify(listed.objects.map(o => ({ key: o.key, size: o.size })));
+      } else if (toolName === 'r2_bucket_summary' && env.R2) {
+        const listed = await env.R2.list({ limit: 1000 });
+        resultText = JSON.stringify({ count: listed.objects.length, truncated: listed.truncated });
+      } else if (toolName === 'platform_info') {
+        resultText = JSON.stringify({ account_id: env.CLOUDFLARE_ACCOUNT_ID, tenant_id: 'tenant_sam_primeaux', worker: 'inneranimalmedia', d1: 'inneranimalmedia-business', r2_dashboard: 'agent-sam' });
+      } else if (toolName === 'list_workers' && env.DB) {
+        const rows = await env.DB.prepare(`SELECT worker_id, name FROM agent_roles WHERE is_active = 1 AND worker_id IS NOT NULL ORDER BY name LIMIT 50`).all();
+        resultText = JSON.stringify(rows.results ?? []);
+      } else if (toolName === 'worker_deploy') {
+        const wn = params.worker_name || params.workerName;
+        resultText = wn ? `Deploy: cd ~/Downloads/march1st-inneranimalmedia && npm run deploy (worker: ${wn})` : 'worker_name required';
+      } else if (toolName === 'telemetry_log' && env.DB) {
+        const { event_type = 'log', message = '', metadata = {} } = params;
+        await env.DB.prepare(`INSERT INTO agent_audit_log (id, tenant_id, event_type, message, metadata_json, created_at) VALUES (?, 'tenant_sam_primeaux', ?, ?, ?, unixepoch())`).bind(crypto.randomUUID(), event_type, message, JSON.stringify(metadata)).run().catch(() => {});
+        resultText = 'logged';
+      } else if (toolName === 'telemetry_query' && env.DB) {
+        const rows = await env.DB.prepare(`SELECT event_type, message, created_at FROM agent_audit_log ORDER BY created_at DESC LIMIT ?`).bind(params.limit || 20).all();
+        resultText = JSON.stringify(rows.results ?? []);
+      } else if (toolName === 'telemetry_stats' && env.DB) {
+        const rows = await env.DB.prepare(`SELECT event_type, COUNT(*) as count FROM agent_audit_log GROUP BY event_type ORDER BY count DESC LIMIT 20`).all();
+        resultText = JSON.stringify(rows.results ?? []);
+      } else if (toolName === 'human_context_list' && env.DB) {
+        const rows = await env.DB.prepare(`SELECT key, value, importance_score FROM agent_memory_index WHERE tenant_id = 'tenant_sam_primeaux' ORDER BY importance_score DESC LIMIT 30`).all();
+        resultText = JSON.stringify(rows.results ?? []);
+      } else if (toolName === 'human_context_add' && env.DB) {
+        const { key, value, importance_score = 5 } = params;
+        if (!key || !value) { resultText = 'key and value required'; }
+        else {
+          await env.DB.prepare(`INSERT INTO agent_memory_index (id, tenant_id, agent_config_id, memory_type, key, value, importance_score, created_at, updated_at) VALUES (?, 'tenant_sam_primeaux', 'agent-sam-primary', 'user_context', ?, ?, ?, unixepoch(), unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, importance_score=excluded.importance_score, updated_at=unixepoch()`).bind(crypto.randomUUID(), key, value, importance_score).run();
+          resultText = `Stored: ${key}`;
+        }
+      } else if (toolName === 'a11y_audit_webpage' && env.MYBROWSER) {
+        const { url } = params;
+        if (!url) { resultText = 'url required'; }
+        else {
+          try {
+            const { launch } = await import('@cloudflare/playwright');
+            const browser = await launch(env.MYBROWSER);
+            const page = await browser.newPage();
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
+            const issues = await page.evaluate(() => {
+              const els = document.querySelectorAll('img:not([alt]), button:not([aria-label]):not([aria-labelledby])');
+              return Array.from(els).slice(0, 20).map(el => ({ tag: el.tagName.toLowerCase(), issue: el.tagName === 'IMG' ? 'missing alt' : 'missing aria-label' }));
+            });
+            await browser.close();
+            resultText = JSON.stringify({ url, issue_count: issues.length, issues });
+          } catch(e) { resultText = `a11y error: ${e?.message ?? e}`; }
+        }
+      } else if (toolName === 'a11y_get_summary') {
+        resultText = 'Run a11y_audit_webpage for a fresh audit.';
+      } else if (toolName === 'context_search' && env.DB) {
+        const q = params.query || '';
+        const rows = await env.DB.prepare(`SELECT key, value FROM agent_memory_index WHERE tenant_id = 'tenant_sam_primeaux' AND (key LIKE ? OR value LIKE ?) ORDER BY importance_score DESC LIMIT 10`).bind(`%${q}%`, `%${q}%`).all();
+        resultText = JSON.stringify(rows.results ?? []);
+      } else if (toolName === 'context_optimize') {
+        resultText = 'Use knowledge_search for targeted retrieval.';
+      } else if (toolName === 'context_chunk') {
+        const { text = '', max_chars = 2000 } = params;
+        const chunks = [];
+        for (let i = 0; i < text.length; i += max_chars) chunks.push(text.slice(i, i + max_chars));
+        resultText = JSON.stringify(chunks);
+      } else if (toolName === 'context_summarize_code') {
+        resultText = 'Use r2_read to fetch the file, then ask the agent to summarize.';
+      } else if (toolName === 'context_extract_structure') {
+        const { text = '' } = params;
+        const functions = (text.match(/(?:async\s+)?function\s+\w+|const\s+\w+\s*=\s*(?:async\s+)?\(/g) || []).slice(0, 30);
+        resultText = JSON.stringify({ functions });
+      } else if (toolName === 'context_progressive_disclosure') {
+        const { text = '', level = 1 } = params;
+        resultText = text.slice(0, level === 1 ? 500 : level === 2 ? 2000 : text.length);
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content']);
       if (!BUILTIN_TOOLS.has(toolName) && env.DB) {
         try {
           const toolRow = await env.DB.prepare('SELECT tool_category FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(toolName).first();
@@ -2970,12 +3074,17 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) { console.warn('[runToolLoop] mcp_tool_calls INSERT', e?.message ?? e); }
       }
 
+      let geminiToolOutput = resultText;
+      if (provider === 'google' && typeof geminiToolOutput === 'string' && geminiToolOutput.includes('no such table: cloudflare_deployments')) {
+        geminiToolOutput = "Error: Table 'cloudflare_deployments' does not exist.\nIt was renamed to 'deployments'.\nRetry with: SELECT id, version, status, timestamp FROM deployments ORDER BY timestamp DESC LIMIT 3";
+      }
+
       if (provider === 'anthropic') {
         toolResults.push({ type: 'tool_result', tool_use_id: tc.id, content: resultText });
       } else if (provider === 'openai') {
         toolResults.push({ role: 'tool', tool_call_id: tc.id, content: resultText });
       } else if (provider === 'google') {
-        toolResults.push({ functionResponse: { name: toolName, response: { output: resultText } } });
+        toolResults.push({ functionResponse: { name: toolName, response: { output: geminiToolOutput } } });
       }
     }
 
@@ -4337,7 +4446,7 @@ async function handleAgentApi(request, url, env, ctx) {
       if (cloudflareDeploymentId && (deployStatus === 'success' || deployStatus === 'failed')) {
         try {
           await env.DB.prepare(
-            "UPDATE cloudflare_deployments SET status = ?, deployment_notes = ? WHERE deployment_id = ?"
+            'UPDATE deployments SET status = ?, notes = ? WHERE id = ?'
           ).bind(deployStatus, deployNotes, cloudflareDeploymentId).run();
         } catch (_) {}
       }
@@ -4863,7 +4972,11 @@ async function handleAgentApi(request, url, env, ctx) {
         resolvedSections = { full: compiledContext };
       }
 
-      const coreSystemPrefix = `SYSTEM: You are Agent Sam. Resolved model: ${model.model_key} provider: ${model.provider}. Always report this exact model_key when asked what model you are running on.\n\n`;
+      const coreSystemPrefix = `SYSTEM: You are Agent Sam. Resolved model: ${model.model_key} provider: ${model.provider}. Always report this exact model_key when asked what model you are running on.
+
+CRITICAL: Never simulate, roleplay, or fabricate tool calls or their results. If you cannot call a real tool, say so plainly. Never invent data or pretend to execute queries.
+
+`;
       let fileBlock = '';
       if (bodyFileContext?.filename && bodyFileContext?.content != null) {
         let content = String(bodyFileContext.content);
@@ -5057,9 +5170,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           if (canStreamAnthropic) {
             const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode });
             if (toolsResp) return toolsResp;
+            return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
           if (canStreamOpenAI || canStreamGoogle) {
-            // Fall through to runToolLoop below with stream flag
             const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles);
             return toolLoopResult;
           }
@@ -6709,7 +6822,10 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
-      const errMsg = `D1 error: ${e?.message ?? e}`;
+      let errMsg = `D1 error: ${e?.message ?? e}`;
+      if (errMsg.includes('no such table')) {
+        errMsg += '\n\nUse the deployments table for worker deploy history. Example: SELECT id, version, status, timestamp FROM deployments ORDER BY timestamp DESC LIMIT 3';
+      }
       await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
@@ -6795,6 +6911,263 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
+
+  // r2_write + r2_search + r2_bucket_summary
+  if (tool_name === 'r2_write' && env.R2) {
+    const key = params.key ?? params.path ?? '';
+    const body = params.body;
+    if (!key) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'r2_write: key required', serviceName: 'builtin' });
+      return { error: 'r2_write: key required' };
+    }
+    try {
+      await env.R2.put(key, body ?? '');
+      const resultText = `Written: ${key}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = `R2 error: ${e?.message ?? e}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'r2_search' && env.R2) {
+    try {
+      const prefix = params.prefix ?? '';
+      const limit = Number(params.limit) || 20;
+      const listed = await env.R2.list({ prefix, limit });
+      const resultText = JSON.stringify(listed.objects.map((o) => ({ key: o.key, size: o.size })));
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = `R2 error: ${e?.message ?? e}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'r2_bucket_summary' && env.R2) {
+    try {
+      const listed = await env.R2.list({ limit: 1000 });
+      const resultText = JSON.stringify({ count: listed.objects.length, truncated: listed.truncated });
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = `R2 error: ${e?.message ?? e}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+
+  // platform_info + list_workers + worker_deploy
+  if (tool_name === 'platform_info') {
+    const resultPayload = {
+      account_id: env.CLOUDFLARE_ACCOUNT_ID,
+      tenant_id: 'tenant_sam_primeaux',
+      worker: 'inneranimalmedia',
+      d1: 'inneranimalmedia-business',
+      r2_dashboard: 'agent-sam',
+    };
+    const resultText = JSON.stringify(resultPayload);
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'list_workers' && env.DB) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT worker_id, name FROM agent_roles WHERE is_active = 1 AND worker_id IS NOT NULL ORDER BY name LIMIT 50`
+      ).all();
+      const resultText = JSON.stringify(rows.results ?? []);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'worker_deploy') {
+    const workerName = params.worker_name ?? params.workerName ?? '';
+    if (!workerName) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: null, error: 'worker_name required', serviceName: 'builtin' });
+      return { error: 'worker_name required' };
+    }
+    const resultText = `Deploy: cd ~/Downloads/march1st-inneranimalmedia && npm run deploy (worker: ${workerName})`;
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+
+  // telemetry (agent_audit_log via writeAuditLog)
+  if (tool_name === 'telemetry_log' && env.DB) {
+    const event_type = params.event_type ?? 'log';
+    const message = params.message ?? '';
+    const metadata = params.metadata && typeof params.metadata === 'object' ? params.metadata : {};
+    await writeAuditLog(env, { event_type, message, metadata });
+    const resultText = 'logged';
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'telemetry', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'telemetry_query' && env.DB) {
+    try {
+      const limit = Math.min(100, Math.max(1, Number(params.limit) || 20));
+      const rows = await env.DB.prepare(
+        `SELECT event_type, message, created_at FROM agent_audit_log
+         ORDER BY created_at DESC LIMIT ?`
+      ).bind(limit).all();
+      const resultText = JSON.stringify(rows.results ?? []);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'telemetry', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'telemetry', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'telemetry_stats' && env.DB) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT event_type, COUNT(*) as count FROM agent_audit_log
+         GROUP BY event_type ORDER BY count DESC LIMIT 20`
+      ).all();
+      const resultText = JSON.stringify(rows.results ?? []);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'telemetry', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'telemetry', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+
+  // human_context
+  if (tool_name === 'human_context_list' && env.DB) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT key, value, importance_score FROM agent_memory_index
+         WHERE tenant_id = 'tenant_sam_primeaux'
+         ORDER BY importance_score DESC LIMIT 30`
+      ).all();
+      const resultText = JSON.stringify(rows.results ?? []);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'memory', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'memory', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'human_context_add' && env.DB) {
+    const key = params.key;
+    const value = params.value;
+    const importance_score = params.importance_score != null ? Number(params.importance_score) : 5;
+    if (key == null || key === '' || value == null || value === '') {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'memory', toolInput: params, result: null, error: 'key and value required', serviceName: 'builtin' });
+      return { error: 'key and value required' };
+    }
+    try {
+      await env.DB.prepare(
+        `INSERT INTO agent_memory_index (tenant_id, agent_config_id, memory_type, key, value, importance_score, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, unixepoch(), unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, importance_score=excluded.importance_score, updated_at=unixepoch()`
+      ).bind('tenant_sam_primeaux', 'agent-sam-primary', 'user_context', String(key), String(value), importance_score).run();
+      const resultText = `Stored: ${key}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'memory', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'memory', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+
+  // a11y
+  if (tool_name === 'a11y_audit_webpage' && env.MYBROWSER) {
+    const url = params.url;
+    if (!url) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'a11y', toolInput: params, result: null, error: 'url required', serviceName: 'builtin' });
+      return { error: 'url required' };
+    }
+    try {
+      const { launch } = await import('@cloudflare/playwright');
+      const browser = await launch(env.MYBROWSER);
+      const page = await browser.newPage();
+      await page.goto(String(url), { waitUntil: 'networkidle', timeout: 20000 });
+      const issues = await page.evaluate(() => {
+        const els = document.querySelectorAll('img:not([alt]), button:not([aria-label]):not([aria-labelledby])');
+        return Array.from(els).slice(0, 20).map((el) => ({
+          tag: el.tagName.toLowerCase(),
+          issue: el.tagName === 'IMG' ? 'missing alt' : 'missing aria-label',
+          src: el.getAttribute('src') || el.textContent?.slice(0, 40),
+        }));
+      });
+      await browser.close();
+      const resultPayload = { url, issue_count: issues.length, issues };
+      const resultText = JSON.stringify(resultPayload);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'a11y', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'a11y', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'a11y_get_summary' && env.DB) {
+    const resultText = 'a11y_audit_webpage to run a new audit. No historical summary stored yet.';
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'a11y', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+
+  // context_* (selective compiled_context operations)
+  if (tool_name === 'context_search' && env.DB) {
+    try {
+      const query = String(params.query ?? '');
+      const rows = await env.DB.prepare(
+        `SELECT key, value FROM agent_memory_index
+         WHERE tenant_id = 'tenant_sam_primeaux'
+         AND (key LIKE ? OR value LIKE ?)
+         ORDER BY importance_score DESC LIMIT 10`
+      ).bind(`%${query}%`, `%${query}%`).all();
+      const resultText = JSON.stringify(rows.results ?? []);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return { result: resultText };
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'context_optimize') {
+    const resultText = 'Context optimization: use knowledge_search for targeted retrieval instead of compiled_context blob.';
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'context_chunk') {
+    const text = String(params.text ?? '');
+    const max_chars = Math.max(1, Number(params.max_chars) || 2000);
+    const chunks = [];
+    for (let i = 0; i < text.length; i += max_chars) chunks.push(text.slice(i, i + max_chars));
+    const resultText = JSON.stringify(chunks);
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'context_summarize_code') {
+    const resultText = 'Use knowledge_search or r2_read to fetch the file, then ask agent to summarize.';
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'context_extract_structure') {
+    const text = String(params.text ?? '');
+    const functions = (text.match(/(?:async\s+)?function\s+\w+|const\s+\w+\s*=\s*(?:async\s+)?\(/g) || []).slice(0, 30);
+    const resultText = JSON.stringify({ functions });
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+  if (tool_name === 'context_progressive_disclosure') {
+    const text = String(params.text ?? '');
+    const level = Number(params.level) || 1;
+    const chars = level === 1 ? 500 : level === 2 ? 2000 : text.length;
+    const resultText = JSON.stringify(text.slice(0, chars));
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+    return { result: resultText };
+  }
+
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();
   if (!toolRow) {
     await rec( { conversationId, toolName: tool_name, toolCategory: 'mcp', toolInput: params, result: null, error: 'Tool not found', serviceName: null });
@@ -7289,11 +7662,6 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const inputTokens = lastUsage.input_tokens;
       const outputTokens = lastUsage.output_tokens;
       const costUsd = calculateCost(model, inputTokens, outputTokens);
-      try {
-        await env.DB.prepare(
-          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-        ).bind(crypto.randomUUID(), conversationId, 'assistant', lastContent.slice(0, 50000), model.provider).run();
-      } catch (_) {}
       await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx);
       if (wantStream) {
         const streamBody = new ReadableStream({
@@ -7540,10 +7908,10 @@ async function handleFederatedSearch(request, env) {
   if (sources.includes('deployments')) {
     try {
       const rows = await env.DB.prepare(
-        `SELECT worker_name, status, deployed_at, deployment_notes
-         FROM cloudflare_deployments
-         WHERE worker_name LIKE ? OR deployment_notes LIKE ?
-         ORDER BY deployed_at DESC
+        `SELECT worker_name, status, timestamp AS deployed_at, notes AS deployment_notes
+         FROM deployments
+         WHERE COALESCE(worker_name, '') LIKE ? OR COALESCE(notes, '') LIKE ?
+         ORDER BY timestamp DESC
          LIMIT ?`
       ).bind(`%${query}%`, `%${query}%`, limit).all();
       out.deployments = (rows?.results || []).map((r, idx) => ({
@@ -8449,7 +8817,7 @@ async function sendDailyDigest(env) {
 
   if (env.DB) {
     deployments = await safe(env.DB.prepare(
-      `SELECT worker_name, environment, status, deployed_at, deployment_notes, triggered_by FROM cloudflare_deployments WHERE deployed_at >= ${todayStart} ORDER BY deployed_at DESC LIMIT 20`
+      `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes, triggered_by FROM deployments WHERE timestamp >= ${todayStart} ORDER BY timestamp DESC LIMIT 20`
     ).all()) || { results: [] };
     const costRow = await safe(env.DB.prepare(
       `SELECT COALESCE(SUM(amount_usd),0) as total FROM spend_ledger WHERE (occurred_at >= ${todayStart} OR (occurred_at IS NULL AND created_at >= ${todayStart})) AND (category IN ('ai_tools','usage') OR provider IS NOT NULL)`
@@ -8689,7 +9057,7 @@ async function handleOverviewStats(request, url, env) {
     ] = await Promise.all([
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM financial_transactions`).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as entries, COALESCE(SUM(amount_usd), 0) as total FROM spend_ledger`).first()),
-      safe(env.DB.prepare(`SELECT deployment_id, deployed_at FROM cloudflare_deployments WHERE worker_name = ? ORDER BY deployed_at DESC LIMIT 1`).bind('inneranimalmedia').first()),
+      safe(env.DB.prepare(`SELECT id AS deployment_id, timestamp AS deployed_at FROM deployments WHERE worker_name = ? ORDER BY timestamp DESC LIMIT 1`).bind('inneranimalmedia').first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM workspaces WHERE category = 'client'`).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as c, MAX(created_at) as last_at FROM agent_telemetry`).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as c, COALESCE(SUM(duration_seconds), 0) as total_sec FROM project_time_entries WHERE project_id = ?`).bind(PROJECT_ID).first()),
@@ -8745,7 +9113,7 @@ async function handleRecentActivity(request, url, env) {
     const [telemetryRows, timeRows, deployRows, sessionRows, checkpointRows] = await Promise.all([
       safe(env.DB.prepare(`SELECT created_at FROM agent_telemetry WHERE created_at >= ? ORDER BY created_at DESC LIMIT 30`).bind(cutoff).all()),
       safe(env.DB.prepare(`SELECT start_time, duration_seconds, description FROM project_time_entries WHERE start_time >= ? ORDER BY start_time DESC LIMIT 20`).bind(cutoffDt).all()),
-      safe(env.DB.prepare(`SELECT deployed_at FROM cloudflare_deployments WHERE worker_name = ? AND deployed_at >= ? ORDER BY deployed_at DESC LIMIT 10`).bind('inneranimalmedia', cutoffDt).all()),
+      safe(env.DB.prepare(`SELECT timestamp AS deployed_at FROM deployments WHERE worker_name = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 10`).bind('inneranimalmedia', cutoffDt).all()),
       safe(env.DB.prepare(`SELECT started_at, updated_at FROM agent_sessions WHERE started_at >= ? OR updated_at >= ? ORDER BY COALESCE(updated_at, started_at) DESC LIMIT 20`).bind(cutoff, cutoff).all()),
       safe(env.DB.prepare(`SELECT label, updated_at FROM workflow_checkpoints WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT 20`).bind(cutoff).all()),
     ]);
@@ -8820,7 +9188,6 @@ async function handleOverviewActivityStrip(request, url, env) {
       agentCallsWeek,
       taskCountWeek,
       taskRows24h,
-      deployRows24h,
       deploymentRows24h,
       cicdRows24h,
       taskCount24h,
@@ -8836,16 +9203,15 @@ async function handleOverviewActivityStrip(request, url, env) {
       projectsProdRow,
       projectsTopRows,
     ] = await Promise.all([
-      safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE deployed_at >= date(?) AND status = 'success'`).bind(sevenDaysAgo).first()),
-      safe(env.DB.prepare(`SELECT date(deployed_at) as day, COUNT(*) as cnt FROM cloudflare_deployments WHERE deployed_at >= date('now','-6 days') AND status = 'success' GROUP BY date(deployed_at) ORDER BY day ASC`).all()),
+      safe(env.DB.prepare(`SELECT COUNT(*) as c FROM deployments WHERE date(timestamp) >= date(?) AND status = 'success'`).bind(sevenDaysAgo).first()),
+      safe(env.DB.prepare(`SELECT date(timestamp) as day, COUNT(*) as cnt FROM deployments WHERE date(timestamp) >= date('now','-6 days') AND status = 'success' GROUP BY date(timestamp) ORDER BY day ASC`).all()),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM agent_telemetry WHERE created_at >= unixepoch(?) AND (tenant_id = ? OR tenant_id IS NULL)`).bind(sevenDaysAgo, TENANT_ID).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE created_at >= unixepoch(?) AND status = 'completed'`).bind(sevenDaysAgo).first()).catch(() => ({ c: 0 })),
       safe(env.DB.prepare(`SELECT 'task' as type, instruction as label, 'cursor' as agent, datetime(created_at,'unixepoch') as ts FROM cursor_tasks WHERE created_at >= unixepoch('now','-24 hours') ORDER BY created_at DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
-      safe(env.DB.prepare(`SELECT 'deploy' as type, (project_name || ' -- ' || COALESCE(triggered_by,'manual')) as label, COALESCE(triggered_by,'manual') as agent, deployed_at as ts FROM cloudflare_deployments WHERE deployed_at >= datetime('now','-24 hours') AND status = 'success' ORDER BY deployed_at DESC LIMIT 5`).all()),
-      safe(env.DB.prepare(`SELECT 'deploy' as type, (version || ' -- ' || COALESCE(deployed_by,'script')) as label, COALESCE(deployed_by,'script') as agent, timestamp as ts FROM deployments WHERE timestamp >= datetime('now','-24 hours') AND status = 'success' ORDER BY timestamp DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
+      safe(env.DB.prepare(`SELECT 'deploy' as type, (version || ' -- ' || COALESCE(COALESCE(triggered_by, deployed_by), 'script')) as label, COALESCE(COALESCE(triggered_by, deployed_by), 'script') as agent, timestamp as ts FROM deployments WHERE timestamp >= datetime('now','-24 hours') AND status = 'success' ORDER BY timestamp DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
       safe(env.DB.prepare(`SELECT 'ci' as type, (workflow_name || ' -- ' || COALESCE(status,'')) as label, COALESCE(conclusion,status,'ci') as agent, COALESCE(completed_at,started_at) as ts FROM ci_di_workflow_runs WHERE COALESCE(completed_at,started_at) >= datetime('now','-24 hours') ORDER BY COALESCE(completed_at,started_at) DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE created_at >= unixepoch('now','-24 hours')`).first()).catch(() => ({ c: 0 })),
-      safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE deployed_at >= datetime('now','-24 hours') AND status = 'success'`).first()).catch(() => ({ c: 0 })),
+      safe(env.DB.prepare(`SELECT COUNT(*) as c FROM deployments WHERE timestamp >= datetime('now','-24 hours') AND status = 'success'`).first()).catch(() => ({ c: 0 })),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE start_time >= date('now','weekday 1') AND user_id IN (${userList}) AND is_active = 0`).bind(...userIdVariants).first()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE date(start_time) = date('now') AND user_id IN (${userList}) AND is_active = 0`).bind(...userIdVariants).first()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(duration_minutes),0)/60.0 as h FROM time_logs WHERE start_time >= date('now','weekday 1')`).first()).catch(() => ({ h: 0 })),
@@ -8871,13 +9237,11 @@ async function handleOverviewActivityStrip(request, url, env) {
     }
 
     const taskRows = taskRows24h?.results || taskRows24h || [];
-    const deployRows = deployRows24h?.results || deployRows24h || [];
     const deploymentRows = deploymentRows24h?.results || deploymentRows24h || [];
     const ciRows = cicdRows24h?.results || cicdRows24h || [];
     const recentEvents = []
       .concat(
         taskRows.map((r) => ({ type: 'task', label: (r.label || '').slice(0, 200), agent: r.agent || 'cursor', ts: r.ts })),
-        deployRows.map((r) => ({ type: 'deploy', label: (r.label || '').slice(0, 200), agent: r.agent || 'manual', ts: r.ts })),
         deploymentRows.map((r) => ({ type: 'deploy', label: (r.label || '').slice(0, 200), agent: r.agent || 'script', ts: r.ts })),
         ciRows.map((r) => ({ type: 'ci', label: (r.label || '').slice(0, 200), agent: r.agent || 'ci', ts: r.ts }))
       )
@@ -8959,7 +9323,7 @@ async function handleOverviewActivityStrip(request, url, env) {
   }
 }
 
-/** GET /api/overview/deployments -- session required. Returns cloudflare_deployments (20) and cicd_runs (10). */
+/** GET /api/overview/deployments -- session required. Returns deployments[] (20) and cicd_runs (10). */
 async function handleOverviewDeployments(request, url, env) {
   if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
   const session = await getSession(env, request);
@@ -8968,9 +9332,9 @@ async function handleOverviewDeployments(request, url, env) {
 
   try {
     const cfRows = await env.DB.prepare(
-      `SELECT worker_name, environment, status, deployed_at, deployment_notes FROM cloudflare_deployments ORDER BY deployed_at DESC LIMIT 20`
+      `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes FROM deployments ORDER BY timestamp DESC LIMIT 20`
     ).all();
-    const cloudflare_deployments = (cfRows?.results ?? cfRows ?? []).map((r) => ({
+    const deploymentRows = (cfRows?.results ?? cfRows ?? []).map((r) => ({
       worker_name: r.worker_name,
       environment: r.environment,
       status: r.status,
@@ -9010,10 +9374,10 @@ async function handleOverviewDeployments(request, url, env) {
       } catch (_) {}
     }
 
-    return jsonResponse({ cloudflare_deployments, cicd_runs });
+    return jsonResponse({ deployments: deploymentRows, cicd_runs });
   } catch (e) {
     console.warn('Overview deployments error:', e?.message);
-    return jsonResponse({ error: String(e?.message), cloudflare_deployments: [], cicd_runs: [] }, 500);
+    return jsonResponse({ error: String(e?.message), deployments: [], cicd_runs: [] }, 500);
   }
 }
 

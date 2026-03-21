@@ -395,7 +395,7 @@
           Snapshot captured during build audit. Use this as baseline for “is the system writing data?” staleness checks.
         </div>
         <div class="codeBlock mono" style="margin-top: 10px;">
-cloudflare_deployments: 148
+deployments: (canonical; row count varies)
 ci_di_workflow_runs: 1
 cicd_runs: 0
 project_time_entries: 6
@@ -469,7 +469,7 @@ agent_memory_for_context: 13
             <div class="node" style="left: 680px; top: 40px; width: 260px;">
               <h4>Canonical tables</h4>
               <ul>
-                <li>cloudflare_deployments</li>
+                <li>deployments</li>
                 <li>project_time_entries</li>
                 <li>cursor_tasks (planned)</li>
                 <li>cicd_runs (needs writer)</li>
@@ -490,11 +490,11 @@ agent_memory_for_context: 13
             <div class="detailsBody">
               <div class="mono">
 Deploys Today:
-  reads: cloudflare_deployments
-  query: deployed_at last day of 7-day window AND status='success'
+  reads: deployments
+  query: date(timestamp) in last 7 days AND status='success'
 
 Worker deploys table:
-  reads: cloudflare_deployments (last 20)
+  reads: deployments (last 20)
 
 Hours This Week:
   reads: project_time_entries (user_id variants) is_active=0 AND start_time >= week start
@@ -623,7 +623,7 @@ ai_rag_search_history:
             <div class="node" style="left: 330px; top: 40px; width: 610px;">
               <h4>Record step (required)</h4>
               <ul>
-                <li>post-deploy-record.sh -> cloudflare_deployments</li>
+                <li>post-deploy-record.sh -> deployments</li>
                 <li>or POST /api/internal/record-deploy</li>
                 <li>ensures Overview Recent Activity stays accurate</li>
               </ul>
@@ -712,8 +712,8 @@ mcp_usage_log is empty (0 rows):
             <input type="checkbox" id="t_deploy_attribution_consistency" data-id="t_deploy_attribution_consistency" />
             <div class="txt">
               <div class="h">Deploy attribution consistency (30+ deploys/day)</div>
-              <div class="d">Ensure every deploy path records to <span class="mono">cloudflare_deployments</span>: use <span class="mono">npm run deploy</span> or call record-deploy API after wrangler.</div>
-              <div class="v mono">Verify: SELECT COUNT(*) FROM cloudflare_deployments WHERE deployed_at >= date('now','-7 days') AND status='success';</div>
+              <div class="d">Ensure every deploy path records to <span class="mono">deployments</span>: use <span class="mono">npm run deploy</span> or call record-deploy API after wrangler.</div>
+              <div class="v mono">Verify: SELECT COUNT(*) FROM deployments WHERE date(timestamp) >= date('now','-7 days') AND status='success';</div>
             </div>
           </div>
 

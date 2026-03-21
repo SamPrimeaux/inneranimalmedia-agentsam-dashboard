@@ -925,7 +925,7 @@ function GuardrailsTab() {
     { name: "Verify before claim",   desc: "Agent must show raw output proof before reporting success", enforced: true },
     { name: "No wasted loops",       desc: "If a command fails twice — stop, report exact error, don't retry", enforced: true },
     { name: "Workspace lock",        desc: "Before any wrangler command: show current dir + git branch + confirm", enforced: true },
-    { name: "D1 verify post-deploy", desc: "SELECT from cloudflare_deployments after every deploy to confirm version ID", enforced: true },
+    { name: "D1 verify post-deploy", desc: "SELECT from deployments after every deploy to confirm version ID", enforced: true },
   ];
 
   return (

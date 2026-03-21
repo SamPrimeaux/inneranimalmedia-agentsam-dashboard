@@ -4610,3 +4610,344 @@ One-time catch-up: append `.gitignore`, verify no secrets staged, commit and pus
 ### Known issues / next steps
 - GitHub Dependabot reports 10 vulnerabilities on the default branch (3 high, 7 moderate); review when convenient.
 - STEP 2 grep matched `.env.example`, `.env.cloudflare.example`, and `migrations/143_secret_audit_log_created_at.sql` (templates / migration name only), not live secrets.
+
+## 2026-03-21 worker.js: Ask mode tools + anti-hallucination system line
+
+### What was asked
+Two changes in `worker.js` only: allow tools in Ask mode (`filterToolsByMode`), add CRITICAL anti-fake-tool instruction to core system prefix; `node --check`; deploy only with approval.
+
+### Files changed
+- `worker.js` lines 2341-2345: `filterToolsByMode` — only `plan` returns empty tools; `ask` keeps full list. Comment updated.
+- `worker.js` lines 4866-4870: `coreSystemPrefix` template — appended CRITICAL paragraph on not simulating or fabricating tool calls/results.
+
+### Files NOT changed (and why)
+- OAuth handlers in `worker.js`: not touched.
+- `FloatingPreviewPanel.jsx`, dashboard HTML: not in scope.
+
+### Deploy status
+- `node --check worker.js`: passed
+- Worker deployed: no (awaiting **deploy approved**)
+- Deploy approved by Sam: no
+
+### What is live now
+Changes local only until a production deploy.
+
+### Known issues / next steps
+- Say **deploy approved** to run `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml` (or project `npm run deploy` if that is the canonical path per your workflow).
+
+## 2026-03-21 deploy approved: worker Ask tools + anti-hallucination prompt
+
+### What was asked
+User typed **deploy approved** after prior `worker.js` changes.
+
+### Files changed
+- None in this step (deploy only).
+
+### Deploy status
+- `node --check worker.js`: passed (before deploy)
+- Worker deployed: yes — **Current Version ID:** `0436d89c-9bdc-4995-b980-679dee739345`
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Ask mode tools + CRITICAL anti-fake-tool system prompt' ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
+- R2 uploaded: no (no dashboard artifact changes in this deploy)
+- D1 `deployments`: yes — `post-deploy-record.sh` with `id=0436d89c-9bdc-4995-b980-679dee739345`, `triggered_by=agent`
+- Deploy approved by Sam: yes
+
+### What is live now
+Production `inneranimalmedia` worker includes Ask-mode tool definitions (plan mode still no tools) and the CRITICAL no-fake-tool-calls line in `coreSystemPrefix`.
+
+### Known issues / next steps
+- None for this deploy.
+
+## 2026-03-21 worker.js: Anthropic double stream, deployments table, d1_query hint
+
+### What was asked
+Three surgical fixes: (1) return 500 when streaming `chatWithToolsAnthropic` returns falsy so raw Anthropic stream does not run; (2) replace `cloudflare_deployments` SQL with `deployments` (aligned to `post-deploy-record.sh` columns); (3) append deployment-table hint on `d1_query` `no such table` errors in `invokeMcpToolFromChat`. `node --check` and deploy.
+
+### Files changed
+- `worker.js` ~5060-5069: after `chatWithToolsAnthropic` with stream, if no `toolsResp`, `jsonResponse({ error: 'Tool loop returned no response' }, 500)`; removed redundant comment on OpenAI/Google `runToolLoop`.
+- `worker.js` internal record-deploy: `INSERT INTO deployments (...)` matching canonical shape; comment updated.
+- `worker.js` terminal complete: `UPDATE deployments SET status, notes WHERE id`.
+- `worker.js` knowledge `deployments` source, digest, overview stats, recent activity, activity strip (counts/trends/24h deploy list deduped to single `deployments` query), overview deployments GET: all read `deployments` with `timestamp`/`notes` aliases where UI expects `deployed_at`/`deployment_notes`. JSON field name `cloudflare_deployments` kept for dashboard compatibility.
+- `worker.js` `invokeMcpToolFromChat` `d1_query` catch: append hint when message includes `no such table`.
+
+### Files NOT changed (and why)
+- `runToolLoop` inline `d1_query` (line ~2772): separate path; user scoped hint to `invokeMcpToolFromChat` only.
+
+### Deploy status
+- `node --check worker.js`: passed
+- Worker deployed: yes — **Current Version ID:** `1424214e-64b9-4151-a5b0-77d3579b57cd`
+- D1 `deployments` row: `post-deploy-record.sh` with that version id, `triggered_by=agent`
+- R2 uploaded: no
+- Deploy approved by Sam: yes (instruction included deploy approval for this batch)
+
+### What is live now
+Production worker avoids second Anthropic stream when tool path returns nothing; deploy telemetry and overview paths use `deployments`; `d1_query` errors on missing tables suggest `deployments` example query.
+
+### Known issues / next steps
+- Legacy `cloudflare_deployments` table may still exist in D1 but is no longer read by these worker paths; historical rows are not merged unless backfilled into `deployments`.
+
+## 2026-03-21 Zero cloudflare_deployments in worker + API `deployments` key + overview R2
+
+### What was asked
+Remove all `cloudflare_deployments` references from runtime code after D1 table drop; align `/api/overview/deployments` JSON with `deployments` array; fix other `.js`/bundles; `node --check` and deploy.
+
+### Files changed
+- `worker.js`: `/api/overview/deployments` returns `{ deployments: deploymentRows, cicd_runs }` (was `cloudflare_deployments`); JSDoc + variable rename; `d1_query` hint text no longer names dropped table; `runToolLoop` `d1_query` catch appends same deployments hint on `no such table`.
+- `overview-dashboard/src/OverviewDashboard.jsx`: read `deployments.deployments` for worker deploy table.
+- `overview-dashboard/dist/*`: rebuilt via `npm install --include=dev` + `npx vite build`.
+- `agent-dashboard/src/SettingsPanel.jsx`: checklist copy references `deployments` not `cloudflare_deployments`.
+- `dashboard/platform-living-design-board.html`: design-board copy and sample SQL use `deployments` / `timestamp`.
+
+### Deploy status
+- `node --check worker.js`: passed
+- Worker deployed: yes — **Version ID** `fada6510-bd98-45d5-8229-e29aa60f861f`
+- D1 `deployments`: `post-deploy-record.sh` for that version id, `triggered_by=agent`
+- R2 uploaded: `agent-sam/static/dashboard/overview/overview-dashboard.js`, `overview-dashboard-PieChart.js`, `Finance.js`, `agent-sam/static/dashboard/platform-living-design-board.html`
+- Deploy approved by Sam: yes (batch instruction)
+
+### What is live now
+No substring `cloudflare_deployments` in repo `*.js` (migrations/docs retain historical mentions). Overview page expects new API shape.
+
+### Known issues / next steps
+- Any external client still expecting `cloudflare_deployments` in JSON must switch to `deployments` (array).
+
+## 2026-03-21 .cursorrules: scope enforcement + pre-deploy lists
+
+### What was asked
+Append to `.cursorrules` (do not replace): SCOPE ENFORCEMENT rules and mandatory pre-deploy file/R2 lists. Show file first; no deploy.
+
+### Files changed
+- `.cursorrules`: appended section "SCOPE ENFORCEMENT (non-negotiable)" and "MANDATORY before any deploy" bullets.
+
+### Deploy status
+- Deploy: no
+
+## 2026-03-21 runToolLoop Gemini: cloudflare_deployments tool error rewrite + worker deploy
+
+### What was asked
+When `d1_query` returns a D1 error containing `no such table: cloudflare_deployments`, replace the entire tool result text sent back to Gemini with an explicit message naming `deployments` and a sample `SELECT`; `node --check`; deploy when approved. `worker.js` only for code; no R2.
+
+### Files changed
+- `worker.js` lines 2977-2987: before pushing `functionResponse` for Google, set `geminiToolOutput` from `resultText` and replace when string includes `no such table: cloudflare_deployments`; use `geminiToolOutput` in `response.output`. Anthropic/OpenAI and `mcp_tool_calls` INSERT still use `resultText`.
+
+### Files NOT changed (and why)
+- No dashboard/R2; no other workers.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: yes — **Version ID** `1bb37c07-4067-43c5-8665-20d77aa853a2`
+- Deploy approved by Sam: yes (`Deploy approved.`)
+
+### What is live now
+Gemini tool rounds get the guided `deployments` retry text instead of a raw D1 error when the missing table is `cloudflare_deployments`.
+
+### Known issues / next steps
+- Other `no such table` cases still use existing `d1_query` generic hint unless they match this substring.
+
+## 2026-03-21 runToolLoop Gemini args extraction fix — deploy
+
+### What was asked
+Confirm prior fix (prefer `functionCall.args`, no `JSON.parse('{}')` swallowing; Google unwrap `{ args }`; `[Gemini args debug]` log; `terminal_execute` string `command`; `d1_query` `query ?? sql`). Deploy via `npm run deploy`.
+
+### Files changed
+- `worker.js` (runToolLoop tool loop): already contained the Gemini args extraction and related changes from prior session; this entry records production deploy only.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: yes — `npm run deploy` — **Version ID** `59700895-4605-4cf2-92d5-23ca4299c977`
+- Deploy approved by Sam: yes
+
+### What is live now
+Gemini tool calls receive real `functionCall.args`; Workers logs include `[Gemini args debug]` for Google rounds until removed.
+
+### Known issues / next steps
+- Consider removing or gating `[Gemini args debug]` after verifying logs.
+
+## 2026-03-21 Sprint 2 Build 1: GitActionCard in AgentDashboard
+
+### What was asked
+Add `GitActionCard` mirroring `TerminalOutputCard` for git actions: types `git_status`, `git_commit`, `git_push`, `git_pull`; parse git stdout for header summary; detect from `terminal_output` when command is `git status|commit|push|pull`. `AgentDashboard.jsx` only; deploy only via `npm run deploy` when approved.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: helpers `normalizeTerminalCommand`, `classifyGitTerminalCommand`, `resolveGitActionType`, `parseGitOutputSummary`; `GitActionCard` component; message list uses `gitActionType` to render `GitActionCard` vs `TerminalOutputCard`; `messages.map` block body for single `resolveGitActionType` call.
+
+### Files NOT changed (and why)
+- `worker.js`, R2: out of scope.
+
+### Deploy status
+- Built: no (dashboard bundle not rebuilt in this step)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no (not requested)
+
+### What is live now
+Unchanged until agent dashboard is built and uploaded per your usual pipeline.
+
+### Known issues / next steps
+- Wire agent/SSE to emit `git_*` tool messages if desired; optional richer parsers for large `git status` output.
+
+## 2026-03-21 GitActionCard: vite build + deploy-with-record.sh
+
+### What was asked
+Ship agent-dashboard JSX to production without `npm run deploy` alone: run `deploy-with-record.sh` (R2 agent bundle, `agent.html` cache bump, `dashboard_versions`, source upload, worker deploy, `post-deploy-record`). Verify live bundle includes Git UI.
+
+### Files changed
+- No new code edits this step; used existing `AgentDashboard.jsx` GitActionCard from prior session.
+
+### Deploy status
+- Built: yes — `agent-dashboard`: `npm run build` (Vite)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `.css`, `agent.html` (script `deploy-with-record.sh`)
+- `agent.html` cache bust: v114 → **v115** (`?v=115` on css/js)
+- Worker deployed: yes — **Version ID** `88d8c619-2f92-4c93-af11-827c371ffad3`
+- D1: `dashboard_versions` insert + `deployments` via `post-deploy-record.sh` (`TRIGGERED_BY=agent`, notes: GitActionCard deploy)
+- Deploy approved by Sam: yes (`deploy-with-record.sh`)
+
+### What is live now
+Production `/static/dashboard/agent/agent-dashboard.js?v=115` contains `Git · status` / `git_status` strings (minified bundle check).
+
+### Known issues / next steps
+- Sam: hard refresh `https://inneranimalmedia.com/dashboard/agent`, run `git status` from terminal in UI, confirm **Git · status** badge and summary (this environment cannot drive the browser).
+
+## 2026-03-21 invokeMcpToolFromChat builtin tools for MCP proxy
+
+### What was asked
+Add builtin handler blocks in `invokeMcpToolFromChat` so tools previously failing with `Tool not available via main worker proxy path` (MCP proxy with `allowRemoteMcp: false`) run on the main worker. Run `node --check worker.js`, then `deploy-with-record.sh` after approval.
+
+### Files changed
+- `worker.js` (inside `invokeMcpToolFromChat`, immediately before `const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools...')`): added builtins for `r2_write`, `r2_search`, `r2_bucket_summary`, `platform_info`, `list_workers`, `worker_deploy`, `telemetry_log` (via existing `writeAuditLog` to match `agent_audit_log` schema), `telemetry_query`, `telemetry_stats`, `human_context_list`, `human_context_add` (INSERT aligned with existing `agent_memory_index` upserts elsewhere), `a11y_audit_webpage`, `a11y_get_summary`, `context_search`, `context_optimize`, `context_chunk`, `context_summarize_code`, `context_extract_structure`, `context_progressive_disclosure`. Each path calls `rec()` / `recordMcpToolCall` like sibling builtins; object results are JSON-stringified in `result` for consistency with `r2_list` / `d1_query` in this function.
+
+### Files NOT changed (and why)
+- MCP server repo, `wrangler.production.toml`, dashboard source beyond what `deploy-with-record.sh` auto-touched: not in scope except script side effects.
+
+### Deploy status
+- Built: no separate Vite step for this change
+- R2 uploaded: yes — `deploy-with-record.sh` uploaded agent-dashboard dist, `dashboard/agent.html`, source tree, `worker.js` backup to `agent-sam`
+- `agent.html` cache bust: v115 to **v116** (script `sed`)
+- Worker deployed: yes — **Version ID** `b244b0e1-7923-40c8-9639-0edbc96375ca`
+- D1: `dashboard_versions`, `deployments` / post-deploy record (script)
+- Deploy approved by Sam: yes (per chat: deploy after `node --check`)
+
+### What is live now
+Main worker serves updated `invokeMcpToolFromChat`; MCP proxy calls with `X-IAM-MCP-Proxy: 1` can resolve the listed tool names locally without round-tripping to remote MCP.
+
+### Known issues / next steps
+- `list_workers` queries `agent_roles`; if schema or columns differ in D1, the tool returns an error string from the catch path.
+- `worker_deploy` returns instructions only; it does not run a deploy.
+
+## 2026-03-21 chatWithToolsAnthropic: single agent_messages INSERT
+
+### What was asked
+On `toolUseBlocks.length === 0`, remove duplicate `INSERT INTO agent_messages` for the assistant turn; keep `streamDoneDbWrites` only. `node --check worker.js`, then `deploy-with-record.sh`.
+
+### Files changed
+- `worker.js` — `chatWithToolsAnthropic`, `if (toolUseBlocks.length === 0)` branch: removed the `try/catch` block that inserted assistant `agent_messages` immediately before `await streamDoneDbWrites(...)` (duplicate of insert inside `streamDoneDbWrites`).
+
+### Files NOT changed (and why)
+- `streamDoneDbWrites` and all other functions: unchanged.
+
+### Deploy status
+- Built: no
+- R2 / `agent.html`: yes — `deploy-with-record.sh` (cache v116 to **v117**)
+- Worker deployed: yes — **Version ID** `68b6c2ee-2d3e-4c7b-a0cc-b007101bff08`
+- Deploy approved by Sam: yes
+
+### What is live now
+Anthropic tool-loop final answers record one assistant row via `streamDoneDbWrites` only.
+
+### Known issues / next steps
+- None for this change.
+
+## 2026-03-21 wrangler.production.toml: cron triggers audit cleanup
+
+### What was asked
+Surgical edit to `wrangler.production.toml` `[triggers]` crons only: keep three schedules with handlers, add back `*/30 * * * *` and `0 0 * * *`, remove five schedules with no worker handlers; show grep/diff; no `worker.js`; deploy only after separate approval.
+
+### Files changed
+- `wrangler.production.toml` lines 106–116: replaced 8 cron entries with 5 (`0 6`, `30 13`, `0 9`, `*/30`, `0 0`) and inline comments documenting purpose; removed `5 14 * * 1`, `0 8`, `0 4`, `0 3`, `0 14`.
+
+### Files NOT changed (and why)
+- `worker.js`: out of scope per request.
+
+### Deploy status
+- Built: yes (as part of combined `deploy-with-record.sh` run same day; see next log entry)
+- R2 uploaded: yes — via `deploy-with-record.sh` (agent bundle + `agent.html` cache bust)
+- Worker deployed: yes — **Version ID** `45354a9a-6d30-4fb1-8160-cb1de85c4e5d` (combined deploy)
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker runs with five `[triggers]` crons only (`0 6`, `30 13`, `0 9`, `*/30`, `0 0`).
+
+### Known issues / next steps
+- None for this change.
+
+## 2026-03-21 AgentDashboard.jsx: image persistence + combined production deploy
+
+### What was asked
+Log the skipped AgentDashboard session entry; deploy together with `wrangler.production.toml` cron cleanup via `npm run build` in `agent-dashboard` then `./scripts/deploy-with-record.sh`; deploy notes: cron cleanup + image persistence fix.
+
+### Files changed (AgentDashboard, prior session)
+- `agent-dashboard/src/AgentDashboard.jsx` — `userMsg.attachedImageUrls` uses `img.url || img.dataUrl` so file/paste/drop images persist on the message object before `setAttachedImages([])`.
+- `agent-dashboard/src/AgentDashboard.jsx` — session `/messages` fetch: functional `setMessages` merges `attachedImageUrls` / `attachedImagePreviews` from prior in-memory user messages onto API rows by sequential user-message index (DB rows omit attachment fields).
+- `agent-dashboard/src/AgentDashboard.jsx` — chat render: `userImageSrcs` from `attachedImageUrls` or fallback `attachedImagePreviews`; thumbnail strip above user text in a bordered card (CSS vars only).
+
+### Files NOT changed (and why)
+- `worker.js`: not required for this UI fix; persistence in D1 still has no image columns (client merge covers refetch after `conversation_id`).
+
+### Deploy status
+- Built: yes — `cd agent-dashboard && npm run build`
+- R2 uploaded: yes — `deploy-with-record.sh`: `agent-dashboard.js`, `agent-dashboard.css`, `dashboard/agent.html` (cache **v117 to v118**), worker source + indexing uploads per script
+- Worker deployed: yes — **Version ID** `45354a9a-6d30-4fb1-8160-cb1de85c4e5d`
+- Deploy approved by Sam: yes
+- D1 deploy record: `TRIGGERED_BY=agent`, notes: `Cron cleanup (5 handlers, remove 5 dead) + image persistence fix (attachedImageUrls || dataUrl, thumbnail strip in user bubble)`
+
+### What is live now
+Production serves agent dashboard **v118** with image thumbnails in user bubbles after reply/session sync; worker cron triggers match the five schedules in `wrangler.production.toml`.
+
+### Known issues / next steps
+- Full page reload of a session still depends on client merge for images until/unless API stores attachment metadata.
+
+## 2026-03-21 worker.js: runToolLoop builtin tools + deploy
+
+### What was asked
+Deploy approved: ship `worker.js` changes (21-tool `else if` chain in `runToolLoop` using `toolName`, expanded `BUILTIN_TOOLS` Set).
+
+### Files changed (code, pre-deploy)
+- `worker.js` — after `imgx_*` branch: handlers for `r2_write`, `r2_search`, `r2_bucket_summary`, `platform_info`, `list_workers`, `worker_deploy`, telemetry/human_context/a11y/context tools, etc.; `BUILTIN_TOOLS` includes those plus `browser_navigate` / `browser_content`.
+
+### Files NOT changed (and why)
+- Dashboard source: not part of this worker-only edit (script still re-uploaded built agent assets and bumped `agent.html` cache per `deploy-with-record.sh`).
+
+### Deploy status
+- Built: no (agent-dashboard bundle not rebuilt this run; script uploaded existing `dist/` + `dashboard/agent.html`)
+- R2 uploaded: yes — `deploy-with-record.sh` (agent js/css/html cache **v118 to v119**), `worker.js` + source trees + docs (full docs pass: no `.deploy-docs-baseline` on runner)
+- Worker deployed: yes — **Version ID** `ed79d8af-e249-473b-8f4e-a01034682954`
+- Deploy approved by Sam: yes
+- D1: `TRIGGERED_BY=agent`, notes: `runToolLoop: 21 builtin tool branches (toolName) + expanded BUILTIN_TOOLS Set`
+
+### What is live now
+Production worker `ed79d8af-e249-473b-8f4e-a01034682954` runs the expanded builtin tool loop and Set; agent shell loads **v119**.
+
+### Known issues / next steps
+- Some SQL paths (`agent_audit_log`, `ON CONFLICT(key)` on `agent_memory_index`) may fail at runtime if schema differs; exercise tools in staging or tail logs if errors appear.
+
+## 2026-03-21 AgentDashboard: slash picker + terminal card loading + deploy
+
+### What was asked
+Deploy approved: `./scripts/deploy-with-record.sh --skip-docs` with notes for slash command picker (instant `/run` execute) and `TerminalOutputCard` animated loading.
+
+### Files changed (code)
+- `agent-dashboard/src/AgentDashboard.jsx` — slash picker above input from `availableCommands`, keyboard nav, `sendMessage(textOverride)` + `applySlashCommandSelection`; `TerminalOutputCard` running state with CSS border + dot pulse; global `<style>` keyframes.
+
+### Deploy status
+- Built: yes — `npm run build` in `agent-dashboard` before deploy
+- R2 uploaded: yes — agent js/css/html (**v119 to v120**); worker + agent-dashboard + MCP source to R2; **docs skipped** (`--skip-docs`)
+- Worker deployed: yes — **Version ID** `24be61ff-1320-43a0-a51d-9d97532a7b66`
+- Deploy approved by Sam: yes
+- D1: `TRIGGERED_BY=agent`, notes: `Slash command picker with instant /run execute + TerminalOutputCard animated loading state`
+
+### What is live now
+Agent dashboard **v120** with slash picker and terminal running animations; worker revision **24be61ff-1320-43a0-a51d-9d97532a7b66**.
+
+### Known issues / next steps
+- Commit `dashboard/agent.html` (`?v=120`) if not already in git.

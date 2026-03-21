@@ -1,9 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Editor from "@monaco-editor/react";
 import { DiffEditor } from "@monaco-editor/react";
-
-const TAB_LABELS = { terminal: "Terminal", browser: "Browser", files: "Files", code: "Code", view: "View", settings: "Settings" };
-const TAB_ORDER = ["terminal", "browser", "files", "code", "view", "settings"];
+import SettingsPanel from "./SettingsPanel";
 
 function buildR2Url(bucket, key) {
   const base = typeof window !== "undefined" ? window.location.origin : "";
@@ -86,6 +84,212 @@ function renderViewPanel(filename, r2Url) {
   );
 }
 
+const GIT_PANEL_REPO = "/Users/samprimeaux/Downloads/march1st-inneranimalmedia";
+
+function GitPanel({ runCommandRunnerRef }) {
+  const [commitMsg, setCommitMsg] = useState("");
+
+  function run(cmd) {
+    runCommandRunnerRef?.current?.runCommandInTerminal?.(cmd);
+  }
+
+  useEffect(() => {
+    run(`cd ${GIT_PANEL_REPO} && git status --short && echo "---GITLOG---" && git log --oneline -8`);
+  }, []);
+
+  const quickActions = [
+    { label: "status", cmd: `cd ${GIT_PANEL_REPO} && git status` },
+    { label: "log", cmd: `cd ${GIT_PANEL_REPO} && git log --oneline -15` },
+    { label: "diff", cmd: `cd ${GIT_PANEL_REPO} && git diff --stat` },
+    { label: "pull", cmd: `cd ${GIT_PANEL_REPO} && git pull` },
+    { label: "stash", cmd: `cd ${GIT_PANEL_REPO} && git stash` },
+    { label: "branches", cmd: `cd ${GIT_PANEL_REPO} && git branch -a` },
+    { label: "push", cmd: `cd ${GIT_PANEL_REPO} && git push` },
+  ];
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: 16 }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "monospace", background: "var(--bg-canvas)", padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", marginBottom: 10 }}>
+          repo: march1st-inneranimalmedia · branch: <span style={{ color: "var(--accent)" }}>main</span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {quickActions.map((a) => (
+            <button key={a.label} type="button" onClick={() => run(a.cmd)} style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 10 }}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-secondary)", marginBottom: 6 }}>Commit</div>
+        <textarea
+          value={commitMsg}
+          onChange={(e) => setCommitMsg(e.target.value)}
+          placeholder="Commit message..."
+          style={{ width: "100%", boxSizing: "border-box", background: "var(--bg-canvas)", border: "1px solid var(--border)", color: "var(--text-primary)", padding: 8, borderRadius: 4, fontFamily: "monospace", fontSize: 11, resize: "none", height: 60, outline: "none", marginBottom: 6 }}
+        />
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            type="button"
+            disabled={!commitMsg.trim()}
+            onClick={() => {
+              const safe = commitMsg.replace(/"/g, '\\"');
+              run(`cd ${GIT_PANEL_REPO} && git add -A && git commit -m "${safe}"`);
+              setCommitMsg("");
+            }}
+            style={{ flex: 1, background: "var(--accent)", color: "var(--bg-canvas)", border: "none", borderRadius: 4, padding: "6px 12px", cursor: commitMsg.trim() ? "pointer" : "not-allowed", fontFamily: "monospace", fontSize: 11, fontWeight: 600, opacity: commitMsg.trim() ? 1 : 0.4 }}
+          >
+            Stage All + Commit
+          </button>
+          <button
+            type="button"
+            disabled={!commitMsg.trim()}
+            onClick={() => {
+              const safe = commitMsg.replace(/"/g, '\\"');
+              run(`cd ${GIT_PANEL_REPO} && git add -A && git commit -m "${safe}" && git push`);
+              setCommitMsg("");
+            }}
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-secondary)", borderRadius: 4, padding: "6px 12px", cursor: commitMsg.trim() ? "pointer" : "not-allowed", fontFamily: "monospace", fontSize: 11, opacity: commitMsg.trim() ? 1 : 0.4 }}
+          >
+            + Push
+          </button>
+        </div>
+      </div>
+      <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.5, background: "var(--bg-canvas)", padding: 8, borderRadius: 4, border: "1px solid var(--border)" }}>
+        All git commands stream output to the Terminal tab. Open Terminal to see results and resolve any conflicts.
+      </div>
+    </div>
+  );
+}
+
+const GITHUB_FILE_BROWSER_PREVIEWABLE = new Set(["html", "htm", "css", "js", "json", "md", "txt", "png", "jpg", "jpeg", "gif", "svg", "pdf", "glb", "gltf"]);
+
+/** Same GitHub repo tree / file browser as Files tab (GitHub source). */
+export function GitHubFileBrowser({ connectedIntegrations, openGithubFileInCode, setSelectedFileForView, onTabChange }) {
+  const connected = connectedIntegrations?.github;
+  const [githubRepos, setGithubRepos] = useState([]);
+  const [githubSelectedRepo, setGithubSelectedRepo] = useState(null);
+  const [githubPath, setGithubPath] = useState("");
+  const [githubPathStack, setGithubPathStack] = useState([]);
+  const [githubFiles, setGithubFiles] = useState([]);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubError, setGithubError] = useState(null);
+
+  useEffect(() => {
+    if (!connected || githubSelectedRepo) return;
+    setGithubLoading(true);
+    setGithubError(null);
+    fetch("/api/integrations/github/repos", { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setGithubRepos(data);
+        } else if (data && data.error) {
+          setGithubError(typeof data.error === "object" ? (data.error?.message || JSON.stringify(data.error)) : String(data.error));
+          setGithubRepos([]);
+        } else {
+          setGithubRepos([]);
+        }
+      })
+      .catch((e) => { setGithubError(e.message || "Failed to load repos"); setGithubRepos([]); })
+      .finally(() => setGithubLoading(false));
+  }, [connected, githubSelectedRepo]);
+
+  useEffect(() => {
+    if (!connected || !githubSelectedRepo) return;
+    setGithubLoading(true);
+    setGithubError(null);
+    const path = githubPath || "";
+    fetch(`/api/integrations/github/files?repo=${encodeURIComponent(githubSelectedRepo)}&path=${encodeURIComponent(path)}`, { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setGithubFiles(data);
+        } else if (data && data.error) {
+          setGithubError(typeof data.error === "object" ? (data.error?.message || JSON.stringify(data.error)) : String(data.error || "Not found"));
+          setGithubFiles([]);
+        } else {
+          setGithubFiles([]);
+        }
+      })
+      .catch((e) => { setGithubError(e.message || "Failed to load"); setGithubFiles([]); })
+      .finally(() => setGithubLoading(false));
+  }, [connected, githubSelectedRepo, githubPath]);
+
+  if (!connected) {
+    return (
+      <div style={{ flex: 1, padding: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "var(--text-secondary)", fontSize: 11, textAlign: "center", padding: 20 }}>
+          GitHub not connected. Connect from Extensions (Tools).
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
+      <div style={{ padding: "8px", borderBottom: "1px solid var(--border)", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", flexShrink: 0 }}>
+        {githubSelectedRepo ? (
+          <>
+            <button type="button" onClick={() => { if (githubPathStack.length > 0) { const prev = githubPathStack[githubPathStack.length - 1]; setGithubPath(prev); setGithubPathStack((s) => s.slice(0, -1)); } else { setGithubSelectedRepo(null); setGithubPath(""); setGithubPathStack([]); } }} style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer", fontFamily: "inherit" }}>^ Up</button>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)", wordBreak: "break-all" }}>{githubSelectedRepo}{githubPath ? ` / ${githubPath}` : ""}</span>
+          </>
+        ) : (
+          <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Select a repo</span>
+        )}
+      </div>
+      {githubError && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{githubError}</div>}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "8px" }}>
+        {!githubSelectedRepo && (
+          <>
+            {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading repos...</div>}
+            {!githubLoading && githubRepos.map((repo) => (
+              <div key={repo.full_name}>
+                <button type="button" onClick={() => setGithubSelectedRepo(repo.full_name)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ color: "var(--accent)" }}>[dir]</span> {repo.full_name}
+                </button>
+              </div>
+            ))}
+            {!githubLoading && githubRepos.length === 0 && !githubError && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>No repos</div>}
+          </>
+        )}
+        {githubSelectedRepo && (
+          <>
+            {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading...</div>}
+            {!githubLoading && githubFiles.filter((item) => item.type === "dir").map((item) => (
+              <div key={item.path}>
+                <button type="button" onClick={() => { setGithubPathStack((s) => [...s, githubPath]); setGithubPath(githubPath + item.name + "/"); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ color: "var(--accent)" }}>[dir]</span> {item.name}
+                </button>
+              </div>
+            ))}
+            {!githubLoading && githubFiles.filter((item) => item.type === "file").length > 0 && (
+              <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "8px", marginBottom: "4px", textTransform: "uppercase" }}>Files</div>
+            )}
+            {!githubLoading && githubFiles.filter((item) => item.type === "file").map((item) => {
+              const fullPath = githubPath + item.name;
+              const ext = (item.name || "").split(".").pop().toLowerCase();
+              const isPreviewable = GITHUB_FILE_BROWSER_PREVIEWABLE.has(ext);
+              return (
+                <div key={item.path} style={{ display: "flex", alignItems: "center", width: "100%" }}>
+                  <button type="button" onClick={() => openGithubFileInCode(githubSelectedRepo, fullPath, item.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ color: "var(--text-muted)" }}>[doc]</span> {item.name}
+                  </button>
+                  {isPreviewable && (
+                    <button type="button" onClick={() => { setSelectedFileForView({ key: item.name || fullPath, url: `/api/integrations/github/raw?repo=${encodeURIComponent(githubSelectedRepo)}&path=${encodeURIComponent(fullPath)}`, ext }); onTabChange && onTabChange("view"); }} style={{ flexShrink: 0, padding: "4px 8px", fontSize: "11px", border: "1px solid var(--border)", borderRadius: "4px", background: "var(--bg-elevated)", color: "var(--text-primary)", cursor: "pointer", fontFamily: "inherit" }}>View</button>
+                  )}
+                </div>
+              );
+            })}
+            {!githubLoading && githubFiles.length === 0 && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Empty</div>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FloatingPreviewPanel({
   open,
   onClose,
@@ -110,15 +314,17 @@ export default function FloatingPreviewPanel({
   connectedIntegrations = {},
   runCommandRunnerRef,
   availableCommands = [],
+  onOpenInBrowser,
+  onDeployStart,
+  onDeployComplete,
 }) {
   const [previewEdit, setPreviewEdit] = useState(false);
   const [browserInputUrl, setBrowserInputUrl] = useState("");
-  const [browserImgUrl, setBrowserImgUrl] = useState("");
   const [browserLoading, setBrowserLoading] = useState(false);
-  const [browserCapturedAt, setBrowserCapturedAt] = useState(null);
   const [terminalWsState, setTerminalWsState] = useState("idle");
   const [terminalOutput, setTerminalOutput] = useState("");
   const [terminalInput, setTerminalInput] = useState("");
+  const [terminalUserReconnect, setTerminalUserReconnect] = useState(0);
   const terminalWsRef = useRef(null);
   const terminalOutputRef = useRef(null);
   const terminalInputRef = useRef(null);
@@ -156,8 +362,8 @@ export default function FloatingPreviewPanel({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const monacoEditorRef = useRef(null);
-  const diffEditorRef = useRef(null);
   const terminalSessionIdRef = useRef(null);
+
   const [diffMode, setDiffMode] = useState(false);
   const [proposedContent, setProposedContent] = useState(null);
   const lastSavedContentRef = useRef("");
@@ -169,23 +375,13 @@ export default function FloatingPreviewPanel({
   const [gdriveLoading, setGdriveLoading] = useState(false);
   const [gdriveError, setGdriveError] = useState(null);
 
-  // GitHub integration (Files tab when source is __github__)
-  const [githubRepos, setGithubRepos] = useState([]);
-  const [githubSelectedRepo, setGithubSelectedRepo] = useState(null);
-  const [githubPath, setGithubPath] = useState("");
-  const [githubPathStack, setGithubPathStack] = useState([]);
-  const [githubFiles, setGithubFiles] = useState([]);
-  const [githubLoading, setGithubLoading] = useState(false);
-  const [githubError, setGithubError] = useState(null);
-
   // 5D: Playwright screenshot with job polling
-  const runBrowserCapture = useCallback(async (forceRefresh = false) => {
+  const runBrowserCapture = useCallback(async () => {
     const u = (browserInputUrl || browserUrl || "").trim();
     if (!u) return;
     let url = u;
     if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
     setBrowserLoading(true);
-    if (!forceRefresh) setBrowserImgUrl("");
     try {
       const res = await fetch("/api/playwright/screenshot", {
         method: "POST",
@@ -202,7 +398,6 @@ export default function FloatingPreviewPanel({
       const jobId = data?.jobId ?? data?.id ?? data?.job?.id ?? null;
       if (!jobId || jobId === "undefined") {
         console.error("Screenshot: no job ID in response", data);
-        if (!forceRefresh) setBrowserImgUrl("");
         return;
       }
       let attempts = 0;
@@ -212,30 +407,23 @@ export default function FloatingPreviewPanel({
         const poll = await fetch(`/api/playwright/jobs/${jobId}`);
         if (!poll.ok) break;
         const job = await poll.json();
-        if (job.status === "complete" && job.result?.screenshot_url) {
-          setBrowserImgUrl(job.result.screenshot_url);
-          setBrowserCapturedAt(Date.now());
-          if (onBrowserScreenshotUrl) onBrowserScreenshotUrl(job.result.screenshot_url);
+        if (job.status === "completed" && job.result_url) {
+          if (onBrowserScreenshotUrl) onBrowserScreenshotUrl(job.result_url);
           break;
         }
-        if (job.status === "failed") break;
+        if (job.status === "failed" || job.status === "error") break;
         attempts++;
       }
     } catch (_) {
-      if (!forceRefresh) setBrowserImgUrl("");
     } finally {
       setBrowserLoading(false);
     }
   }, [browserInputUrl, browserUrl, onBrowserScreenshotUrl]);
 
-  const runBrowserGo = useCallback(() => runBrowserCapture(false), [runBrowserCapture]);
-  const runBrowserRefresh = useCallback(() => runBrowserCapture(true), [runBrowserCapture]);
+  const runBrowserGo = useCallback(() => runBrowserCapture(), [runBrowserCapture]);
+  const runBrowserRefresh = useCallback(() => runBrowserCapture(), [runBrowserCapture]);
 
   // Screenshots only trigger from Go / Screenshot button clicks -- no auto-refresh on tab activation
-
-  useEffect(() => {
-    if (onBrowserScreenshotUrl && browserImgUrl) onBrowserScreenshotUrl(browserImgUrl);
-  }, [browserImgUrl, onBrowserScreenshotUrl]);
 
   // Monaco: CSS-var driven theme (iam-custom), no hardcoded colors
   const isDark = isDarkTheme || ["dark", "galaxy", "dev", "meaux-storm-gray", "meaux-mono", "innersam-slate", "meaux-ocean-soft-dark", "mil-forest", "mil-night"].some((s) => activeThemeSlug.includes(s));
@@ -355,49 +543,6 @@ export default function FloatingPreviewPanel({
       .finally(() => setGdriveLoading(false));
   }, [activeTab, open, filesBucket, gdriveFolderId]);
 
-  // Files tab: GitHub -- load repos when source is __github__ and no repo selected
-  useEffect(() => {
-    if (activeTab !== "files" || !open || filesBucket !== "__github__" || githubSelectedRepo) return;
-    setGithubLoading(true);
-    setGithubError(null);
-    fetch("/api/integrations/github/repos", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setGithubRepos(data);
-        } else if (data && data.error) {
-          setGithubError(typeof data.error === 'object' ? (data.error?.message || JSON.stringify(data.error)) : String(data.error));
-          setGithubRepos([]);
-        } else {
-          setGithubRepos([]);
-        }
-      })
-      .catch((e) => { setGithubError(e.message || "Failed to load repos"); setGithubRepos([]); })
-      .finally(() => setGithubLoading(false));
-  }, [activeTab, open, filesBucket, githubSelectedRepo]);
-
-  // Files tab: GitHub -- load files when repo and path are set
-  useEffect(() => {
-    if (activeTab !== "files" || !open || filesBucket !== "__github__" || !githubSelectedRepo) return;
-    setGithubLoading(true);
-    setGithubError(null);
-    const path = githubPath || "";
-    fetch(`/api/integrations/github/files?repo=${encodeURIComponent(githubSelectedRepo)}&path=${encodeURIComponent(path)}`, { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setGithubFiles(data);
-        } else if (data && data.error) {
-          setGithubError(typeof data.error === 'object' ? (data.error?.message || JSON.stringify(data.error)) : String(data.error || "Not found"));
-          setGithubFiles([]);
-        } else {
-          setGithubFiles([]);
-        }
-      })
-      .catch((e) => { setGithubError(e.message || "Failed to load"); setGithubFiles([]); })
-      .finally(() => setGithubLoading(false));
-  }, [activeTab, open, filesBucket, githubSelectedRepo, githubPath]);
-
   const openFileInCode = useCallback((bucket, key) => {
     const url = buildR2Url(bucket, key);
     fetch(`/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`, { credentials: "same-origin" })
@@ -469,7 +614,7 @@ export default function FloatingPreviewPanel({
       .then((r) => r.json())
       .then((data) => {
         if (data && data.error) {
-          setGithubError(typeof data.error === 'object' ? (data.error?.message || JSON.stringify(data.error)) : String(data.error));
+          setFilesError(typeof data.error === "object" ? (data.error?.message || JSON.stringify(data.error)) : String(data.error));
           return;
         }
         const fname = name || path.split("/").pop() || "";
@@ -488,8 +633,17 @@ export default function FloatingPreviewPanel({
           });
         }
       })
-      .catch((e) => setGithubError(e.message || "Failed to load file"));
+      .catch((e) => setFilesError(e.message || "Failed to load file"));
   }, [onCodeContentChange, onTabChange, onFileContextChange, previewableExtensions]);
+
+  const settingsGithubSlot = useMemo(() => (
+    <GitHubFileBrowser
+      connectedIntegrations={connectedIntegrations}
+      openGithubFileInCode={openGithubFileInCode}
+      setSelectedFileForView={setSelectedFileForView}
+      onTabChange={onTabChange}
+    />
+  ), [connectedIntegrations, openGithubFileInCode, onTabChange]);
 
   const saveFileToR2 = useCallback(async () => {
     if (!codeFilename || !filesBucket) return;
@@ -607,44 +761,84 @@ export default function FloatingPreviewPanel({
     onFileContextChange?.({ filename: codeFilename, content: codeContent, bucket: filesBucket });
   }, [codeFilename, codeContent, filesBucket, onFileContextChange]);
 
-  // When agent proposes a file change for the currently open file, show diff and switch to Code tab
+  // When agent proposes a file change: match open file, or load original from R2 then show diff
   useEffect(() => {
     if (!proposedFileChange || !proposedFileChange.filename || proposedFileChange.content == null) return;
-    const match = codeFilename && (proposedFileChange.filename === codeFilename || codeFilename === proposedFileChange.filename || codeFilename.endsWith("/" + proposedFileChange.filename));
+    const fn = proposedFileChange.filename;
+    const match = codeFilename && (fn === codeFilename || codeFilename === fn || codeFilename.endsWith("/" + fn));
     if (match) {
       setProposedContent(proposedFileChange.content);
       setDiffMode(true);
       if (onTabChange) onTabChange("code");
+      return;
     }
-  }, [proposedFileChange, codeFilename, onTabChange]);
+    const bucket = proposedFileChange.bucket || filesBucket || (filesBuckets.length > 0 ? filesBuckets[0] : "");
+    if (!bucket) {
+      setCodeFilename(fn);
+      if (onCodeContentChange) onCodeContentChange("");
+      setProposedContent(proposedFileChange.content);
+      setDiffMode(true);
+      if (onTabChange) onTabChange("code");
+      return;
+    }
+    fetch(`/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(fn)}`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((text) => {
+        if (onCodeContentChange) onCodeContentChange(text);
+        setCodeFilename(fn);
+        setProposedContent(proposedFileChange.content);
+        setDiffMode(true);
+        if (onTabChange) onTabChange("code");
+      })
+      .catch(() => {
+        if (onCodeContentChange) onCodeContentChange("");
+        setCodeFilename(fn);
+        setProposedContent(proposedFileChange.content);
+        setDiffMode(true);
+        if (onTabChange) onTabChange("code");
+      });
+  }, [proposedFileChange, codeFilename, onTabChange, filesBucket, filesBuckets, onCodeContentChange]);
 
-  // Terminal WebSocket (do not touch - xterm.js PTY)
-  // Cleanup only closes when actually leaving terminal or closing panel; re-render flicker leaves socket alive.
+  // Terminal WebSocket: prefer direct wss:// to TERMINAL_WS_URL (one hop); fallback to same-origin Worker proxy.
   useEffect(() => {
     if (activeTab !== "terminal" || !open) return;
     if (terminalWsRef.current && terminalWsRef.current.readyState < 2) return;
     wsGuardRef.current = false;
-    const wsProto = (typeof window !== "undefined" && window.location.protocol === "https:") ? "wss:" : "ws:";
-    const wsHost = (typeof window !== "undefined") ? window.location.host : "terminal.inneranimalmedia.com";
-    const wsUrl = `${wsProto}//${wsHost}/api/agent/terminal/ws`;
-    let ws = null;
     let cancelled = false;
+    const wsProto = (typeof window !== "undefined" && window.location.protocol === "https:") ? "wss:" : "ws:";
+    const wsHost = (typeof window !== "undefined") ? window.location.host : "inneranimalmedia.com";
+    const fallbackWsUrl = `${wsProto}//${wsHost}/api/agent/terminal/ws`;
     setTerminalWsState("connecting");
     setTerminalOutput("");
-    try {
-      ws = new WebSocket(wsUrl);
-      terminalWsRef.current = ws;
-    } catch (_) {
-      setTerminalWsState("error");
-      return;
-    }
+
+    (async () => {
+      let targetUrl = fallbackWsUrl;
+      try {
+        const r = await fetch("/api/agent/terminal/socket-url", { credentials: "same-origin" });
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (j && typeof j.url === "string" && (j.url.startsWith("wss://") || j.url.startsWith("ws://"))) targetUrl = j.url;
+        }
+      } catch (_) {}
+      if (cancelled) return;
+      if (terminalWsRef.current && terminalWsRef.current.readyState < 2) return;
+      let ws = null;
+      try {
+        ws = new WebSocket(targetUrl);
+        terminalWsRef.current = ws;
+      } catch (_) {
+        if (!cancelled) setTerminalWsState("error");
+        return;
+      }
     ws.onopen = () => {
       if (cancelled) return;
+      if (terminalWsRef.current !== ws) return;
       setTerminalWsState("connected");
-      setTerminalOutput(prev => prev + "\r\nConnected.\r\n");
+      setTerminalOutput((prev) => prev + "\r\nConnected.\r\n");
     };
     ws.onmessage = (ev) => {
       if (cancelled) return;
+      if (terminalWsRef.current !== ws) return;
       const raw = typeof ev.data === "string" ? ev.data : ev.data?.toString?.() ?? "";
       try {
         const msg = JSON.parse(raw);
@@ -653,23 +847,37 @@ export default function FloatingPreviewPanel({
           return;
         }
         if (msg.type === "output" && msg.data) {
-          setTerminalOutput(prev => prev + msg.data);
+          setTerminalOutput((prev) => prev + msg.data);
           return;
         }
       } catch (_) {}
-      setTerminalOutput(prev => prev + raw);
+      setTerminalOutput((prev) => prev + raw);
     };
-    ws.onclose = () => { if (!cancelled) setTerminalWsState("disconnected"); };
-    ws.onerror = () => { if (!cancelled) setTerminalWsState("error"); };
+    ws.onclose = () => {
+      if (cancelled) return;
+      if (terminalWsRef.current !== ws) return;
+      terminalWsRef.current = null;
+      terminalSessionIdRef.current = null;
+      setTerminalWsState("disconnected");
+    };
+    ws.onerror = () => {
+      if (cancelled) return;
+      if (terminalWsRef.current !== ws) return;
+      setTerminalWsState("error");
+    };
+    })();
+
     return () => {
+      cancelled = true;
       if (!mountedRef.current || !openRef.current || activeTabRef.current !== "terminal") {
         wsGuardRef.current = true;
-        cancelled = true;
-        try { if (terminalWsRef.current) terminalWsRef.current.close(); } catch (_) {}
+        try {
+          if (terminalWsRef.current) terminalWsRef.current.close();
+        } catch (_) {}
         terminalWsRef.current = null;
       }
     };
-  }, [open, activeTab]);
+  }, [open, activeTab, terminalUserReconnect]);
 
   useEffect(() => {
     if (activeTab === "terminal" && terminalInputRef.current) {
@@ -682,15 +890,20 @@ export default function FloatingPreviewPanel({
   }, [terminalOutput]);
 
   const sendTerminalKey = useCallback((e) => {
-    console.log("WS readyState:", terminalWsRef.current?.readyState);
-    if (terminalWsRef.current?.readyState !== 1) return;
-    if (e.key === "Enter") {
-      const line = terminalInput.trimEnd() + "\n";
-      terminalWsRef.current.send(line);
-      setTerminalOutput(prev => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + terminalInput + "\r\n");
-      setTerminalInput("");
-      e.preventDefault();
+    const isEnter = e.key === "Enter" || e.key === "NumpadEnter";
+    if (!isEnter) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ws = terminalWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const line = terminalInput.trimEnd() + "\n";
+    try {
+      ws.send(JSON.stringify({ type: "input", data: line }));
+    } catch (_) {
+      return;
     }
+    setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + terminalInput + "\r\n");
+    setTerminalInput("");
   }, [terminalInput]);
 
   const runCommandInTerminal = useCallback(async (command) => {
@@ -703,15 +916,17 @@ export default function FloatingPreviewPanel({
           session_id: terminalSessionIdRef.current ?? null,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.output) {
         setTerminalOutput((prev) => prev + "\r\n" + data.output);
       }
-      setActiveTab("terminal");
+      if (onTabChange) onTabChange("terminal");
+      return { ok: res.ok, output: data.output, error: data.error };
     } catch (err) {
       console.error("[runCommandInTerminal]", err);
+      return { ok: false, error: err?.message ?? String(err) };
     }
-  }, []);
+  }, [onTabChange]);
 
   useEffect(() => {
     if (runCommandRunnerRef) {
@@ -733,8 +948,6 @@ export default function FloatingPreviewPanel({
     }
   };
 
-  const secondsAgo = browserCapturedAt ? Math.round((Date.now() - browserCapturedAt) / 1000) : null;
-
   return (
     <div
       style={{
@@ -747,7 +960,7 @@ export default function FloatingPreviewPanel({
         overflow: "hidden",
       }}
     >
-      {/* Tab bar */}
+      {/* Header: pop out + close (tab labels live on AgentDashboard icon strip) */}
       <div
         style={{
           display: "flex",
@@ -758,26 +971,6 @@ export default function FloatingPreviewPanel({
           flexShrink: 0,
         }}
       >
-        {TAB_ORDER.map(t => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => onTabChange(t)}
-            style={{
-              padding: "3px 9px",
-              marginRight: "3px",
-              borderRadius: "3px",
-              border: "none",
-              background: activeTab === t ? "var(--accent)" : "transparent",
-              color: activeTab === t ? "var(--bg-canvas)" : "var(--text-secondary)",
-              fontSize: "11px",
-              fontFamily: "inherit",
-              cursor: "pointer",
-            }}
-          >
-            {TAB_LABELS[t]}
-          </button>
-        ))}
         <div style={{ flex: 1 }} />
         <button
           type="button"
@@ -914,38 +1107,22 @@ export default function FloatingPreviewPanel({
           </div>
         )}
 
-        {/* SETTINGS TAB -- commands + shortcuts */}
+        {/* GIT TAB — Source control via PTY */}
+        {activeTab === "git" && (
+          <GitPanel runCommandRunnerRef={runCommandRunnerRef} />
+        )}
+
+        {/* SETTINGS TAB -- full ops panel */}
         {activeTab === "settings" && (
-          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <h3 style={{ margin: "0 0 16px 0", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>Commands</h3>
-            <div style={{ marginBottom: 24 }}>
-              {(availableCommands.length === 0) ? (
-                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>No commands loaded. Type /help in chat for slash commands.</div>
-              ) : (
-                availableCommands.map((cmd) => (
-                  <div
-                    key={cmd.command_name || cmd.trigger || cmd.description}
-                    style={{
-                      padding: 12,
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      marginBottom: 8,
-                      background: "var(--bg-canvas)",
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text-primary)" }}>/{cmd.command_name || cmd.trigger || "command"}</div>
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>{cmd.description || "No description."}</div>
-                  </div>
-                ))
-              )}
-            </div>
-            <h3 style={{ margin: "0 0 16px 0", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>Keyboard Shortcuts</h3>
-            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              <div>Cmd+K - Open settings</div>
-              <div>Cmd+/ - Focus chat input</div>
-              <div>Esc - Close panels</div>
-            </div>
-          </div>
+          <SettingsPanel
+            availableCommands={availableCommands}
+            runCommandRunnerRef={runCommandRunnerRef}
+            connectedIntegrations={connectedIntegrations}
+            onOpenInBrowser={onOpenInBrowser}
+            settingsGithubSlot={settingsGithubSlot}
+            onDeployStart={onDeployStart}
+            onDeployComplete={onDeployComplete}
+          />
         )}
 
         {/* BROWSER TAB -- live iframe + screenshot */}
@@ -993,15 +1170,7 @@ export default function FloatingPreviewPanel({
                     {browserLoading && (
                       <div style={{ padding: "20px", color: "var(--text-secondary)", fontSize: "12px" }}>Capturing screenshot...</div>
                     )}
-                    {!browserLoading && browserImgUrl && (
-                      <>
-                        <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginBottom: "5px" }}>
-                          Snapshot -- auto-refresh 10s.{secondsAgo !== null ? ` Last captured: ${secondsAgo}s ago` : ""}
-                        </div>
-                        <img src={browserImgUrl} alt="Browser snapshot" style={{ width: "100%", display: "block", borderRadius: "3px", border: "1px solid var(--border)" }} />
-                      </>
-                    )}
-                    {!browserLoading && !browserImgUrl && !liveUrl && (
+                    {!browserLoading && !liveUrl && (
                       <div style={{ padding: "20px", color: "var(--text-secondary)", fontSize: "12px" }}>
                         Paste a URL and press Go to view the site live; use Screenshot to capture an image.
                       </div>
@@ -1027,11 +1196,6 @@ export default function FloatingPreviewPanel({
                     setGdriveFolderId("root");
                     setGdriveFolderIdStack(["root"]);
                     setGdriveError(null);
-                  } else if (v === "__github__") {
-                    setGithubSelectedRepo(null);
-                    setGithubPath("");
-                    setGithubPathStack([]);
-                    setGithubError(null);
                   }
                 }}
                 style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-primary)", padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontFamily: "inherit" }}
@@ -1078,18 +1242,6 @@ export default function FloatingPreviewPanel({
                   <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{gdriveFolderId === "root" ? "My Drive" : "Folder"}</span>
                 </>
               )}
-              {filesBucket === "__github__" && (
-                <>
-                  {githubSelectedRepo ? (
-                    <>
-                      <button type="button" onClick={() => { if (githubPathStack.length > 0) { const prev = githubPathStack[githubPathStack.length - 1]; setGithubPath(prev); setGithubPathStack((s) => s.slice(0, -1)); } else { setGithubSelectedRepo(null); setGithubPath(""); setGithubPathStack([]); } }} style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--bg-elevated)", color: "var(--text-primary)", fontSize: "11px", cursor: "pointer", fontFamily: "inherit" }}>^ Up</button>
-                      <span style={{ fontSize: "11px", color: "var(--text-muted)", wordBreak: "break-all" }}>{githubSelectedRepo}{githubPath ? ` / ${githubPath}` : ""}</span>
-                    </>
-                  ) : (
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Select a repo</span>
-                  )}
-                </>
-              )}
               {filesBucket !== "__gdrive__" && filesBucket !== "__github__" && (
               <>
               <button
@@ -1108,7 +1260,14 @@ export default function FloatingPreviewPanel({
             </div>
             {(filesBucket !== "__gdrive__" && filesBucket !== "__github__" && filesError) && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{filesError}</div>}
             {filesBucket === "__gdrive__" && gdriveError && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{gdriveError}</div>}
-            {filesBucket === "__github__" && githubError && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{githubError}</div>}
+            {filesBucket === "__github__" ? (
+              <GitHubFileBrowser
+                connectedIntegrations={connectedIntegrations}
+                openGithubFileInCode={openGithubFileInCode}
+                setSelectedFileForView={setSelectedFileForView}
+                onTabChange={onTabChange}
+              />
+            ) : (
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "8px" }}>
               {filesBucket === "__gdrive__" && (
                 <>
@@ -1140,51 +1299,6 @@ export default function FloatingPreviewPanel({
                     );
                   })}
                   {!gdriveLoading && (Array.isArray(gdriveFiles) ? gdriveFiles : []).length === 0 && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Empty</div>}
-                </>
-              )}
-              {filesBucket === "__github__" && !githubSelectedRepo && (
-                <>
-                  {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading repos...</div>}
-                  {!githubLoading && githubRepos.map((repo) => (
-                    <div key={repo.full_name}>
-                      <button type="button" onClick={() => setGithubSelectedRepo(repo.full_name)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                        <span style={{ color: "var(--accent)" }}>[dir]</span> {repo.full_name}
-                      </button>
-                    </div>
-                  ))}
-                  {!githubLoading && githubRepos.length === 0 && !githubError && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>No repos</div>}
-                </>
-              )}
-              {filesBucket === "__github__" && githubSelectedRepo && (
-                <>
-                  {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading...</div>}
-                  {!githubLoading && githubFiles.filter((item) => item.type === "dir").map((item) => (
-                    <div key={item.path}>
-                      <button type="button" onClick={() => { setGithubPathStack((s) => [...s, githubPath]); setGithubPath(githubPath + item.name + "/"); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                        <span style={{ color: "var(--accent)" }}>[dir]</span> {item.name}
-                      </button>
-                    </div>
-                  ))}
-                  {!githubLoading && githubFiles.filter((item) => item.type === "file").length > 0 && (
-                    <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "8px", marginBottom: "4px", textTransform: "uppercase" }}>Files</div>
-                  )}
-                  {!githubLoading && githubFiles.filter((item) => item.type === "file").map((item) => {
-                    const fullPath = githubPath + item.name;
-                    const isText = /\.(md|txt|json|js|jsx|ts|tsx|html|css|yml|yaml|sh|env)$/i.test(item.name);
-                    const ext = (item.name || "").split(".").pop().toLowerCase();
-                    const isPreviewable = previewableExtensions.has(ext);
-                    return (
-                      <div key={item.path} style={{ display: "flex", alignItems: "center", width: "100%" }}>
-                        <button type="button" onClick={() => openGithubFileInCode(githubSelectedRepo, fullPath, item.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                          <span style={{ color: "var(--text-muted)" }}>[doc]</span> {item.name}
-                        </button>
-                        {isPreviewable && (
-                          <button type="button" onClick={() => { setSelectedFileForView({ key: item.name || fullPath, url: `/api/integrations/github/raw?repo=${encodeURIComponent(githubSelectedRepo)}&path=${encodeURIComponent(fullPath)}`, ext }); onTabChange && onTabChange("view"); }} style={{ flexShrink: 0, padding: "4px 8px", fontSize: "11px", border: "1px solid var(--border)", borderRadius: "4px", background: "var(--bg-elevated)", color: "var(--text-primary)", cursor: "pointer", fontFamily: "inherit" }}>View</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {!githubLoading && githubFiles.length === 0 && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Empty</div>}
                 </>
               )}
               {filesBucket !== "__gdrive__" && filesBucket !== "__github__" && (
@@ -1242,6 +1356,7 @@ export default function FloatingPreviewPanel({
                 </>
               )}
             </div>
+            )}
           </div>
         )}
 
@@ -1347,8 +1462,16 @@ export default function FloatingPreviewPanel({
               <div style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", fontSize: "10px", color: "var(--text-muted)" }}>Code -- edit or paste; use Files tab to open from R2</div>
             )}
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-              <div style={{ display: hasRealDiffFromChat || diffMode ? "block" : "none", height: "100%", minHeight: 0 }}>
+              {(hasRealDiffFromChat || diffMode) && (
+              <div style={{ display: "block", height: "100%", minHeight: 0 }}>
                 <DiffEditor
+                  key={
+                    hasRealDiffFromChat
+                      ? `diff-chat-${monacoDiffFromChat.filename || "x"}`
+                      : proposedFileChange
+                        ? `diff-prop-${proposedFileChange.filename || "file"}`
+                        : `diff-mode-${codeFilename || "code"}`
+                  }
                   original={hasRealDiffFromChat ? monacoDiffFromChat.original : (diffMode ? codeContent ?? "" : "")}
                   modified={hasRealDiffFromChat ? monacoDiffFromChat.modified : (diffMode ? (proposedContent ?? "") : "")}
                   language={getMonacoLanguage(hasRealDiffFromChat ? monacoDiffFromChat.filename : codeFilename)}
@@ -1361,8 +1484,7 @@ export default function FloatingPreviewPanel({
                     fontSize: 13,
                     fontFamily: "'JetBrains Mono','Fira Code',Menlo,monospace",
                   }}
-                  onMount={(editors, monaco) => {
-                    diffEditorRef.current = editors;
+                  onMount={(_editors, monaco) => {
                     if (monaco) {
                       const s = getComputedStyle(document.documentElement);
                       const get = (v) => s.getPropertyValue(v).trim() || undefined;
@@ -1392,6 +1514,7 @@ export default function FloatingPreviewPanel({
                   }}
                 />
               </div>
+              )}
               <div style={{ display: !hasRealDiffFromChat && !diffMode ? "block" : "none", height: "100%", minHeight: 0 }}>
               <Editor
                 height="100%"
@@ -1446,9 +1569,36 @@ export default function FloatingPreviewPanel({
         {/* TERMINAL TAB */}
         {activeTab === "terminal" && (
           <div className="agent-panel-terminal" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 10px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              {(terminalWsState === "disconnected" || terminalWsState === "error") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      if (terminalWsRef.current) terminalWsRef.current.close();
+                    } catch (_) {}
+                    terminalWsRef.current = null;
+                    terminalSessionIdRef.current = null;
+                    setTerminalUserReconnect((n) => n + 1);
+                  }}
+                  style={{
+                    fontSize: "12px",
+                    padding: "4px 10px",
+                    cursor: "pointer",
+                    borderRadius: "4px",
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-elevated)",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  Reconnect
+                </button>
+              )}
+              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Reconnect if the shell stops responding.</span>
+            </div>
             <div ref={terminalOutputRef} style={{ flex: 1, overflow: "auto", padding: "10px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
               {terminalWsState === "connecting" && "Connecting to terminal..."}
-              {terminalWsState === "error" && "Connection error. Check /api/agent/terminal/ws."}
+              {terminalWsState === "error" && "Connection error."}
               {terminalWsState === "disconnected" && "Disconnected."}
               {terminalOutput}
             </div>

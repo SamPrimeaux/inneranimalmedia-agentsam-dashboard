@@ -74,7 +74,17 @@ When the user asks to “add a table” or “track X”, prefer extending or us
   - Recent activity: `SELECT deployed_at FROM cloudflare_deployments WHERE worker_name = ? AND deployed_at >= ? ORDER BY deployed_at DESC LIMIT 10`.
   - Overview stats: deploy count last 7 days; deploy count by day; activity strip “deploy” rows (last 24h); 24h deploy count.
 - **Migrations:** 113 (create table + index), 114 (timing columns), 115 (deployment_notes).
-- **Backfill / manual record:** Run `DEPLOY_SECONDS=<seconds> ./scripts/post-deploy-record.sh` after a manual deploy, or INSERT with same columns (use datetime('now') for deployed_at/created_at).
+- **Backfill / manual record:** Run `DEPLOY_SECONDS=<seconds> ./scripts/post-deploy-record.sh` after a manual deploy, or INSERT with same columns (use datetime('now') for deployed_at/created_at). **API:** `POST /api/internal/record-deploy` (X-Internal-Secret) also inserts one row; see docs/DEPLOY_TRACKING.md.
+
+---
+
+### ci_di_workflow_runs (CI/DI workflow run history)
+
+- **Purpose:** Record workflow runs (e.g. autorag_sync from post-merge hook or cron) for audit and CI/DI visibility. Complements cloudflare_deployments (which is deploy-specific).
+- **Written by:** `scripts/record-workflow-run.sh`, called from `.githooks/post-merge` after populate-autorag.sh or run manually/cron.
+- **Schema (D1):** id (TEXT PK), workflow_name (TEXT NOT NULL), trigger_type (TEXT NOT NULL), triggered_at (TEXT), completed_at (TEXT), status (TEXT DEFAULT 'running'), details_text (TEXT), created_at (TEXT). workflow_name e.g. 'autorag_sync'; trigger_type e.g. 'post-merge', 'cron', 'manual'.
+- **Migration:** 140 (`migrations/140_ci_di_workflow_runs.sql`). Apply once: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/140_ci_di_workflow_runs.sql`.
+- **Reference:** docs/AUTORAG_SYNC.md (setup, test/validate, D1 recording).
 
 ---
 
@@ -86,6 +96,7 @@ When the user asks to “add a table” or “track X”, prefer extending or us
 | Cost ($)             | spend_ledger          | amount_usd, category='ai_tools'\|'usage', provider, date/occurred_at |
 | Time spent           | project_time_entries  | project_id='inneranimalmedia', start_time, end_time, duration_seconds |
 | Deploy history       | cloudflare_deployments | deployment_id, worker_name='inneranimalmedia', status, deployed_at, build_time_seconds, deploy_time_seconds; or run scripts/post-deploy-record.sh after manual deploy |
+| CI/DI workflow runs  | ci_di_workflow_runs   | workflow_name, trigger_type, status, triggered_at; or run scripts/record-workflow-run.sh after autorag sync / cron |
 | Agent $ gauge        | (reads spend_ledger)  | No direct write; update spend_ledger. |
 | Agent token view     | (reads agent_telemetry) | No direct write; update agent_telemetry. |
 

@@ -1,2 +1,47 @@
 CLOUDFLARE_ACCOUNT_ID=ede6590ac0d2fb7daf155b35653457b2
 CLOUDFLARE_API_TOKEN=kwmh_Y4t_zu_EqG62sjyxilTQfxdAl3yev83F6K_
+# =============================================================================
+# Local CLI — ./scripts/with-cloudflare-env.sh needs these
+# =============================================================================
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_API_TOKEN=
+
+# =============================================================================
+# Same token on BOTH workers — main worker validates / proxies MCP; MCP serves /mcp
+# Also set Authorization Bearer in .cursor/mcp.json (gitignored) for Cursor.
+# =============================================================================
+MCP_AUTH_TOKEN=
+
+# =============================================================================
+# Main worker (inneranimalmedia) — plain [vars] (also in wrangler.production.toml)
+# =============================================================================
+CLOUDFLARE_IMAGES_ACCOUNT_HASH= g7wf09fCONpnidkRnR_5vw
+TENANT_ID= tenant_sam_primeaux
+GITHUB_CLIENT_ID=Ov23li6BZYxjVtGUWibX
+GOOGLE_CLIENT_ID=427617292678-gf3u47lpf876q7miq31hel2ms6tcr2f8.apps.googleusercontent.com
+
+# =============================================================================
+# Main worker (inneranimalmedia) — secrets
+# =============================================================================
+INTERNAL_API_SECRET=
+WORKER_SECRET=
+DEPLOY_TRACKING_TOKEN=
+GITHUB_CLIENT_SECRET=
+GOOGLE_OAUTH_CLIENT_SECRET=
+RESEND_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+GOOGLE_AI_API_KEY=
+AI_GATEWAY_TOKEN=
+AI_GATEWAY_BASE_URL=
+AI_GATEWAY_OPENAI_BASE_URL=
+CF_AIG_TOKEN=
+CLOUDFLARE_IMAGES_API_TOKEN=
+CLOUDFLARE_IMAGES_TOKEN=
+PTY_AUTH_TOKEN=080670ad4bef2201e69c4af7f392d5c493e67125dd9bdb8c1d5bf5aa2758c15e
+TERMINAL_SECRET=
+TERMINAL_WS_URL=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+VAULT_MASTER_KEY=

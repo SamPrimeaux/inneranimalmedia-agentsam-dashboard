@@ -258,6 +258,39 @@
         /* === MCP: Agent grid === */
         .agent-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 24px; }
         @media (max-width: 768px) { .agent-grid { grid-template-columns: 1fr; } }
+        .text-secondary { color: var(--text-secondary); font-size: 13px; }
+        .surface-card { background: color-mix(in srgb, var(--bg-elevated) 88%, transparent); border: 1px solid var(--border); border-radius: 10px; backdrop-filter: blur(12px); }
+        .mcp-workflows-panel { background: var(--bg-elevated); border: none; border-radius: 0; overflow: hidden; margin-bottom: 0; }
+        .mcp-workflows-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg-nav) 85%, transparent); }
+        .mcp-workflows-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-primary); }
+        .mcp-workflows-refresh { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-size: 12px; cursor: pointer; font-family: inherit; }
+        .mcp-workflows-refresh:hover { border-color: var(--accent); color: var(--accent); }
+        .workflows-list { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; }
+        .workflow-card { padding: 14px; }
+        .workflow-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+        .workflow-name { font-weight: 600; font-size: 15px; color: var(--text-primary); }
+        .workflow-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4; }
+        .workflow-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn-run { padding: 6px 14px; border-radius: 6px; border: none; background: var(--accent); color: var(--bg-canvas); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .btn-run:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-secondary { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; }
+        .btn-secondary:hover { border-color: var(--text-secondary); }
+        .status-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); color: var(--text-secondary); }
+        .status-badge.status-active, .status-badge.status-success, .status-badge.status-completed { background: color-mix(in srgb, var(--success) 22%, transparent); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); color: var(--success); }
+        .status-badge.status-draft { background: color-mix(in srgb, var(--text-secondary) 15%, transparent); }
+        .status-badge.status-running { background: color-mix(in srgb, var(--accent) 20%, transparent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--accent); }
+        .status-badge.status-failed { background: color-mix(in srgb, var(--danger) 18%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--danger); }
+        .workflow-runs-backdrop { position: fixed; inset: 0; background: var(--bg-overlay); z-index: 12000; }
+        .workflow-runs-modal { position: fixed; inset: 0; z-index: 12001; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
+        .workflow-runs-modal:not([hidden]) { pointer-events: auto; }
+        .workflow-runs-modal-inner { max-width: 520px; width: 100%; max-height: 72vh; display: flex; flex-direction: column; pointer-events: auto; }
+        .workflow-runs-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+        .workflow-runs-title { font-size: 16px; font-weight: 600; margin: 0; color: var(--text-primary); }
+        .workflow-runs-close { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-canvas); color: var(--text-primary); cursor: pointer; font-size: 18px; line-height: 1; font-family: inherit; }
+        .workflow-runs-close:hover { border-color: var(--accent); }
+        .workflow-runs-body { padding: 12px 16px 16px; overflow-y: auto; }
+        .run-row { display: grid; grid-template-columns: minmax(72px,auto) 1fr auto auto; gap: 8px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
+        .run-row:last-child { border-bottom: none; }
         .agent-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; border-left-width: 4px; padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: box-shadow 0.2s; }
         .agent-card.pulsing { animation: mcpCardPulse 1s ease-in-out; }
         @keyframes mcpCardPulse { 0%,100% { box-shadow: none; } 50% { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); } }
@@ -293,7 +326,10 @@
         .workspace-subtitle { font-size: 12px; color: var(--text-secondary); }
         .workspace-close { background: none; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 6px; width: 30px; height: 30px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: color 0.1s, border-color 0.1s; }
         .workspace-close:hover { color: var(--text-primary); border-color: var(--text-secondary); }
-        .workspace-body { display: flex; flex: 1; overflow: hidden; }
+        .workspace-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+        .workspace-body-main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+        .workspace-operator-workflows { flex-shrink: 0; border-top: 1px solid var(--border); max-height: 280px; display: flex; flex-direction: column; background: var(--bg-elevated); }
+        .workspace-operator-workflows[hidden] { display: none !important; }
         .workspace-chat { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
         .workspace-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
         .ws-msg { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
@@ -335,6 +371,7 @@
         .health-badge.degraded { background: rgba(230,184,0,0.15); color: var(--warning); }
         .health-badge.down { background: rgba(231,76,60,0.15); color: var(--error); }
         .health-badge.unverified { background: var(--border); color: var(--text-secondary); }
+        .health-badge.unreachable { background: rgba(231,76,60,0.12); color: var(--error); }
         .mcp-add-form { padding: 14px 16px; border-top: 1px solid var(--border); display: none; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
         .mcp-add-form.open { display: flex; }
         .mcp-add-form input, .mcp-add-form select { flex: 1; min-width: 160px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-size: 13px; font-family: inherit; }
@@ -451,6 +488,16 @@
                 </div>
             </div>
             <div class="agent-grid" id="agentGrid"></div>
+            <div class="workflow-runs-backdrop" id="workflowRunsBackdrop" hidden aria-hidden="true"></div>
+            <div class="workflow-runs-modal" id="workflowRunsModal" hidden role="dialog" aria-modal="true" aria-labelledby="workflowRunsTitle" aria-hidden="true">
+                <div class="workflow-runs-modal-inner surface-card">
+                    <div class="workflow-runs-modal-header">
+                        <h2 class="workflow-runs-title" id="workflowRunsTitle">Workflow Run History</h2>
+                        <button type="button" class="workflow-runs-close" id="workflowRunsClose" aria-label="Close">&times;</button>
+                    </div>
+                    <div class="workflow-runs-body" id="workflowRunsBody"></div>
+                </div>
+            </div>
             <div class="mcp-services-panel">
                 <div class="mcp-services-toggle" id="svcToggle">
                     <span class="mcp-services-toggle-title">MCP Connections <span id="svcCount" style="color:var(--text-secondary);font-weight:400;font-size:13px;"></span></span>
@@ -458,8 +505,8 @@
                 </div>
                 <div class="mcp-services-body" id="svcBody">
                     <table class="mcp-svc-table">
-                        <thead><tr><th>Service</th><th>Endpoint</th><th>Health</th></tr></thead>
-                        <tbody id="svcTableBody"><tr><td colspan="3" style="color:var(--text-secondary);padding:16px;">Loading connections...</td></tr></tbody>
+                        <thead><tr><th>Endpoint</th><th>Tenants</th><th>Health</th><th></th></tr></thead>
+                        <tbody id="svcTableBody"><tr><td colspan="4" style="color:var(--text-secondary);padding:16px;">Loading connections...</td></tr></tbody>
                     </table>
                     <div class="mcp-services-footer">
                         <button type="button" class="btn btn-primary" id="addSvcBtn" style="font-size:12px;padding:6px 14px;">+ New Connection</button>
@@ -487,6 +534,7 @@
                     <button type="button" class="workspace-close" id="wsClose" aria-label="Close">&#x2715;</button>
                 </div>
                 <div class="workspace-body">
+                    <div class="workspace-body-main">
                     <div class="workspace-chat">
                         <div class="workspace-messages" id="wsMessages"></div>
                         <div class="workspace-input-row">
@@ -516,6 +564,14 @@
                             </div>
                         </div>
                     </div>
+                    </div>
+                    <div class="mcp-workflows-panel workspace-operator-workflows" id="mcpWorkflowsPanel" hidden>
+                        <div class="mcp-workflows-head">
+                            <span class="mcp-workflows-title">Operator workflows</span>
+                            <button type="button" class="mcp-workflows-refresh" id="mcpWorkflowsRefresh">Refresh</button>
+                        </div>
+                        <div id="workflows-list" class="workflows-list"></div>
+                    </div>
                 </div>
             </div>
             <div class="mcp-toast" id="mcpToast"></div>
@@ -525,17 +581,19 @@
     <div class="overlay" id="overlay"></div>
     <footer class="dashboard-mobile-footer" aria-hidden="true"></footer>
 
+    <script src="/static/dashboard/mcp-workflows-panel.js"></script>
     <script>
         (function () {
             var BASE = window.location.origin;
             var AGENTS = [
-                { id: 'mcp_agent_architect', name: 'Architect', role: 'Plan / Brainstorm', color: '#4A90D9', tools: ['d1_query','r2_list','r2_read'] },
-                { id: 'mcp_agent_builder',   name: 'Builder',   role: 'Code / Generate',   color: '#C0392B', tools: ['d1_query','d1_write','r2_list','r2_read','r2_write'] },
-                { id: 'mcp_agent_tester',    name: 'Tester',    role: 'Debug / Inspect',   color: '#27AE60', tools: ['d1_query','r2_list','r2_read'] },
-                { id: 'mcp_agent_operator',  name: 'Operator',  role: 'Deploy / Monitor',  color: '#E6B800', tools: ['d1_query','r2_list','r2_read','worker_deploy'] }
+                { id: 'mcp_agent_architect', name: 'Architect', role: 'Plan / Brainstorm', color: '#4A90D9', toolCategories: ['context','query','database'] },
+                { id: 'mcp_agent_builder',   name: 'Builder',   role: 'Code / Generate',   color: '#C0392B', toolCategories: ['database','storage','integrations','execute','image'] },
+                { id: 'mcp_agent_tester',    name: 'Tester',    role: 'Debug / Inspect',   color: '#27AE60', toolCategories: ['database','browser','quality','telemetry','context'] },
+                { id: 'mcp_agent_operator',  name: 'Operator',  role: 'Deploy / Monitor',  color: '#E6B800', toolCategories: ['platform','terminal','storage','telemetry','database'] }
             ];
             var agentData = {};
             var activeWorkspaceId = null;
+            var activeConversationId = null;
             var wsConversation = [];
             var pollTimer = null;
             var cmdSuggestions = [];
@@ -562,7 +620,7 @@
                     var pct = a.progress_pct || 0;
                     var logs = []; try { logs = JSON.parse(a.logs_json || '[]'); } catch(e) {}
                     var lastLogs = logs.slice(-3);
-                    var tools = []; try { var tp = JSON.parse(a.tool_permissions_json || '{}'); tools = tp.allowed_tools || cfg.tools || []; } catch(e) { tools = cfg.tools || []; }
+                    var tools = []; try { var tp = JSON.parse(a.tool_permissions_json || '{}'); tools = tp.allowed_tools || cfg.toolCategories || []; } catch(e) { tools = cfg.toolCategories || []; }
                     var shownTools = tools.slice(0,3);
                     var extraTools = tools.length > 3 ? '+' + (tools.length-3) : '';
                     var progressHtml = pct > 0 ? '<div class="agent-progress-wrap"><div class="agent-progress-bar" style="width:'+pct+'%;background:'+cfg.color+'"></div></div>' : '';
@@ -610,18 +668,24 @@
                 var cfg = AGENTS.find(function(x){return x.id===agentId;}) || {};
                 activeWorkspaceId = agentId;
                 if (sessionId) wsSessionId = sessionId;
+                activeConversationId = null;
+                var wfPanel = document.getElementById('mcpWorkflowsPanel');
+                if (wfPanel) {
+                    wfPanel.hidden = agentId !== 'mcp_agent_operator';
+                    if (!wfPanel.hidden && window.loadMcpWorkflows) window.loadMcpWorkflows();
+                }
                 document.getElementById('wsAccentBar').style.background = cfg.color || 'var(--accent)';
                 document.getElementById('wsTitle').textContent = cfg.name || agentId;
                 document.getElementById('wsSubtitle').textContent = cfg.role || '';
                 document.getElementById('wsSend').style.background = cfg.color || 'var(--accent)';
                 var toolsEl = document.getElementById('wsTools');
                 toolsEl.innerHTML = '<div class="ws-msg thinking" style="margin:0;">Loading tools...</div>';
-                fetch(BASE + '/api/mcp/tools').then(function(r){ return r.ok ? r.json() : Promise.reject(); }).then(function(d) {
+                fetch(BASE + '/api/mcp/tools?agent_id=' + encodeURIComponent(agentId)).then(function(r){ return r.ok ? r.json() : Promise.reject(); }).then(function(d) {
                     var list = d.tools || d || [];
                     if (!Array.isArray(list) || list.length === 0) {
                         var merged = [];
-                        AGENTS.forEach(function(a){ (a.tools||[]).forEach(function(t){ if (merged.indexOf(t)===-1) merged.push(t); }); });
-                        list = merged.map(function(t){ return { tool_name: t, category: /query|list|read/.test(t) ? 'read' : /write|deploy/.test(t) ? 'write' : 'execute' }; });
+                        AGENTS.forEach(function(a){ (a.toolCategories||[]).forEach(function(t){ if (merged.indexOf(t)===-1) merged.push(t); }); });
+                        list = merged.map(function(t){ return { tool_name: t, category: 'execute' }; });
                     }
                     var byCat = { read: [], write: [], execute: [] };
                     list.forEach(function(t) {
@@ -641,7 +705,7 @@
                     });
                     toolsEl.innerHTML = html || '<div style="font-size:12px;color:var(--text-secondary);">No tools assigned</div>';
                 }).catch(function() {
-                    var fallback = (cfg.tools || []).map(function(t){ return '<div class="ws-tool-row"><div class="ws-tool-dot" style="background:'+(cfg.color||'var(--accent)')+'"></div><span>'+escHtml(t)+'</span></div>'; }).join('');
+                    var fallback = (cfg.toolCategories || []).map(function(t){ return '<div class="ws-tool-row"><div class="ws-tool-dot" style="background:'+(cfg.color||'var(--accent)')+'"></div><span>'+escHtml(t)+'</span></div>'; }).join('');
                     toolsEl.innerHTML = fallback || '<div style="font-size:12px;color:var(--text-secondary);">No tools assigned</div>';
                 });
                 var a = agentData[agentId] || {};
@@ -658,7 +722,19 @@
                 if (initialPrompt) { setTimeout(function(){ document.getElementById('wsInput').value = initialPrompt; sendWsMessage(); }, 300); }
             };
 
-            document.getElementById('wsClose').onclick = function() { document.getElementById('workspaceOverlay').classList.remove('open'); activeWorkspaceId = null; };
+            document.getElementById('wsClose').onclick = function() {
+                document.getElementById('workspaceOverlay').classList.remove('open');
+                var cid = activeConversationId;
+                activeWorkspaceId = null;
+                activeConversationId = null;
+                if (cid) {
+                    fetch(BASE + '/api/agent/sessions/' + encodeURIComponent(cid), {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'completed' })
+                    });
+                }
+            };
             document.querySelectorAll('.ws-section-header').forEach(function(h){ h.onclick = function(){ this.nextElementSibling.classList.toggle('collapsed'); }; });
             document.getElementById('wsInput').addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendWsMessage(); } });
             document.getElementById('wsSend').onclick = sendWsMessage;
@@ -667,7 +743,12 @@
                 { pattern: /\b(?:list\s+my\s+)?r2\s+files?\b|\br2\s*list\b|\blist\s+r2\b/i, tool_name: 'r2_list', params: {} },
                 { pattern: /\br2\s+read\b|\bread\s+r2\b/i, tool_name: 'r2_read', params: {} },
                 { pattern: /\bd1\s+query\b|\bquery\s+d1\b|\brun\s+d1\b/i, tool_name: 'd1_query', params: {} },
-                { pattern: /\bdeploy\s+(?:worker|production)\b|\bworker\s+deploy\b/i, tool_name: 'worker_deploy', params: {} }
+                { pattern: /\bdeploy\s+(?:worker|production)\b|\bworker\s+deploy\b|\bdeploy\s+worker\b/i, tool_name: 'worker_deploy', params: {} },
+                { pattern: /\blist\s+images\b|\bcf\s*images\s*list\b/i, tool_name: 'cf_images_list', params: {} },
+                { pattern: /\bcheck\s+a11y\b|\ba11y\s+(?:check|audit)\b/i, tool_name: 'a11y_audit_webpage', params: {} },
+                { pattern: /\blist\s+github\s+repos?\b|\bgithub\s+repos?\b/i, tool_name: 'github_repos', params: {} },
+                { pattern: /^\s*telemetry\s*$|\btelemetry\s+query\b/i, tool_name: 'telemetry_query', params: {} },
+                { pattern: /\bexecution\s+plan\b|\bgenerate\s+execution\s+plan\b/i, tool_name: 'generate_execution_plan', params: {} }
             ];
             function matchToolIntent(text) {
                 var t = (text || '').trim().toLowerCase();
@@ -710,7 +791,10 @@
                     .then(function(d) {
                         thinking.remove();
                         var reply = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text : (d.response || d.message || (d.content && typeof d.content === 'string' ? d.content : null) || (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || JSON.stringify(d));
-                        if (d.conversation_id && !wsSessionId) wsSessionId = d.conversation_id;
+                        if (d.conversation_id) {
+                            activeConversationId = d.conversation_id;
+                            if (!wsSessionId) wsSessionId = d.conversation_id;
+                        }
                         var re = document.createElement('div'); re.className = 'ws-msg assistant'; re.textContent = reply; msgs.appendChild(re); msgs.scrollTop = msgs.scrollHeight;
                         wsConversation.push({ role: 'assistant', content: reply });
                     })
@@ -777,10 +861,55 @@
                 svcLoaded = true;
                 fetch(BASE + '/api/mcp/services').then(function(r){ return r.json(); }).then(function(d) {
                     var svcs = Array.isArray(d.services) ? d.services : (Array.isArray(d.results) ? d.results : []);
-                    document.getElementById('svcCount').textContent = '('+svcs.length+')';
+                    document.getElementById('svcCount').textContent = '('+svcs.length+' services, grouped by endpoint)';
                     var tbody = document.getElementById('svcTableBody');
-                    tbody.innerHTML = svcs.length ? svcs.map(function(s) { var h = (s.health_status||'unverified').toLowerCase(); return '<tr><td><strong>'+escHtml(s.service_name||s.name||s.id)+'</strong></td><td style="font-size:11px;font-family:monospace;color:var(--text-secondary)">'+escHtml(s.endpoint_url||s.url||'—')+'</td><td><span class="health-badge '+h+'">'+(h.charAt(0).toUpperCase()+h.slice(1))+'</span></td></tr>'; }).join('') : '<tr><td colspan="3" style="color:var(--text-secondary)">No connections registered</td></tr>';
-                }).catch(function() { document.getElementById('svcTableBody').innerHTML = '<tr><td colspan="3" style="color:var(--error)">Failed to load</td></tr>'; });
+                    if (!svcs.length) {
+                        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-secondary)">No connections registered</td></tr>';
+                        return;
+                    }
+                    var groups = {};
+                    svcs.forEach(function(s) {
+                        var ep = String(s.endpoint_url || s.url || '');
+                        if (!groups[ep]) groups[ep] = { endpoint: ep, tenants: [], sampleIds: [] };
+                        groups[ep].tenants.push(s.service_name || s.name || s.id);
+                        if (s.id) groups[ep].sampleIds.push(s.id);
+                    });
+                    var rows = Object.keys(groups).map(function(ep) {
+                        var g = groups[ep];
+                        var n = g.tenants.length;
+                        var repId = g.sampleIds[0] || '';
+                        var h = 'unverified';
+                        for (var si = 0; si < svcs.length; si++) {
+                            if (String(svcs[si].endpoint_url || svcs[si].url || '') === ep) {
+                                h = svcs[si].health_status || h;
+                                break;
+                            }
+                        }
+                        h = String(h).toLowerCase();
+                        var badgeId = 'hb-' + (repId || 'x').replace(/[^a-z0-9]+/gi,'');
+                        return '<tr data-endpoint="'+escAttr(ep)+'"><td style="font-size:11px;font-family:monospace;color:var(--text-secondary)">'+escHtml(ep||'—')+'</td><td><strong>'+n+'</strong> <span style="color:var(--text-secondary);font-size:11px;">'+escHtml(g.tenants.slice(0,3).join(', ') + (n > 3 ? '...' : ''))+'</span></td><td><span class="health-badge '+h+'" id="'+badgeId+'">'+(h.charAt(0).toUpperCase()+h.slice(1))+'</span></td><td>'+(repId ? '<button type="button" class="btn-secondary svc-test-btn" data-svc-id="'+escAttr(repId)+'" data-badge-id="'+escAttr(badgeId)+'" style="font-size:11px;padding:4px 10px;">Test</button>' : '')+'</td></tr>';
+                    }).join('');
+                    tbody.innerHTML = rows;
+                    tbody.querySelectorAll('.svc-test-btn').forEach(function(btn) {
+                        btn.addEventListener('click', function() {
+                            var sid = btn.getAttribute('data-svc-id');
+                            var bid = btn.getAttribute('data-badge-id');
+                            btn.disabled = true;
+                            fetch(BASE + '/api/mcp/services/' + encodeURIComponent(sid) + '/ping', { method: 'POST', credentials: 'same-origin' })
+                                .then(function(r){ return r.json(); })
+                                .then(function(x) {
+                                    var el = document.getElementById(bid);
+                                    if (el && x.health_status) {
+                                        var nh = String(x.health_status).toLowerCase();
+                                        el.className = 'health-badge ' + nh;
+                                        el.textContent = nh.charAt(0).toUpperCase() + nh.slice(1);
+                                    }
+                                })
+                                .catch(function(){})
+                                .finally(function(){ btn.disabled = false; });
+                        });
+                    });
+                }).catch(function() { document.getElementById('svcTableBody').innerHTML = '<tr><td colspan="4" style="color:var(--error)">Failed to load</td></tr>'; });
             }
             document.getElementById('addSvcBtn').onclick = function() { document.getElementById('addSvcForm').classList.toggle('open'); };
             document.getElementById('saveSvcBtn').onclick = function() {

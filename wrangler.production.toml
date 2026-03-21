@@ -4,14 +4,13 @@ compatibility_date = "2026-01-20"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 preview_urls = true
-no_bundle = true
-packages = "external"
+no_bundle = false
 
 [build]
 command = ""
 
 [esbuild]
-external = ["@cloudflare/playwright"]
+external = []
 
 [[routes]]
 pattern = "inneranimalmedia.com/*"

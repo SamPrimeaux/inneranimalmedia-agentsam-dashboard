@@ -15,7 +15,7 @@ alwaysApply: true
 - **URL:** `https://mcp.inneranimalmedia.com/mcp`
 - **Auth:** `Authorization: Bearer <token>` (token is in `.cursor/mcp.json` only; do not commit it elsewhere).
 - **Required header:** `Accept: application/json, text/event-stream` (server returns 406 without it).
-- **Server:** InnerAnimalMedia MCP v1.0.0, protocol 2024-11-05, capabilities: tools (listChanged: true).
+- **Server:** InnerAnimalMedia MCP v1.0.0, protocol 2024-11-05, capabilities: tools (listChanged: false).
 
 ## Health check (use this exact command)
 

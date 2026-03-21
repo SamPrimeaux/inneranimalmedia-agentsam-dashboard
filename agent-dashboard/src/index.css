@@ -1,9 +1,23 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg-canvas);
+}
+
 /* Agent dashboard mount - shell provides dimensions */
 #agent-dashboard-root {
   display: block;
   box-sizing: border-box;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 /* Mode colors (Ask, Debug, Plan, Agent) - use var(--mode-*) in components */
@@ -107,4 +121,86 @@ select option {
 }
 .add-files-btn:hover {
   background: var(--bg-canvas);
+}
+
+/* ── Mobile tab icon strip ─────────────────────────────────── */
+/* Sits just below the topbar on mobile — always visible */
+.sp-mobile-tabbar {
+  display: none;
+}
+@media (max-width: 768px) {
+  .sp-mobile-tabbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 8px;
+    height: 36px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sp-mobile-tabbar::-webkit-scrollbar { display: none; }
+  .sp-mobile-tabbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 150ms, color 150ms;
+    flex-shrink: 0;
+  }
+  .sp-mobile-tabbar-btn.active {
+    background: var(--bg-canvas);
+    color: var(--accent);
+  }
+  .sp-mobile-tabbar-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* iOS HIG minimum tap target (mobile); dense chrome stays 36px */
+@media (max-width: 768px) {
+  #agent-dashboard-root button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .iam-viewer-icon-strip button,
+  .iam-mobile-icon-toggle button,
+  .add-files-btn {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}
+
+.iam-chat-pane,
+.messages-container {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* ── Safe area + viewport fixes ────────────────────────────── */
+@media (max-width: 768px) {
+  #agent-dashboard-root {
+    height: 100dvh !important;
+    overflow: hidden;
+  }
+  /* Panel on mobile is the bottom sheet */
+  .sp-panel-desktop {
+    display: none !important;
+  }
+}
+@media (min-width: 769px) {
+  .sp-panel-mobile-only {
+    display: none !important;
+  }
 }

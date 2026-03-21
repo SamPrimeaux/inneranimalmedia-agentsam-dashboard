@@ -133,7 +133,7 @@ export default {
         id,
         result: {
           protocolVersion: PROTOCOL_VERSION,
-          capabilities: { tools: { listChanged: true } },
+          capabilities: { tools: { listChanged: false } },
           serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
         },
       });

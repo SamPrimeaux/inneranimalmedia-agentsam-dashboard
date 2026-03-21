@@ -1,3 +1,362 @@
+## [2026-03-21] Playwright screenshot: Cloudflare Images instead of R2
+
+### What was asked
+`worker.js` only: replace R2 put + `r2.dev` `result_url` with multipart upload to Cloudflare Images API; keep DB UPDATE/return. `node --check` + deploy.
+
+### Files changed
+- `worker.js` ~4470–4481: after `page.screenshot`, `FormData` + `Blob` POST to `https://api.cloudflare.com/client/v4/accounts/${imagesAccountId}/images/v1` with `CLOUDFLARE_IMAGES_TOKEN` / account id; `result_url` from `imgJson.result.variants[0]` (fallback `result.id`) or throw.
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker **Version ID `093c6291-cad8-4cb3-8d2a-097ade6d11c8`**; `post-deploy-record.sh`.
+- R2: no.
+- Deploy approved by Sam: yes.
+
+### What is live now
+Inline Playwright path stores screenshot in CF Images; `playwright_jobs.result_url` is variant URL (e.g. imagedelivery). Outer guard still requires `env.DASHBOARD` (unchanged).
+
+### Known issues / next steps
+- If inline path should run without DASHBOARD, relax `if (env.MYBROWSER && env.DASHBOARD && env.DB)` in a follow-up.
+
+---
+
+## [2026-03-21] wrangler Option B: bundle Playwright; size check
+
+### What was asked
+Continue after interruption: size-check `worker.js`, compare gzip to Workers limits, apply approved Option B (`no_bundle = false`, remove `packages = "external"`, `[esbuild] external = []`).
+
+### Files changed
+- `wrangler.production.toml` lines 7–13: `no_bundle = false`; removed `packages = "external"`; `external = []` (drops `@cloudflare/playwright` from externals so Wrangler bundles it).
+
+### Size / limits
+- `worker.js`: **544664 bytes** (~532 KiB), **10567 lines**.
+- **Before Option B** (`--dry-run`, prior `no_bundle = true`): `Total Upload: 12465.65 KiB / gzip: 6019.98 KiB` (full rules upload table including many static modules).
+- **After Option B** (`--dry-run`): `Total Upload: 4034.36 KiB / gzip: 773.41 KiB` — well under typical **10 MiB gzip** paid limit; REST API fallback not required for size.
+
+### Deploy status
+- **Deployed** after Sam **deploy approved**: Worker **Version ID `d1df6ea6-aeb8-48fc-9b8c-4ed673405f4e`**; `post-deploy-record.sh` (D1 `cloudflare_deployments`). Upload **4034.36 KiB / gzip 773.41 KiB**.
+
+### Known issues / next steps
+- Re-test screenshot + tail for `[playwright] browser launched` (module error should be gone).
+
+---
+
+## [2026-03-21] Redeploy after npm install (external @cloudflare/playwright wiring)
+
+### What was asked
+No code changes: clean `npm install` + `npm run deploy` so Wrangler can resolve `no_bundle` + `packages = "external"` + esbuild external `@cloudflare/playwright` from local `node_modules`. Then trigger screenshot and tail for `[playwright] browser launched`.
+
+### Files changed
+- None.
+
+### Deploy status
+- Worker **Version ID `1053f8d9-60d4-4b15-85db-0d382edecb07`**; `post-deploy-record.sh` (D1 `cloudflare_deployments`).
+- R2: no.
+- Screenshot / tail: run locally — `wrangler tail inneranimalmedia --format pretty`, trigger Browser screenshot in agent.
+
+### What is live now
+Same worker code as prior deploy; bundle should now include correct external reference if `node_modules` was present at deploy time.
+
+### Known issues / next steps
+- Confirm tail shows `[playwright] browser launched` or `[playwright] FAILED:` after triggering screenshot.
+
+---
+
+## [2026-03-21] Playwright launch race 10s + FAILED log; agent v107 R2
+
+### What was asked
+Hang at `launch()` — `Promise.race` on `launch` 10s; `console.error('[playwright] FAILED:', …)` in catch. `wrangler whoami`. FloatingPreviewPanel already `completed`/`result_url`; R2 **v107** cache bust.
+
+### Files changed
+- `worker.js`: `browser = await Promise.race([ launch(env.MYBROWSER), 10s reject ])`; catch logs `console.error('[playwright] FAILED:', …)` before job `error` update.
+- `dashboard/agent.html`: `?v=107`.
+- `FloatingPreviewPanel.jsx`: unchanged (poll fix already in v106 source).
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker **Version ID `d683700c-f5e9-474d-b958-f7ee57f8cec3`**; `cloudflare_deployments` **8B848F47-C201-4E01-AFCE-BD95DC748278**.
+- R2 `deploy-to-r2.sh`; `cloudflare_deployments` **6CB215A9-EF99-40FE-BDD5-283445D7A72E**.
+- `deployments`: **124754A8-E787-4FAC-90CA-E815020A7A67** (worker launch race), **328EC1D9-8916-4597-9BA3-D1C207AC5CB1** (R2 v107).
+
+### Notes
+- `wrangler whoami`: account **Info@inneranimals.com's Account**, id `ede6590ac0d2fb7daf155b35653457b2` — does **not** show Browser Rendering / plan tier; confirm in Cloudflare dashboard (Workers Paid + Browser Rendering add-on / quota).
+
+---
+
+## [2026-03-21] Playwright race + Browser poll fix (worker b1507723, agent v106)
+
+### What was asked
+Worker: log after launch, `Promise.race` on `goto` (6s) for hang diagnosis. FloatingPreviewPanel: poll `completed` + `result_url`; treat `error` like failed. Deploy worker + R2 v106 + D1 log both.
+
+### Files changed
+- `worker.js` ~4456–4466: `[playwright] browser launched`; `Promise.race([ page.goto(..., 6000), setTimeout reject goto timeout ])`; then goto completed log + 500ms delay.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` ~414–420: `job.status === 'completed' && job.result_url`; break on `failed` or `error`.
+- `dashboard/agent.html`: `?v=106`.
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker: **Version ID `b1507723-a524-4498-a01c-121662770b6f`**; `cloudflare_deployments` **119B4554-C808-466F-90FE-BE46A42C79CB**.
+- R2: `deploy-to-r2.sh` (agent bundle + `agent.html` v106 + other dashboard assets); `cloudflare_deployments` **EC9654B9-B8E1-4D9F-A96D-F08FFAA2CA81**.
+- `deployments` table: **97E814E7-1B19-45B2-9598-62BB22E9E151** (worker-playwright-race-b1507723), **F957917A-A70F-436C-A7DC-1081BBED606D** (agent-r2-v106-playwright-poll).
+
+### What is live now
+Production worker has bounded `goto`; agent UI polls D1-shaped job rows so existing `completed` jobs with `result_url` can display.
+
+---
+
+## [2026-03-21] Playwright repair deploy (post disk cleanup)
+
+### What was asked
+Full deploy + documentation after freeing disk; validate Playwright screenshot path (domcontentloaded, setTimeout delay, goto log, single browser close).
+
+### Files changed (live in this deploy)
+- `worker.js` `POST /api/playwright/screenshot` inline block (~4453–4481): `waitUntil: 'domcontentloaded'`, `timeout: 8000`, `console.log('[playwright] goto completed')` after `goto`, `await new Promise((r) => setTimeout(r, 500))` before screenshot, `let browser` + single `finally { browser.close() }`. (Also includes earlier `terminal_history` schema-aligned inserts and `[playwright] bindings check` log.)
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker deployed: yes — **Cloudflare Version ID `066f2503-9b7a-47f4-825a-4562171570d5`**.
+- `post-deploy-record.sh`: `59BF15D0-A32C-41CE-9E4E-4598C33A18AB` (`cloudflare_deployments`).
+- `deployments` table: id `A8B9E943-74C8-4185-B1F8-E2881D584612`, version `sprint1-playwright-repair-066f2503`, git `74b6e37a8517aabe94813d173be9d20ca23d56e2`.
+- R2 / frontend: not part of this deploy.
+
+### How to verify Playwright
+1. `npx wrangler tail inneranimalmedia --format pretty` (or dashboard Logs).
+2. Dashboard Browser tab: screenshot a URL.
+3. Expect logs: `[playwright] bindings check` then `[playwright] goto completed` if navigation finishes.
+4. D1: `SELECT id, status, error, result_url FROM playwright_jobs ORDER BY created_at DESC LIMIT 5` — job should move to `completed` or `error`, not stay `pending` if the HTTP handler returns.
+
+### What is live now
+Production worker `inneranimalmedia` at version **066f2503** with Playwright + terminal_history fixes.
+
+### Known issues / next steps
+- If jobs still `pending`, tail for missing `goto completed` (hang in `goto`) vs errors in `catch` path.
+
+---
+
+## [2026-03-21] Playwright screenshot: domcontentloaded + setTimeout delay + goto log (local edits; deploy blocked ENOSPC then superseded)
+
+### What was asked
+Revert `waitUntil` to `domcontentloaded`; replace `waitForTimeout` with `new Promise(setTimeout)`; log `[playwright] goto completed` after goto.
+
+### Files changed
+- `worker.js` ~4460–4463: `goto` options, `console.log`, 500ms delay via `setTimeout` promise.
+
+### Deploy status (superseded)
+- Earlier attempt: **ENOSPC** — deploy succeeded later after disk cleanup (see entry above).
+
+---
+
+## [2026-03-21] Deploy: terminal_history schema inserts + Playwright screenshot tuning
+
+### What was asked
+Deploy worker only; verify `terminal_history` with SELECT; Playwright inline block: `load` + 8s timeout, 500ms wait after goto, single `browser.close` (no double-close).
+
+### Files changed
+- `worker.js` `/api/playwright/screenshot` inline path: `waitUntil: 'load'`, `timeout: 8000`, `await page.waitForTimeout(500)` after goto; flattened try/catch with `let browser` and one `finally { browser.close() }` (closing only in `catch` would leak on success).
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker deployed: yes — Version ID `4c60945c-e735-4059-9035-ff99b04fcec6`.
+- `post-deploy-record.sh`: `7CBD0D4B-4B2A-42F6-A65A-ABED97333732`.
+- D1 sample query: latest `terminal_history` rows returned (input/output with `agent_session_id`).
+
+### Files NOT changed (and why)
+- Frontend: not required for this deploy.
+
+---
+
+## [2026-03-21] terminal_history INSERT aligned to live D1 schema
+
+### What was asked
+Audit `runTerminalCommand` history writes vs `sqlite_master` DDL; both INSERT paths were wrong. Align INSERT with actual columns (`terminal_session_id` NOT NULL, `tenant_id`, `sequence`). Playwright: bindings all true but jobs stay pending — analyze inline block.
+
+### Files changed
+- `worker.js` `runTerminalCommand`: resolve active `terminal_sessions.id` for `getAuthUser` + `user_id`; `COALESCE(MAX(sequence),0)+1` for input/output rows; single INSERT shape matching live `terminal_history`; removed legacy `session_id`/`created_at` fallback.
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker deployed: no (say **deploy approved** to ship).
+
+### Known issues / next steps
+- If no active PTY session row for user, history still skipped (logged).
+- Playwright: see narrative below — likely hung subrequest / worker CPU wall, not missing catch.
+
+---
+
+## [2026-03-21] Sprint 1 Build 2: terminal_history session_id + Playwright bindings diagnostic log
+
+### What was asked
+Pass `body.session_id` into `runTerminalCommand` for slash `terminal_execute`; add `[playwright] bindings check` log before MYBROWSER conditional on `POST /api/playwright/screenshot`; validate, deploy worker, verify D1.
+
+### Files changed
+- `worker.js` ~952: `runTerminalCommand(..., body.session_id ?? null)` for builtin `terminal_execute`.
+- `worker.js` ~4432–4436: `console.log('[playwright] bindings check:', { hasMYBROWSER, hasDASHBOARD, hasDB })` immediately before `if (env.MYBROWSER && ...)`.
+- `agent-dashboard/src/AgentDashboard.jsx`: `session_id: currentSessionId` on `POST /api/agent/commands/execute` body (required or worker never receives session_id).
+- `dashboard/agent.html`: `?v=104` to `?v=105` for cache bust.
+- R2: uploaded `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` after Vite build.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: locked; binding already `MYBROWSER`.
+- Migrations / D1 schema: not requested.
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Worker deployed: yes — Version ID `4af99b29-4c9a-4f7b-a0f4-37f13d0ce746`; `TRIGGERED_BY=agent` + notes.
+- `post-deploy-record.sh`: recorded `6CA5A711-091A-4F80-B630-6AFCF09CCF04`.
+- R2: agent bundle + `agent.html` v105 uploaded (so `session_id` ships to production).
+
+### What is live now
+Worker serves updated execute + screenshot handler logging; dashboard v105 sends `session_id` on slash execute.
+
+### Known issues / next steps
+- **Verify SQL:** use DB `inneranimalmedia-business` (not `inneranimalmedia`). Prefer `recorded_at` on `terminal_history` (newer schema); legacy rows may use `created_at`.
+- After `/run echo test`, expect **+2 rows** per command (input + output inserts in `runTerminalCommand`).
+- Run `wrangler tail inneranimalmedia --format pretty`, trigger Browser tab screenshot, capture `[playwright] bindings check` line (not run from this environment).
+
+---
+
+## [2026-03-21] Session: deploy-to-r2 v104, D1 `deployments` row, full DB audit, Playwright + terminal_history notes
+
+### What was asked
+Fresh session brief: run `./agent-dashboard/deploy-to-r2.sh`, insert `deployments` row (user SQL adjusted to real schema), run 10 D1 audit queries, grep Playwright/browser + `runTerminalCommand` for follow-up fixes (audit only for code).
+
+### Files changed
+- None in repo source for this session (R2 + D1 remote only).
+- `docs/cursor-session-log.md`: This entry.
+
+### Deploy status
+- Built: yes (via `deploy-to-r2.sh` → `npm run build` in agent-dashboard).
+- R2 uploaded: yes — script uploaded agent bundle, many dashboard HTML/assets, `dashboard/agent.html` (includes v104 if present in repo).
+- Worker deployed: no
+- D1: `deployments` insert id `DBFF2F5A-1D15-46AB-BDB7-A03E95BE2E62`, version `sprint1-build2b-slash-card`, git_hash `74b6e37a8517aabe94813d173be9d20ca23d56e2`.
+
+### What is live now
+R2 objects updated per script output; `deployments` table has new production row.
+
+### Known issues / next steps
+- User INSERT template used non-existent `changed_files` column — used `description` only for file list.
+- Playwright: see audit — `/api/agent/playwright` is queue-only; pending rows need `MY_QUEUE` consumer or switch to inline path.
+- `terminal_history`: slash `/run` passes `null` session to `runTerminalCommand` (line 952).
+
+---
+
+## [2026-03-21] Slash commands: terminal_output card + agentActivity (v104)
+
+### What was asked
+Audit `sed -n '838,882p'` AgentDashboard.jsx; add terminal card injection on slash-command path matching Run button (same card/state); bump v=104.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` (sendMessage, slash branch ~1024–1078): After user bubble, append `terminal_output` message with `status: "running"`, `command: trimmedInput`; `setAgentActivity` like Run handler; on fetch resolve map-update card `output` + `success`/`error`; `finally` `setAgentActivity(null)`. Removed separate assistant `systemMsg` for execute result (output lives in card).
+- `dashboard/agent.html`: `?v=103` to `?v=104` on agent CSS/JS links.
+- `agent-dashboard/dist/*`: rebuilt via `npm run build`.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `worker.js`: not in scope.
+
+### Deploy status
+- Built: yes (`agent-dashboard` Vite).
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html` (v104; slash-command terminal card).
+- Worker deployed: no (R2-only approval)
+- Deploy approved by Sam: yes (R2 only, 2026-03-21)
+
+### What is live now
+Production R2 serves agent page v104 with slash-command `terminal_output` card + `agentActivity` pattern.
+
+### Known issues / next steps
+- None for this slice.
+
+---
+
+## [2026-03-20] Fix /api/agent/commands/execute routing (dead code above handleAgentApi catch-all)
+
+### What was asked
+Move the execute-slash-command handler above the `pathLower.startsWith('/api/agent')` delegation so `POST /api/agent/commands/execute` is not swallowed by `handleAgentApi` (which returned 404). Surgical block move only; remove duplicate dead handler.
+
+### Files changed
+- `worker.js` (~924–978): Inserted `POST /api/agent/commands/execute` handler with NOTE comment; restored section comment before `handleAgentApi` catch-all.
+- `worker.js` (former ~998–1039): Removed duplicate unreachable execute block (now only one `commands/execute` match).
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `AgentDashboard.jsx`, `FloatingPreviewPanel.jsx`, `agent.html`: not required for worker route order fix.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: yes — **Version ID:** `15487d41-4806-42c9-892f-8bffc02b36ba` (wrangler output from `npm run deploy`).
+- D1 record: yes — `scripts/post-deploy-record.sh` with `TRIGGERED_BY=agent`, `deployment_id=2A60F3E0-9F77-4254-A89C-E3A98E27A69B` (notes include worker version id; table has no `version_id` column).
+- Deploy approved by Sam: yes (2026-03-20).
+
+### What is live now
+Production worker `inneranimalmedia` serves `POST /api/agent/commands/execute` from the main router before `handleAgentApi`; slash commands should no longer get `{ error: 'Not found' }` from the agent API fallback.
+
+### Known issues / next steps
+- Verify in UI: `/run echo "build 2 live"`. D1 verify: `SELECT deployment_id, worker_name, deployed_at, triggered_by, deployment_notes FROM cloudflare_deployments ORDER BY deployed_at DESC LIMIT 3` (not `version_id` — column does not exist on this table).
+
+---
+
+## [2026-03-20] iOS mobile layout v102 (viewport, safe area, overflow, touch targets)
+
+### What was asked
+Pre-flight audit, then iOS-focused fixes at 390px: viewport meta with `viewport-fit=cover`, global overflow-x, input bar + mobile toggle safe areas, message/code overflow, drawer `maxWidth`, Settings sidebar `min(160px,35%)`, 44px tap targets (mobile, with exceptions), overscroll behavior, bump to v=102, build + R2 deploy + D1 row.
+
+### Files changed
+- `dashboard/agent.html`: Viewport `viewport-fit=cover` (removed `user-scalable=no`; `maximum-scale=1` retained); asset query `?v=102`.
+- `agent-dashboard/src/index.css`: `html,body` overflow-x / max-width / text-size-adjust; `body` overscroll + momentum + `background: var(--bg-canvas)`; `#agent-dashboard-root` max-width + overflow-x; mobile-only `#agent-dashboard-root button` 44px min size with exceptions (`.iam-viewer-icon-strip`, `.iam-mobile-icon-toggle`, `.add-files-btn` 36px); `.iam-chat-pane` + `.messages-container` momentum/overscroll; removed duplicate `.agent-input-container` safe-area padding (moved to JSX wrapper).
+- `agent-dashboard/src/AgentDashboard.jsx`: Messages scroll `className="messages-container"`, `wordBreak`; bubble column `minWidth:0`, `overflowX:hidden`; code `<pre>`/`code` `pre-wrap`, `wordBreak`, `maxWidth:100%`, `overflowX:auto`; input bar wrapper `paddingBottom: calc(12px + env(safe-area-inset-bottom))`; `agent-input-container` `maxWidth: min(900px,100%)`, `boxSizing`; mobile tool toggle `iam-mobile-icon-toggle`, `top: calc(52px + env(safe-area-inset-top))`; FloatingPreviewPanel wrappers (mobile + desktop) `maxWidth:100%`.
+- `agent-dashboard/src/SettingsPanel.jsx`: Nav sidebar `width: min(160px, 35%)`.
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `worker.js`, `wrangler.production.toml`: not required for R2-only dashboard CSS/JS/HTML.
+- `FloatingPreviewPanel.jsx`: not in v102 scope.
+
+### Deploy status
+- Built: yes (Vite via `deploy-to-r2.sh`).
+- R2 uploaded: yes — `agent-dashboard.js`, `agent-dashboard.css`, `dashboard/agent.html`, and other pages the script uploads.
+- Worker deployed: no (not requested).
+- Deploy approved by Sam: yes (prior message).
+
+### What is live now
+Agent dashboard bundle and `agent.html` v102 on R2; iOS viewport-fit, safe-area padding on input strip and mobile tool toggle, horizontal overflow guards, responsive input max width, narrower settings nav in narrow drawer.
+
+### Known issues / next steps
+- Global `button` min 44px applies only under 768px inside `#agent-dashboard-root`; very compact controls may still need one-off exceptions if layout breaks.
+- `node --check` does not apply to `.jsx`; build success used as compile gate.
+
+---
+
+## [2026-03-20] Agent v101: GitHubFileBrowser reuse, desktop strip flex, mobile icon drawer
+
+### What was asked
+Audit line numbers, then v101 fixes: Settings GitHub tab uses same GitHub browser as Files tab; desktop viewer icon strip stops clipping (no height 100% on strip chain); mobile collapsed tool strip becomes top-right toggle with outside-click close; bump agent.html to v=101; build (deploy/D1 only with explicit approval).
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: Added exported `GitHubFileBrowser` (same fetch/tree/View behavior as former Files-tab GitHub block), `GITHUB_FILE_BROWSER_PREVIEWABLE`, `useMemo` `settingsGithubSlot`; removed duplicate GitHub state/effects from panel; Files tab renders `GitHubFileBrowser` when `filesBucket === "__github__"`; `openGithubFileInCode` errors use `setFilesError`; `SettingsPanel` receives `settingsGithubSlot`.
+- `agent-dashboard/src/SettingsPanel.jsx`: Removed `GitHubTab`; added prop `settingsGithubSlot`; github nav renders slot (fallback placeholder if missing).
+- `agent-dashboard/src/AgentDashboard.jsx`: Desktop viewer column uses `alignSelf: "stretch"`, `minHeight: 0`, removed `height`/`maxHeight` 100% on strip wrapper; strip uses `alignSelf: "stretch"`, `minHeight: 0` instead of `height: 100%`; mobile `mobileIconsOpen` + `mobileIconsStripRef`, mousedown outside closes, Escape closes; replaced fixed vertical edge strip with top-right grid toggle + dropdown; style block adds `.iam-viewer-icon-strip { min-height: 0 }`.
+- `dashboard/agent.html`: `?v=100` to `?v=101` on agent-dashboard.css/js.
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `worker.js`, `wrangler.production.toml`, `FloatingPreviewPanel.jsx` auth/OAuth: not touched per rules.
+- Did not add `flex: 1 1 0%` on the desktop strip: parent is `flexDirection: row`, so that flex shorthand would grow width, not height; used `alignSelf: stretch` + `minHeight: 0` instead.
+
+### Deploy status
+- Built: yes (`agent-dashboard` Vite build succeeded).
+- R2 uploaded: no.
+- Worker deployed: no.
+- Deploy approved by Sam: no.
+
+### What is live now
+Unchanged in production until R2 upload of built assets and/or deploy per your process.
+
+### Known issues / next steps
+- Run `./agent-dashboard/deploy-to-r2.sh` (or your canonical path) after **deploy approved**; upload `dashboard/agent.html` to R2 before worker deploy if applicable.
+- Optional D1 deployments row: run only if you approve the INSERT.
+
+---
+
 ## [2026-03-19] Workspace API + dashboard wire + go live
 
 ### What was asked
@@ -3095,4 +3454,1126 @@ Never overwrite `agent-sam/static/dashboard/agent/agent-dashboard.js` except fro
 
 ### Known issues / next steps
 - Run `cd inneranimalmedia-mcp-server && npx wrangler deploy` so production attaches secrets/bindings to **inneranimalmedia-mcp-server**; retire stray `mcp-server` worker in Cloudflare dashboard if it still exists.
-- `wrangler deploy --dry-run` may print "No bindings found" in some modes; confirm bindings in dashboard or a non-dry-run deploy output.
+- `wrangler deploy --dry-run` may print "No bindings found" in some modes; confirm bindings in a real deploy output.
+
+### Addendum — wrangler parent config trap (2026-03-19)
+Running `npx wrangler deploy` **without** `-c` from `inneranimalmedia-mcp-server/` resolved the **repo root** `wrangler.jsonc` (`name = inneranimalmedia`, `overview-dashboard` assets) and **deployed the wrong bundle to the main worker** (version `35aa9b68-a6b1-435c-8c65-ef3f7c9a6415`, 2026-03-19 ~21:45 UTC). **Correct MCP command:** `cd inneranimalmedia-mcp-server && ../scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.toml`.
+
+### Emergency rollback — main worker restored (2026-03-19)
+**What happened:** Accidental `wrangler deploy` from `inneranimalmedia-mcp-server/` without `-c wrangler.toml` walked up to repo root `wrangler.jsonc` and overwrote **inneranimalmedia** production with the overview-dashboard asset worker.
+
+**Recovery:** `wrangler rollback 736112a9-234a-4ddb-8914-beffee052f05 -c wrangler.production.toml -y` (version from session log “Pass 2 overview repairs” deploy). **Current production version ID:** `736112a9-234a-4ddb-8914-beffee052f05`.
+
+**Smoke:** `GET https://inneranimalmedia.com/dashboard/agent` and `GET /api/health` returned 200 after rollback.
+
+**Note:** Cloudflare states rollback does not revert “bound resources” (DO/D1/R2/KV namespaces as account resources); it restores the **Worker version** that was live at that deployment. **Secrets** set in the dashboard after that version may still be the newer values (separate from version snapshot). If anything still looks wrong, compare dashboard bindings to `wrangler.production.toml` and open a support ticket — do not re-run stray `wrangler deploy` without `-c wrangler.production.toml` at repo root for the main worker.
+
+### Binding repair deploy (2026-03-19)
+After rollback, dashboard showed missing bindings relative to production. Ran **`./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`** from repo root. **Version ID:** `02dc4988-45ad-4cc4-a821-b1ba6f910ffc`. Wrangler listed restored bindings: Durable Objects (IAM_COLLAB, CHESS_SESSION), KV, Queue, D1, Vectorize x2, Hyperdrive, R2 buckets (ASSETS, CAD_ASSETS, DASHBOARD, R2), WAE, Browser, AI, plus plain vars from config (CLOUDFLARE_*, GITHUB_CLIENT_ID, GOOGLE_CLIENT_ID, TENANT_ID). **`/api/health`** returned `ok` with ASSETS+DASHBOARD true. **Secrets** are not defined in TOML — if still empty in dashboard, re-apply each with `wrangler secret put` from Sam’s vault (not from the agent).
+
+## 2026-03-19 MCP client spam fix + env inventory for recovery
+
+### What was asked
+Sam asked for an inventory of Worker/MCP environment (vars, bindings, secrets names) after secret loss stress, and to stop MCP from spamming (Cursor/UI churn). Sam pasted a Bearer token in chat — treat as compromised; rotate `MCP_AUTH_TOKEN` and update `.cursor/mcp.json` after.
+
+### Files changed
+- `.cursor/mcp.json`: Removed invalid `transport: stdio` for remote URL; renamed server key to `inneranimalmedia` per canonical docs; HTTP MCP uses `url` + `headers` only.
+- `inneranimalmedia-mcp-server/src/index.js` (initialize `capabilities.tools.listChanged`): `true` → `false` so clients do not aggressively poll `tools/list` for a static tool set.
+- `docs/MCP_CURSOR_TERMINAL_SYNC.md`: Documented “no stdio with remote `url`”.
+
+### Files NOT changed (and why)
+- `worker.js`: not touched (auth/OAuth locked).
+- No production deploy run (Sam did not type **deploy approved**); MCP server change needs `cd inneranimalmedia-mcp-server && ../scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.toml` when approved.
+
+### Deploy status
+- MCP Worker deployed: no
+- R2 / main worker: no
+- Deploy approved by Sam: no
+
+### Known issues / next steps
+- Restart MCP in Cursor after pulling local `.cursor/mcp.json` (gitignored): **MCP: Restart Servers**.
+- Deploy MCP worker so `listChanged: false` is live in production — **done** in follow-up entry (deploy approved).
+- Rotate MCP auth token (exposed in chat) via `wrangler secret put MCP_AUTH_TOKEN` on the MCP worker and update Bearer in `.cursor/mcp.json`.
+
+## 2026-03-19 Production deploy after Sam approval
+
+### What was asked
+Sam typed **deploy approved**; deploy MCP worker + main worker to fix production build/state.
+
+### Commands run
+- `cd inneranimalmedia-mcp-server && ../scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.toml`
+- `TRIGGERED_BY=agent DEPLOYMENT_NOTES='MCP server listChanged fix deploy after user approval' npm run deploy` (repo root; `wrangler.production.toml`)
+
+### Deploy status
+- **inneranimalmedia-mcp-server** version ID: `5b21423e-eda5-4673-badf-b3eb3c5e2a07` (custom domain `mcp.inneranimalmedia.com`). Bindings: DB, ASSETS, R2; tail → `inneranimalmedia-tail`.
+- **inneranimalmedia** version ID: `432f8971-4c59-487e-a2b9-a4b90ade35b7`. Wrangler listed full binding set (DO, KV, queue, D1, vectorize, hyperdrive, R2 x4, WAE, browser, AI, plain vars).
+- **Smoke:** `GET https://inneranimalmedia.com/api/health` → `{"ok":true,"worker":"inneranimalmedia","bindings":{"ASSETS":true,"DASHBOARD":true}}`.
+- Deploy approved by Sam: **yes** (this message).
+
+### Files NOT changed in this step
+- No new code edits; deploy only.
+
+### Known issues / next steps
+- MCP deploy warned local vs dashboard D1 metadata diff; local `wrangler.toml` applied on deploy — confirm Cloudflare dashboard matches if anything looks off.
+- If Cursor MCP still misbehaves: **MCP: Restart Servers** after confirming `.cursor/mcp.json` has no `stdio` transport with remote `url`.
+
+## 2026-03-19 MCP_AUTH_TOKEN (main + MCP workers)
+
+- `wrangler secret put MCP_AUTH_TOKEN` on **inneranimalmedia** and **inneranimalmedia-mcp-server** — success. Value must match `.cursor/mcp.json` Bearer; user sent value in chat (prefer local-only `secret put` in future).
+
+## 2026-03-19 .env.example refresh (public vars + full secret list)
+
+- Rewrote `.env.example`: filled main-worker plaintext vars from `wrangler.production.toml [vars]`; added `AI_SEARCH_TOKEN`, `CLOUDFLARE_STREAM_TOKEN`; grouped `DEPLOY_TRACKING_TOKEN` for local deploy scripts; MCP `MAIN_WORKER_BASE_URL`; binding reminder. Secret values intentionally blank in repo (fill locally from vault / `.env.secrets.recovery`).
+
+## 2026-03-19 iam-pty: fix posix_spawnp (Agent terminal WS 101 but PTY error)
+
+- **`~/iam-pty/server.js`:** Removed hardcoded fallback `PTY_AUTH_TOKEN`. Added `listShellCandidates()` (try **`/bin/bash`** first, then zsh, `SHELL`, sh), spawn loop with per-shell `env`, `LANG`/`LC_ALL` defaults. `/exec` uses `ENV_BASE`.
+- **`~/iam-pty/ecosystem.config.cjs`:** `SHELL` default **`/bin/bash`** (was zsh).
+- Ops: `npm rebuild node-pty`, `pm2 restart iam-pty --update-env`, `pm2 save`. Agent dashboard WebSocket was already **101**; failure was upstream PTY spawn.
+
+## 2026-03-19 MCP_CURSOR_TERMINAL_SYNC: zsh-safe MCP_AUTH snippet
+
+- Added subsection with copy-paste `export MCP_AUTH` + `curl` (no `#` comment lines) and note about `zsh: command not found: #` when pasting bad comment characters.
+
+## 2026-03-19 MCP docs: listChanged + curl token placeholder
+
+- `docs/MCP_CURSOR_TERMINAL_SYNC.md`: Table and success example now match production **`listChanged: false`**; short explanation of what the flag means; curl sample uses token placeholder; repair section paths fixed (`inneranimalmedia-mcp-server`, `with-cloudflare-env.sh`, main Worker token note).
+- `.cursor/rules/mcp-reference.mdc`: `listChanged: true` → **`false`** to match deployed MCP.
+
+## 2026-03-19 TERMINAL_WS_URL
+
+- Uploaded to Worker **inneranimalmedia** as secret (`wrangler secret put TERMINAL_WS_URL -c wrangler.production.toml`). Value: terminal custom domain URL per Sam.
+
+## 2026-03-19 VAULT_MASTER_KEY
+
+- Uploaded to Worker **inneranimalmedia** (`wrangler secret put VAULT_MASTER_KEY -c wrangler.production.toml`). Success. Value was sent in chat; if vault encryption matters, generate a new key and re-upload (data encrypted with old key may need migration — confirm app behavior before rotating).
+
+## 2026-03-19 R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY
+
+- Uploaded to Worker **inneranimalmedia** (`wrangler.production.toml`). Success. Values were sent in chat; rotate R2 API tokens in Cloudflare dashboard if needed.
+
+## 2026-03-19 OPENAI_API_KEY
+
+- Uploaded to Worker **inneranimalmedia** (`wrangler secret put OPENAI_API_KEY -c wrangler.production.toml`). Success. Key was sent in chat; revoke/rotate in OpenAI dashboard if exposure is a concern.
+
+## 2026-03-19 GOOGLE_AI_API_KEY
+
+- Uploaded to Worker **inneranimalmedia** via `wrangler secret put GOOGLE_AI_API_KEY -c wrangler.production.toml`. Success. Key was sent in chat; rotate in Google AI Studio / Cloud Console if needed.
+
+## 2026-03-19 Cloudflare Images + Stream tokens
+
+- `CLOUDFLARE_IMAGES_TOKEN` and `CLOUDFLARE_STREAM_TOKEN` uploaded to Worker **inneranimalmedia** (`wrangler.production.toml`). Success. Same value supplied for both per Sam; rotate in Cloudflare dashboard if chat exposure matters.
+
+## 2026-03-19 OAuth client secrets (Google + GitHub)
+
+- `GOOGLE_OAUTH_CLIENT_SECRET` and `GITHUB_CLIENT_SECRET` uploaded to Worker **inneranimalmedia** via `wrangler secret put` + `wrangler.production.toml`. Success.
+- Values were provided in chat; rotate in Google Cloud Console / GitHub OAuth app settings if chat exposure is a concern.
+
+## 2026-03-19 TERMINAL_SECRET (re-apply)
+
+- `wrangler secret put TERMINAL_SECRET -c wrangler.production.toml` on **inneranimalmedia** — success (value from Sam in chat; avoid pasting in future).
+
+## 2026-03-19 Secrets: ANTHROPIC_API_KEY, AI_SEARCH_TOKEN
+
+### What was asked
+Sam sent values for `ANTHROPIC_API_KEY`, `AI_SEARCH_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`.
+
+### Actions
+- `wrangler secret put ANTHROPIC_API_KEY` and `AI_SEARCH_TOKEN` on Worker **inneranimalmedia** (`wrangler.production.toml`). Success.
+- `CLOUDFLARE_ACCOUNT_ID`: already present as plain `[vars]` in `wrangler.production.toml`; no secret put. For CLI, add to local `.env.cloudflare` if needed.
+
+### Security
+- Keys were pasted in chat; Sam should rotate at Anthropic / Cloudflare AI Search when practical.
+
+## 2026-03-19 PTY_AUTH_TOKEN (main + MCP)
+
+### What was asked
+Sam provided `PTY_AUTH_TOKEN` value to set on Workers.
+
+### Actions
+- `wrangler secret put PTY_AUTH_TOKEN -c wrangler.production.toml` → Worker **inneranimalmedia**.
+- `wrangler secret put PTY_AUTH_TOKEN -c inneranimalmedia-mcp-server/wrangler.toml` → Worker **inneranimalmedia-mcp-server** (MCP `terminal_execute` uses it).
+
+### Deploy
+- No full deploy; secrets apply to next invocation.
+
+### Note
+Value was sent in chat; prefer vault + `wrangler secret put` from local shell only.
+
+## 2026-03-19 Worker secrets: TERMINAL + INTERNAL + WORKER + DEPLOY_TRACKING
+
+### What was asked
+Sam set `TERMINAL_SECRET` with a chosen value via `wrangler secret put` and asked to remake `INTERNAL_API_SECRET`, `WORKER_SECRET`, `DEPLOY_TRACKING_TOKEN`.
+
+### Actions
+- `TERMINAL_SECRET` uploaded to Worker `inneranimalmedia` (`wrangler.production.toml`) — value supplied by Sam in chat (rotate if chat logs are a concern).
+- `INTERNAL_API_SECRET`, `WORKER_SECRET`, `DEPLOY_TRACKING_TOKEN`: regenerated with `crypto.randomBytes(32).toString('hex')`, uploaded again, and **written once** to **`.env.secrets.recovery`** (gitignored so Sam can copy to vault then delete). Cloudflare does not show secret values after upload — without a local file the operator has no copy for CI/hooks.
+
+### Files changed
+- `.gitignore`: ignore `.env.secrets.recovery`.
+
+### Deploy
+- No deploy; secrets only.
+
+### Files NOT changed
+- `worker.js`, OAuth handlers, `wrangler.production.toml` bindings.
+
+## 2026-03-19 Recovery .env.example (names only)
+
+### What was asked
+Sam asked for a generated env to speed recovery after losing time to secret/bindings cleanup.
+
+### Files changed
+- `.env.example` (new): All main-worker and MCP-related secret/plain **names** with empty values, comments for `wrangler secret put` and bindings; `MCP_AUTH_TOKEN` called out once with note to set on both workers + Cursor.
+- `.env.cloudflare.example`: Minimal `CLOUDFLARE_*` for `with-cloudflare-env.sh` + pointer to `.env.example`.
+
+### Files NOT changed
+- `worker.js`, `wrangler.production.toml`, `inneranimalmedia-mcp-server/wrangler.toml`.
+
+### Deploy status
+- No deploy. No real secrets written to repo.
+
+## 2026-03-19 Agent Terminal: Enter sends structured input + R2 upload
+
+### What was asked
+Terminal WebSocket showed Connected (101) but pressing Enter did nothing; fix so commands send to the PTY.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` (`sendTerminalKey`): send `JSON.stringify({ type: "input", data: line })` instead of raw string; handle `NumpadEnter`; use `WebSocket.OPEN`; `stopPropagation`; user-visible lines when not connected or send fails; removed debug `console.log`.
+- `dashboard/agent.html` lines 720-721: cache buster `v=64` to `v=65` for agent-dashboard JS/CSS.
+
+### Build / R2
+- `npm run build` in `agent-dashboard/` (dist `agent-dashboard.js`, `agent-dashboard.css`).
+- R2 remote put: `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `dashboard/agent.html`.
+
+### Files NOT changed
+- `worker.js` (OAuth/terminal proxy unchanged this step).
+- `~/iam-pty/server.js`: prior thread added `routeMessageToPty`; restart `pm2 restart iam-pty` on the Mac if that file was updated there.
+
+### Deploy status
+- Built: yes (agent-dashboard).
+- R2 uploaded: yes — files above.
+- Worker deployed: no.
+- Deploy approved by Sam: n/a for this fix (static only).
+
+### What is live now
+Production R2 serves agent bundle v=65 and `agent.html` that references it; terminal Enter should deliver `{ type: "input", data }` to the PTY server when paired with server-side handler.
+
+### Known issues / next steps
+- Confirm `iam-pty` is running updated `server.js` and restarted after edits.
+- Hard refresh `/dashboard/agent` (or clear cache) to load `?v=65`.
+
+## 2026-03-19 Agent Terminal: reconnect after socket close
+
+### What was asked
+PM2 showed `iam-pty` ready on port 3099; UI still showed `Disconnected.` + `Connected.` in output and `[Terminal: not connected]` on Enter.
+
+### Root cause
+`onclose` set `terminalWsState` to `disconnected` but did not clear `terminalWsRef` or re-run the connect effect. Stale `terminalOutput` kept `Connected.` while the socket was already CLOSED, so Enter correctly failed `WebSocket.OPEN` checks.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `terminalReconnectEpoch` + `terminalReconnectTimerRef`; on `ws.onclose` null ref, clear `terminalSessionIdRef`, `scheduleReconnect` (500ms) while panel+tab still terminal; clear timer in effect cleanup; effect deps include `terminalReconnectEpoch`; `new WebSocket` catch schedules reconnect; `sendTerminalKey` distinguishes CONNECTING vs dead socket message.
+- `dashboard/agent.html`: cache buster `v=65` to `v=66`.
+
+### Build / R2
+- `npm run build` in `agent-dashboard/`; R2 put `agent-dashboard.js`, `agent-dashboard.css`, `agent.html`.
+
+### Deploy status
+- Worker deployed: no.
+- Deploy approved: n/a.
+
+### What is live now
+R2 serves agent bundle `?v=66` with auto-reconnect after terminal WS drops.
+
+### Known issues / next steps
+- If upstream rejects forever, reconnect loops every 500ms; consider max retries later.
+
+## 2026-03-19 Agent Terminal: stop WebSocket reconnect storm (v67)
+
+### What was asked
+After v66 auto-reconnect, Network tab showed many rapid WS 101 handshakes; terminal UI flickered Disconnected/Connected.
+
+### Root cause
+`scheduleReconnect` on every `onclose` re-ran the effect while the upstream connection was still closing immediately, causing a tight connect loop.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: removed `terminalReconnectEpoch` timer auto-reconnect; kept `onclose` nulling `terminalWsRef` and session id; added `terminalUserReconnect` for manual **Reconnect** only (closes stale socket, then bumps counter); terminal tab header with Reconnect + hint; effect deps `[open, activeTab, terminalUserReconnect]`.
+- `dashboard/agent.html`: cache buster `v=66` to `v=67`.
+
+### Build / R2
+- `npm run build`; R2 put `agent-dashboard.js`, `agent-dashboard.css`, `agent.html`.
+
+### Deploy status
+- Worker deployed: no.
+
+### What is live now
+R2 `?v=67`: no automatic reconnect loop; user-driven Reconnect or tab switch to open a new socket.
+
+### Next steps
+- If socket still drops right after 101, debug Worker to PTY path (auth, proxy idle timeout) separately from client loop.
+
+## 2026-03-19 docs: TERMINAL_KEYS_RESET
+
+### What was asked
+Sam asked to reset all keys needed for the terminal stack after repeated terminal UI issues.
+
+### Files changed
+- `docs/TERMINAL_KEYS_RESET.md` (new): single checklist — one shared token for `iam-pty` `PTY_AUTH_TOKEN`, Worker `TERMINAL_SECRET`, Worker `PTY_AUTH_TOKEN`, MCP Worker `PTY_AUTH_TOKEN`; `TERMINAL_WS_URL`; `wrangler secret put` commands with `with-cloudflare-env.sh`; local `wscat` and tunnel notes.
+- `.env.example`: comment pointing to that doc for terminal vars.
+
+### Files NOT changed
+- `worker.js`, `wrangler.production.toml`, OAuth handlers.
+
+### Deploy status
+- No deploy; documentation only. Sam runs `openssl rand -hex 32` and secret puts locally.
+
+## 2026-03-19 Terminal bridge: Worker error handlers + remove PTY ws.ping heartbeat
+
+### What was asked
+Sam still saw Connected then immediate dead socket and could not run commands; extreme frustration.
+
+### Root cause (likely)
+1. `iam-pty` sent `ws.ping()` every 20s; Cloudflare Worker `fetch()` WebSocket to origin often does not complete ping/pong the way `ws` expects, so clients were marked dead and `terminate()`d soon after connect.
+2. Worker `serverWs`/`upstreamWs` `error` listeners called `closeBoth()`, which could tear down a healthy bridge on spurious `error` events.
+
+### Files changed
+- `/Users/samprimeaux/iam-pty/server.js`: removed HEARTBEAT_INTERVAL_MS and the ping/pong interval + `wss.on("close")` clear; removed per-socket `isAlive`/`pong` on connect; left NOTE comment.
+- `worker.js` lines 3947-3950: `close` handlers still call `closeBoth()`; `error` handlers now log only (do not close bridge).
+
+### Runtime
+- `pm2 restart iam-pty` run after `server.js` change.
+
+### Deploy status
+- Worker: **not deployed** (Sam must type `deploy approved` for `npm run deploy` so `worker.js` change is live).
+- Until deploy, only PTY-side fix is active; Worker error-handler fix applies after deploy.
+
+### Files NOT changed
+- OAuth handlers in `worker.js`.
+
+## 2026-03-19 Wrangler: sync terminal secrets from iam-pty ecosystem
+
+### What was asked
+Sam asked the agent to run wrangler and set terminal-related secrets (no more manual chasing).
+
+### Actions
+- Read `PTY_AUTH_TOKEN` from `~/iam-pty/ecosystem.config.cjs` via Node (not echoed).
+- Piped to `wrangler secret put` with `with-cloudflare-env.sh`:
+  - Worker **inneranimalmedia** (`wrangler.production.toml`): `TERMINAL_SECRET`, `PTY_AUTH_TOKEN`, `TERMINAL_WS_URL` (`https://terminal.inneranimalmedia.com`).
+  - Worker **inneranimalmedia-mcp-server** (`inneranimalmedia-mcp-server/wrangler.toml`): `PTY_AUTH_TOKEN`.
+- All four uploads reported success.
+
+### Files changed
+- None (Cloudflare secrets only).
+
+### Deploy status
+- Worker deployed: no (secrets apply on next invocation).
+- Token value not logged here; it matches current PM2 `iam-pty` env.
+
+## 2026-03-19 Full deploy + post-mortem: Agent Terminal (dashboard + Worker + PTY)
+
+### Deploy executed (live)
+- **Command:** `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Terminal bridge: Worker WS error handlers no longer closeBoth; PTY heartbeat removed on Mac (separate). Secrets synced earlier.' npm run deploy`
+- **Worker:** `inneranimalmedia`
+- **Version ID:** `a842b09f-3968-4684-ae04-b796a1527191`
+- **R2 (this step):** no new agent bundle upload — production already had `agent-dashboard` + `agent.html` at cache buster **v=67** from earlier today; terminal UX fixes are in that bundle.
+
+### What was broken today (honest accounting)
+1. **Client protocol mismatch:** Dashboard sent **raw lines** on Enter; PTY server expected structured JSON (`{ type: "input", data }`) or dropped input — fixed in `FloatingPreviewPanel.jsx`, built, uploaded to R2 (v65 then v67).
+2. **Stale socket after close:** `onclose` did not clear `terminalWsRef`; UI still showed “Connected” while the socket was dead — fixed by nulling ref and session id on close.
+3. **Reconnect storm:** Auto-reconnect on a timer re-opened WS while upstream still dropped immediately → dozens of 101s in Network — **removed** auto timer; added manual **Reconnect** + tab-switch hint.
+4. **Secrets drift:** Worker `TERMINAL_SECRET` / `PTY_AUTH_TOKEN` / `TERMINAL_WS_URL` could disagree with PM2 — **synced** from `~/iam-pty/ecosystem.config.cjs` via `wrangler secret put` (four puts).
+5. **Root cause of “Connected then dead”:** **`iam-pty` `ws.ping()` heartbeat** every 20s: Worker `fetch()` WebSocket to origin does not reliably complete ping/pong with Node `ws`, so the server **terminated** the bridge; plus **`worker.js` called `closeBoth()` on spurious `error`** on either leg — fixed by **removing PTY ping heartbeat** (`~/iam-pty/server.js`, `pm2 restart iam-pty`) and **logging-only `error` handlers** on the terminal bridge in `worker.js` (this deploy).
+
+### Files touched (cumulative today)
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` — structured input, ref lifecycle, reconnect UX, no reconnect loop.
+- `dashboard/agent.html` — `?v=67` for agent bundle.
+- `worker.js` — terminal WebSocket proxy: `error` no longer tears down bridge.
+- `/Users/samprimeaux/iam-pty/server.js` — heartbeat removed (not in git repo; backup via `docs/IAM_INFRASTRUCTURE_TERMINAL_FIX_AGENT_SAM_HANDOFF.md` / R2 `agent-sam/pty-server/` if used).
+- `docs/TERMINAL_KEYS_RESET.md`, `.env.example` comment — operator checklist.
+- `docs/cursor-session-log.md` — this thread.
+
+### Files NOT changed
+- OAuth handlers (`handleGoogleOAuthCallback`, `handleGitHubOAuthCallback`).
+- `wrangler.production.toml` bindings.
+
+### What is live now
+- **Worker production** includes terminal bridge `error`-handler fix (version above).
+- **Dashboard** from R2: agent JS/CSS v67 + `agent.html` reference.
+- **PTY:** PM2 `iam-pty` running edited `server.js` without ws ping heartbeat (verify `pm2 list` on the Mac).
+
+### How Sam should verify (when ready)
+1. Hard refresh `/dashboard/agent` (v67).
+2. Terminal tab → **Reconnect** if needed.
+3. Type a command, Enter — expect PTY echo/output.
+4. If failure: Worker logs for `[terminal/ws]`; PM2 logs for `[PTY]`; confirm tunnel → `127.0.0.1:3099`.
+
+### Deploy approved
+- Sam explicitly demanded full deploy and documentation in the same message as this entry; deploy was run as above.
+
+## 2026-03-19 Terminal follow-up: stale WebSocket handlers + bridge close ordering (v68 + Worker)
+
+### What was wrong
+- Repeated `[Terminal: not connected...]` with a visible `101` WS: **stale `onclose` / `onopen` from an old socket** could null `terminalWsRef` or append output after **Reconnect** replaced the socket, so Enter saw **null ref** while Network still showed an earlier successful upgrade.
+- Worker `closeBoth()` on **both** legs could **re-enter** close handlers; replaced with **one-way** close + `terminalBridgeCleaned` guard.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `onopen` / `onmessage` / `onclose` / `onerror` only act if `terminalWsRef.current === ws`; `onclose` appends `[Socket closed]`; throttle "not connected" Enter spam (2.5s).
+- `worker.js` terminal `/api/agent/terminal/ws`: `closeFromBrowserLeg` / `closeFromUpstreamLeg` with `terminalBridgeCleaned`.
+- `dashboard/agent.html`: `?v=68`.
+
+### Build / deploy
+- `npm run build` (agent-dashboard); R2 put `agent-dashboard.js`, `agent-dashboard.css`, `agent.html`.
+- `npm run deploy` — Worker **inneranimalmedia** Version ID: `3f70b87d-c405-40e0-86e0-ec9f445dc43f`.
+
+## 2026-03-19 Terminal: ctx.waitUntil + quiet UI (v69)
+
+### What was asked
+Sam was still seeing immediate socket close after 101, angry about noisy bracket messages and “error codes” in the terminal UI.
+
+### Root cause (addressed)
+- Outbound Worker `fetch()` WebSocket to PTY may be cut when the handler returns unless the runtime keeps the invocation alive; added **`ctx.waitUntil(Promise)`** that resolves when either bridge leg **`close`** fires.
+- UI: removed **`[Socket closed]`**, throttled “not connected” spam, “still connecting”, and “send failed” lines; Enter when dead is silent; shorter hint and error copy.
+
+### Files changed
+- `worker.js` `/api/agent/terminal/ws`: `ctx.waitUntil`; `upstreamWs.close()` / `serverWs.close()` without code/reason args.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: as above; stale `ws` guards retained.
+- `dashboard/agent.html`: `?v=69`.
+
+### Deploy / R2
+- Built agent-dashboard; R2 put JS/CSS/`agent.html`; `npm run deploy` — Worker Version ID: `cca99682-bbd5-4cca-8deb-e4990a478714`.
+
+### Note
+- MCP work was not reverted in this step; this session only adjusted terminal bridge + dashboard copy.
+
+## 2026-03-19 Deploy on demand (Sam)
+
+### What was asked
+Sam demanded another deploy to test the current build.
+
+### Deploy
+- `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Sam requested deploy to verify terminal bridge (ctx.waitUntil + latest worker)' npm run deploy`
+- Worker **inneranimalmedia** Version ID: `7c420bd1-c6ce-4af8-bf0d-f3dbf7c006b1`
+
+### R2
+- No R2 upload this step (agent bundle remains v69 unless rebuilt separately).
+
+## 2026-03-20 docs: incident retrospective (terminal + MCP)
+
+### What was asked
+Sam asked for “new API secrets” printed and a write-up of how the working build was ruined; extreme frustration with Cursor subscription.
+
+### Actions
+- **Did not print secrets** — Cloudflare never returns secret values after upload; no agent has production secret plaintext. Advised vault + rotation if values were lost or exposed in chat.
+- Added `docs/INCIDENT_RETROSPECTIVE_2026-03-19_TERMINAL_MCP.md`: technical causes (terminal protocol, WS state, reconnect storm, Worker bridge lifetime, PTY ping, error handlers, stale handlers, wrong `wrangler --name` for MCP), process failures, correct secret **targets** (names only), recovery and verification table.
+
+### Files changed
+- `docs/INCIDENT_RETROSPECTIVE_2026-03-19_TERMINAL_MCP.md` (new)
+- `docs/cursor-session-log.md` (this entry)
+
+### Deploy
+- None.
+
+## 2026-03-20 Terminal token sync (Sam-supplied)
+
+### What was asked
+Sam supplied a new shared token to install everywhere needed for terminal recovery.
+
+### Actions
+- `~/iam-pty/ecosystem.config.cjs`: `PTY_AUTH_TOKEN` updated to Sam-supplied value.
+- `wrangler secret put` via `with-cloudflare-env.sh`:
+  - Worker **inneranimalmedia**: `TERMINAL_SECRET`, `PTY_AUTH_TOKEN`, `TERMINAL_WS_URL` (`https://terminal.inneranimalmedia.com`).
+  - Worker **inneranimalmedia-mcp-server**: `PTY_AUTH_TOKEN`.
+- `pm2 restart iam-pty --update-env`.
+
+### Not changed
+- `.cursor/mcp.json` / `MCP_AUTH_TOKEN` (terminal-only rotation per request).
+
+### Security note
+Token was pasted in chat; consider vault copy and rotation if chat retention is a concern.
+
+## 2026-03-20 Terminal: direct browser wss (bypass Worker WS proxy)
+
+### What was wrong
+Same-origin Worker WebSocket proxy (browser Worker fetch() WS to tunnel) remained fragile; user still saw 101 then dead pipe.
+
+### Fix
+- `worker.js`: **`GET /api/agent/terminal/socket-url`** (session required) returns JSON `{ url }` = `wss://` form of `TERMINAL_WS_URL` + `?token=TERMINAL_SECRET`.
+- `FloatingPreviewPanel.jsx`: on Terminal tab, **`fetch` socket-url** then **`new WebSocket(url)`**; fallback to `/api/agent/terminal/ws` if fetch fails or bad JSON.
+- `dashboard/agent.html`: `?v=90`.
+
+### Security
+Any logged-in dashboard user can obtain the PTY gate token from this endpoint (DevTools). Acceptable for single-operator IAM; do not expose dashboard login to untrusted users without a different model (e.g. opaque tickets + PTY-side validation).
+
+### Deploy / R2
+- Built agent-dashboard; R2 put; `npm run deploy` — Worker Version ID: `eb04fc18-ab93-42c9-a4f4-c2d12908af90`.
+
+## 2026-03-20 Settings panel + mobile tab bar + /api/env + D1 query
+
+### What was asked
+Execute approved settings patch: `SettingsPanel.jsx`, `FloatingPreviewPanel` settings tab swap, `AgentDashboard` mobile strip + bottom sheet wrapper, append mobile CSS, worker routes for `/api/env/*`, `POST /api/d1/query`, `GET /api/env/spend`, backups + rollback script, build, R2, deploy.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx` (new): extracted from session transcript; semantic tokens with fallbacks per Correction 3; fixed alpha-border strings broken by naive hex replace (`var(--border-danger, #cf667940)`, `var(--border-success, #4caf8640)`, `var(--border-success, #4caf8630)`).
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` lines 3-4: `import SettingsPanel`; lines 950-962: settings tab mounts `SettingsPanel`.
+- `agent-dashboard/src/AgentDashboard.jsx` after icon bar: mobile `sp-mobile-tabbar` (icons via Unicode escapes); lines ~3306-3335: `previewOpen` wraps `FloatingPreviewPanel` in `<div className={isMobile ? "sp-bottom-sheet" : ""}>` (no `.closed` per Correction 2).
+- `agent-dashboard/src/index.css`: appended mobile bottom sheet + tab bar + `100dvh` / safe-area rules from transcript extract.
+- `worker.js`: **first** insert placed env/d1/spend inside `handleAgentApi` (wrong — `/api/env` never hit that handler → 404). **Removed** that block and **re-inserted** after `/api/vault` in main `fetch`, with `method` replaced by `(request.method || 'GET').toUpperCase()` in those `if`s. **`GET /api/env/spend`** moved to the **top** of the `/api/env/` block (before `VAULT_KEY` guard) so it is not shadowed by `pathLower.startsWith('/api/env/')` and does not require vault.
+- `rollback-settings-patch.sh` (new, executable); `.bak` files for `FloatingPreviewPanel.jsx`, `AgentDashboard.jsx`, `index.css`, `worker.js`.
+
+### Files NOT changed (and why)
+- `dashboard/agent.html`: not required for Vite bundle; deploy script pushed built JS/CSS to R2.
+- `wrangler.production.toml`: per rules, not touched.
+
+### Deploy status
+- Built: yes (`agent-dashboard.js` ~316 kB).
+- R2 uploaded: yes — via `./agent-dashboard/deploy-to-r2.sh` (includes agent-dashboard bundle).
+- Worker deployed: yes — Worker Version ID after spend-route fix: `b5b5743c-885b-4ff6-84c9-2867a200f0a0` (prior mis-routed deploy: `987eb522-29cf-4444-a824-aca0e15d5e1c`).
+- Deploy approved by Sam: yes (explicit execute order in chat including `npm run deploy`).
+
+### What is live now
+- `GET https://inneranimalmedia.com/api/env/secrets` returns JSON (200, empty list if no rows).
+- `POST https://inneranimalmedia.com/api/d1/query` returns 401 without session.
+- Agent dashboard bundle on R2 includes Settings panel and mobile CSS.
+
+### Known issues / next steps
+- `PROVIDER_COLORS` in `SettingsPanel.jsx` still uses raw hex for provider accents (not in Correction 3 list).
+- Consider normalizing indent of inserted `worker.js` block (currently mixed 4- vs 6-space at outer `if`).
+- D1 `POST /api/d1/query`: destructive guard uses `startsWith` only; `UPDATE`/`INSERT` still allowed for authenticated users.
+
+## 2026-03-20 Mobile/Desktop panel repair + DB docs
+
+### What was asked
+Fix the Agent dashboard layout regression (desktop cramped panel + mobile sheet behavior), deploy updated frontend assets to R2, skip screenshots, and write deployment documentation into D1 and session logs.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: fixed chat-pane flex to ignore panel split on mobile, added mobile backdrop overlay, replaced panel wrapper with inline mobile bottom-sheet styles and desktop flex wrapper styles.
+- `agent-dashboard/src/index.css`: removed `.sp-bottom-sheet`/`.closed` class block, tightened mobile tab button spacing (`padding 4px 6px`) and font size (`10px`).
+- `docs/cursor-session-log.md`: appended this entry.
+
+### Files NOT changed (and why)
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: intentionally untouched per surgical scope.
+- `worker.js`: no changes in this task.
+
+### Deploy status
+- Built: yes (`vite build` successful).
+- R2 uploaded: yes — `./agent-dashboard/deploy-to-r2.sh`.
+- Worker deployed: no (not requested in this step).
+- Deploy approved by Sam: yes (`deploy approved`).
+
+### DB documentation written
+- Deploy ID used: `r2-mobile-fix-20260320-58cceec7`.
+- `cms_pages`: `INSERT OR IGNORE` executed (no-op; row already present).
+- `deployments`: inserted 1 row.
+- `dashboard_versions`: inserted/replaced 1 row (`md5=26cd77c67064c2e615857ba651ef9ab0`, `size=316645`, `git=74b6e37`).
+- `deployment_health_checks`: inserted 4 rows (health/env/d1/dashboard-agent = 200/200/401/200, all marked pass per expected auth behavior on d1 route).
+- `roadmap_steps`: update attempted; 0 rows changed (target IDs not currently `in_progress`).
+- `project_memory`: upserted summary row with key `DEPLOY_MOBILE_PANEL_FIX_20260320`.
+
+### Error encountered and resolution
+- Initial `deployment_health_checks` insert failed with FK constraint because this table references `cloudflare_deployments(deployment_id)` in current schema, not `deployments(id)`.
+- Resolved by inserting matching row into `cloudflare_deployments` with the same deploy ID, then re-running health-check inserts successfully.
+
+### What is live now
+Updated `agent-dashboard.js/css` are live from R2 with repaired desktop split behavior and mobile bottom-sheet/backdrop behavior.
+
+### Known issues / next steps
+- If desired, run manual visual pass on desktop/mobile in browser (screenshots were skipped per explicit user instruction).
+
+## 2026-03-20 Vault middleware Phase 0 deploy
+
+### What was asked
+Deploy approved: ship Phase 0 vault middleware in `worker.js` (`getVaultSecrets`, per-request `secret()` helper), verify health, document deploy in D1 `deployments`.
+
+### Files changed
+- `worker.js` (prior session): module-level `getVaultSecrets`; first lines of `worker.fetch` `try` load vault and define `secret(key) => vault[key] ?? env[key]`.
+
+### Files NOT changed (and why)
+- No frontend, HTML, CSS, or wrangler config in this deploy step.
+
+### Deploy status
+- Built: n/a (worker only).
+- R2 uploaded: no.
+- Worker deployed: yes — **Current Version ID:** `fb3c122d-905c-4575-a7f8-00b8f61b5368`.
+- Deploy approved by Sam: yes (`deploy approved`).
+
+### Post-deploy
+- `GET https://inneranimalmedia.com/api/health`: `{"ok":true,"worker":"inneranimalmedia",...}`.
+- D1 `deployments`: inserted row `id=fb3c122d-905c-4575-a7f8-00b8f61b5368`, `version=vault-middleware-phase0`, `git_hash=74b6e37a8517aabe94813d173be9d20ca23d56e2`.
+
+### What is live now
+Production worker loads active `env_secrets` into memory per request; `secret()` prefers vault over `env`; existing `env.*` call sites unchanged.
+
+### Known issues / next steps
+- Optional: `curl /api/env/secrets` with session cookie (not run from agent).
+- Next phase: swap selected handlers to `secret('KEY')` one at a time.
+
+## 2026-03-20 Boot integrations: google alias + deploy
+
+### What was asked
+After the `/api/agent/boot` integrations loop, alias `google_drive` to `google` for frontend compatibility; deploy approved.
+
+### Files changed
+- `worker.js` (boot handler): after `for (const row of tokRows.results) integrations[row.provider] = true;`, added comment + `if (integrations['google_drive']) integrations['google'] = true;`.
+
+### Deploy status
+- Worker deployed: yes — **Current Version ID:** `38959162-7cc0-4aec-99d3-06cdec812a4e`.
+- Deploy approved by Sam: yes (`deploy approved`).
+
+### What is live now
+Boot `integrations` includes both `google_drive` and `google` when Drive is connected.
+
+## 2026-03-20 Agent dashboard: search, Git tab, diff card
+
+### What was asked
+Three targeted UI changes only: remove knowledge search floating overlay (route search to Files tab), source control opens right-panel Git tab with `GitPanel`, non-shell `generatedCode` messages use inline `DiffProposalCard` with Open/Accept/Reject; build dashboard.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: removed knowledge search state/effect/overlay; topbar + connector search open Files tab; source icon opens `git` tab; removed legacy Source Control fixed popup and its state/effects; added `DiffProposalCard` (CSS vars only); shell messages keep Run/Deny + pre; other languages use card; Accept sets `proposedFileChange` with bucket hint.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `TAB_LABELS`/`TAB_ORDER` include `git`; added `GitPanel` (PTY commands to fixed repo path); `activeTab === "git"` render; extended `proposedFileChange` effect to load original from R2 when no matching open file (`filesBuckets[0]` string fix).
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`).
+- R2 uploaded: yes — `./agent-dashboard/deploy-to-r2.sh` after `deploy approved` (agent-dashboard.js/css + script bundle set).
+- D1 deployments insert: yes — id `r2-agent-dash-ui-20260320-74b6e37`, version `ui-targeted-improvements-r2`.
+
+### Known issues / next steps
+- `GitPanel` uses a hard-coded local repo path; PTY runs in user terminal environment.
+
+## 2026-03-20 Viewer icon strip left edge + v91
+
+### What was asked
+Remove search icon from chat subheader; icon buttons toggle panel open/close with active styling; move tool icons to vertical strip on left edge of desktop viewer column; remove FloatingPreviewPanel text tab row; bump `agent.html` to `?v=91`; R2 deploy + D1 row.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: chat subheader is session-name only; desktop `!isMobile` column with 48px strip + `FloatingPreviewPanel` when open; strip uses SVG `ViewerPanelStripIcon`; chat flex when desktop + closed uses `1 1 0%` beside 48px strip; resize divider only `previewOpen && !isMobile`; mobile tabbar adds Git and toggle close.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: removed `TAB_LABELS`/`TAB_ORDER` and horizontal tab buttons; header keeps pop-out + close. (`runCommandInTerminal` / `onTabChange` fixed in follow-up deploy v92.)
+- `dashboard/agent.html`: `v=90` -> `v=91` on CSS/JS.
+
+### Deploy status
+- Built: yes; R2: `./agent-dashboard/deploy-to-r2.sh`.
+- D1: `deployments.id` = `r2-icon-strip-v91-74b6e37`, `version` = `icon-strip-left-v91`.
+
+### What is live now
+Agent page loads bundle with `v=91`; desktop viewer shows vertical tool strip; shell header unchanged.
+
+## 2026-03-20 runCommandInTerminal onTabChange fix + v92
+
+### What was asked
+Deploy approved: standalone pass — `FloatingPreviewPanel.jsx` `runCommandInTerminal` use `onTabChange("terminal")` + deps; `agent.html` `?v=92`; build, R2, D1.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` ~847–851: `if (onTabChange) onTabChange("terminal");`, `useCallback` deps `[onTabChange]`.
+- `dashboard/agent.html`: `v=91` → `v=92` on agent-dashboard CSS/JS links.
+
+### Deploy status
+- `node --check` on `.jsx`: not applicable (Node reports unknown extension); `npm run build` OK.
+- R2: `./agent-dashboard/deploy-to-r2.sh` OK.
+- D1: `r2-onTabChange-v92-74b6e37`, version `floating-preview-onTabChange-v92`.
+
+### What is live now
+Successful `/api/agent/terminal/run` from `runCommandRunnerRef` switches parent tab to Terminal without `ReferenceError`; agent page cache bust `v=92`.
+
+## 2026-03-20 Combined UI v93 (icon strip, chat header, mobile tabbar, settings nav)
+
+### What was asked
+COMBINED BUILD: icon strip uses `--bg-nav` / `--border-light`; remove duplicate session subheader; single chat header row with rename + `•••` session menu + outside-click close; mobile tabbar icons-only with 44px touch targets (overrides in `AgentDashboard.jsx` `<style>` only — `index.css` not changed per 3-file scope); `SettingsPanel` horizontal tabs replaced with grouped left sidebar + placeholder General/Usage/Agents; Integrations nav id `extensions`; D1 label "Data"; `agent.html` `?v=93`; build + R2 + D1 insert (R2/D1 pending Sam approval).
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: `chatMenuRef`; outside-click `useEffect` includes `showChatMenu`; removed duplicate subheader row; chat title row = editable session name + `•••` dropdown (Rename / Star / Add to project / Delete); project + delete modals as siblings under chat pane; `iam-viewer-icon-strip` background/border; mobile tabbar map icons-only + `title` + `minWidth: 44`; scoped CSS for `.iam-chat-pane .sp-mobile-tabbar-btn`.
+- `agent-dashboard/src/SettingsPanel.jsx`: `NAV_GROUPS` sidebar; `GeneralTab` / `UsageTab` / `AgentsTab` stubs; `tabContent` keys include `extensions` (was `integrations`); root layout flex row 140px nav + content.
+- `dashboard/agent.html`: `v=92` → `v=93` on agent-dashboard CSS/JS.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `worker.js`, `index.css`: per user scope / rules.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`).
+- R2 uploaded: yes — `./agent-dashboard/deploy-to-r2.sh` (agent-dashboard.js/css, `dashboard/agent.html`, plus script’s other dashboard pages).
+- Worker deployed: no (R2-only; worker unchanged).
+- Deploy approved by Sam: yes (2026-03-20).
+- D1 `deployments` row: `r2-settings-sidebar-v93-74b6e37`, version `settings-sidebar-v93`, `git_hash` `74b6e37`.
+
+### What is live now
+Production R2 serves agent bundle `?v=93` and updated `agent.html`; combined UI (icon strip, chat header, mobile tabbar, settings sidebar) is live for users loading from R2-backed agent page.
+
+### Known issues / next steps
+- None for this drop; worker deploy only if routing or API changes are needed.
+
+## 2026-03-20 Visual refinements v94
+
+### What was asked
+Style-only v94: icon strip transparent + no left border; verify mobile 7-tab icons-only strip (Git glyph); settings nav group icons + section dividers + indented compact items; `agent.html` `?v=94`; build + R2 + D1 (R2/D1 pending **deploy approved**).
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` ~3152–3156: `iam-viewer-icon-strip` `background: transparent`, `borderLeft: none`; mobile tabbar Git icon `\u2387` (⎇).
+- `agent-dashboard/src/SettingsPanel.jsx`: `NAV_GROUPS` per-group `icon`; sidebar headers flex row with icon + label, `borderTop`/`marginTop` except first group; nav item `padding: 4px 10px 4px 16px`, `fontSize: 11`.
+- `dashboard/agent.html`: `?v=93` → `?v=94`.
+
+### Deploy status
+- Built: yes (`npm run build`).
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20).
+- D1: `r2-nav-refinements-v94-74b6e37`, version `nav-refinements-v94`, `git_hash` `74b6e37`.
+
+### What is live now
+Production R2 serves agent bundle and `agent.html` with `?v=94` (transparent icon strip, mobile Git glyph, settings nav refinements).
+
+## 2026-03-20 v95 — mobile tabbar visibility + icon strip + settings nav sizing
+
+### What was asked
+Diagnostic: mobile `.sp-mobile-tabbar` not visible on iPhone despite `isMobile`; fix with inline layout/stacking; place tabbar between conversation header and messages; icon strip overflow/alignment/active border; settings sidebar 160px / 13px text; `?v=95`; build + deploy + D1 (R2/D1 pending **deploy approved**).
+
+### Diagnostic (index.css lines 112–129)
+- Default: `.sp-mobile-tabbar { display: none; }`
+- `@media (max-width: 768px)` only then sets `display: flex` plus height, border, background. If JS `isMobile` is true but stylesheet media rules do not apply to the same layout box (or base `display:none` wins in edge cases), the row stays hidden. **Fix:** when `isMobile`, the tabbar wrapper uses inline `display: "flex"` plus `zIndex: 50`, `width: "100%"`, `background: var(--bg-elevated)`, `borderBottom: var(--border)`, `position: "sticky"`, `top: 0`, horizontal scroll + `scrollbarWidth: "none"`.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: moved `{isMobile && (` tabbar block to immediately before the messages pane (after chat header + modals); tabbar only gated by `isMobile`; desktop viewer column `overflow: "visible"`; `iam-viewer-icon-strip` `overflow: "visible"`, `paddingTop/Bottom: 12`, `alignItems: "flex-end"`; strip buttons use `borderRight` accent, `borderLeft: "none"`, conditional `borderRadius`; `<style>` webkit scrollbar hide for `.iam-chat-pane .sp-mobile-tabbar`.
+- `agent-dashboard/src/SettingsPanel.jsx`: sidebar `width: 160`; section header `fontSize: 10`, `letterSpacing: "0.08em"`; group icon `fontSize: 13`, `opacity: 0.6`; nav items `fontSize: 13`, `padding: "6px 10px 6px 16px"`.
+- `dashboard/agent.html`: `?v=94` → `?v=95`.
+
+### Deploy status
+- Built: yes (`npm run build`).
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20).
+- D1: `r2-icon-nav-sizing-v95-74b6e37`, version `icon-nav-sizing-v95`, `git_hash` `74b6e37`.
+
+### What is live now
+Production R2 serves agent bundle and `agent.html` with `?v=95` (mobile tabbar fix/placement, icon strip layout, settings nav sizing).
+
+## 2026-03-20 v96 — strip clipping, settings nav right, mobile SVG icons
+
+### What was asked
+v96: outer viewer overflow + strip `minHeight`/`height`/padding/position; settings nav on right with `borderLeft` and `borderRight` accent + padding flip; mobile tabbar uses same SVGs as desktop via `ViewerPanelStripIcon` + `size`; `?v=96`; build + deploy + D1 (R2/D1 pending **deploy approved**).
+
+### Pre-flight (line refs, pre-edit)
+- Viewer column ~3158–3166: already `overflow: "visible"`; strip ~3168–3183; `ViewerPanelStripIcon` ~187–197; mobile tabbar ~1826–1874 (Unicode icons); `SettingsPanel` root ~1017–1090 (nav left, `width: 160`).
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: `ViewerPanelStripIcon` accepts optional `size` (default dim 16 vs 18 for files/settings when omitted); `iam-viewer-icon-strip` `position: "relative"`, `height: "auto"`, `minHeight: "100%"`, padding 16, `overflow: "visible"`; strip buttons `overflow: "visible"`; mobile `.sp-mobile-tabbar` maps `VIEWER_STRIP_TAB_ORDER` with `<ViewerPanelStripIcon tab={tab} size={16} />` (no Unicode tab icons).
+- `agent-dashboard/src/SettingsPanel.jsx`: content column first, 160px nav second; nav `borderLeft` (was `borderRight`); item `borderRight` accent, `padding: "6px 16px 6px 10px"`.
+- `dashboard/agent.html`: `?v=95` → `?v=96`.
+
+### Deploy status
+- Built: yes (`npm run build`).
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20).
+- D1: `r2-icon-nav-align-v96-74b6e37`, version `icon-nav-align-v96`, `git_hash` `74b6e37`.
+
+### What is live now
+Production R2 serves agent bundle and `agent.html` with `?v=96` (strip sizing, settings nav right, mobile SVG tab icons).
+
+## 2026-03-20 v97 — icon strip overflow, panel flex parity, settings NAV SVGs
+
+### What was asked
+Layout fix + settings nav icons v97: constrain viewer column and scrollable icon strip; confirm chat/viewer flex; replace `NAV_GROUPS` Unicode with inline SVGs; bump `agent.html` to `?v=97`; build; deploy/D1 only with explicit approval.
+
+### Pre-flight (line refs, pre-edit)
+- No `iam-viewer-column` class; outer desktop viewer wrapper ~3151–3159 (`overflow: "visible"`).
+- Icon strip ~3161–3179 (`height: "auto"`, `minHeight: "100%"`, `paddingTop/Bottom: 16`, `overflow: "visible"`).
+- Strip buttons ~3196–3213 (`overflow: "visible"`).
+- `FloatingPreviewPanel` wrapper ~3223 already `flex: 1`, `minWidth: 0`, column flex.
+- Chat flex ~1499; viewer flex ~3155 (`previewOpen` only, inside `!isMobile` equivalent to `previewOpen && !isMobile`).
+- `NAV_GROUPS` ~9–53 (Unicode); section icon ~1050; `agent.html` ~720–721 `v=96`.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` ~1499: chat pane flex uses `previewOpen && !isMobile` for width split (same behavior as before).
+- `agent-dashboard/src/AgentDashboard.jsx` ~3151–3159: viewer outer column `height`/`maxHeight` `100%`, `overflow: "hidden"`, flex `previewOpen && !isMobile`.
+- `agent-dashboard/src/AgentDashboard.jsx` ~3161–3181: icon strip `height: "100%"`, `overflowY: "auto"`, `overflowX: "hidden"`, `scrollbarWidth: "none"`, padding 12; removed `minHeight`/`overflow: visible`.
+- `agent-dashboard/src/AgentDashboard.jsx` ~3196–3212: removed strip button `overflow: "visible"`.
+- `agent-dashboard/src/AgentDashboard.jsx` ~3255–3271: `.iam-viewer-icon-strip::-webkit-scrollbar { display: none; }`.
+- `agent-dashboard/src/SettingsPanel.jsx` ~9–100: `NAV_GROUPS` icons as inline SVG (`currentColor`); ~1050–1053: section header span flex + opacity 0.7 for JSX icons.
+- `dashboard/agent.html` ~720–721: `?v=96` → `?v=97`.
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `worker.js`, `agent.html` beyond version query: not in scope.
+- Mobile tabbar button `overflow: "visible"` (~1854): left as-is (not desktop icon strip).
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/` via `deploy-to-r2.sh`).
+- `node --check agent-dashboard/dist/agent-dashboard.js`: pass (prior run).
+- R2 uploaded: yes — `./agent-dashboard/deploy-to-r2.sh` (2026-03-20, **deploy approved**): `agent-dashboard.js`, `agent-dashboard.css`, `dashboard/agent.html` (`?v=97`), plus script’s other dashboard/static uploads (shell, chats, cloud, overview, time-tracking, finance, billing, Finance.js, PieChart chunks, overview/time-tracking bundles).
+- Worker deployed: no (R2-only; script ends with note to run `npm run deploy` if worker change needed).
+- D1 deployments row: not run (optional `INSERT` still available).
+- Deploy approved by Sam: yes.
+
+### What is live now
+Production R2 **agent-sam** serves agent bundle and `static/dashboard/agent.html` with `?v=97` (icon strip scroll/clipping, viewer column constraints, settings nav SVG icons).
+
+### Known issues / next steps
+- Optional: D1 `INSERT INTO deployments` for v97 with real `VERSION_ID` and `GIT_HASH`.
+- Worker unchanged; no `npm run deploy` required for this UI-only R2 rollout.
+
+## 2026-03-20 v98 — root flex row height anchor (icon strip overflow)
+
+### What was asked
+Definitive fix: root flex row (direct child of `#agent-dashboard-root` containing chat + viewer) needs `height: "100%"` so viewer column `height: 100%` resolves; bump `agent.html` to `?v=98`; build + deploy + optional D1.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` ~1487–1494: added `height: "100%"` to root chat+viewer flex row (`minHeight: 0` and `overflow: "hidden"` were already present).
+- `dashboard/agent.html` ~720–721: `?v=97` → `?v=98`.
+- `docs/cursor-session-log.md`: This entry.
+
+### Deploy status
+- Built: yes; `node --check agent-dashboard/dist/agent-dashboard.js`: pass.
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20): agent bundle + `agent.html` (`?v=98`) and script’s other dashboard uploads.
+- D1: not run (user template needs `VERSION_ID` / `GIT_HASH`).
+- Deploy approved by Sam: yes.
+
+### What is live now
+Production R2 **agent-sam** serves agent bundle and `static/dashboard/agent.html` with `?v=98` (root flex row `height: 100%` for icon strip constraint).
+
+## 2026-03-20 v99 — Monaco diff cleanup, settings nav + pages
+
+### What was asked
+FloatingPreviewPanel: dispose diff editor safely when leaving Code tab (setModel null before dispose). SettingsPanel: merge Usage into Spend under WORKSPACE as "Usage & Spend", GitHub repos open URL (onOpenInBrowser + fallback), General/Agents tabs designed with SettingsRow/ToggleSwitch; agent.html `?v=99`; build (deploy when approved).
+
+### Pre-flight (grep highlights)
+- FloatingPreviewPanel: `DiffEditor` ~1448–1490, `diffEditorRef` ~1462; no `createDiffEditor`/`setModel` in source (react wrapper only).
+- SettingsPanel: `UsageTab` ~1007–1016, `SpendTab` ~808+, NAV `usage` ~22, `spend` in CONTEXT ~85, `GitHubTab` repos ~735–746 (no click), `SettingsPanel` ~1033, `tabContent` usage/spend ~1037–1049.
+- FloatingPreviewPanel `SettingsPanel` ~1041–1045 (no `onOpenInBrowser`).
+- agent.html `v=98` ~720–721.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: prop `onOpenInBrowser`; `useEffect([open, activeTab])` cleanup when `open && activeTab === "code"` ends — `getModel`, `setModel(null)`, `dispose`, clear ref; pass `onOpenInBrowser` to `SettingsPanel`.
+- `agent-dashboard/src/SettingsPanel.jsx`: `SettingsRow`, `ToggleSwitch` before `NAV_GROUPS`; WORKSPACE nav `spend` "Usage & Spend", remove `usage`; CONTEXT drop `spend`; remove `UsageTab`; `GeneralTab`/`AgentsTab` content; `GitHubTab` repo rows clickable + hover + `html_url` fallback URL; export/`GitHubTab` take `onOpenInBrowser`.
+- `dashboard/agent.html`: `?v=98` → `?v=99`.
+- `agent-dashboard/src/AgentDashboard.jsx`: `handleOpenInBrowser` (`window.open(url, "_blank", "noopener")`); both `FloatingPreviewPanel` instances (mobile + desktop) pass `onOpenInBrowser={handleOpenInBrowser}`.
+- `docs/cursor-session-log.md`: This entry.
+
+### Deploy status
+- Built: yes; `node --check dist/agent-dashboard.js`: pass.
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20); `agent.html` `?v=99` + agent bundle + script’s other dashboard uploads.
+- Worker / D1: not run for this rollout.
+
+### What is live now
+Production R2 **agent-sam** serves v99 agent bundle with settings/GitHub/diff fixes and dashboard-wired `onOpenInBrowser` for Settings GitHub repos.
+
+## 2026-03-20 v100 — DiffEditor key remount, GitHub → Browser tab, mobile drawer
+
+### What was asked
+Monaco DiffEditor: key + conditional mount, remove manual dispose ref. GitHub settings repos open in Browser panel (`setBrowserUrl` + tab + preview). GitHubTab fetch errors visible. Mobile: right drawer replaces bottom sheet + remove `sp-mobile-tabbar`. `agent.html` `?v=100`. Build + deploy when approved.
+
+### Pre-flight (audit line refs, pre-edit)
+- FloatingPreviewPanel: `DiffEditor` ~1465–1507, `diffEditorRef` ~238/1479, `useEffect` cleanup ~241–254, `proposedFileChange` ~706+.
+- SettingsPanel: `GitHubTab` ~721+, `html_url` / `onOpenInBrowser` ~777–795.
+- FloatingPreviewPanel: `browserUrl` prop ~173, `onBrowserUrlChange` / iframe ~1065+.
+- AgentDashboard: mobile bottom sheet ~3099–3156 (`72vh`), `sp-mobile-tabbar` ~1835–1876; `browserUrl`/`setBrowserUrl` ~333, ~3136+.
+- agent.html `v=99` ~720–721.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: removed `diffEditorRef` and tab/dispose `useEffect`; `DiffEditor` only mounts when `hasRealDiffFromChat || diffMode`; stable `key` from chat filename / `proposedFileChange.filename` / `codeFilename`; `onMount` no longer assigns ref.
+- `agent-dashboard/src/AgentDashboard.jsx`: `handleOpenInBrowser` sets normalized URL, `browser` tab, `previewOpen`; mobile side drawer (backdrop + `translateX` drawer + collapsed edge strip); removed horizontal `sp-mobile-tabbar` and old bottom sheet; dropped dead `@media` for `sp-mobile-tabbar`.
+- `dashboard/agent.html`: `?v=99` → `?v=100`.
+- `agent-dashboard/src/SettingsPanel.jsx` (CHANGE 2 error/empty): `GitHubTab` `error` state, non-OK fetch handling, error + empty repo copy.
+- `docs/cursor-session-log.md`: This entry.
+
+### Deploy status
+- Built: yes; `node --check dist/agent-dashboard.js`: pass.
+- R2: yes — `./agent-dashboard/deploy-to-r2.sh` after **deploy approved** (2026-03-20): agent bundle + `agent.html` (`?v=100`) and script’s other dashboard uploads.
+- D1: not run.
+- Deploy approved by Sam: yes.
+
+### What is live now
+Production R2 **agent-sam** serves v100 agent bundle (`?v=100`): DiffEditor key remount, GitHub repos → Browser tab in-app, mobile right drawer, Settings GitHub fetch error/empty states.
+
+---
+
+## [2026-03-20] Sprint 1 Build 1 — TOOL_CALL SSE in chatWithToolsAnthropic, terminal_execute builtin
+
+### What was asked
+Pre-flight sed/grep; Change 1: queue `TOOL_CALL` / `THINKING` state events in `chatWithToolsAnthropic` tool loop, flush on stream `start`; Change 2: `terminal_execute` in `/api/agent/commands/execute` builtins using `runTerminalCommand`; Change 3: xterm theme from CSS (FloatingPreviewPanel); `node --check`, build, deploy/D1 per instructions.
+
+### Pre-flight results (as run)
+- `sed -n '7255,7275p' worker.js`: showed post-invoke log / `toolResults` / `messages.push` / start of `finalRes` block (loop `for (const block` is ~7250–7263).
+- `sed -n '1014,1022p' worker.js`: `builtin` branch with `clear_context` / `list_tools` map.
+- `grep agentSessionIdForHistory`: line 3051 assignment; binds 3057, 3060, 3066, 3069.
+- `FloatingPreviewPanel.jsx`: no `new Terminal` / `xterm` / `Terminal({` matches; `agent-dashboard/package.json` has no xterm dependency — terminal tab is WebSocket + text output, not xterm.js.
+
+### Files changed
+- `worker.js` — `chatWithToolsAnthropic` (~7126+): `TOOL_DISPLAY`, `pendingStateEvents`, `flushPendingToolStates`; before each tool `invokeMcpToolFromChat`, push `{ type: 'state', state: 'TOOL_CALL', context: { tool } }` when `wantStream`; after invoke push `{ type: 'state', state: 'THINKING', context: {} }`; call `flushPendingToolStates(controller)` at start of three `ReadableStream` `start` handlers (tool approval stream, no-tools stream, post-loop stream).
+- `worker.js` — `/api/agent/commands/execute` builtins: added `terminal_execute` calling `runTerminalCommand(env, request, cmdToRun, null)` with `parameters.raw || parameters.command`.
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: Change 3 not applicable — no xterm `Terminal` instance in repo dashboard sources; theme-from-CSS pattern would require adding xterm or a different hook.
+- `dashboard/agent.html` / R2: not part of this edit set.
+
+### Deploy status
+- `node --check worker.js`: pass.
+- Built: yes (`npm run build` in `agent-dashboard/`).
+- R2 uploaded: no (no dashboard/HTML changes in this sprint).
+- Worker deployed: yes — **Version ID: `ef51fba8-9dc0-40a1-9ee2-9e7d8d3ae041`** (`TRIGGERED_BY=agent`, `DEPLOYMENT_NOTES` set for Sprint 1 Build 1).
+- D1 deployments row: not run.
+- Deploy approved by Sam: yes (2026-03-20).
+
+### What is live now
+Production worker **inneranimalmedia** at version `ef51fba8-9dc0-40a1-9ee2-9e7d8d3ae041` serves Sprint 1 Build 1: `chatWithToolsAnthropic` streams queued `TOOL_CALL` / `THINKING` state events; `/api/agent/commands/execute` includes `terminal_execute` builtin when `agent_commands.implementation_ref` matches.
+
+### Known issues / next steps
+- Ensure `agent_commands` row for `/run` uses `implementation_type: 'builtin'` and `implementation_ref: 'terminal_execute'`, with `parameters.raw` or `parameters.command` set by the client slash handler.
+- Deploy worker after **deploy approved**; optional D1 insert only if approved.
+
+---
+
+## [2026-03-20] Sprint 1 Build 2 — TerminalOutputCard, DeployStatusPill, status bar activity
+
+### What was asked
+Pre-flight greps; add `TerminalOutputCard` and `DeployStatusPill`; wire into `messages.map`; Run button injects `terminal_output` message + `agentActivity`; Wrangler deploy injects `deploy_status` via callbacks; `agent.html` `?v=103`; build; `deploy-to-r2.sh` / D1 per sprint doc.
+
+### Pre-flight line numbers (grep)
+- `DiffProposalCard`: line 149; usage ~2158 (shifted after edits).
+- `messages.map` / `msg.role` / `msg.content`: map ~2140+; content block updated for tool card types.
+- `agent-status-bar` / `Agent Sam`: ~3276 / ~3291 area (post-edit).
+- `terminal/run` / `commandRun`: Run handler ~2295+; `commandRun` still used for snippet row state.
+- `Deploy to Production` / wrangler: **not in FloatingPreviewPanel** — found in `SettingsPanel.jsx` `WranglerTab` ~516–546 (`Deploy to Production`, `npm run deploy` in modal).
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: `TerminalOutputCard`, `DeployStatusPill` (after `DiffProposalCard`); `agentActivity` state; `handleDeployStart` / `handleDeployComplete`; message renderer branches for `terminal_output` / `deploy_status`; Run button appends running card, updates on fetch, `setAgentActivity` + clear in `finally`; status bar shows activity vs `Agent Sam`; `@keyframes spPulse` in page `<style>`.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: props `onDeployStart`, `onDeployComplete`; `runCommandInTerminal` returns `{ ok, output, error }`; pass deploy props to `SettingsPanel`.
+- `agent-dashboard/src/SettingsPanel.jsx`: `WranglerTab` + root accept deploy callbacks; **Yes, Deploy** awaits `runCommandInTerminal`, parses version id from output, calls `onDeployComplete`.
+- `dashboard/agent.html`: `?v=102` → `?v=103` for agent bundle URLs.
+- `docs/cursor-session-log.md`: This entry.
+
+### Files NOT changed (and why)
+- `worker.js`: out of scope for Build 2.
+
+### Deploy status
+- Built: yes (`npm run build`); `node --check dist/agent-dashboard.js`: pass.
+- R2 / `deploy-to-r2.sh`: **yes** (2026-03-20 after **deploy approved**) — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html` (`?v=103`), plus script’s other dashboard uploads (shell.css, chats/cloud/overview/time-tracking/finance/billing HTML, overview + time-tracking bundles, Finance.js, PieChart chunk).
+- Worker deployed: no (Build 2 is frontend-only).
+- D1 insert: not run.
+- Deploy approved by Sam: yes (2026-03-20).
+
+### What is live now
+Production R2 **agent-sam** serves Sprint 1 Build 2 agent bundle and `agent.html` v103: terminal/deploy chat cards, deploy callbacks from Settings Wrangler tab, status bar activity on Run.
+
+### Notes
+- UI uses ASCII markers (`^`/`v`, `*`, `ok`/`fail`/`...`) instead of emoji per project rules.
+- `var(--danger)` / `var(--success)` use fallbacks where vars may be missing.
+
+## 2026-03-21 Batch 1 — MCP session bind, Playwright gate, screenshot double-fire, icon strip
+
+### What was asked
+Approved Batch 1: fix `upsertMcpAgentSession` D1 bind count; drop `env.DASHBOARD` from Playwright screenshot launch gate only; remove duplicate screenshot callback and in-panel snapshot preview in `FloatingPreviewPanel.jsx`; tighten viewer icon strip padding and mobile drawer overflow in `AgentDashboard.jsx`.
+
+### Files changed
+- `worker.js` lines 4453, 6570: Playwright path gated on `env.MYBROWSER && env.DB` only; `upsertMcpAgentSession` `.bind` now passes 7 args (two trailing `nowUnix` for `created_at` / `updated_at`).
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: removed `browserImgUrl` / `browserCapturedAt` state, duplicate `useEffect` on `browserImgUrl`, snapshot label + `<img>` block; poll completion still calls `onBrowserScreenshotUrl(job.result_url)` once; removed unused `forceRefresh` from `runBrowserCapture`.
+- `agent-dashboard/src/AgentDashboard.jsx`: mobile preview shell `overflow: "hidden"`; `iam-viewer-icon-strip` `paddingTop`/`paddingBottom` 0 on mobile and desktop blocks.
+- `agent-dashboard/dist/agent-dashboard.js` / `agent-dashboard.css`: regenerated by Vite build.
+- `dashboard/agent.html`: `?v=107` to `?v=108` (cache bust for agent bundle URLs).
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: locked.
+
+### Deploy status
+- Built: yes (`./agent-dashboard/deploy-to-r2.sh` runs Vite build).
+- `node --check worker.js`: pass before R2 + deploy.
+- R2 uploaded: yes — `./agent-dashboard/deploy-to-r2.sh` (agent-dashboard.js/css, `agent.html` v108, shell.css, chats/cloud/overview/time-tracking/finance/billing HTML, overview + time-tracking bundles, Finance.js, PieChart chunks).
+- Worker deployed: yes — **Version ID `eaae4d70-d442-4b61-b13e-e20e793d7271`** (`npm run deploy`).
+- D1 `cloudflare_deployments`: yes — `deployment_id=C9CC6647-832A-443F-94CD-CDC73C053817`, `triggered_by=agent`, `deploy_time_seconds=17`, notes describe Batch 1.
+- Deploy approved by Sam: yes (2026-03-21).
+
+### What is live now
+Production worker includes MCP session bind fix and Playwright screenshot path without `DASHBOARD` gate. R2 serves agent page **v108** and rebuilt bundle (icon strip, screenshot single-fire / no in-panel snapshot).
+
+### Known issues / next steps
+- Batches 2–4 (image URLs in chat, provider tool parity, git cards) still pending.
+
+## 2026-03-21 Icon strip vertical offset (chat header/footer alignment)
+
+### What was asked
+Read-only audit of FloatingPreviewPanel outer layout; note `iam-viewer-icon-strip` lives in AgentDashboard, not FloatingPreviewPanel. Set icon strip `paddingTop: 34`, `paddingBottom: 86` on both mobile and desktop strips only.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` lines ~3415-3416 and ~3610-3611: `iam-viewer-icon-strip` paddingTop/paddingBottom 0 to 34/86 (mobile drawer strip + desktop strip). No other properties on those elements changed.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: no `iam-viewer-icon-strip` in this file; layout audit documented in chat only.
+
+### Deploy status
+- Built: yes (`agent-dashboard npm run build`).
+- R2 / worker: not deployed this turn.
+
+### What is live now
+Prior production state until next R2 upload + optional `agent.html` bump.
+
+## 2026-03-21 Icon strip paddingTop 34 to 60
+
+### What was asked
+On both `iam-viewer-icon-strip` nodes in `AgentDashboard.jsx`, set `paddingTop` from 34 to 60; keep `paddingBottom: 86`; no other edits.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` (mobile + desktop icon strip style objects): `paddingTop: 60` only.
+
+### Deploy status
+- Not deployed (pre-deploy correction only).
+
+## 2026-03-21 Frontend R2 — icon strip padding, agent.html v108
+
+### What was asked
+Frontend only: build and `./agent-dashboard/deploy-to-r2.sh`; keep `agent.html` at `?v=108` (repo already v108). Root `npm run build` does not exist — used `agent-dashboard` build + script (script runs Vite again).
+
+### Files changed
+- None in repo beyond prior `AgentDashboard.jsx` padding; `dashboard/agent.html` unchanged at `?v=108`.
+
+### Deploy status
+- Built: yes (Vite x2 via manual + deploy-to-r2).
+- R2 uploaded: yes — `deploy-to-r2.sh` to agent-sam (agent bundle, `agent.html` v108, other dashboard assets in script).
+- Worker deployed: no.
+
+### What is live now
+R2 serves latest agent-dashboard bundle and `agent.html` with `?v=108`.
+
+## 2026-03-21 Icon strip padding tune + agent.html v110 (frontend R2 only)
+
+### What was asked
+Apply approved padding: mobile strip `paddingTop: 34`, `paddingBottom: 110`; desktop `paddingTop: 41`, `paddingBottom: 110`. Bump `agent.html` to `?v=110`. Build + R2 push; no worker.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: both `iam-viewer-icon-strip` style blocks as above.
+- `dashboard/agent.html`: `?v=108` to `?v=110` (CSS + JS).
+- `agent-dashboard/dist/*`: from Vite via deploy script.
+
+### Deploy status
+- Built: yes (`deploy-to-r2.sh`).
+- R2 uploaded: yes (agent bundle + `agent.html` v110 + script’s other dashboard assets).
+- Worker deployed: no.
+
+### What is live now
+R2 serves updated icon-strip offsets and `agent.html` cache bust **v110**.
+
+## 2026-03-21 Desktop icon strip — justifyContent center, no vertical padding (P3)
+
+### What was asked
+Apply desktop-only `iam-viewer-icon-strip`: `justifyContent: "center"`, remove `paddingTop` / `paddingBottom`. Mobile strip unchanged. Ignore cover-div proposal. Bump `agent.html` to `?v=111`, build + R2; no worker.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: desktop strip style only (~3607–3614 area).
+- `dashboard/agent.html`: `?v=110` to `?v=111`.
+- `agent-dashboard/dist/*`: from deploy script.
+
+### Deploy status
+- R2: yes (`deploy-to-r2.sh`).
+- Worker: no.
+
+### What is live now
+R2: desktop viewer tab strip vertically centered in strip column; `agent.html` **v111**.
+
+## 2026-03-21 Batch 2 — attachedImageUrls in chat (frontend R2 v112)
+
+### What was asked
+Store `attachedImageUrls` on `userMsg` from `attachedImages[].url`; render thumbnails for `msg.attachedImageUrls` after `attachedImagePreviews` block. Bump `?v=112`, build + R2; no worker.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: `userMsg` + message render branch for durable HTTPS screenshot URLs.
+- `dashboard/agent.html`: `?v=111` to `?v=112`.
+
+### Deploy status
+- R2: yes (`deploy-to-r2.sh`).
+- Worker: no.
+
+### What is live now
+R2 serves Batch 2 chat persistence for CF Images URLs alongside data URL previews; **agent.html v112**.
+
+## 2026-03-21 Screenshot attach persists CF Images url on image object (v113)
+
+### What was asked
+`handleBrowserScreenshotUrl`: add `url` to attached image object so `attachedImageUrls` on send includes imagedelivery URL. Bump `?v=113`, build + R2; no worker.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: screenshot `setAttachedImages` payload includes `url`.
+- `dashboard/agent.html`: `?v=112` to `?v=113`.
+
+### Deploy status
+- R2: yes (`deploy-to-r2.sh`).
+- Worker: no.
+
+### What is live now
+First-send `userMsg.attachedImageUrls` can include CF URL after FileReader completes; **agent.html v113**.
+
+## 2026-03-21 Agent chat tools for streaming (worker.js)
+
+### What was asked
+Apply approved diff: `useTools = supportsTools`; load `toolDefinitions` when `supportsTools`; streaming path use `chatWithToolsAnthropic` with `stream: true` and optional `runToolLoop` for OpenAI/Google when tools present. Run `node --check worker.js`, `npm run deploy`. No frontend, no version bump.
+
+### Files changed
+- `worker.js` lines 4902-4905: `useTools` no longer gated on `!wantStream`; tool load guard `if (supportsTools)`.
+- `worker.js` lines 5045-5056: replace `mcpToolsCount` block with `toolDefinitions.length` branch + `chatWithToolsAnthropic` / `runToolLoop`; re-open `if (canStreamAnthropic)` for raw Anthropic SSE path.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`, OAuth handlers: out of scope.
+- Dashboard R2: no `dashboard/` HTML changes.
+
+### Deploy status
+- Built: no (worker only).
+- R2 uploaded: no.
+- Worker deployed: yes — version ID: `f9c01488-c833-4c06-9d3b-0ae2591932b8`.
+- Deploy approved by Sam: yes (`deploy approved` in chat).
+
+### What is live now
+Production worker **inneranimalmedia** includes agent/chat tool registration for supported providers regardless of stream flag; streaming Anthropic attempts tool path with `stream: true` when tools exist; OpenAI/Google streaming with tools attempt `runToolLoop` return before raw Anthropic fallback.
+
+### Known issues / next steps
+- `canStreamOpenAI` / `canStreamGoogle` early returns (lines 5036-5040) run before the new `runToolLoop` branch, so that branch may be unreachable for those providers until route order is adjusted if streaming+tools for them is required end-to-end.
+
+## 2026-03-21 Gemini additionalProperties strip + agent.html v114
+
+### What was asked
+Apply `stripAdditionalProperties` before `runToolLoop`, use it for Gemini `function_declarations` `parameters`. Bump `?v=`, `node --check`, R2 `agent.html`, `npm run deploy`. No Vite/React frontend edits.
+
+### Files changed
+- `worker.js` after line 2587: new `stripAdditionalProperties` helper (recursive omit `additionalProperties`).
+- `worker.js` Gemini branch: `parameters: stripAdditionalProperties(t.input_schema)`.
+- `dashboard/agent.html` lines 720-721: `?v=113` to `?v=114` for agent-dashboard.css / agent-dashboard.js.
+
+### Files NOT changed (and why)
+- `agent-dashboard/src/*`, `FloatingPreviewPanel.jsx`: not touched per request.
+
+### Deploy status
+- Built: no Vite build (cache bump only on HTML).
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`.
+- Worker deployed: yes — version ID: `1f678666-a554-4f4a-9977-2dcc3582a7b6`.
+- Deploy approved by Sam: yes.
+
+### What is live now
+Worker strips `additionalProperties` from JSON schemas sent to Gemini tool declarations; agent page references **v=114** on R2 HTML.
+
+### Known issues / next steps
+- If `project_memory` logging is desired, insert a row with this version id and summary (D1 write needs explicit approval per schema rules).
+
+## 2026-03-21 post-deploy-record.sh: deployments table INSERT
+
+### What was asked
+Audit `scripts/post-deploy-record.sh`, replace `cloudflare_deployments` with `deployments` and new INSERT columns; deploy approved for this script only (no worker deploy).
+
+### Files changed
+- `scripts/post-deploy-record.sh`: comments + D1 INSERT into `deployments` (`id`, `timestamp`, `version`, `git_hash`, `description`, `status`, `deployed_by`, `environment`, `deploy_time_seconds`, `worker_name`, `triggered_by`, `notes`). `id` from `CLOUDFLARE_VERSION_ID` / `WRANGLER_VERSION_ID` or UUID fallback; `version` from `DEPLOY_VERSION` or git short hash; `description` from `DEPLOY_DESCRIPTION` or `DEPLOYMENT_NOTES` or default string; `notes` from `DEPLOYMENT_NOTES`; removed `BUILD_SECONDS` / `cloudflare_deployments` flow.
+
+### Deploy status
+- Worker deployed: no (shell-only change).
+
+### What is live now
+Repo script only; next run of `post-deploy-record.sh` (e.g. from `deploy-with-record.sh`) writes to `deployments` with the new shape. Set `CLOUDFLARE_VERSION_ID` after wrangler deploy to align `id` with Wrangler version id.
+
+## 2026-03-21 deploy-with-record.sh: capture version ID, drop duplicate deployments POST
+
+### What was asked
+Capture `CLOUDFLARE_VERSION_ID` from `wrangler deploy` output before `post-deploy-record.sh`; remove redundant `/api/deployments/log` curl block; header comment drop `build_time_seconds`. Script only, no deploy.
+
+### Files changed
+- `scripts/deploy-with-record.sh`: deploy via temp log + `tee`; `grep 'Current Version ID:'` + `export CLOUDFLARE_VERSION_ID`; `set -o pipefail` around pipeline so wrangler failure is not masked by `tee`; removed `DEPLOY_TRACKING_TOKEN` curl block; line 2 comment updated.
+
+### Deploy status
+- Worker deployed: no.
+
+## 2026-03-21 deploy-with-record.sh: dashboard_versions after agent R2 uploads
+
+### What was asked
+After agent-dashboard.js / .css / agent.html R2 puts, INSERT OR REPLACE into `dashboard_versions` for each artifact. Script only.
+
+### Files changed
+- `scripts/deploy-with-record.sh`: MD5 + byte size per file (`JS_HASH` / `CSS_HASH` / `HTML_HASH`), `DEPLOY_TS`, one D1 execute with three rows; confirms remote table columns via audit.
+
+### Deploy status
+- Worker deployed: no.

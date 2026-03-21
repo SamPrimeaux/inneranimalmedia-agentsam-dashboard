@@ -22,7 +22,7 @@ Before touching either function, paste the full current code and wait for approv
 MCP server deploys:
 - Worker name: inneranimalmedia-mcp-server (EXACT — no variations)
 - Path in this monorepo: `inneranimalmedia-mcp-server/`
-- Command: `npx wrangler deploy` (from `inneranimalmedia-mcp-server/` repo root only)
+- Command: `npx wrangler deploy -c wrangler.toml` (from `inneranimalmedia-mcp-server/` only). **Never** run bare `wrangler deploy` there: the monorepo root `wrangler.jsonc` (`inneranimalmedia`) would be used and would deploy the wrong worker.
 - `inneranimalmedia-mcp-server/wrangler.toml` field `name` MUST be `inneranimalmedia-mcp-server` — verify before every deploy
 - If `wrangler.toml` is missing or `name` is wrong: STOP and tell Sam
 

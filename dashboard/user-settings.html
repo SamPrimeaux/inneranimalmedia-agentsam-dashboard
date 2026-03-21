@@ -21,6 +21,106 @@
         }
     })();
     </script>
+    <script>
+    (function() {
+        function applyShellTheme(slug, config, apiVariables) {
+            if (!slug) return;
+            document.documentElement.setAttribute('data-theme', slug);
+            var cssVars = (config && (config.cssVars || config.css_vars)) || {};
+            if (apiVariables && typeof apiVariables === 'object' && Object.keys(apiVariables).length) {
+                cssVars = apiVariables;
+            } else if (config && typeof config === 'object' && !config.cssVars && !config.css_vars) {
+                var c = config;
+                cssVars['--bg-nav'] = c.nav || c.bg || c.surface || '#1e293b';
+                cssVars['--text-nav'] = c.text || c.textSecondary || '#f1f5f9';
+                cssVars['--text-primary'] = c.text || c.textSecondary || '#f1f5f9';
+                cssVars['--text-secondary'] = c.textSecondary || c.text || '#94a3b8';
+                cssVars['--color-border'] = c.border || '#334155';
+                cssVars['--border-nav'] = c.border || '#334155';
+                cssVars['--accent'] = c.primary || '#3b82f6';
+                cssVars['--color-primary'] = c.primary || '#3b82f6';
+                if (!c.bg && !c.surface) { cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b'; } else { if (c.bg) cssVars['--bg-canvas'] = c.bg; if (c.surface) cssVars['--bg-elevated'] = c.surface; }
+            }
+            if (Object.keys(cssVars).length === 0) {
+                cssVars['--bg-nav'] = '#1e293b'; cssVars['--text-nav'] = '#f1f5f9'; cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b';
+            }
+            var cssText = ':root[data-theme="' + String(slug).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"] {';
+            for (var k in cssVars) if (Object.prototype.hasOwnProperty.call(cssVars, k)) {
+                var key = String(k).indexOf('--') === 0 ? k : '--' + k;
+                cssText += key + ':' + cssVars[k] + ';';
+            }
+            cssText += '}';
+            try { localStorage.setItem('dashboard-theme', slug); localStorage.setItem('dashboard-theme-vars', cssText); } catch (e) {}
+            var styleEl = document.getElementById('theme-dynamic-inject');
+            if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'theme-dynamic-inject'; document.head.appendChild(styleEl); }
+            styleEl.textContent = cssText;
+        }
+        window.applyShellTheme = applyShellTheme;
+        window.applyThemeToShell = function(name) {
+            if (!name) return;
+            fetch('/api/themes', { credentials: 'same-origin' }).then(function(r) { return r.json(); }).then(function(data) {
+                var themes = data.themes || [];
+                for (var i = 0; i < themes.length; i++) {
+                    var t = themes[i];
+                    if ((t.slug || t.name || '').toLowerCase() === String(name).toLowerCase()) {
+                        var cfg = t.config;
+                        if (typeof cfg === 'string') try { cfg = JSON.parse(cfg); } catch (e) { cfg = {}; }
+                        applyShellTheme(name, cfg || {}); return;
+                    }
+                }
+                applyShellTheme(name, {});
+            }).catch(function() { applyShellTheme(name, {}); });
+        };
+        window.usApplyTheme = async function(name, displayName) {
+            document.querySelectorAll('.us-theme-card').forEach(function(c) {
+                var onStr = (c.getAttribute('onclick') || '');
+                c.classList.toggle('selected', onStr.indexOf("'" + name + "'") !== -1);
+            });
+            if (typeof usState !== 'undefined') usState.currentTheme = name;
+            try {
+                var patchRes = await fetch('/api/settings/theme', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: JSON.stringify({ theme: name }) });
+                if (!patchRes.ok) throw new Error('Failed to save');
+                var getRes = await fetch('/api/settings/theme', { credentials: 'same-origin' });
+                if (getRes.ok) {
+                    var d = await getRes.json();
+                    if (d && d.theme && d.variables && typeof d.variables === 'object') applyShellTheme(d.theme, {}, d.variables);
+                    else applyThemeToShell(name);
+                } else applyThemeToShell(name);
+                if (typeof window.showToast === 'function') window.showToast('Theme applied', 'success');
+            } catch (e) {
+                applyThemeToShell(name);
+                if (typeof window.showToast === 'function') window.showToast('Failed to save theme', 'error');
+            }
+        };
+        fetch('/api/settings/theme', { credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(d) {
+                var slug = (d && d.theme) ? d.theme.trim() : null;
+                if (!slug) { try { slug = localStorage.getItem('dashboard-theme'); } catch (e) {} if (!slug) return; }
+                if (d && d.variables && typeof d.variables === 'object' && Object.keys(d.variables).length) {
+                    applyShellTheme(slug, {}, d.variables); return;
+                }
+                fetch('/api/themes', { credentials: 'same-origin' })
+                    .then(function(r2) { return r2.json(); })
+                    .then(function(data) {
+                        var themes = data.themes || [];
+                        for (var i = 0; i < themes.length; i++) {
+                            var t = themes[i];
+                            if ((t.slug || t.name || '').toLowerCase() === slug.toLowerCase()) {
+                                var cfg = t.config;
+                                if (typeof cfg === 'string') try { cfg = JSON.parse(cfg); } catch (e) { cfg = {}; }
+                                applyShellTheme(slug, cfg || {}); return;
+                            }
+                        }
+                        applyShellTheme(slug, {});
+                    })
+                    .catch(function() { applyShellTheme(slug, {}); });
+            })
+            .catch(function() {
+                try { var local = localStorage.getItem('dashboard-theme'); if (local) applyShellTheme(local, {}); } catch (e) {}
+            });
+    })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -68,7 +168,7 @@
         .topbar {
             position: sticky;
             top: 0;
-            z-index: 100;
+            z-index: 1000;
             background: var(--bg-nav);
             border-bottom: 1px solid var(--border-nav);
             height: 60px;
@@ -118,7 +218,7 @@
         .search-wrap .search-input::placeholder { color: var(--text-nav-muted); }
         .search-wrap .search-input:focus { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); }
         .search-wrap .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-nav-muted); }
-        .search-dropdown { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); z-index: 110; display: none; }
+        .search-dropdown { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); z-index: 1001; display: none; }
         .search-dropdown.open { display: block; }
         .search-dropdown .item { padding: 10px 12px; font-size: 13px; color: var(--text-primary); cursor: pointer; border-bottom: 1px solid var(--border); }
         .search-dropdown .item:hover { background: var(--bg-canvas); }
@@ -127,7 +227,7 @@
         .topbar-right { position: relative; }
         .profile-wrap { position: relative; }
         .agent-sam-avatar { cursor: pointer; }
-        .profile-dropdown { position: absolute; right: 0; top: 100%; margin-top: 8px; min-width: 200px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.12); z-index: 115; display: none; padding: 6px 0; }
+        .profile-dropdown { position: absolute; right: 0; top: 100%; margin-top: 8px; min-width: 200px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.12); z-index: 1001; display: none; padding: 6px 0; }
         .profile-dropdown.open { display: block; }
         .profile-dropdown a, .profile-dropdown button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 16px; font-size: 14px; color: var(--text-primary); background: none; border: none; cursor: pointer; text-align: left; font-family: inherit; }
         .profile-dropdown a:hover, .profile-dropdown button:hover { background: var(--bg-canvas); }
@@ -455,7 +555,7 @@
                 <button type="button" id="clock-btn" class="nav-icon-btn" aria-label="Time &amp; tracking" title="Time &amp; tracking" style="border: none; background: transparent; cursor: pointer; padding: 6px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: inherit;">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 </button>
-                <div id="clock-dropdown" style="position: absolute; right: 0; top: 100%; margin-top: 8px; width: 280px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 45px rgba(0,0,0,0.15); padding: 16px; display: none; z-index: 130;">
+                <div id="clock-dropdown" style="position: absolute; right: 0; top: 100%; margin-top: 8px; width: 280px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 45px rgba(0,0,0,0.15); padding: 16px; display: none; z-index: 1001;">
                     <div id="clock-time" style="font-size: 24px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums;">--:--:--</div>
                     <div id="clock-date" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">--</div>
                     <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;">
@@ -473,7 +573,7 @@
                 </svg>
                 <span id="notifications-badge" style="position:absolute; top:4px; right:4px; min-width:14px; height:14px; border-radius:999px; background:#f97316; color:white; font-size:10px; line-height:14px; text-align:center; padding:0 3px; display:none;"></span>
             </button>
-            <div id="notifications-dropdown" style="position:absolute; right:0; top:100%; margin-top:8px; width:320px; max-height:420px; overflow-y:auto; background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; box-shadow:0 18px 45px rgba(0,0,0,0.15); padding:8px 0; display:none; z-index:120;">
+            <div id="notifications-dropdown" style="position:absolute; right:0; top:100%; margin-top:8px; width:320px; max-height:420px; overflow-y:auto; background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; box-shadow:0 18px 45px rgba(0,0,0,0.15); padding:8px 0; display:none; z-index:1001;">
                 <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 16px 6px 16px;">
                     <span style="font-size:13px; font-weight:600; color: var(--text-primary);">Notifications</span>
                     <button id="notifications-mark-all" style="border:none; background:none; color: var(--text-secondary); font-size:11px; cursor:pointer;">Mark all read</button>
@@ -483,10 +583,11 @@
                 </div>
             </div>
             <div class="profile-wrap">
-                <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b5557284-485e-4305-2c5a-49c6acf99a00/thumbnail" 
-                     alt="Agent Sam" 
+                <img src="" 
+                     alt="Profile" 
                      class="agent-sam-avatar"
-                     id="profileAvatar">
+                     id="profileAvatar"
+                     style="width:36px;height:36px;border-radius:50%;object-fit:cover;background:var(--bg-canvas);">
                 <div class="profile-dropdown" id="profileDropdown">
                     <button type="button" id="profileSwitchAccount">Switch account</button>
                     <button type="button" id="profileChangePhoto">Change profile picture</button>
@@ -1138,9 +1239,9 @@
 .us-save-bar {
   position: sticky;
   bottom: 0;
-  background: var(--bg-elevated, #fff);
+  background: var(--bg-canvas);
   backdrop-filter: blur(12px);
-  border-top: 1px solid var(--border, #e5e7eb);
+  border-top: 1px solid var(--border);
   padding: 14px 0;
   margin-top: 24px;
   display: flex;
@@ -1149,8 +1250,8 @@
   gap: 10px;
 }
 .us-save-btn {
-  background: var(--accent, #3b82f6);
-  color: #fff;
+  background: var(--accent);
+  color: var(--color-on-accent, #fff);
   border: none;
   border-radius: 10px;
   padding: 10px 24px;
@@ -1160,12 +1261,68 @@
   cursor: pointer;
   transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
 }
+.us-save-bar .us-save-btn {
+  background: var(--accent);
+  color: #fff;
+  min-width: 120px;
+}
+.us-save-bar .us-save-btn:hover { color: #fff; }
 .us-save-btn:hover {
-  background: var(--accent-hover, #2563eb);
+  background: var(--accent-hover);
   box-shadow: 0 4px 16px rgba(59,130,246,0.3);
   transform: translateY(-1px);
 }
 .us-save-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.us-password-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.us-password-wrap .us-input { flex: 1; }
+.us-password-toggle {
+  flex-shrink: 0; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-canvas); color: var(--text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.us-password-toggle:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.us-vault-add-fab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent); color: #fff; border: none; border-radius: 12px; padding: 12px 20px;
+  font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(59,130,246,0.25);
+}
+.us-vault-add-fab:hover { background: var(--accent-hover); color: #fff; }
+.us-preset-secret {
+  display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--bg-canvas);
+}
+.us-preset-secret.has-secret { border-color: var(--accent); background: rgba(59,130,246,0.06); }
+.us-preset-secret-add { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); font-size: 18px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.us-preset-secret-add:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.us-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10002;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.us-modal {
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;
+  max-width: 480px; width: 100%; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.25);
+}
+.us-modal-header {
+  display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.us-modal-title { font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.us-modal-close {
+  width: 36px; height: 36px; border: none; background: transparent; color: var(--text-secondary); font-size: 24px; line-height: 1; cursor: pointer; border-radius: 8px;
+}
+.us-modal-close:hover { background: var(--bg-canvas); color: var(--text-primary); }
+.us-modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+.us-modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; }
+.us-modal-footer .us-save-btn { margin: 0; }
+.us-registry-card-clickable { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.us-registry-card-clickable:hover { border-color: var(--accent); background: rgba(59,130,246,0.08); }
+.us-workspace-slots .us-ws-slot {
+  padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-canvas);
+  font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500; color: var(--text-primary);
+  cursor: pointer; text-align: left; transition: border-color 0.15s, background 0.15s;
+}
+.us-workspace-slots .us-ws-slot:hover { background: var(--bg-elevated); border-color: var(--accent); }
+.us-workspace-slots .us-ws-slot.active { border-color: var(--accent); background: var(--bg-elevated); color: var(--accent); }
+.us-avatar-dropzone.us-avatar-dragover { border-color: var(--accent); background: var(--bg-elevated); }
 
 .us-toast {
   position: fixed; bottom: 24px; right: 24px; z-index: 2000;
@@ -1225,22 +1382,30 @@
 
 <div class="us-page">
 
-  <div class="us-header">
-    <h1 class="us-title">User Settings</h1>
-    <p class="us-subtitle">Manage your profile, theme, workspaces, and communication identity</p>
-  </div>
-
   <div class="us-tabs">
     <button class="us-tab active" data-tab="profile">Profile</button>
     <button class="us-tab" data-tab="security">Security</button>
     <button class="us-tab" data-tab="preferences">Preferences</button>
-    <button class="us-tab" data-tab="organizations">Organizations</button>
-    <button class="us-tab" data-tab="teams">Teams</button>
-    <button class="us-tab" data-tab="api">API</button>
+    <button class="us-tab" data-tab="workspace">Workspace</button>
+    <button class="us-tab" data-tab="api">API Vault</button>
     <button class="us-tab" data-tab="audit-logs">Audit Logs</button>
   </div>
 
   <div class="us-panel active" id="tab-profile">
+    <div class="us-card">
+      <div class="us-card-title">Profile image</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;font-family:'DM Sans',sans-serif">Drag and drop an image here to set or replace your profile photo, or enter an image URL below. Saved with your profile.</p>
+      <div id="profileImageDropZone" class="us-avatar-dropzone" style="width:120px;height:120px;border-radius:50%;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bg-elevated);cursor:pointer;position:relative">
+        <img id="profileImageImg" src="" alt="" style="width:100%;height:100%;object-fit:cover;display:none;pointer-events:none;position:absolute;inset:0">
+        <span id="profileImagePlaceholder" style="font-size:12px;color:var(--text-3);text-align:center;padding:8px">Drop image</span>
+      </div>
+      <input type="file" id="profileImageInput" accept="image/jpeg,image/png,image/webp,image/gif" style="position:absolute;opacity:0;width:0;height:0">
+      <div class="us-field" style="margin-top:14px">
+        <label class="us-label">Profile image URL</label>
+        <input class="us-input" id="pAvatarUrl" type="url" placeholder="https://… (optional)">
+        <span style="font-size:11px;color:var(--text-3);display:block;margin-top:4px">Paste an image URL to use as your profile picture (e.g. Cloudflare Images). Leave blank to use upload only.</span>
+      </div>
+    </div>
     <div class="us-card">
       <div class="us-card-title">Identity</div>
       <div class="us-row-2">
@@ -1252,6 +1417,23 @@
           <label class="us-label">Display Name</label>
           <input class="us-input" id="pDisplayName" type="text" placeholder="Display name">
         </div>
+      </div>
+    </div>
+    <div class="us-card">
+      <div class="us-card-title">Contact</div>
+      <div class="us-row-2">
+        <div class="us-field">
+          <label class="us-label">Primary email (login)</label>
+          <input class="us-input" id="pPrimaryEmail" type="text" placeholder="Loading…" readonly style="background:var(--bg-canvas);cursor:not-allowed">
+        </div>
+        <div class="us-field">
+          <label class="us-label">Backup email</label>
+          <input class="us-input" id="pBackupEmail" type="email" placeholder="Backup email">
+        </div>
+      </div>
+      <div class="us-field" style="margin-top:12px">
+        <label class="us-label">Phone</label>
+        <input class="us-input" id="pPhone" type="tel" placeholder="Phone number">
       </div>
     </div>
     <div class="us-card">
@@ -1278,6 +1460,13 @@
       </div>
     </div>
     <div class="us-card">
+      <div class="us-card-title">Integrations</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:14px;font-family:'DM Sans',sans-serif">Connected accounts used by the dashboard and agent. Connect from the Agent or Cloud page when prompted. You can connect multiple GitHub accounts; each is stored by GitHub username.</p>
+      <div id="integrationsStatusList" style="display:flex;flex-wrap:wrap;gap:12px">
+        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif">Loading…</div>
+      </div>
+    </div>
+    <div class="us-card">
       <div class="us-card-title">Verified Emails (read-only)</div>
       <p style="font-size:12px;color:var(--text-3);margin-bottom:14px;font-family:'DM Sans',sans-serif">
         Your superadmin login identity. Sending configuration is in Preferences.
@@ -1285,16 +1474,54 @@
       <div id="profileEmailList"></div>
     </div>
     <div class="us-save-bar">
-      <button class="us-save-btn" id="profileSaveBtn" onclick="usSaveProfile()">Save Profile</button>
+      <button type="button" class="us-save-btn" id="profileSaveBtn" onclick="usSaveProfile()">Save Profile</button>
     </div>
   </div>
 
   <div class="us-panel" id="tab-security">
     <div class="us-card">
-      <div class="us-card-title">Security</div>
-      <p style="font-size:13px;color:var(--text-secondary);font-family:'DM Sans',sans-serif;line-height:1.5">
-        Password, 2FA (TOTP), recovery codes, active sessions, and API token management. Configure in your identity provider or Cloudflare Zero Trust.
-      </p>
+      <div class="us-card-title">Change Password</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">If you sign in with Google or GitHub, your password is managed by that provider. Change it in your Google account or GitHub account settings. If this account has a password set (e.g. for backup login), you can change it below.</p>
+      <div class="us-row-2" style="margin-bottom:12px">
+        <div class="us-field">
+          <label class="us-label">Current password</label>
+          <div class="us-password-wrap">
+            <input class="us-input" id="securityCurrentPassword" type="password" placeholder="Current password" autocomplete="current-password">
+            <button type="button" class="us-password-toggle" id="toggleCurrentPassword" aria-label="Show password" onclick="usTogglePasswordVisibility('securityCurrentPassword', this)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <div class="us-field"></div>
+      </div>
+      <div class="us-row-2" style="margin-bottom:12px">
+        <div class="us-field">
+          <label class="us-label">New password</label>
+          <div class="us-password-wrap">
+            <input class="us-input" id="securityNewPassword" type="password" placeholder="New password" autocomplete="new-password">
+            <button type="button" class="us-password-toggle" id="toggleNewPassword" aria-label="Show password" onclick="usTogglePasswordVisibility('securityNewPassword', this)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <div class="us-field">
+          <label class="us-label">Confirm new password</label>
+          <div class="us-password-wrap">
+            <input class="us-input" id="securityConfirmPassword" type="password" placeholder="Confirm" autocomplete="new-password">
+            <button type="button" class="us-password-toggle" id="toggleConfirmPassword" aria-label="Show password" onclick="usTogglePasswordVisibility('securityConfirmPassword', this)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="us-save-btn" onclick="usChangePassword()">Change Password</button>
+    </div>
+    <div class="us-card">
+      <div class="us-card-title">Active Sessions</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Sessions where you are signed in. Revoke any you do not recognize.</p>
+      <div id="sessionsList">
+        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:12px 0">Load Security tab to fetch.</div>
+      </div>
+      <button type="button" class="us-save-btn" style="margin-top:12px;background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usRevokeAllOtherSessions()">Revoke All Other Sessions</button>
+    </div>
+    <div class="us-card">
+      <div class="us-card-title">Recovery / backup codes</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Backup codes let you sign in if you lose access to your primary sign-in method. Generate one-time codes; they are emailed to your login address and stored hashed in the database. Each code works once. Store them somewhere safe.</p>
+      <button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" id="generateBackupCodesBtn" onclick="usGenerateBackupCodes()">Generate backup codes</button>
     </div>
   </div>
 
@@ -1303,7 +1530,7 @@
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
         <div class="us-card-title" style="margin-bottom:0">Theme Gallery <span id="themeCount" style="color:var(--text-3);font-weight:400;text-transform:none;letter-spacing:0"></span></div>
         <div style="position:relative">
-          <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-3);font-size:12px">&#128269;</span>
+          <svg style="position:absolute;left:11px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--text-3)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke-width="2"/><path stroke-width="2" stroke-linecap="round" d="m21 21-4.35-4.35"/></svg>
           <input class="us-theme-search" id="themeSearch" placeholder="Search themes…" oninput="usFilterThemes()">
         </div>
       </div>
@@ -1366,46 +1593,133 @@
     </div>
   </div>
 
-  <div class="us-panel" id="tab-organizations">
+  <div class="us-panel" id="tab-workspace">
     <div class="us-card">
-      <div class="us-card-title">Organizations</div>
-      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Organizations you belong to. Create and manage organizations.</p>
-      <div id="orgList">
-        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:12px 0">Loading…</div>
+      <div class="us-card-title">Your workspaces</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Track and document each buildout. Select a workspace to edit Brand, Plans, Budget, and Time.</p>
+      <div id="workspaceSlotsList" class="us-workspace-slots">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
+          <button type="button" class="us-ws-slot active" data-ws-id="ws_samprimeaux" onclick="usSelectWorkspaceSlot('ws_samprimeaux')">Sam Primeaux</button>
+          <button type="button" class="us-ws-slot" data-ws-id="ws_inneranimal" onclick="usSelectWorkspaceSlot('ws_inneranimal')">InnerAnimal</button>
+          <button type="button" class="us-ws-slot" data-ws-id="ws_meauxbility" onclick="usSelectWorkspaceSlot('ws_meauxbility')">Meauxbility</button>
+          <button type="button" class="us-ws-slot" data-ws-id="ws_innerautodidact" onclick="usSelectWorkspaceSlot('ws_innerautodidact')">InnerAutodidact</button>
+        </div>
       </div>
     </div>
-  </div>
-
-  <div class="us-panel" id="tab-teams">
-    <div class="us-card">
-      <div class="us-card-title">Teams</div>
-      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Teams within organizations.</p>
-      <div id="teamList">
-        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:12px 0">Loading…</div>
+    <div class="us-card" id="workspaceDetailCard">
+      <div class="us-card-title">Current workspace: <span id="workspaceDetailName">Sam Primeaux</span></div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Use these fields to align and monitor each buildout. Saved to your account. Set a theme per workspace so switching is obvious.</p>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Theme</label>
+        <select class="us-input us-select" id="wsSlotTheme" style="max-width:280px" onchange="usSetWorkspaceTheme(usState.currentWorkspaceSlot, this.value)">
+          <option value="">Default (user theme)</option>
+        </select>
+      </div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Brand</label>
+        <input class="us-input" id="wsBrand" placeholder="Brand name, positioning, or notes">
+      </div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Plans</label>
+        <textarea class="us-input" id="wsPlans" rows="3" placeholder="Roadmap, milestones, or plan notes" style="resize:vertical;min-height:80px"></textarea>
+      </div>
+      <div class="us-row-2">
+        <div class="us-field">
+          <label class="us-label">Budget</label>
+          <input class="us-input" id="wsBudget" type="text" placeholder="Budget or cost cap">
+        </div>
+        <div class="us-field">
+          <label class="us-label">Time</label>
+          <input class="us-input" id="wsTime" type="text" placeholder="Time allocation or target hours">
+        </div>
+      </div>
+      <div class="us-save-bar" style="margin-top:16px">
+        <button type="button" class="us-save-btn" id="workspaceSaveBtn" onclick="usSaveWorkspace()">Save workspace</button>
       </div>
     </div>
   </div>
 
   <div class="us-panel" id="tab-api">
     <div class="us-card">
-      <div class="us-card-title">API Tokens</div>
-      <p style="font-size:13px;color:var(--text-secondary);font-family:'DM Sans',sans-serif;line-height:1.5">
-        Named tokens with scoped permissions and expiration. Manage in Cloudflare Dashboard or add a token API later.
-      </p>
+      <div class="us-card-title">Worker env registry</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:8px;font-family:'DM Sans',sans-serif">Reference list of Cloudflare Worker variables and domains. Use when rolling keys or updating the CF dashboard.</p>
+      <p style="font-size:11px;color:var(--text-muted);margin-bottom:16px;font-family:'DM Sans',sans-serif">Linked to: <strong>Sam Primeaux / inneranimalmedia</strong> worker. Click any variable to reveal, rotate, or see audit.</p>
+      <div id="vaultRegistryList"><div style="color:var(--text-3);font-size:13px">Loading…</div></div>
+    </div>
+    <div class="us-card">
+      <div class="us-card-title">API Vault</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Stored API keys and secrets. Values are encrypted; use Reveal or Copy only when needed.</p>
+      <div style="margin-bottom:20px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+        <button type="button" class="us-vault-add-fab" onclick="usOpenNewSecretDrawer()"><span style="font-size:18px;line-height:1">+</span> Add secret</button>
+        <select class="us-input us-select" id="vaultProjectFilter" style="width:auto;max-width:200px" onchange="loadVaultSecrets()">
+          <option value="">All projects</option>
+        </select>
+      </div>
+      <div class="us-card-title" style="margin-bottom:12px">Secrets for this build</div>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;font-family:'DM Sans',sans-serif">Track and add the APIs you use. Click + to add a secret for that service.</p>
+      <div id="vaultPresetList">
+        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:8px 0">Loading…</div>
+      </div>
+      <div class="us-card-title" style="margin-top:24px;margin-bottom:12px">All secrets</div>
+      <div id="vaultSecretsList">
+        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:12px 0">Load API Vault tab to fetch.</div>
+      </div>
+    </div>
+    <div class="us-card" id="newSecretCard" style="display:none">
+      <div class="us-card-title">Add Secret</div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Secret name</label>
+        <input class="us-input" id="vaultSecretName" placeholder="e.g. Production API Key">
+      </div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Service</label>
+        <input class="us-input" id="vaultServiceName" placeholder="e.g. cloudflare, openai, stripe">
+      </div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Secret value</label>
+        <input class="us-input" id="vaultSecretValue" type="password" placeholder="Paste value (never stored in plaintext)">
+      </div>
+      <div class="us-field" style="margin-bottom:12px">
+        <label class="us-label">Project (optional)</label>
+        <input class="us-input" id="vaultProjectLabel" placeholder="e.g. inneranimalmedia">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="us-save-btn" onclick="usCreateSecret()">Save Secret</button>
+        <button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usCloseNewSecretDrawer()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="usModalOverlay" class="us-modal-overlay" style="display:none" aria-hidden="true">
+    <div class="us-modal" id="usModalContent" role="dialog" aria-modal="true" aria-labelledby="usModalTitle">
+      <div class="us-modal-header">
+        <h3 class="us-modal-title" id="usModalTitle">Secret</h3>
+        <button type="button" class="us-modal-close" id="usModalClose" aria-label="Close">&times;</button>
+      </div>
+      <div class="us-modal-body" id="usModalBody"></div>
+      <div class="us-modal-footer" id="usModalFooter"></div>
     </div>
   </div>
 
   <div class="us-panel" id="tab-audit-logs">
     <div class="us-card">
       <div class="us-card-title">Audit Logs</div>
-      <p style="font-size:12px;color:var(--text-3);margin-bottom:12px;font-family:'DM Sans',sans-serif">Field-level change history for your account.</p>
-      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select class="us-input us-select" id="auditResourceType" style="width:auto;max-width:180px" onchange="usLoadAuditLogs()">
-          <option value="">All types</option>
-          <option value="user_settings">User settings</option>
-          <option value="organizations">Organizations</option>
-          <option value="teams">Teams</option>
-          <option value="api_tokens">API tokens</option>
+      <p style="font-size:12px;color:var(--text-3);margin-bottom:16px;font-family:'DM Sans',sans-serif">Shows when API Vault secrets were created, viewed, copied, edited, rotated, or revoked. Use filters to monitor during development or to track who accessed which secret and when.</p>
+      <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <select class="us-input us-select" id="auditEventType" style="width:auto;max-width:140px" onchange="usLoadAuditLogs()">
+          <option value="">All events</option>
+          <option value="created">Created</option>
+          <option value="viewed">Viewed</option>
+          <option value="copied">Copied</option>
+          <option value="edited">Edited</option>
+          <option value="rotated">Rotated</option>
+          <option value="revoked">Revoked</option>
+        </select>
+        <select class="us-input us-select" id="auditSince" style="width:auto;max-width:160px" onchange="usLoadAuditLogs()">
+          <option value="">All time</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
         </select>
         <button class="us-save-btn" style="padding:8px 16px" onclick="usLoadAuditLogs()">Refresh</button>
       </div>
@@ -1415,20 +1729,7 @@
     </div>
   </div>
 
-  <div class="us-panel" id="tab-workspaces" style="display:none">
-    <div class="us-card">
-      <div class="us-card-title">Default Workspace</div>
-      <p style="font-size:12px;color:var(--text-3);margin-bottom:20px;font-family:'DM Sans',sans-serif;line-height:1.5">
-        Your default workspace sets the starting context when you open the dashboard.<br>
-        The workspace switcher in the topbar still lets you view any workspace at any time.
-      </p>
-      <div class="us-ws-grid" id="wsGrid">
-        <div style="color:var(--text-3);font-size:13px;font-family:'DM Sans',sans-serif;padding:20px">Loading workspaces…</div>
-      </div>
-    </div>
-  </div>
-
-  <div class="us-panel" id="tab-emails">
+  <div class="us-panel" id="tab-emails" style="display:none">
     <div class="us-card">
       <div class="us-card-title">Sending Identities</div>
       <p style="font-size:12px;color:var(--text-3);margin-bottom:20px;font-family:'DM Sans',sans-serif;line-height:1.5">
@@ -1511,73 +1812,6 @@
     </div>
   </div>
 
-  <div class="us-panel" id="tab-profile">
-    <div class="us-card">
-      <div class="us-card-title">Identity</div>
-      <div class="us-row-2">
-        <div class="us-field">
-          <label class="us-label">Full Name</label>
-          <input class="us-input" id="pFullName" type="text" value="Sam Primeaux">
-        </div>
-        <div class="us-field">
-          <label class="us-label">Display Name</label>
-          <input class="us-input" id="pDisplayName" type="text" value="Sam">
-        </div>
-      </div>
-    </div>
-
-    <div class="us-card">
-      <div class="us-card-title">Localization</div>
-      <div class="us-row-2">
-        <div class="us-field">
-          <label class="us-label">Timezone</label>
-          <select class="us-input us-select" id="pTimezone">
-            <option value="America/Chicago">America/Chicago (CT)</option>
-            <option value="America/New_York">America/New_York (ET)</option>
-            <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
-            <option value="America/Denver">America/Denver (MT)</option>
-            <option value="UTC">UTC</option>
-          </select>
-        </div>
-        <div class="us-field">
-          <label class="us-label">Language</label>
-          <select class="us-input us-select" id="pLanguage">
-            <option value="en">English</option>
-            <option value="es">Spanish</option>
-            <option value="fr">French</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div class="us-card">
-      <div class="us-card-title">Verified Emails (read-only)</div>
-      <p style="font-size:12px;color:var(--text-3);margin-bottom:14px;font-family:'DM Sans',sans-serif">
-        These are your superadmin login identities. Manage sending configuration in the Email &amp; Resend tab.
-      </p>
-      <div id="profileEmailList"></div>
-    </div>
-
-    <div class="us-save-bar">
-      <button class="us-save-btn" id="profileSaveBtn" onclick="usSaveProfile()">Save Profile</button>
-    </div>
-  </div>
-
-  <div class="us-panel" id="tab-preferences">
-    <div class="us-card">
-      <div class="us-card-title">Notifications</div>
-      <div id="notifToggles"></div>
-    </div>
-    <div class="us-card">
-      <div class="us-card-title">Accessibility &amp; Display</div>
-      <div id="a11yToggles"></div>
-    </div>
-    <div class="us-card">
-      <div class="us-card-title">Developer</div>
-      <div id="devToggles"></div>
-    </div>
-  </div>
-
 </div>
 
 <div class="us-toast" id="usToast"></div>
@@ -1599,7 +1833,10 @@ var usState = {
   profile: {},
   dirtyProfile: false,
   activeTab: 'themes',
+  currentWorkspaceSlot: 'ws_samprimeaux',
 };
+var WORKSPACE_SLOT_NAMES = { ws_samprimeaux: 'Sam Primeaux', ws_inneranimal: 'InnerAnimal', ws_meauxbility: 'Meauxbility', ws_innerautodidact: 'InnerAutodidact' };
+var WORKSPACE_STORAGE_KEY = 'iam_workspace_settings';
 
 async function usInit() {
   document.querySelectorAll('.us-tab').forEach(function(t) {
@@ -1608,6 +1845,7 @@ async function usInit() {
       usSetTab(tab);
     });
   });
+  usSetupProfileImage();
   await Promise.all([
     loadThemes(),
     loadWorkspaces(),
@@ -1624,7 +1862,12 @@ function usSetTab(tab) {
   document.querySelectorAll('.us-panel').forEach(function(p) {
     p.classList.toggle('active', p.id === 'tab-' + tab);
   });
-  if (tab === 'teams') loadTeams();
+  if (tab === 'security') loadSessions();
+  else if (tab === 'audit-logs') usLoadAuditLogs();
+  else if (tab === 'api') { loadVaultRegistry(); loadVaultSecrets(); }
+  else if (tab === 'workspace') loadWorkspaceDetail();
+  else if (tab === 'preferences') loadWorkspaces();
+  else if (tab === 'profile') loadIntegrationsStatus();
 }
 window.usSetTab = usSetTab;
 
@@ -1785,23 +2028,35 @@ window.usFilterThemes = function() {
   renderThemeGallery(usState.themes, usState.currentTheme, q);
 };
 
-window.usApplyTheme = async function(name, displayName) {
-  document.querySelectorAll('.us-theme-card').forEach(function(c) {
-    var onStr = (c.getAttribute('onclick') || '');
-    c.classList.toggle('selected', onStr.indexOf("'" + name + "'") !== -1);
-  });
-  usState.currentTheme = name;
-  var themeData = usState.themeDataMap[name];
-  applyThemeToShell(name, themeData);
+/* usApplyTheme defined in head with same theme logic as overview/finance/etc (applyShellTheme + /api/settings/theme) */
 
-  try {
-    var res = await fetch('/api/settings/theme', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: JSON.stringify({ theme: name }) });
-    if (!res.ok) throw new Error('Failed');
-    showToast('Theme "' + displayName + '" applied', 'success');
-  } catch(e) {
-    showToast('Failed to save theme', 'error');
+(function() {
+  var sel = document.getElementById('workspaceSelect');
+  if (!sel) return;
+  function fillAndWire(workspacesPayload) {
+    var data = workspacesPayload.data || [];
+    var current = workspacesPayload.current || 'ws_samprimeaux';
+    var workspaceThemes = workspacesPayload.workspaceThemes || {};
+    sel.innerHTML = data.map(function(w) { return '<option value="' + (w.id || w.workspace_id) + '">' + (w.name || w.id) + '</option>'; }).join('');
+    sel.value = current;
+    sel.addEventListener('change', function() {
+      var id = sel.value;
+      if (!id) return;
+      fetch('/api/settings/workspace/default', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ workspace_id: id }) })
+        .then(function(r) { return r.ok ? workspacesPayload : Promise.reject(); })
+        .then(function(p) {
+          var themeSlug = (p.workspaceThemes || {})[id];
+          if (themeSlug && typeof window.applyThemeToShell === 'function') window.applyThemeToShell(themeSlug);
+          if (typeof usState !== 'undefined') usState.currentWs = id;
+        })
+        .catch(function() {});
+    });
   }
-};
+  fetch('/api/settings/workspaces', { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(d) { if (d) fillAndWire(d); })
+    .catch(function() { fillAndWire({ data: [{ id: 'ws_samprimeaux', name: 'Sam Primeaux' }, { id: 'ws_inneranimal', name: 'InnerAnimal' }, { id: 'ws_meauxbility', name: 'Meauxbility' }, { id: 'ws_innerautodidact', name: 'InnerAutodidact' }], current: 'ws_samprimeaux', workspaceThemes: {} }); });
+})();
 
 async function loadWorkspaces() {
   try {
@@ -2037,16 +2292,109 @@ async function loadProfile() {
 
 function renderProfile() {
   var p = usState.profile;
-  if (p['user.full_name']) document.getElementById('pFullName').value = p['user.full_name'];
-  if (p['user.display_name']) document.getElementById('pDisplayName').value = p['user.display_name'];
-  if (p['user.timezone']) {
+  var fullName = p.full_name != null ? p.full_name : (p['user.full_name'] || '');
+  var displayName = p.display_name != null ? p.display_name : (p['user.display_name'] || '');
+  var primaryEmail = p.primary_email != null ? p.primary_email : (p['user.primary_email'] || '');
+  var backupEmail = p.backup_email != null ? p.backup_email : (p['user.backup_email'] || '');
+  var phone = p.phone != null ? p.phone : (p['user.phone'] || '');
+  var tz = p.timezone || p['user.timezone'] || '';
+  var lang = p.language || p['user.language'] || '';
+  if (document.getElementById('pFullName')) document.getElementById('pFullName').value = fullName;
+  if (document.getElementById('pDisplayName')) document.getElementById('pDisplayName').value = displayName;
+  if (document.getElementById('pPrimaryEmail')) document.getElementById('pPrimaryEmail').value = primaryEmail || 'Not set';
+  if (document.getElementById('pBackupEmail')) document.getElementById('pBackupEmail').value = backupEmail;
+  if (document.getElementById('pPhone')) document.getElementById('pPhone').value = phone;
+  if (tz) {
     var sel = document.getElementById('pTimezone');
-    var opts = sel.options;
-    for (var i = 0; i < opts.length; i++) { if (opts[i].value === p['user.timezone']) { opts[i].selected = true; break; } }
+    if (sel) for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === tz) { sel.options[i].selected = true; break; } }
   }
-  if (p['user.language']) {
+  if (lang) {
     var selLang = document.getElementById('pLanguage');
-    for (var j = 0; j < selLang.options.length; j++) { if (selLang.options[j].value === p['user.language']) { selLang.options[j].selected = true; break; } }
+    if (selLang) for (var j = 0; j < selLang.options.length; j++) { if (selLang.options[j].value === lang) { selLang.options[j].selected = true; break; } }
+  }
+  var avatarUrl = p.avatar_url || '';
+  var imgEl = document.getElementById('profileImageImg');
+  var phEl = document.getElementById('profileImagePlaceholder');
+  var avatarUrlInput = document.getElementById('pAvatarUrl');
+  if (imgEl) { imgEl.src = avatarUrl || ''; imgEl.style.display = avatarUrl ? 'block' : 'none'; imgEl.alt = 'Profile'; }
+  if (phEl) phEl.style.display = avatarUrl ? 'none' : 'block';
+  if (avatarUrlInput) avatarUrlInput.value = avatarUrl || '';
+  var headerAvatar = document.getElementById('profileAvatar');
+  if (headerAvatar) { headerAvatar.src = avatarUrl || headerAvatar.getAttribute('data-fallback') || ''; headerAvatar.alt = displayName || 'Profile'; }
+}
+
+function usSetupProfileImage() {
+  var zone = document.getElementById('profileImageDropZone');
+  var input = document.getElementById('profileImageInput');
+  if (!zone || !input) return;
+  function uploadFile(file) {
+    if (!file || !file.type || !file.type.startsWith('image/')) { showToast('Please choose an image file', 'error'); return; }
+    input.value = '';
+    var fd = new FormData();
+    fd.append('file', file);
+    fetch('/api/settings/profile/avatar', { method: 'POST', body: fd })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, json: j }; }); })
+      .then(function(o) {
+        if (!o.ok) { showToast(o.json.error || 'Upload failed', 'error'); return; }
+        var url = o.json.avatar_url;
+        if (url) {
+          usState.profile.avatar_url = url;
+          var i = document.getElementById('profileImageImg');
+          var p = document.getElementById('profileImagePlaceholder');
+          if (i) { i.src = url; i.style.display = 'block'; }
+          if (p) p.style.display = 'none';
+          var headerAvatar = document.getElementById('profileAvatar');
+          if (headerAvatar) { headerAvatar.src = url; }
+          var avatarUrlInput = document.getElementById('pAvatarUrl');
+          if (avatarUrlInput) avatarUrlInput.value = url;
+          showToast('Profile image updated', 'success');
+        }
+      })
+      .catch(function() { showToast('Upload failed', 'error'); })
+      .finally(function() { input.value = ''; });
+  }
+  zone.addEventListener('click', function() {
+    input.value = '';
+    input.click();
+  });
+  zone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); zone.classList.add('us-avatar-dragover'); });
+  zone.addEventListener('dragleave', function(e) { e.preventDefault(); zone.classList.remove('us-avatar-dragover'); });
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.remove('us-avatar-dragover');
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) uploadFile(f);
+  });
+  input.addEventListener('change', function() {
+    var f = input.files && input.files[0];
+    if (f) uploadFile(f);
+    else input.value = '';
+  });
+}
+
+async function loadIntegrationsStatus() {
+  var el = document.getElementById('integrationsStatusList');
+  if (!el) return;
+  try {
+    var res = await fetch('/api/integrations/status');
+    var d = await res.json().catch(function() { return {}; });
+    var google = d.google ? 'Connected' : 'Not connected';
+    var ghAccounts = d.github_accounts || [];
+    var ghHtml = d.github ? ('Connected' + (ghAccounts.length > 0 ? ' (' + ghAccounts.length + ' account' + (ghAccounts.length !== 1 ? 's' : '') + ')' : '')) : 'Not connected';
+    var listHtml =
+      '<div style="padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg-elevated)"><span style="font-weight:600;color:var(--text-primary)">Google Drive</span><span style="margin-left:8px;font-size:12px;color:var(--text-3)">' + google + '</span></div>' +
+      '<div style="padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg-elevated)"><span style="font-weight:600;color:var(--text-primary)">GitHub</span><span style="margin-left:8px;font-size:12px;color:var(--text-3)">' + ghHtml + '</span></div>';
+    if (ghAccounts.length > 0) {
+      ghAccounts.forEach(function(a) {
+        var id = (a.account_identifier || '').trim();
+        if (id) listHtml += '<div style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-canvas);font-size:12px;color:var(--text-3)">GitHub: <code style="color:var(--text-primary)">' + id + '</code></div>';
+      });
+    }
+    listHtml += '<div style="padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg-elevated)"><span style="font-weight:600;color:var(--text-primary)">Cloudflare</span><span style="margin-left:8px;font-size:12px;color:var(--text-3)">Configured via dashboard</span></div>';
+    el.innerHTML = listHtml;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif">Could not load status.</div>';
   }
 }
 
@@ -2111,19 +2459,25 @@ window.usSaveProfile = async function() {
   btn.textContent = 'Saving…';
 
   var body = {
-    'user.full_name': document.getElementById('pFullName').value.trim(),
-    'user.display_name': document.getElementById('pDisplayName').value.trim(),
-    'user.timezone': document.getElementById('pTimezone').value,
-    'user.language': document.getElementById('pLanguage').value,
+    full_name: document.getElementById('pFullName').value.trim(),
+    display_name: document.getElementById('pDisplayName').value.trim(),
+    backup_email: document.getElementById('pBackupEmail') ? document.getElementById('pBackupEmail').value.trim() : '',
+    phone: document.getElementById('pPhone') ? document.getElementById('pPhone').value.trim() : '',
+    timezone: document.getElementById('pTimezone').value,
+    language: document.getElementById('pLanguage').value,
   };
+  var pAvatarUrlEl = document.getElementById('pAvatarUrl');
+  if (pAvatarUrlEl) body.avatar_url = pAvatarUrlEl.value.trim();
 
   try {
     var res = await fetch('/api/settings/profile', {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error();
+    if (body.avatar_url) usState.profile.avatar_url = body.avatar_url;
+    renderProfile();
     showToast('Profile saved', 'success');
   } catch(e) {
     showToast('Failed to save profile', 'error');
@@ -2131,6 +2485,541 @@ window.usSaveProfile = async function() {
     btn.disabled = false;
     btn.textContent = 'Save Profile';
   }
+};
+
+async function loadSessions() {
+  var el = document.getElementById('sessionsList');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:12px 0">Loading…</div>';
+  try {
+    var res = await fetch('/api/settings/sessions');
+    var d = await res.json();
+    var list = d.sessions || [];
+    if (!list.length) {
+      el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:12px 0">No sessions found.</div>';
+      return;
+    }
+    el.innerHTML = list.map(function(s) {
+      var ip = esc(s.ip_address || '—');
+      var ua = (s.user_agent || '—').substring(0, 50);
+      var created = s.created_at ? new Date(s.created_at).toLocaleString() : '—';
+      return '<div class="us-session-row" style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">' +
+        '<div><div style="font-weight:600;color:var(--text-primary)">' + ip + '</div><div style="font-size:12px;color:var(--text-3)">' + esc(ua) + '</div><div style="font-size:11px;color:var(--text-3);margin-top:4px">' + created + '</div></div>' +
+        '<button type="button" class="us-save-btn" style="padding:6px 12px;font-size:12px" onclick="usRevokeSession(\'' + esc(s.id).replace(/'/g, "\\'") + '\')">Revoke</button>' +
+        '</div>';
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--error,#ef4444);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:12px 0">Failed to load sessions.</div>';
+  }
+}
+
+window.usChangePassword = async function() {
+  var current = document.getElementById('securityCurrentPassword') && document.getElementById('securityCurrentPassword').value;
+  var newP = document.getElementById('securityNewPassword') && document.getElementById('securityNewPassword').value;
+  var confirmP = document.getElementById('securityConfirmPassword') && document.getElementById('securityConfirmPassword').value;
+  if (!current || !newP) { showToast('Enter current and new password', 'error'); return; }
+  if (newP !== confirmP) { showToast('New password and confirm do not match', 'error'); return; }
+  try {
+    var res = await fetch('/api/settings/security/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: newP }),
+    });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(data.error || 'Failed to change password', 'error'); return; }
+    showToast('Password updated', 'success');
+    if (document.getElementById('securityCurrentPassword')) document.getElementById('securityCurrentPassword').value = '';
+    if (document.getElementById('securityNewPassword')) document.getElementById('securityNewPassword').value = '';
+    if (document.getElementById('securityConfirmPassword')) document.getElementById('securityConfirmPassword').value = '';
+  } catch (e) { showToast('Failed to change password', 'error'); }
+};
+
+window.usRevokeSession = async function(sessionId) {
+  if (!confirm('Revoke this session?')) return;
+  try {
+    var res = await fetch('/api/settings/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+    if (!res.ok) throw new Error();
+    showToast('Session revoked', 'success');
+    loadSessions();
+  } catch (e) { showToast('Failed to revoke', 'error'); }
+};
+
+window.usRevokeAllOtherSessions = async function() {
+  if (!confirm('Revoke all other sessions? You will stay signed in on this device.')) return;
+  try {
+    var res = await fetch('/api/settings/sessions/all', { method: 'DELETE' });
+    if (!res.ok) throw new Error();
+    showToast('Other sessions revoked', 'success');
+    loadSessions();
+  } catch (e) { showToast('Failed to revoke', 'error'); }
+};
+
+window.usTogglePasswordVisibility = function(inputId, btn) {
+  var input = document.getElementById(inputId);
+  if (!input) return;
+  var isPass = input.type === 'password';
+  input.type = isPass ? 'text' : 'password';
+  btn.setAttribute('aria-label', isPass ? 'Hide password' : 'Show password');
+  btn.querySelector('svg').style.display = 'block';
+};
+
+function getWorkspaceStorage() {
+  try {
+    var raw = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function setWorkspaceStorage(data) {
+  try {
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {}
+}
+
+function applyWorkspaceDataToForm(data) {
+  data = data || {};
+  if (document.getElementById('wsBrand')) document.getElementById('wsBrand').value = data.brand || '';
+  if (document.getElementById('wsPlans')) document.getElementById('wsPlans').value = data.plans || '';
+  if (document.getElementById('wsBudget')) document.getElementById('wsBudget').value = data.budget || '';
+  if (document.getElementById('wsTime')) document.getElementById('wsTime').value = data.time || '';
+}
+
+function fillWorkspaceThemeSelect() {
+  var sel = document.getElementById('wsSlotTheme');
+  if (!sel) return;
+  var opts = usState.themeList.length ? usState.themeList : [{ name: 'meaux-glass-blue', display_name: 'Meaux Glass Blue' }];
+  var current = usState.workspaceThemes[usState.currentWorkspaceSlot] || '';
+  sel.innerHTML = '<option value="">Default (user theme)</option>' + opts.map(function(t) {
+    return '<option value="' + esc(t.name) + '">' + esc(t.display_name || t.name) + '</option>';
+  }).join('');
+  sel.value = current;
+}
+
+async function loadWorkspaceDetail() {
+  var id = usState.currentWorkspaceSlot;
+  var nameEl = document.getElementById('workspaceDetailName');
+  if (nameEl) nameEl.textContent = WORKSPACE_SLOT_NAMES[id] || id;
+  document.querySelectorAll('.us-ws-slot').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-ws-id') === id);
+  });
+  var local = getWorkspaceStorage();
+  try {
+    var res = await fetch('/api/settings/workspaces');
+    var json = await res.json().catch(function() { return {}; });
+    var api = json.workspaces || {};
+    usState.workspaceApiData = api;
+    if (json.workspaceThemes) usState.workspaceThemes = json.workspaceThemes;
+    if (json.data && json.data.length) usState.workspaces = json.data;
+    if (json.current) usState.currentWs = json.current;
+    var merged = {};
+    ['ws_samprimeaux', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'].forEach(function(wid) {
+      merged[wid] = api[wid] ? { brand: api[wid].brand || '', plans: api[wid].plans || '', budget: api[wid].budget || '', time: api[wid].time || '' } : (local[wid] || { brand: '', plans: '', budget: '', time: '' });
+    });
+    setWorkspaceStorage(merged);
+    applyWorkspaceDataToForm(merged[id]);
+  } catch (e) {
+    applyWorkspaceDataToForm(local[id]);
+  }
+  if (!usState.themeList.length) {
+    try {
+      var tRes = await fetch('/api/themes');
+      var tData = await tRes.json();
+      var raw = Array.isArray(tData.themes) ? tData.themes : [];
+      usState.themeList = raw.map(function(t) { return { name: t.slug || t.name, display_name: t.name || t.slug }; });
+    } catch (err) {}
+  }
+  fillWorkspaceThemeSelect();
+}
+
+window.usSelectWorkspaceSlot = function(id) {
+  var prev = usState.currentWorkspaceSlot;
+  var all = getWorkspaceStorage();
+  all[prev] = {
+    brand: document.getElementById('wsBrand') ? document.getElementById('wsBrand').value : '',
+    plans: document.getElementById('wsPlans') ? document.getElementById('wsPlans').value : '',
+    budget: document.getElementById('wsBudget') ? document.getElementById('wsBudget').value : '',
+    time: document.getElementById('wsTime') ? document.getElementById('wsTime').value : '',
+  };
+  setWorkspaceStorage(all);
+  usState.currentWorkspaceSlot = id;
+  applyWorkspaceDataToForm(all[id]);
+  var nameEl = document.getElementById('workspaceDetailName');
+  if (nameEl) nameEl.textContent = WORKSPACE_SLOT_NAMES[id] || id;
+  document.querySelectorAll('.us-ws-slot').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-ws-id') === id);
+  });
+  fillWorkspaceThemeSelect();
+};
+
+window.usSaveWorkspace = async function() {
+  var id = usState.currentWorkspaceSlot;
+  var payload = {
+    workspace_id: id,
+    brand: document.getElementById('wsBrand') ? document.getElementById('wsBrand').value : '',
+    plans: document.getElementById('wsPlans') ? document.getElementById('wsPlans').value : '',
+    budget: document.getElementById('wsBudget') ? document.getElementById('wsBudget').value : '',
+    time: document.getElementById('wsTime') ? document.getElementById('wsTime').value : '',
+  };
+  try {
+    var res = await fetch('/api/settings/workspaces', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    var json = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(json.error || 'Save failed', 'error'); return; }
+    var all = getWorkspaceStorage();
+    all[id] = { brand: payload.brand, plans: payload.plans, budget: payload.budget, time: payload.time };
+    setWorkspaceStorage(all);
+    showToast('Workspace saved', 'success');
+  } catch (e) {
+    showToast('Save failed', 'error');
+  }
+};
+
+var VAULT_PRESETS = [
+  { service_name: 'cloudflare', secret_name: 'Cloudflare API Token', description: 'Workers, R2, D1' },
+  { service_name: 'openai', secret_name: 'OpenAI API Key', description: 'GPT, embeddings' },
+  { service_name: 'anthropic', secret_name: 'Anthropic API Key', description: 'Claude' },
+  { service_name: 'stripe', secret_name: 'Stripe Secret Key', description: 'Payments' },
+  { service_name: 'github', secret_name: 'GitHub Token', description: 'Repos, deploy' },
+  { service_name: 'resend', secret_name: 'Resend API Key', description: 'Transactional email' },
+  { service_name: 'mcp', secret_name: 'MCP Auth Token', description: 'MCP server auth' },
+];
+
+function renderVaultPresets(secretsList) {
+  var el = document.getElementById('vaultPresetList');
+  if (!el) return;
+  var byService = {};
+  (secretsList || []).forEach(function(s) {
+    var k = (s.service_name || '').toLowerCase();
+    if (!byService[k]) byService[k] = [];
+    byService[k].push(s);
+  });
+  el.innerHTML = VAULT_PRESETS.map(function(preset) {
+    var secrets = byService[preset.service_name] || [];
+    var hasSecret = secrets.length > 0 && secrets[0].is_active;
+    var meta = {};
+    if (hasSecret && secrets[0].metadata_json) try { meta = typeof secrets[0].metadata_json === 'string' ? JSON.parse(secrets[0].metadata_json) : secrets[0].metadata_json; } catch (e) {}
+    var last4 = meta.last4 || '????';
+    var status = hasSecret ? '****' + last4 : 'Not set';
+    var rowClass = hasSecret ? 'us-preset-secret has-secret' : 'us-preset-secret';
+    return '<div class="' + rowClass + '">' +
+      '<div><div style="font-weight:600;color:var(--text-primary)">' + esc(preset.secret_name) + '</div>' +
+      (preset.description ? '<div style="font-size:12px;color:var(--text-3)">' + esc(preset.description) + '</div>' : '') +
+      '<div style="font-size:11px;color:var(--text-3);margin-top:4px">' + status + '</div></div>' +
+      '<button type="button" class="us-preset-secret-add" onclick="event.stopPropagation(); usOpenNewSecretDrawer(\'' + esc(preset.service_name).replace(/'/g, "\\'") + '\',\'' + esc(preset.secret_name).replace(/'/g, "\\'") + '\', \'inneranimalmedia\')" title="Add secret">+</button>' +
+      '</div>';
+  }).join('');
+}
+
+async function loadVaultRegistry() {
+  var el = document.getElementById('vaultRegistryList');
+  if (!el) return;
+  try {
+    var regRes = await fetch('/api/vault/registry', { credentials: 'same-origin' });
+    var d = await regRes.json().catch(function() { return {}; });
+    if (!regRes.ok) { el.innerHTML = '<div style="color:var(--text-3);font-size:13px">' + esc(d.error || 'Failed to load registry') + '</div>'; return; }
+    var secrets = d.secrets || [];
+    var domains = d.domains || [];
+    var vaultList = [];
+    try {
+      var vRes = await fetch('/api/vault/secrets', { credentials: 'same-origin' });
+      var vData = await vRes.json().catch(function() { return {}; });
+      if (vRes.ok && vData.secrets) vaultList = vData.secrets;
+    } catch (err) {}
+    var nameToSecret = {};
+    vaultList.forEach(function(s) {
+      if (s.secret_name && s.is_active) {
+        nameToSecret[s.secret_name] = s;
+        nameToSecret[s.secret_name.replace(/\s+/g, '_')] = s;
+        nameToSecret[s.secret_name.replace(/_/g, ' ')] = s;
+      }
+    });
+    var html = '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin-bottom:8px">Variables &amp; secrets (click to reveal / roll / audit)</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-bottom:20px">';
+    secrets.forEach(function(s) {
+      var typeLabel = (s.type || 'secret') === 'plaintext' ? 'plaintext' : 'secret';
+      var vault = nameToSecret[s.name] || nameToSecret[s.name.replace(/_/g, ' ')];
+      var vaultId = vault ? vault.id : '';
+      var nameEsc = String(s.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      var descEsc = String(s.description || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      var click = "usOpenSecretDetailModal(" + (vaultId ? "'" + String(vaultId).replace(/'/g, "\\'") + "'" : "null") + ",'" + nameEsc + "','" + descEsc + "')";
+      html += '<div class="us-registry-card-clickable" style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-canvas)" onclick="' + click + '">';
+      html += '<div style="font-weight:600;color:var(--text-primary);font-size:13px">' + esc(s.name) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + typeLabel + (s.description ? ' &bull; ' + esc(s.description) : '') + (vaultId ? ' &bull; In vault' : '') + '</div>';
+      html += '</div>';
+    });
+    html += '</div><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin-bottom:8px">Domains &amp; routes</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">';
+    domains.forEach(function(d) {
+      html += '<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-canvas)">';
+      html += '<div style="font-weight:600;color:var(--text-primary);font-size:13px">' + esc(d.value) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(d.type || '') + (d.description ? ' &bull; ' + esc(d.description) : '') + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--error,#ef4444);font-size:13px">Failed to load registry.</div>';
+  }
+}
+
+async function loadVaultSecrets() {
+  var el = document.getElementById('vaultSecretsList');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:12px 0">Loading…</div>';
+  try {
+    var project = document.getElementById('vaultProjectFilter') && document.getElementById('vaultProjectFilter').value;
+    var url = '/api/vault/secrets';
+    if (project) url += '?project=' + encodeURIComponent(project);
+    var res = await fetch(url);
+    var d = await res.json();
+    if (!res.ok) { el.innerHTML = '<div style="color:var(--error,#ef4444);font-size:13px">' + esc(d.error || 'Failed to load') + '</div>'; renderVaultPresets([]); return; }
+    var list = d.secrets || [];
+    var projectsRes = await fetch('/api/vault/projects');
+    var projectsData = await projectsRes.json();
+    var projects = projectsData.projects || [];
+    var sel = document.getElementById('vaultProjectFilter');
+    if (sel && projects.length) {
+      var current = sel.value;
+      sel.innerHTML = '<option value="">All projects</option>' + projects.map(function(p) {
+        return '<option value="' + esc(p.project_label) + '">' + esc(p.project_label) + ' (' + (p.secret_count || 0) + ')</option>';
+      }).join('');
+      sel.value = current || '';
+    }
+    renderVaultPresets(list);
+    if (!list.length) {
+      el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:20px 0">No secrets. Click + Add secret or use a preset above.</div>';
+      return;
+    }
+    var byProject = {};
+    list.forEach(function(s) {
+      var proj = s.project_label || 'Default';
+      if (!byProject[proj]) byProject[proj] = [];
+      byProject[proj].push(s);
+    });
+    var html = '';
+    for (var proj in byProject) {
+      html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin:16px 0 8px">' + esc(proj) + '</div>';
+      byProject[proj].forEach(function(s) {
+        var meta = {};
+        try { meta = typeof s.metadata_json === 'string' ? JSON.parse(s.metadata_json) : (s.metadata_json || {}); } catch (e) {}
+        var last4 = meta.last4 || '????';
+        var status = s.is_active ? 'active' : 'revoked';
+        var idEsc = String(s.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        html += '<div class="us-vault-row us-registry-card-clickable" style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--bg-canvas)" onclick="usOpenSecretDetailModal(\'' + idEsc + '\', \'' + esc(s.secret_name).replace(/'/g, "\\'") + '\')">' +
+          '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600;color:var(--text-primary)">' + esc(s.secret_name) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-3)">' + esc(s.service_name || '—') + ' &bull; ****' + esc(last4) + ' <span style="font-size:11px;padding:2px 6px;border-radius:4px;background:var(--border)">' + status + '</span></div>' +
+          '</div>' +
+          '<button type="button" class="us-save-btn" style="padding:6px 10px;font-size:12px" onclick="event.stopPropagation(); usRevealSecret(\'' + idEsc + '\')">Reveal</button>' +
+          '<button type="button" class="us-save-btn" style="padding:6px 10px;font-size:12px;background:transparent;border:1px solid var(--border)" onclick="event.stopPropagation(); usCopySecret(\'' + idEsc + '\')">Copy</button>' +
+          '</div>';
+      });
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--error,#ef4444);font-size:13px">Failed to load secrets.</div>';
+    renderVaultPresets([]);
+  }
+}
+
+function usModalClose() {
+  var ov = document.getElementById('usModalOverlay');
+  if (ov) { ov.style.display = 'none'; ov.setAttribute('aria-hidden', 'true'); }
+}
+
+function usModalOpen(title, bodyHtml, footerHtml) {
+  var ov = document.getElementById('usModalOverlay');
+  var titleEl = document.getElementById('usModalTitle');
+  var body = document.getElementById('usModalBody');
+  var footer = document.getElementById('usModalFooter');
+  if (titleEl) titleEl.textContent = title || 'Secret';
+  if (body) body.innerHTML = bodyHtml || '';
+  if (footer) footer.innerHTML = footerHtml || '';
+  if (ov) { ov.style.display = 'flex'; ov.setAttribute('aria-hidden', 'false'); }
+}
+
+window.usOpenNewSecretDrawer = function(serviceName, secretName, projectLabel) {
+  if (document.getElementById('vaultSecretName')) document.getElementById('vaultSecretName').value = secretName || '';
+  if (document.getElementById('vaultServiceName')) document.getElementById('vaultServiceName').value = serviceName || '';
+  if (document.getElementById('vaultSecretValue')) document.getElementById('vaultSecretValue').value = '';
+  if (document.getElementById('vaultProjectLabel')) document.getElementById('vaultProjectLabel').value = projectLabel || 'inneranimalmedia';
+  var body = '<div class="us-field" style="margin-bottom:12px"><label class="us-label">Secret name</label><input class="us-input" id="vaultSecretNameModal" placeholder="e.g. Production API Key" value="' + esc(secretName || '') + '"></div>' +
+    '<div class="us-field" style="margin-bottom:12px"><label class="us-label">Service</label><input class="us-input" id="vaultServiceNameModal" placeholder="e.g. cloudflare, openai" value="' + esc(serviceName || '') + '"></div>' +
+    '<div class="us-field" style="margin-bottom:12px"><label class="us-label">Secret value</label><input class="us-input" id="vaultSecretValueModal" type="password" placeholder="Paste value (never stored in plaintext)"></div>' +
+    '<div class="us-field" style="margin-bottom:12px"><label class="us-label">Project (optional)</label><input class="us-input" id="vaultProjectLabelModal" placeholder="e.g. inneranimalmedia" value="' + esc(projectLabel || 'inneranimalmedia') + '"></div>';
+  var footer = '<button type="button" class="us-save-btn" onclick="usCreateSecretFromModal()">Save Secret</button><button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usModalClose()">Cancel</button>';
+  usModalOpen('Add secret', body, footer);
+}
+
+window.usCreateSecretFromModal = async function() {
+  var name = document.getElementById('vaultSecretNameModal') && document.getElementById('vaultSecretNameModal').value.trim();
+  var value = document.getElementById('vaultSecretValueModal') && document.getElementById('vaultSecretValueModal').value;
+  var service = document.getElementById('vaultServiceNameModal') && document.getElementById('vaultServiceNameModal').value.trim();
+  var project = document.getElementById('vaultProjectLabelModal') && document.getElementById('vaultProjectLabelModal').value.trim();
+  if (!name || !value) { showToast('Name and value required', 'error'); return; }
+  try {
+    var res = await fetch('/api/vault/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ secret_name: name, secret_value: value, service_name: service || null, project_label: project || null }) });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(data.error || 'Failed to create', 'error'); return; }
+    showToast('Secret saved', 'success');
+    usModalClose();
+    loadVaultSecrets();
+    loadVaultRegistry();
+  } catch (e) { showToast('Failed to create secret', 'error'); }
+};
+
+window.usOpenSecretDetailModal = function(vaultId, registryName, registryDesc) {
+  if (vaultId) {
+    fetch('/api/vault/secrets/' + encodeURIComponent(vaultId) + '/audit', { credentials: 'same-origin' }).then(function(r) { return r.json(); }).then(function(d) {
+      var audit = (d.audit || []).slice(0, 10);
+      var lastUsed = audit.find(function(a) { return a.event_type === 'viewed' || a.event_type === 'copied'; });
+      var lastChanged = audit.find(function(a) { return a.event_type === 'rotated' || a.event_type === 'edited' || a.event_type === 'created'; });
+      var body = '<div style="margin-bottom:16px"><strong>Last used:</strong> ' + (lastUsed ? new Date(lastUsed.created_at * 1000).toLocaleString() : 'Never') + '</div>';
+      body += '<div style="margin-bottom:16px"><strong>Last changed:</strong> ' + (lastChanged ? new Date(lastChanged.created_at * 1000).toLocaleString() : 'Never') + '</div>';
+      body += '<div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Recent audit</div><div style="max-height:160px;overflow-y:auto;font-size:12px">';
+      audit.forEach(function(a) {
+        body += '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' + esc(a.event_type) + ' &bull; ' + new Date(a.created_at * 1000).toLocaleString() + '</div>';
+      });
+      body += '</div>';
+      var footer = '<button type="button" class="us-save-btn" onclick="usRevealSecret(\'' + String(vaultId).replace(/'/g, "\\'") + '\'); usModalClose();">Reveal</button>' +
+        '<button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border)" onclick="usCopySecret(\'' + String(vaultId).replace(/'/g, "\\'") + '\'); usModalClose();">Copy</button>' +
+        '<button type="button" class="us-save-btn" style="background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-primary)" onclick="usOpenRotateModal(\'' + String(vaultId).replace(/'/g, "\\'") + '\')">Roll</button>' +
+        '<button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usModalClose()">Close</button>';
+      usModalOpen(registryName || 'Secret', body, footer);
+    }).catch(function() {
+      var footer = '<button type="button" class="us-save-btn" onclick="usRevealSecret(\'' + String(vaultId).replace(/'/g, "\\'") + '\'); usModalClose();">Reveal</button><button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border)" onclick="usCopySecret(\'' + String(vaultId).replace(/'/g, "\\'") + '\'); usModalClose();">Copy</button><button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usModalClose()">Close</button>';
+      usModalOpen(registryName || 'Secret', '<p style="color:var(--text-3)">Audit could not be loaded.</p>', footer);
+    });
+  } else {
+    var body = '<p style="color:var(--text-3);margin-bottom:16px">This variable is set in the Cloudflare Worker dashboard. Store a copy here to reveal, roll, and track it.</p>';
+    var footer = '<button type="button" class="us-save-btn" onclick="usModalClose(); usOpenNewSecretDrawer(\'\', \'' + String(registryName || '').replace(/'/g, "\\'") + '\', \'inneranimalmedia\');">Store a copy in vault</button><button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usModalClose()">Close</button>';
+    usModalOpen(registryName || 'Worker variable', body, footer);
+  }
+};
+
+window.usOpenRotateModal = function(vaultId) {
+  var body = '<p style="color:var(--text-3);margin-bottom:12px">Enter the new value. The previous value will be replaced and audit logged.</p><div class="us-field"><label class="us-label">New value</label><input class="us-input" id="vaultRotateNewValue" type="password" placeholder="New secret value"></div>';
+  var footer = '<button type="button" class="us-save-btn" onclick="usDoRotate(\'' + String(vaultId).replace(/'/g, "\\'") + '\')">Rotate</button><button type="button" class="us-save-btn" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary)" onclick="usModalClose()">Cancel</button>';
+  usModalOpen('Roll secret', body, footer);
+};
+
+window.usDoRotate = async function(vaultId) {
+  var newVal = document.getElementById('vaultRotateNewValue') && document.getElementById('vaultRotateNewValue').value;
+  if (!newVal) { showToast('Enter new value', 'error'); return; }
+  try {
+    var res = await fetch('/api/vault/secrets/' + encodeURIComponent(vaultId) + '/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ new_value: newVal }) });
+    var d = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(d.error || 'Rotate failed', 'error'); return; }
+    showToast('Secret rotated', 'success');
+    usModalClose();
+    loadVaultSecrets();
+    loadVaultRegistry();
+  } catch (e) { showToast('Rotate failed', 'error'); }
+};
+
+(function() {
+  var ov = document.getElementById('usModalOverlay');
+  var closeBtn = document.getElementById('usModalClose');
+  if (ov) ov.addEventListener('click', function(e) { if (e.target === ov) usModalClose(); });
+  if (closeBtn) closeBtn.addEventListener('click', usModalClose);
+})();
+
+window.usCloseNewSecretDrawer = function() {
+  usModalClose();
+  var card = document.getElementById('newSecretCard');
+  if (card) card.style.display = 'none';
+}
+
+window.usCreateSecret = async function() {
+  var name = document.getElementById('vaultSecretName') && document.getElementById('vaultSecretName').value.trim();
+  var value = document.getElementById('vaultSecretValue') && document.getElementById('vaultSecretValue').value;
+  if (!name || !value) { showToast('Name and value required', 'error'); return; }
+  try {
+    var res = await fetch('/api/vault/secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret_name: name,
+        secret_value: value,
+        service_name: (document.getElementById('vaultServiceName') && document.getElementById('vaultServiceName').value.trim()) || null,
+        project_label: (document.getElementById('vaultProjectLabel') && document.getElementById('vaultProjectLabel').value.trim()) || null,
+      }),
+    });
+    var data = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(data.error || 'Failed to create', 'error'); return; }
+    showToast('Secret saved', 'success');
+    usCloseNewSecretDrawer();
+    loadVaultSecrets();
+  } catch (e) { showToast('Failed to create secret', 'error'); }
+}
+
+window.usRevealSecret = async function(id) {
+  try {
+    var res = await fetch('/api/vault/secrets/' + encodeURIComponent(id) + '/reveal', { method: 'POST' });
+    var d = await res.json();
+    if (!res.ok) { showToast(d.error || 'Failed', 'error'); return; }
+    var val = d.value || '';
+    prompt('Revealed value (close after 30s):', val);
+  } catch (e) { showToast('Failed to reveal', 'error'); }
+}
+
+window.usCopySecret = async function(id) {
+  try {
+    var res = await fetch('/api/vault/secrets/' + encodeURIComponent(id) + '/copy', { method: 'POST' });
+    var d = await res.json();
+    if (!res.ok) { showToast(d.error || 'Failed', 'error'); return; }
+    var val = d.value || '';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(val);
+      showToast('Copied to clipboard', 'success');
+    } else {
+      prompt('Copy value:', val);
+    }
+  } catch (e) { showToast('Failed to copy', 'error'); }
+}
+
+window.usLoadAuditLogs = async function() {
+  var el = document.getElementById('auditLogList');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:12px 0">Loading…</div>';
+  var eventType = document.getElementById('auditEventType') ? document.getElementById('auditEventType').value : '';
+  var sinceOpt = document.getElementById('auditSince') ? document.getElementById('auditSince').value : '';
+  var sinceTs = '';
+  if (sinceOpt === '24h') sinceTs = String(Math.floor(Date.now() / 1000) - 86400);
+  else if (sinceOpt === '7d') sinceTs = String(Math.floor(Date.now() / 1000) - 604800);
+  else if (sinceOpt === '30d') sinceTs = String(Math.floor(Date.now() / 1000) - 2592000);
+  var q = [];
+  if (eventType) q.push('event_type=' + encodeURIComponent(eventType));
+  if (sinceTs) q.push('since=' + encodeURIComponent(sinceTs));
+  var url = '/api/vault/audit' + (q.length ? '?' + q.join('&') : '');
+  try {
+    var res = await fetch(url);
+    var d = await res.json();
+    if (!res.ok) { el.innerHTML = '<div style="color:var(--error,#ef4444)">' + esc(d.error || 'Failed') + '</div>'; return; }
+    var list = d.audit || [];
+    if (!list.length) {
+      el.innerHTML = '<div style="color:var(--text-3);font-size:13px;font-family:\'DM Sans\',sans-serif;padding:20px 0">No audit events match the filters.</div>';
+      return;
+    }
+    el.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th style="padding:8px 12px">Time</th><th style="padding:8px 12px">Event</th><th style="padding:8px 12px">Secret</th><th style="padding:8px 12px">Service</th><th style="padding:8px 12px">Notes</th><th style="padding:8px 12px">IP</th><th style="padding:8px 12px">By</th></tr></thead><tbody>' +
+      list.map(function(a) {
+        var time = a.created_at ? new Date(a.created_at * 1000).toLocaleString() : '—';
+        return '<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px;color:var(--text-3);white-space:nowrap">' + esc(time) + '</td><td style="padding:8px 12px">' + esc(a.event_type) + '</td><td style="padding:8px 12px">' + esc(a.secret_name) + '</td><td style="padding:8px 12px">' + esc(a.service_name) + '</td><td style="padding:8px 12px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="' + esc(a.notes || '') + '">' + esc((a.notes || '—').slice(0, 50)) + (a.notes && a.notes.length > 50 ? '…' : '') + '</td><td style="padding:8px 12px;font-size:12px;color:var(--text-3)">' + esc(a.ip_address || '—') + '</td><td style="padding:8px 12px">' + esc(a.triggered_by) + '</td></tr>';
+      }).join('') +
+      '</tbody></table></div>';
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--error,#ef4444);font-size:13px">Failed to load audit log.</div>';
+  }
+};
+
+window.usGenerateBackupCodes = async function() {
+  var btn = document.getElementById('generateBackupCodesBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    var res = await fetch('/api/settings/security/backup-codes/generate', { method: 'POST' });
+    var d = await res.json().catch(function() { return {}; });
+    if (!res.ok) { showToast(d.error || 'Failed to generate', 'error'); return; }
+    showToast(d.message || 'Backup codes sent to your email', 'success');
+  } catch (e) { showToast('Failed to generate backup codes', 'error'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Generate backup codes'; } }
 };
 
 function showToast(msg, type) {
@@ -2397,8 +3286,18 @@ usInit();
                 dropdown.classList.toggle('open');
             });
             document.addEventListener('click', function () { dropdown.classList.remove('open'); });
-            document.getElementById('profileSwitchAccount') && document.getElementById('profileSwitchAccount').addEventListener('click', function () { dropdown.classList.remove('open'); /* TODO: switch account */ });
-            document.getElementById('profileChangePhoto') && document.getElementById('profileChangePhoto').addEventListener('click', function () { dropdown.classList.remove('open'); /* TODO: change photo */ });
+            document.getElementById('profileSwitchAccount') && document.getElementById('profileSwitchAccount').addEventListener('click', function () { dropdown.classList.remove('open'); });
+            document.getElementById('profileChangePhoto') && document.getElementById('profileChangePhoto').addEventListener('click', function () {
+                dropdown.classList.remove('open');
+                var profileTab = document.querySelector('.us-tab[data-tab="profile"]');
+                var panel = document.getElementById('tab-profile');
+                if (profileTab) { profileTab.click(); }
+                if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setTimeout(function () {
+                    var input = document.getElementById('pAvatarUrl');
+                    if (input) input.focus(); else document.getElementById('profileImageDropZone') && document.getElementById('profileImageDropZone').focus();
+                }, 300);
+            });
             document.getElementById('logoutBtn') && document.getElementById('logoutBtn').addEventListener('click', function () {
                 dropdown.classList.remove('open');
                 fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(function () {
@@ -2496,83 +3395,6 @@ usInit();
             }
         })();
     </script>
-
-<script id="theme-loader-v2-override">
-// v2 override — sync theme with localStorage vars for FOUC prevention
-(function() {
-  const TMAP = { bg:'--bg-primary', surface:'--bg-secondary', elevated:'--bg-elevated', nav:'--bg-nav', text:'--color-text', textSecondary:'--text-muted', border:'--color-border', primary:'--accent-primary', secondary:'--accent-secondary', radius:'--border-radius' };
-  let styleEl = null;
-  let themeCssMap = {};
-  async function loadThemesV2() {
-    try {
-      const res = await fetch('/api/themes');
-      if (!res.ok) return;
-      const data = await res.json();
-      const themes = data.themes || [];
-      if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'theme-dynamic-v2'; document.head.appendChild(styleEl); }
-      let css = '';
-      themes.forEach(td => {
-        const slug = td.slug;
-        let config = {};
-        try { config = typeof td.config === 'string' ? JSON.parse(td.config) : td.config; } catch(e){}
-        let vars = '';
-        Object.entries(config).forEach(([key, val]) => { const cv = TMAP[key]; if (cv) vars += cv + ':' + val + ';'; });
-        const navBg = config.surface || config.bg || '#1a2035';
-        const navText = config.text || '#e2e8f0';
-        const navMuted = config.textSecondary || 'rgba(255,255,255,0.6)';
-        const navBorder = config.border || 'rgba(255,255,255,0.1)';
-        vars += '--bg-nav:' + navBg + ';--text-nav:' + navText + ';--text-nav-muted:' + navMuted + ';--border-nav:' + navBorder + ';';
-        vars += '--bg-canvas:' + (config.bg||'#0f172a') + ';--bg-elevated:' + (config.surface||'#1e293b') + ';';
-        vars += '--color-primary:' + (config.primary||'#3b82f6') + ';--accent:' + (config.primary||'#3b82f6') + ';--border:' + (config.border||'#334155') + ';';
-        vars += '--text-primary:' + (config.text||'#f1f5f9') + ';--text-secondary:' + (config.textSecondary||'#94a3b8') + ';';
-        if (vars) {
-          var block = ':root[data-theme="' + slug + '"] {' + vars + '}';
-          css += block + '\n';
-          themeCssMap[slug] = block;
-        }
-      });
-      styleEl.textContent = css;
-      const saved = localStorage.getItem('dashboard-theme') || 'meaux-glass-blue';
-      document.documentElement.setAttribute('data-theme', saved);
-      if (themeCssMap[saved]) localStorage.setItem('dashboard-theme-vars', themeCssMap[saved]);
-    } catch(e) { console.error('loadThemesV2 error', e); }
-  }
-  window.applyThemeToShell = function(name) {
-    localStorage.setItem('dashboard-theme', name);
-    document.documentElement.setAttribute('data-theme', name);
-    if (themeCssMap[name]) {
-      localStorage.setItem('dashboard-theme-vars', themeCssMap[name]);
-      var el = document.getElementById('theme-dynamic-inject');
-      if (!el) { el = document.createElement('style'); el.id = 'theme-dynamic-inject'; document.head.appendChild(el); }
-      el.textContent = themeCssMap[name];
-    }
-  };
-  loadThemesV2();
-  window._loadThemesV2 = loadThemesV2;
-
-  window.usApplyTheme = async function(name, displayName) {
-    document.querySelectorAll('.us-theme-card').forEach(function(c) {
-      var onStr = (c.getAttribute('onclick') || '');
-      c.classList.toggle('selected', onStr.indexOf("'" + name + "'") !== -1);
-    });
-    localStorage.setItem('dashboard-theme', name);
-    document.documentElement.setAttribute('data-theme', name);
-    if (themeCssMap[name]) {
-      localStorage.setItem('dashboard-theme-vars', themeCssMap[name]);
-      var el = document.getElementById('theme-dynamic-inject');
-      if (!el) { el = document.createElement('style'); el.id = 'theme-dynamic-inject'; document.head.appendChild(el); }
-      el.textContent = themeCssMap[name];
-    }
-    try {
-      var res = await fetch('/api/settings/theme', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin', body: JSON.stringify({ theme: name }) });
-      if (!res.ok) throw new Error('Failed');
-      if (typeof window.showToast === 'function') window.showToast('Theme applied', 'success');
-    } catch(e) {
-      if (typeof window.showToast === 'function') window.showToast('Failed to save theme', 'error');
-    }
-  };
-})();
-</script>
 
 </body>
 </html>

@@ -22,6 +22,7 @@ function getSamContext(email) {
     id: email === 'sam@inneranimalmedia.com' ? 32 : 24,
     email,
     user_id: 'sam_primeaux',
+    _session_user_id: email,
     name: 'Sam Primeaux',
     role: 'superadmin',
     permissions: ['*'],
@@ -188,9 +189,141 @@ async function selectAutoModel(env, lastUserContent) {
   }
 }
 
+async function handleDeploymentLog(request, env, ctx) {
+  const token = env.DEPLOY_TRACKING_TOKEN || env.WORKER_SECRET;
+  if (!token) return jsonResponse({ error: 'Deploy tracking not configured' }, 501);
+  const authHeader = request.headers.get('Authorization') || request.headers.get('X-Deploy-Token') || '';
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+  if (bearer !== token) return jsonResponse({ error: 'Unauthorized' }, 401);
+  let body = {};
+  try {
+    const raw = await request.text();
+    if (raw) body = JSON.parse(raw);
+  } catch (_) {}
+  const id = 'dpl-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  const timestamp = (body.timestamp || new Date().toISOString()).toString();
+  const version = (body.version || 'unknown').toString();
+  const gitHash = (body.git_hash || body.git_hash_short || '').toString();
+  const description = (body.description || '').toString();
+  const status = (body.status || 'success').toString();
+  const deployedBy = (body.deployed_by || 'script').toString();
+  const environment = (body.environment || 'production').toString();
+  const durationSeconds = typeof body.duration_seconds === 'number' ? body.duration_seconds : null;
+  const deployDurationMs = durationSeconds != null ? durationSeconds * 1000 : null;
+  const changes = Array.isArray(body.changes) ? body.changes : [];
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  if (ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+          ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+          for (let i = 0; i < changes.length; i++) {
+            const ch = changes[i];
+            const changeId = id + '-ch-' + i;
+            const filePath = (ch.file_path || ch.path || '').toString();
+            const changeType = (ch.change_type || ch.type || '').toString();
+            await env.DB.prepare(
+              `INSERT INTO deployment_changes (id, deployment_id, file_path, change_type, created_at) VALUES (?, ?, ?, ?, unixepoch())`
+            ).bind(changeId, id, filePath || null, changeType || null).run();
+          }
+          await ensureWorkSessionAndSignal(env, 'sam_primeaux', 'ws_inneranimal', 'deploy', 'deploy-log', {
+            deployment_id: id,
+            version,
+            status,
+            environment,
+          });
+        } catch (e) {
+          console.error('[deployments/log]', e?.message ?? e);
+        }
+      })()
+    );
+  } else {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+      ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+      for (let i = 0; i < changes.length; i++) {
+        const ch = changes[i];
+        const changeId = id + '-ch-' + i;
+        const filePath = (ch.file_path || ch.path || '').toString();
+        const changeType = (ch.change_type || ch.type || '').toString();
+        await env.DB.prepare(
+          `INSERT INTO deployment_changes (id, deployment_id, file_path, change_type, created_at) VALUES (?, ?, ?, ?, unixepoch())`
+        ).bind(changeId, id, filePath || null, changeType || null).run();
+      }
+      await ensureWorkSessionAndSignal(env, 'sam_primeaux', 'ws_inneranimal', 'deploy', 'deploy-log', {
+        deployment_id: id,
+        version,
+        status,
+        environment,
+      });
+    } catch (e) {
+      console.error('[deployments/log]', e?.message ?? e);
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+  return jsonResponse({ ok: true, deployment_id: id });
+}
+
+async function handleDeploymentsRecent(request, env) {
+  if (!env.DB) return jsonResponse({ deployments: [] });
+  const limit = Math.min(parseInt(request.url && new URL(request.url).searchParams.get('limit'), 10) || 20, 50);
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, timestamp, version, git_hash, changed_files, description, status, deployed_by, environment, deploy_duration_ms, notes, created_at FROM deployments ORDER BY timestamp DESC LIMIT ?`
+    ).bind(limit).all();
+    return jsonResponse({ deployments: results || [] });
+  } catch (e) {
+    console.error('[deployments/recent]', e?.message ?? e);
+    return jsonResponse({ deployments: [] });
+  }
+}
+
+// ── Vault secret loader ───────────────────────────────────────
+// Loads all active vault secrets from D1 into a plain object.
+// Returns empty object on any failure — never throws.
+// (Crypto matches /api/env/* _vaultDecrypt; defined at module scope so fetch can call it.)
+async function getVaultSecrets(env) {
+  try {
+    if (!env.VAULT_KEY || !env.DB) return {};
+    async function importKey(b64) {
+      const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    }
+    async function decryptRow(encB64, ivB64, vaultKeyB64) {
+      const key = await importKey(vaultKeyB64);
+      const plain = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
+        key,
+        Uint8Array.from(atob(encB64), c => c.charCodeAt(0))
+      );
+      return new TextDecoder().decode(plain);
+    }
+    const { results } = await env.DB.prepare(
+      'SELECT key_name, encrypted_value, iv FROM env_secrets WHERE is_active = 1'
+    ).all();
+    const secrets = {};
+    for (const row of (results || [])) {
+      try {
+        secrets[row.key_name] = await decryptRow(
+          row.encrypted_value, row.iv, env.VAULT_KEY
+        );
+      } catch {}
+    }
+    return secrets;
+  } catch {
+    return {};
+  }
+}
+
 const worker = {
   async fetch(request, env, ctx) {
     try {
+      // Load vault secrets — vault wins over wrangler env, wrangler is fallback
+      const vault = await getVaultSecrets(env);
+      const secret = (key) => vault[key] ?? env[key];
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/$/, '') || '/';
       const pathLower = path.toLowerCase();
@@ -225,6 +358,45 @@ const worker = {
           return jsonResponse({ ok: true, keys });
         } catch (e) {
           console.error('[post-deploy]', e?.message ?? e);
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
+      // ----- API: Deployment tracking (deployments + deployment_changes tables) -----
+      if (url.pathname === '/api/deployments/log' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleDeploymentLog(request, env, ctx);
+      }
+      if (url.pathname === '/api/deployments/recent' && (request.method || 'GET').toUpperCase() === 'GET') {
+        return handleDeploymentsRecent(request, env);
+      }
+
+      // ----- API: Internal record-deploy (one row in cloudflare_deployments) -----
+      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/record-deploy') {
+        const secret = env.INTERNAL_API_SECRET;
+        if (!secret) {
+          return jsonResponse({ error: 'record-deploy not configured (INTERNAL_API_SECRET)' }, 501);
+        }
+        const authHeader = request.headers.get('Authorization') || request.headers.get('X-Internal-Secret') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        if (token !== secret) {
+          return jsonResponse({ error: 'Unauthorized' }, 401);
+        }
+        let body = {};
+        try {
+          const raw = await request.text();
+          if (raw) body = JSON.parse(raw);
+        } catch (_) {}
+        const triggeredBy = (body.triggered_by || 'api_record_deploy').toString().replace(/'/g, "''");
+        const notes = (body.deployment_notes || body.notes || '').toString().replace(/'/g, "''");
+        const deployId = 'rec-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        try {
+          env.DB.prepare(
+            `INSERT INTO cloudflare_deployments (deployment_id, worker_name, project_name, deployment_type, environment, status, deployment_url, preview_url, triggered_by, deployed_at, created_at, build_time_seconds, deploy_time_seconds, deployment_notes) VALUES (?, 'inneranimalmedia', 'inneranimalmedia', 'worker', 'production', 'success', 'https://inneranimalmedia.meauxbility.workers.dev', 'https://www.inneranimalmedia.com', ?, datetime('now'), datetime('now'), 0, 0, ?)`
+          ).bind(deployId, triggeredBy, notes).run();
+          return jsonResponse({ ok: true, deployment_id: deployId });
+        } catch (e) {
+          console.error('[record-deploy]', e?.message ?? e);
           return jsonResponse({ error: String(e?.message || e) }, 500);
         }
       }
@@ -426,9 +598,12 @@ const worker = {
         return handleGitHubOAuthCallback(request, url, env);
       }
 
-      // ----- Auth: email/password login and logout (D1 auth_users with password_hash) -----
+      // ----- Auth: email/password login, backup-code login, logout -----
       if (pathLower === '/api/auth/login' && (request.method || 'GET').toUpperCase() === 'POST') {
         return handleEmailPasswordLogin(request, url, env);
+      }
+      if (pathLower === '/api/auth/backup-code' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleBackupCodeLogin(request, url, env);
       }
       if (pathLower === '/api/auth/logout' && (request.method || 'GET').toUpperCase() === 'POST') {
         return handleLogout(request, url, env);
@@ -552,24 +727,35 @@ const worker = {
       // ----- API: Integrations (status, gdrive, github) -- before handleAgentApi -----
       if (path === '/api/integrations/status') {
         const authUser = await getAuthUser(request, env);
-        if (!authUser) return jsonResponse({ google: false, github: false });
-        const result = await env.DB.prepare(
-          `SELECT provider FROM user_oauth_tokens WHERE user_id = ?`
-        ).bind(authUser.id).all();
-        const providers = result.results.map(r => r.provider);
-        return jsonResponse({
-          google: providers.includes('google_drive'),
-          github: providers.includes('github')
-        });
+        if (!authUser) return jsonResponse({ google: false, github: false, github_accounts: [] });
+        const integrationUserId = authUser.email || authUser.id;
+        let google = false;
+        let github = false;
+        const githubAccounts = [];
+        try {
+          const result = await env.DB.prepare(
+            `SELECT provider, account_identifier FROM user_oauth_tokens WHERE user_id = ?`
+          ).bind(integrationUserId).all();
+          for (const r of result.results || []) {
+            if (r.provider === 'google_drive') google = true;
+            if (r.provider === 'github') {
+              github = true;
+              if (r.account_identifier) githubAccounts.push({ account_identifier: r.account_identifier });
+            }
+          }
+        } catch (_) {}
+        return jsonResponse({ google, github, github_accounts: githubAccounts });
       }
       if (path.startsWith('/api/integrations/')) {
         const method = (request.method || 'GET').toUpperCase();
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const integrationUserId = authUser.email || authUser.id;
+        const githubAccount = url.searchParams.get('account') || '';
         // gdrive files
         if (method === 'GET' && path === '/api/integrations/gdrive/files') {
           const folderId = url.searchParams.get('folderId') || 'root';
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
           driveUrl.searchParams.set('q', `'${folderId}' in parents and trashed=false`);
@@ -592,8 +778,8 @@ const worker = {
             const refreshed = await refreshRes.json();
             if (refreshed.access_token) {
               await env.DB.prepare(
-                `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive'`
-              ).bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), authUser.id).run();
+                `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive' AND account_identifier = ''`
+              ).bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), integrationUserId).run();
               const retryUrl = new URL('https://www.googleapis.com/drive/v3/files');
               retryUrl.searchParams.set('q', `'${folderId}' in parents and trashed=false`);
               retryUrl.searchParams.set('fields', 'files(id,name,mimeType,size,modifiedTime)');
@@ -606,7 +792,7 @@ const worker = {
         }
         if (method === 'GET' && path === '/api/integrations/gdrive/file') {
           const fileId = url.searchParams.get('fileId');
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` }});
           if (res.status === 401 && tokenRow.refresh_token && env.GOOGLE_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET) {
@@ -623,8 +809,8 @@ const worker = {
             const refreshed = await refreshRes.json();
             if (refreshed.access_token) {
               await env.DB.prepare(
-                `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive'`
-              ).bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), authUser.id).run();
+                `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive' AND account_identifier = ''`
+              ).bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), integrationUserId).run();
               const retry = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, { headers: { Authorization: `Bearer ${refreshed.access_token}` }});
               return jsonResponse({ content: await retry.text() });
             }
@@ -632,7 +818,7 @@ const worker = {
           return jsonResponse({ content: await res.text() });
         }
         if (method === 'GET' && path === '/api/integrations/github/repos') {
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch('https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member', { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' }});
           return jsonResponse(await res.json());
@@ -640,7 +826,7 @@ const worker = {
         if (method === 'GET' && path === '/api/integrations/github/files') {
           const repo = url.searchParams.get('repo');
           const filePath = url.searchParams.get('path') || '';
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' }});
           return jsonResponse(await res.json());
@@ -648,7 +834,7 @@ const worker = {
         if (method === 'GET' && path === '/api/integrations/github/file') {
           const repo = url.searchParams.get('repo');
           const filePath = url.searchParams.get('path');
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' }});
           const data = await res.json();
@@ -660,7 +846,7 @@ const worker = {
           const repo = url.searchParams.get('repo');
           const filePath = url.searchParams.get('path');
           if (!repo || !filePath) return jsonResponse({ error: 'missing repo or path' }, 400);
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch(`https://raw.githubusercontent.com/${encodeURIComponent(repo)}/HEAD/${filePath.split('/').map(p => encodeURIComponent(p)).join('/')}`, { headers: { Authorization: `token ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
           if (!res.ok) return jsonResponse({ error: res.statusText || 'Not found' }, res.status);
@@ -674,7 +860,7 @@ const worker = {
         if (method === 'GET' && path === '/api/integrations/gdrive/raw') {
           const fileId = url.searchParams.get('fileId');
           if (!fileId) return jsonResponse({ error: 'missing fileId' }, 400);
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
           if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
           const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` } });
           if (!res.ok) return jsonResponse({ error: res.statusText || 'Not found' }, res.status);
@@ -701,7 +887,8 @@ const worker = {
           }
           const repo = state.active_file_source?.repo || null;
           if (repo) {
-            const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+            const integrationUserId = authUser.email || authUser.id;
+            const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', '');
             if (tokenRow) {
               try {
                 const [repoRes, commitsRes] = await Promise.all([
@@ -734,13 +921,58 @@ const worker = {
         }
       }
 
+      // ----- API: Execute slash command (agent_commands) -----
+      // NOTE: Must be above the /api/agent/* catch-all or handleAgentApi swallows it
+      if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
+        if (!env.DB) return jsonResponse({ success: false, error: 'DB not configured' }, 503);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const commandName = (body.command_name || body.name || '').trim();
+          const parameters = body.parameters || {};
+          const tenantId = 'tenant_sam_primeaux';
+          if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
+          const command = await env.DB.prepare(
+            `SELECT * FROM agent_commands WHERE tenant_id = ? AND status = 'active' AND (name = ? OR slug = ?) LIMIT 1`
+          ).bind(tenantId, commandName, commandName).first();
+          if (!command) {
+            return jsonResponse({ success: false, error: 'Command not found' }, 404);
+          }
+          let result = { output: command.command_text || `Command /${commandName} registered.` };
+          if (command.implementation_type === 'builtin' && command.implementation_ref) {
+            const builtins = {
+              clear_context: async () => ({ output: 'Context cleared' }),
+              list_tools: async () => {
+                const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
+                return { output: JSON.stringify((r.results || []).map(t => ({ name: t.tool_name, description: t.description })), null, 2) };
+              },
+              terminal_execute: async () => {
+                const cmdToRun = (parameters.raw || parameters.command || '').trim();
+                if (!cmdToRun) return { output: 'Usage: /run <command>' };
+                try {
+                  const { output } = await runTerminalCommand(env, request, cmdToRun, body.session_id ?? null);
+                  return { output: output || '(no output)' };
+                } catch (e) {
+                  return { output: `Error: ${e?.message ?? String(e)}` };
+                }
+              },
+            };
+            const fn = builtins[command.implementation_ref];
+            if (fn) result = await fn();
+          }
+          return jsonResponse({ success: true, result });
+        } catch (e) {
+          return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
+        }
+      }
+
+      // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
       if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots')) {
         return handleAgentApi(request, url, env, ctx);
       }
 
       // ----- API: MCP dashboard (/api/mcp/*) -----
       if (pathLower.startsWith('/api/mcp/')) {
-        return handleMcpApi(request, url, env);
+        return handleMcpApi(request, url, env, ctx);
       }
 
       // ----- API: R2 DevOps (buckets, objects, sync, upload, stats, bulk-action) -----
@@ -808,39 +1040,6 @@ const worker = {
         }
       }
 
-      // ----- API: Execute slash command (agent_commands) -----
-      if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
-        if (!env.DB) return jsonResponse({ success: false, error: 'DB not configured' }, 503);
-        try {
-          const body = await request.json().catch(() => ({}));
-          const commandName = (body.command_name || body.name || '').trim();
-          const parameters = body.parameters || {};
-          const tenantId = 'tenant_sam_primeaux';
-          if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
-          const command = await env.DB.prepare(
-            `SELECT * FROM agent_commands WHERE tenant_id = ? AND status = 'active' AND (name = ? OR slug = ?) LIMIT 1`
-          ).bind(tenantId, commandName, commandName).first();
-          if (!command) {
-            return jsonResponse({ success: false, error: 'Command not found' }, 404);
-          }
-          let result = { output: command.command_text || `Command /${commandName} registered.` };
-          if (command.implementation_type === 'builtin' && command.implementation_ref) {
-            const builtins = {
-              clear_context: async () => ({ output: 'Context cleared' }),
-              list_tools: async () => {
-                const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
-                return { output: JSON.stringify((r.results || []).map(t => ({ name: t.tool_name, description: t.description })), null, 2) };
-              },
-            };
-            const fn = builtins[command.implementation_ref];
-            if (fn) result = await fn();
-          }
-          return jsonResponse({ success: true, result });
-        } catch (e) {
-          return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
-        }
-      }
-
       // ----- API: Themes (cms_themes for theme gallery) -----
       if (pathLower === '/api/themes' && request.method === 'GET') {
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -874,6 +1073,243 @@ const worker = {
         }
       }
 
+      // ----- API: Vault (secrets + audit; auth required) -----
+      if (pathLower.startsWith('/api/vault')) {
+        const vaultUser = await getAuthUser(request, env);
+        if (!vaultUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        return handleVaultRequest(request, env);
+      }
+
+    if (pathLower.startsWith('/api/env/')) {
+
+      if (pathLower === '/api/env/spend' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const limit = parseInt(new URL(request.url).searchParams.get('limit') || '100');
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT provider, source, model_key, amount_usd, tokens_in, tokens_out, occurred_at, project_id
+             FROM spend_ledger ORDER BY occurred_at DESC LIMIT ?`
+          ).bind(limit).all();
+          return jsonResponse({ results: results || [] });
+        } catch (e) {
+          return jsonResponse({ results: [], error: e?.message });
+        }
+      }
+
+      // ── Crypto helpers (Web Crypto API — works in Workers runtime) ──
+      async function _vaultImportKey(b64) {
+        const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+      }
+      async function _vaultEncrypt(plaintext, vaultKeyB64) {
+        const key = await _vaultImportKey(vaultKeyB64);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const cipher = await crypto.subtle.encrypt(
+          { name: 'AES-GCM', iv },
+          key,
+          new TextEncoder().encode(plaintext)
+        );
+        return {
+          encrypted_value: btoa(String.fromCharCode(...new Uint8Array(cipher))),
+          iv: btoa(String.fromCharCode(...iv)),
+        };
+      }
+      async function _vaultDecrypt(encB64, ivB64, vaultKeyB64) {
+        const key = await _vaultImportKey(vaultKeyB64);
+        const plain = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
+          key,
+          Uint8Array.from(atob(encB64), c => c.charCodeAt(0))
+        );
+        return new TextDecoder().decode(plain);
+      }
+      async function _vaultAudit(db, keyName, action, note) {
+        await db.prepare(
+          'INSERT INTO env_audit_log (key_name, action, note) VALUES (?, ?, ?)'
+        ).bind(keyName, action, note || null).run();
+      }
+
+      // ── VAULT_KEY guard ──
+      if (!env.VAULT_KEY) {
+        return jsonResponse({ error: 'VAULT_KEY secret not configured' }, 500);
+      }
+
+      // ── GET /api/env/secrets — list all (no values) ──
+      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const { results } = await env.DB.prepare(`
+          SELECT id, key_name, provider, label, is_active,
+                 last_rotated_at, created_at, last_tested_at, test_status,
+                 rotation_reminder_days
+          FROM env_secrets ORDER BY provider ASC, key_name ASC
+        `).all();
+        return jsonResponse({ secrets: results });
+      }
+
+      // ── GET /api/env/audit — audit log ──
+      if (pathLower === '/api/env/audit' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const keyFilter = url.searchParams.get('key_name');
+        const { results } = keyFilter
+          ? await env.DB.prepare(
+              'SELECT * FROM env_audit_log WHERE key_name = ? ORDER BY ts DESC LIMIT ?'
+            ).bind(keyFilter, limit).all()
+          : await env.DB.prepare(
+              'SELECT * FROM env_audit_log ORDER BY ts DESC LIMIT ?'
+            ).bind(limit).all();
+        return jsonResponse({ log: results });
+      }
+
+      // ── POST /api/env/secrets — create new encrypted secret ──
+      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const body = await request.json();
+        const { key_name, value, provider, label, rotation_reminder_days } = body;
+        if (!key_name || !value || !provider) {
+          return jsonResponse({ error: 'key_name, value, and provider required' }, 400);
+        }
+        const cleanKey = key_name.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+        const existing = await env.DB.prepare(
+          'SELECT id FROM env_secrets WHERE key_name = ?'
+        ).bind(cleanKey).first();
+        if (existing) {
+          return jsonResponse({ error: `${cleanKey} already exists — use PATCH to rotate` }, 409);
+        }
+        const { encrypted_value, iv } = await _vaultEncrypt(value, env.VAULT_KEY);
+        const now = new Date().toISOString();
+        await env.DB.prepare(`
+          INSERT INTO env_secrets
+            (key_name, encrypted_value, iv, provider, label, last_rotated_at, rotation_reminder_days)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(cleanKey, encrypted_value, iv, provider, label || cleanKey,
+          now, rotation_reminder_days || 90).run();
+        await _vaultAudit(env.DB, cleanKey, 'create', `provider: ${provider}`);
+        return jsonResponse({ success: true, key_name: cleanKey });
+      }
+
+      // ── POST /api/env/secrets/reveal — decrypt + return value ──
+      if (pathLower === '/api/env/secrets/reveal' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const { key_name } = await request.json();
+        if (!key_name) return jsonResponse({ error: 'key_name required' }, 400);
+        const row = await env.DB.prepare(
+          'SELECT encrypted_value, iv FROM env_secrets WHERE key_name = ? AND is_active = 1'
+        ).bind(key_name).first();
+        if (!row) return jsonResponse({ error: 'Secret not found' }, 404);
+        try {
+          const value = await _vaultDecrypt(row.encrypted_value, row.iv, env.VAULT_KEY);
+          await _vaultAudit(env.DB, key_name, 'read', 'Revealed via Settings UI');
+          return jsonResponse({ key_name, value });
+        } catch {
+          return jsonResponse({ error: 'Decryption failed' }, 500);
+        }
+      }
+
+      // ── POST /api/env/secrets/test/:keyName — live provider test ──
+      const testMatch = pathLower.match(/^\/api\/env\/secrets\/test\/([a-z0-9_]+)$/i);
+      if (testMatch && (request.method || 'GET').toUpperCase() === 'POST') {
+        const keyName = testMatch[1].toUpperCase();
+        const row = await env.DB.prepare(
+          'SELECT encrypted_value, iv, provider FROM env_secrets WHERE key_name = ? AND is_active = 1'
+        ).bind(keyName).first();
+        if (!row) return jsonResponse({ error: 'Secret not found' }, 404);
+        let status = 'fail', message = 'No test for this provider';
+        try {
+          const value = await _vaultDecrypt(row.encrypted_value, row.iv, env.VAULT_KEY);
+          const p = (row.provider || '').toLowerCase();
+          if (p === 'anthropic') {
+            const r = await fetch('https://api.anthropic.com/v1/models', {
+              headers: { 'x-api-key': value, 'anthropic-version': '2023-06-01' }
+            });
+            status = r.ok ? 'ok' : 'fail';
+            message = r.ok ? 'Anthropic connection OK' : `Anthropic rejected key (${r.status})`;
+          } else if (p === 'openai') {
+            const r = await fetch('https://api.openai.com/v1/models', {
+              headers: { Authorization: `Bearer ${value}` }
+            });
+            status = r.ok ? 'ok' : 'fail';
+            message = r.ok ? 'OpenAI connection OK' : `OpenAI rejected key (${r.status})`;
+          } else if (p === 'google') {
+            const r = await fetch(
+              `https://generativelanguage.googleapis.com/v1/models?key=${value}`
+            );
+            status = r.ok ? 'ok' : 'fail';
+            message = r.ok ? 'Google connection OK' : `Google rejected key (${r.status})`;
+          } else if (p === 'cloudflare') {
+            status = (typeof value === 'string' && value.length > 20) ? 'ok' : 'fail';
+            message = status === 'ok' ? 'Token format valid' : 'Token too short';
+          } else {
+            status = 'ok'; message = 'Format check passed (no live test for this provider)';
+          }
+        } catch (e) {
+          status = 'fail'; message = e.message;
+        }
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          'UPDATE env_secrets SET test_status = ?, last_tested_at = ? WHERE key_name = ?'
+        ).bind(status, now, keyName).run();
+        await _vaultAudit(env.DB, keyName, 'test', `${status}: ${message}`);
+        return jsonResponse({ key_name: keyName, status, message, tested_at: now });
+      }
+
+      // ── PATCH /api/env/secrets/:keyName — rotate value ──
+      const secretMatch = pathLower.match(/^\/api\/env\/secrets\/([a-z0-9_]+)$/i);
+      if (secretMatch && (request.method || 'GET').toUpperCase() === 'PATCH') {
+        const keyName = secretMatch[1].toUpperCase();
+        const { value, note } = await request.json();
+        if (!value) return jsonResponse({ error: 'value required' }, 400);
+        const existing = await env.DB.prepare(
+          'SELECT id FROM env_secrets WHERE key_name = ? AND is_active = 1'
+        ).bind(keyName).first();
+        if (!existing) return jsonResponse({ error: 'Secret not found' }, 404);
+        const { encrypted_value, iv } = await _vaultEncrypt(value, env.VAULT_KEY);
+        const now = new Date().toISOString();
+        await env.DB.prepare(`
+          UPDATE env_secrets
+          SET encrypted_value = ?, iv = ?, last_rotated_at = ?,
+              updated_at = ?, test_status = 'untested', last_tested_at = NULL
+          WHERE key_name = ?
+        `).bind(encrypted_value, iv, now, now, keyName).run();
+        await _vaultAudit(env.DB, keyName, 'rotate', note || 'Rotated via Settings UI');
+        return jsonResponse({ success: true, key_name: keyName, rotated_at: now });
+      }
+
+      // ── DELETE /api/env/secrets/:keyName — soft delete ──
+      if (secretMatch && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const keyName = secretMatch[1].toUpperCase();
+        await env.DB.prepare(
+          "UPDATE env_secrets SET is_active = 0, updated_at = datetime('now') WHERE key_name = ?"
+        ).bind(keyName).run();
+        await _vaultAudit(env.DB, keyName, 'delete', 'Deactivated via Settings UI');
+        return jsonResponse({ success: true, key_name: keyName });
+      }
+
+      return jsonResponse({ error: 'Unknown /api/env route' }, 404);
+    }
+    // ── END /api/env/* ──────────────────────────────────────────
+
+    // /api/d1/query — D1 SQL runner (auth required)
+    if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const { sql } = await request.json();
+        if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
+        // Safety: block destructive ops without explicit confirmation
+        const upperSql = sql.trim().toUpperCase();
+        const dangerous = ['DROP TABLE', 'DROP DATABASE', 'TRUNCATE', 'DELETE FROM'];
+        if (dangerous.some(d => upperSql.startsWith(d))) {
+          return jsonResponse({ error: 'Destructive query blocked. Use wrangler d1 execute directly for this.' }, 403);
+        }
+        const { results, success, meta } = await env.DB.prepare(sql).all();
+        return jsonResponse({ results: results || [], success, meta });
+      } catch (e) {
+        return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
+      }
+    }
+
+      // ----- API: Federated search (AI + sources) -----
+      if (url.pathname === '/api/search/federated' && request.method === 'POST') {
+        return handleFederatedSearch(request, env);
+      }
+
       // ----- API: Search (AI RAG + history) -----
       if (url.pathname === '/api/search') {
         const query = request.method === 'POST'
@@ -888,15 +1324,391 @@ const worker = {
         return Response.json({ answer, sources: data });
       }
 
-      // ----- API: Settings stubs (dead endpoints) -----
-      if ((request.method || 'GET').toUpperCase() === 'GET' && pathLower === '/api/settings/profile') {
-        return jsonResponse({ profile: null });
+      // ----- API: Settings (profile, preferences, sessions, change-password) -----
+      const settingsUser = await getAuthUser(request, env);
+      const settingsSessionUserId = settingsUser ? (settingsUser.email || settingsUser.id) : null;
+      if (pathLower === '/api/settings/profile') {
+        if ((request.method || 'GET').toUpperCase() === 'GET') {
+          if (!env.DB) return jsonResponse({ profile: null });
+          if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          try {
+            const row = await env.DB.prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first();
+            const authRow = await env.DB.prepare('SELECT id, email, name FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1').bind(settingsSessionUserId, settingsSessionUserId).first().catch(() => null);
+            const primaryEmailFromAuth = authRow && (authRow.email || authRow.id) ? (authRow.email || authRow.id) : (settingsUser.email || settingsUser.id || '');
+            const nameFromAuth = authRow && authRow.name ? authRow.name : '';
+            if (!row) {
+              const flat = {
+                full_name: nameFromAuth,
+                display_name: nameFromAuth,
+                avatar_url: '',
+                bio: '',
+                primary_email: primaryEmailFromAuth,
+                primary_email_verified: 0,
+                backup_email: '',
+                phone: '',
+                timezone: 'America/Chicago',
+                language: 'en',
+              };
+              return jsonResponse({ profile: null, flat });
+            }
+            const flat = {
+              full_name: (row.full_name ?? nameFromAuth) || '',
+              display_name: (row.display_name ?? nameFromAuth) || '',
+              avatar_url: row.avatar_url ?? '',
+              bio: row.bio ?? '',
+              primary_email: (row.primary_email ?? primaryEmailFromAuth) || '',
+              primary_email_verified: row.primary_email_verified ?? 0,
+              backup_email: row.backup_email ?? '',
+              phone: row.phone ?? '',
+              timezone: row.timezone ?? 'America/Chicago',
+              language: row.language ?? 'en',
+            };
+            return jsonResponse({ profile: row, flat });
+          } catch (e) {
+            return jsonResponse({ profile: null, flat: {}, error: e?.message }, 500);
+          }
+        }
+        if ((request.method || 'GET').toUpperCase() === 'PATCH' || (request.method || 'GET').toUpperCase() === 'PUT') {
+          if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+          try {
+            const body = await request.json().catch(() => ({}));
+            const { full_name, display_name, avatar_url, bio, backup_email, phone, timezone, language } = body;
+            const uid = settingsSessionUserId;
+            const result = await env.DB.prepare(
+              `UPDATE user_settings SET full_name = ?, display_name = ?, avatar_url = ?, bio = ?, backup_email = ?, phone = ?, timezone = ?, language = ?, updated_at = unixepoch() WHERE user_id = ?`
+            ).bind(full_name ?? null, display_name ?? null, avatar_url ?? null, bio ?? null, backup_email ?? null, phone ?? null, timezone ?? 'America/Chicago', language ?? 'en', uid).run();
+            if (result.meta && result.meta.changes === 0) {
+              await env.DB.prepare(
+                `INSERT INTO user_settings (id, user_id, full_name, display_name, avatar_url, bio, backup_email, phone, timezone, language, theme, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'meaux-glass-blue', unixepoch())`
+              ).bind('us_' + uid, uid, full_name ?? null, display_name ?? null, avatar_url ?? null, bio ?? null, backup_email ?? null, phone ?? null, timezone ?? 'America/Chicago', language ?? 'en').run();
+            }
+            return jsonResponse({ ok: true });
+          } catch (e) {
+            return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
+          }
+        }
+      }
+      if (pathLower === '/api/settings/profile/avatar' && (request.method || 'GET').toUpperCase() === 'POST') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DASHBOARD) return jsonResponse({ error: 'Storage not configured' }, 503);
+        try {
+          const formData = await request.formData();
+          const file = formData.get('file') || formData.get('avatar');
+          if (!file || typeof file.arrayBuffer !== 'function') return jsonResponse({ error: 'No file' }, 400);
+          const body = await file.arrayBuffer();
+          const ct = (file.type || 'image/jpeg').toLowerCase();
+          const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : ct.includes('gif') ? 'gif' : 'jpg';
+          const safeUser = (settingsSessionUserId || '').replace(/[^a-zA-Z0-9@._-]/g, '_').slice(0, 200) || 'user';
+          const key = `avatars/${safeUser}.${ext}`;
+          await env.DASHBOARD.put(key, body, { httpMetadata: { contentType: ct } });
+          const avatarUrl = `${new URL(request.url).origin}/api/settings/avatar?user=${encodeURIComponent(settingsSessionUserId)}`;
+          const upd = await env.DB.prepare(`UPDATE user_settings SET avatar_url = ?, updated_at = unixepoch() WHERE user_id = ?`).bind(avatarUrl, settingsSessionUserId).run();
+          if (upd.meta && upd.meta.changes === 0) {
+            await env.DB.prepare(
+              `INSERT INTO user_settings (id, user_id, avatar_url, theme, updated_at) VALUES (?, ?, ?, 'meaux-glass-blue', unixepoch())`
+            ).bind('us_' + settingsSessionUserId, settingsSessionUserId, avatarUrl).run().catch(() => {});
+          }
+          return jsonResponse({ ok: true, avatar_url: avatarUrl });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Upload failed' }, 500);
+        }
+      }
+      if (pathLower.startsWith('/api/settings/avatar') && (request.method || 'GET').toUpperCase() === 'GET') {
+        const user = url.searchParams.get('user');
+        if (!user || !env.DASHBOARD) return new Response(null, { status: 404 });
+        const safeUser = (user || '').replace(/[^a-zA-Z0-9@._-]/g, '_').slice(0, 200) || 'user';
+        const keys = ['avatars/' + safeUser + '.jpg', 'avatars/' + safeUser + '.png', 'avatars/' + safeUser + '.webp', 'avatars/' + safeUser + '.gif'];
+        let obj = null;
+        let contentType = 'image/jpeg';
+        for (const k of keys) {
+          try {
+            obj = await env.DASHBOARD.get(k);
+            if (obj) {
+              contentType = obj.httpMetadata?.contentType || (k.endsWith('.png') ? 'image/png' : k.endsWith('.webp') ? 'image/webp' : k.endsWith('.gif') ? 'image/gif' : 'image/jpeg');
+              break;
+            }
+          } catch (_) {}
+        }
+        if (!obj || !obj.body) return new Response(null, { status: 404 });
+        return new Response(obj.body, { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=3600' } });
+      }
+      if (pathLower === '/api/settings/preferences') {
+        if ((request.method || 'GET').toUpperCase() === 'GET') {
+          if (!env.DB) return jsonResponse({ preferences: {} });
+          if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          try {
+            const us = await env.DB.prepare('SELECT * FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first();
+            const up = await env.DB.prepare('SELECT * FROM user_preferences WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first();
+            const merged = {
+              theme: us?.theme ?? 'meaux-glass-blue',
+              theme_id: up?.theme_id ?? 'galaxy',
+              compact_mode: us?.compact_mode ?? 0,
+              font_size: us?.font_size ?? 'medium',
+              high_contrast: us?.high_contrast ?? 0,
+              reduced_motion: us?.reduced_motion ?? 0,
+              email_notifications: us?.email_notifications ?? 1,
+              notification_frequency: us?.notification_frequency ?? 'instant',
+              push_notifications: us?.push_notifications ?? 0,
+              marketing_emails: us?.marketing_emails ?? 0,
+              security_alerts: us?.security_alerts ?? 1,
+              sidebar_collapsed: up?.sidebar_collapsed ?? us?.sidebar_collapsed ?? 0,
+              notifications_enabled: up?.notifications_enabled ?? 1,
+            };
+            return jsonResponse({ preferences: merged, user_settings: us || null, user_preferences: up || null });
+          } catch (e) {
+            return jsonResponse({ preferences: {}, error: e?.message }, 500);
+          }
+        }
+        if ((request.method || 'GET').toUpperCase() === 'PATCH' || (request.method || 'GET').toUpperCase() === 'PUT') {
+          if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+          try {
+            const body = await request.json().catch(() => ({}));
+            const uid = settingsSessionUserId;
+            const { theme, theme_id, compact_mode, font_size, high_contrast, reduced_motion, email_notifications, notification_frequency, push_notifications, marketing_emails, security_alerts, sidebar_collapsed } = body;
+            await env.DB.prepare(
+              `UPDATE user_settings SET theme = COALESCE(?, theme), compact_mode = ?, font_size = COALESCE(?, font_size), high_contrast = ?, reduced_motion = ?, email_notifications = ?, notification_frequency = COALESCE(?, notification_frequency), push_notifications = ?, marketing_emails = ?, security_alerts = ?, updated_at = unixepoch() WHERE user_id = ?`
+            ).bind(theme ?? null, compact_mode != null ? (compact_mode ? 1 : 0) : null, font_size ?? null, high_contrast != null ? (high_contrast ? 1 : 0) : null, reduced_motion != null ? (reduced_motion ? 1 : 0) : null, email_notifications != null ? (email_notifications ? 1 : 0) : null, notification_frequency ?? null, push_notifications != null ? (push_notifications ? 1 : 0) : null, marketing_emails != null ? (marketing_emails ? 1 : 0) : null, security_alerts != null ? (security_alerts ? 1 : 0) : null, uid).run();
+            const upResult = await env.DB.prepare(
+              `UPDATE user_preferences SET theme_id = COALESCE(?, theme_id), sidebar_collapsed = COALESCE(?, sidebar_collapsed), notifications_enabled = COALESCE(?, notifications_enabled), updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`
+            ).bind(theme_id ?? null, sidebar_collapsed != null ? (sidebar_collapsed ? 1 : 0) : null, email_notifications != null ? (email_notifications ? 1 : 0) : null, uid).run();
+            if (upResult.meta && upResult.meta.changes === 0) {
+              await env.DB.prepare(
+                `INSERT INTO user_preferences (user_id, theme_id, sidebar_collapsed, notifications_enabled, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+              ).bind(uid, theme_id ?? 'galaxy', sidebar_collapsed ? 1 : 0, 1).run().catch(() => {});
+            }
+            return jsonResponse({ ok: true });
+          } catch (e) {
+            return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
+          }
+        }
+      }
+      if (pathLower === '/api/settings/security/change-password' && (request.method || 'GET').toUpperCase() === 'POST') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const { current_password, new_password } = body;
+          if (!current_password || !new_password) return jsonResponse({ error: 'current_password and new_password required' }, 400);
+          const userRow = await env.DB.prepare('SELECT id, password_hash, salt FROM auth_users WHERE id = ?').bind(settingsSessionUserId).first();
+          if (!userRow || !userRow.password_hash || !userRow.salt) return jsonResponse({ error: 'Account uses OAuth; no password to change' }, 400);
+          if (userRow.password_hash === 'oauth' || userRow.salt === 'oauth') return jsonResponse({ error: 'Account uses OAuth; no password to change' }, 400);
+          const valid = await verifyPassword(current_password, userRow.salt, userRow.password_hash);
+          if (!valid) return jsonResponse({ error: 'Current password is incorrect' }, 400);
+          const { saltHex, hashHex } = await hashPassword(new_password);
+          await env.DB.prepare('UPDATE auth_users SET password_hash = ?, salt = ?, updated_at = datetime(\'now\') WHERE id = ?').bind(hashHex, saltHex, settingsSessionUserId).run();
+          return jsonResponse({ ok: true });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Change failed' }, 500);
+        }
+      }
+      if (pathLower === '/api/settings/security/backup-codes/generate' && (request.method || 'GET').toUpperCase() === 'POST') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        if (!env.RESEND_API_KEY) return jsonResponse({ error: 'Email not configured' }, 503);
+        try {
+          const userId = settingsSessionUserId;
+          const toEmail = userId.includes('@') ? userId : null;
+          if (!toEmail) return jsonResponse({ error: 'Backup codes are sent to your login email; no email on file' }, 400);
+          const BACKUP_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+          const CODE_LEN = 8;
+          const NUM_CODES = 10;
+          async function sha256Hex(str) {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+          }
+          function randomCode() {
+            let s = '';
+            const arr = new Uint8Array(CODE_LEN);
+            crypto.getRandomValues(arr);
+            for (let i = 0; i < CODE_LEN; i++) s += BACKUP_CODE_CHARS[arr[i] % BACKUP_CODE_CHARS.length];
+            return s;
+          }
+          await env.DB.prepare('DELETE FROM user_backup_codes WHERE user_id = ? AND used_at IS NULL').bind(userId).run();
+          const plainCodes = [];
+          for (let i = 0; i < NUM_CODES; i++) {
+            const code = randomCode();
+            plainCodes.push(code);
+            const codeHash = await sha256Hex(code);
+            const id = 'bc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 14);
+            await env.DB.prepare(
+              'INSERT INTO user_backup_codes (id, user_id, code_hash, used_at, created_at) VALUES (?, ?, ?, NULL, unixepoch())'
+            ).bind(id, userId, codeHash).run();
+          }
+          const codeList = plainCodes.map((c, i) => `${i + 1}. ${c}`).join('\n');
+          const html = `<p>Your backup codes for Inner Animal Media are below. Each code can be used once to sign in if you lose access to your primary method.</p><pre style="font-family:monospace;background:#f1f5f9;padding:12px;border-radius:6px">${codeList}</pre><p>Store these somewhere safe. Do not share them.</p>`;
+          const res = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              from: 'Inner Animal Media <sam@inneranimalmedia.com>',
+              to: [toEmail],
+              subject: 'Your backup codes - Inner Animal Media',
+              html,
+            }),
+          });
+          if (!res.ok) {
+            const err = await res.text();
+            return jsonResponse({ error: 'Failed to send email: ' + (err || res.status) }, 502);
+          }
+          return jsonResponse({ ok: true, message: 'Backup codes sent to your email' });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Generate failed' }, 500);
+        }
+      }
+      if (pathLower === '/api/settings/sessions' && (request.method || 'GET').toUpperCase() === 'GET') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ sessions: [] });
+        try {
+          const rows = await env.DB.prepare(
+            'SELECT id, user_id, expires_at, created_at, ip_address, user_agent FROM auth_sessions WHERE user_id = ? ORDER BY created_at DESC'
+          ).bind(settingsSessionUserId).all();
+          return jsonResponse({ sessions: rows.results ?? [] });
+        } catch (e) {
+          return jsonResponse({ sessions: [], error: e?.message }, 500);
+        }
+      }
+      if (pathLower.match(/^\/api\/settings\/sessions\/all$/) && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const cookie = request.headers.get('Cookie') || '';
+          const m = cookie.match(/session=([^\s;]+)/);
+          const currentSessionId = m?.[1] || '';
+          if (currentSessionId) {
+            await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ? AND id != ?').bind(settingsSessionUserId, currentSessionId).run();
+          } else {
+            await env.DB.prepare('DELETE FROM auth_sessions WHERE user_id = ?').bind(settingsSessionUserId).run();
+          }
+          return jsonResponse({ ok: true });
+        } catch (e) {
+          return jsonResponse({ error: e?.message }, 500);
+        }
+      }
+      const sessionsIdMatch = pathLower.match(/^\/api\/settings\/sessions\/([^/]+)$/);
+      if (sessionsIdMatch && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const sessionId = sessionsIdMatch[1];
+        if (!sessionId || sessionId === 'all') { /* handled above */ } else {
+          if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+          try {
+            await env.DB.prepare('DELETE FROM auth_sessions WHERE id = ? AND user_id = ?').bind(sessionId, settingsSessionUserId).run();
+            return jsonResponse({ ok: true });
+          } catch (e) {
+            return jsonResponse({ error: e?.message }, 500);
+          }
+        }
       }
       if ((request.method || 'GET').toUpperCase() === 'GET' && pathLower === '/api/settings/emails') {
-        return jsonResponse({ emails: [] });
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const loginEmail = settingsUser.email || settingsUser.id || '';
+        const emails = loginEmail ? [{ id: 'primary', email: loginEmail, verified: true, is_primary: true }] : [];
+        return jsonResponse({ emails });
       }
-      if ((request.method || 'GET').toUpperCase() === 'GET' && pathLower === '/api/settings/workspaces') {
-        return jsonResponse({ workspaces: [] });
+      const CORE_WORKSPACE_IDS = ['ws_samprimeaux', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
+      const CORE_WORKSPACES_DATA = [
+        { id: 'ws_samprimeaux', name: 'Sam Primeaux', category: 'entity' },
+        { id: 'ws_inneranimal', name: 'InnerAnimal', category: 'entity' },
+        { id: 'ws_meauxbility', name: 'Meauxbility', category: 'entity' },
+        { id: 'ws_innerautodidact', name: 'InnerAutodidact', category: 'entity' },
+      ];
+      if (pathLower === '/api/settings/workspaces') {
+        const method = (request.method || 'GET').toUpperCase();
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (method === 'GET') {
+          if (!env.DB) {
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {} });
+          }
+          try {
+            let rowsResult = null;
+            let usRow = null;
+            try {
+              const [rows, us] = await Promise.all([
+                env.DB.prepare(
+                  'SELECT workspace_id, brand, plans, budget, time, theme FROM user_workspace_settings WHERE user_id = ?'
+                ).bind(settingsSessionUserId).all(),
+                env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(),
+              ]);
+              rowsResult = rows;
+              usRow = us;
+            } catch (colErr) {
+              const msg = String(colErr?.message || '');
+              if (msg.includes('theme') || msg.includes('default_workspace_id')) {
+                rowsResult = await env.DB.prepare('SELECT workspace_id, brand, plans, budget, time FROM user_workspace_settings WHERE user_id = ?').bind(settingsSessionUserId).all();
+                try { usRow = await env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(); } catch (_) { usRow = null; }
+              } else throw colErr;
+            }
+            const workspaces = {};
+            const workspaceThemes = {};
+            for (const r of (rowsResult?.results || [])) {
+              workspaces[r.workspace_id] = {
+                brand: r.brand ?? '',
+                plans: r.plans ?? '',
+                budget: r.budget ?? '',
+                time: r.time ?? '',
+              };
+              if (r.theme != null && r.theme.trim()) workspaceThemes[r.workspace_id] = r.theme.trim();
+            }
+            const current = (usRow?.default_workspace_id && CORE_WORKSPACE_IDS.includes(usRow.default_workspace_id))
+              ? usRow.default_workspace_id : 'ws_samprimeaux';
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
+          } catch (e) {
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
+          }
+        }
+        if (method === 'PATCH' || method === 'PUT') {
+          if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+          try {
+            const body = await request.json().catch(() => ({}));
+            const { workspace_id, brand, plans, budget, time } = body;
+            if (!workspace_id || !CORE_WORKSPACE_IDS.includes(workspace_id)) return jsonResponse({ error: 'Invalid workspace_id' }, 400);
+            await env.DB.prepare(
+              `INSERT INTO user_workspace_settings (user_id, workspace_id, brand, plans, budget, time, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, unixepoch())
+               ON CONFLICT(user_id, workspace_id) DO UPDATE SET
+                 brand = excluded.brand, plans = excluded.plans, budget = excluded.budget, time = excluded.time, updated_at = unixepoch()`
+            ).bind(settingsSessionUserId, workspace_id, brand ?? '', plans ?? '', budget ?? '', time ?? '').run();
+            return jsonResponse({ ok: true });
+          } catch (e) {
+            return jsonResponse({ error: e?.message ?? 'Save failed' }, 500);
+          }
+        }
+      }
+      if (pathLower === '/api/settings/workspace/default' && (request.method === 'PUT' || request.method === 'PATCH')) {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const workspace_id = body.workspace_id;
+          if (!workspace_id || !CORE_WORKSPACE_IDS.includes(workspace_id)) return jsonResponse({ error: 'Invalid workspace_id' }, 400);
+          await env.DB.prepare(
+            `UPDATE user_settings SET default_workspace_id = ?, updated_at = unixepoch() WHERE user_id = ?`
+          ).bind(workspace_id, settingsSessionUserId).run();
+          return jsonResponse({ ok: true, current: workspace_id });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
+        }
+      }
+      const wsThemeMatch = pathLower.match(/^\/api\/settings\/workspace\/([^/]+)\/theme$/);
+      if (wsThemeMatch && (request.method === 'PUT' || request.method === 'PATCH')) {
+        const workspaceId = wsThemeMatch[1];
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        if (!CORE_WORKSPACE_IDS.includes(workspaceId)) return jsonResponse({ error: 'Invalid workspace_id' }, 400);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const theme = body.theme != null ? String(body.theme).trim() : null;
+          await env.DB.prepare(
+            `INSERT INTO user_workspace_settings (user_id, workspace_id, brand, plans, budget, time, theme, updated_at)
+             VALUES (?, ?, '', '', '', '', ?, unixepoch())
+             ON CONFLICT(user_id, workspace_id) DO UPDATE SET theme = excluded.theme, updated_at = unixepoch()`
+          ).bind(settingsSessionUserId, workspaceId, theme || null).run();
+          return jsonResponse({ ok: true });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Save failed' }, 500);
+        }
       }
 
       // ----- API: Settings theme (GET/PATCH, auth required for PATCH) -----
@@ -1379,8 +2191,20 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     await env.DB.prepare(
       `INSERT INTO agent_costs (model_used, tokens_in, tokens_out, cost_usd, task_type, user_id, created_at) VALUES (?, ?, ?, ?, ?, 'agent_sam', datetime('now'))`
     ).bind(safeModelKey, safeInput, safeOutput, safeCost, 'chat_stream').run();
+    } catch (e) {
+      console.error('[agent/chat] agent_costs INSERT failed:', e?.message ?? e);
+    }
+  try {
+    if (conversationId) {
+      await env.DB.prepare(
+        `UPDATE mcp_agent_sessions
+         SET cost_usd = COALESCE(cost_usd, 0) + ?,
+             updated_at = unixepoch()
+         WHERE conversation_id = ?`
+      ).bind(amountUsd ?? 0, conversationId).run();
+    }
   } catch (e) {
-    console.error('[agent/chat] agent_costs INSERT failed:', e?.message ?? e);
+    console.warn('[streamDoneDbWrites] mcp_agent_sessions cost rollup', e?.message ?? e);
   }
   if (agent_id) {
     try {
@@ -1523,6 +2347,36 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
   }
   return toolDefinitions;
+}
+
+/** Per-panel tool categories for /dashboard/mcp (request body agent_id). Agent Sam / unknown ids: no filter. */
+const PANEL_TOOL_POLICY = {
+  mcp_agent_architect: ['context', 'query', 'database'],
+  mcp_agent_builder: ['database', 'storage', 'integrations', 'execute', 'image'],
+  mcp_agent_tester: ['database', 'browser', 'quality', 'telemetry', 'context'],
+  mcp_agent_operator: ['platform', 'terminal', 'storage', 'telemetry', 'database'],
+};
+const ARCHITECT_READ_ONLY_DB_TOOLS = new Set(['d1_query', 'r2_read', 'r2_list', 'knowledge_search']);
+
+function panelColumnFromRequestAgentId(agentId) {
+  if (agentId == null || typeof agentId !== 'string') return 'agent_sam';
+  if (agentId === 'agent_sam') return 'agent_sam';
+  if (agentId.startsWith('mcp_agent_')) return agentId.slice('mcp_agent_'.length);
+  return 'agent_sam';
+}
+
+/** @param {string|null|undefined} requestAgentId @param {any[]} rows from mcp_registered_tools */
+function filterToolRowsByPanel(requestAgentId, rows) {
+  if (!requestAgentId || !Array.isArray(rows) || !PANEL_TOOL_POLICY[requestAgentId]) return rows || [];
+  const allow = PANEL_TOOL_POLICY[requestAgentId];
+  return rows.filter((t) => {
+    const cat = String(t.tool_category || '').toLowerCase();
+    if (!allow.includes(cat)) return false;
+    if (requestAgentId === 'mcp_agent_architect' && cat === 'database') {
+      return ARCHITECT_READ_ONLY_DB_TOOLS.has(t.tool_name);
+    }
+    return true;
+  });
 }
 
 /** Use Haiku to classify intent of the last user message. Returns { intent: 'sql'|'shell'|'question'|'mixed', tasks?: [{ type, content }] }. */
@@ -1732,6 +2586,17 @@ async function runMixedTasks(env, request, provider, modelKey, systemWithBlurb, 
   return await singleRoundNoTools(env, provider, modelKey, systemWithBlurb, finalMessages);
 }
 
+const stripAdditionalProperties = (obj) => {
+  if (typeof obj !== 'object' || obj === null) return obj;
+  if (Array.isArray(obj)) return obj.map(stripAdditionalProperties);
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'additionalProperties') continue;
+    result[k] = stripAdditionalProperties(v);
+  }
+  return result;
+};
+
 /** Multi-provider tool loop (non-streaming). Supports anthropic, openai, google. Returns final assistant text. */
 async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest) {
   let messages = [...apiMessages];
@@ -1832,7 +2697,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         tools: [{ function_declarations: toolDefinitions.map(t => ({
           name: t.name,
           description: t.description || '',
-          parameters: t.input_schema,
+          parameters: stripAdditionalProperties(t.input_schema),
         })) }],
       };
     } else {
@@ -1991,7 +2856,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       } else if (toolName === 'gdrive_list' || toolName === 'gdrive_fetch') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) { resultText = JSON.stringify({ error: 'unauthorized' }); } else {
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+          const integrationUserId = authUser.email || authUser.id;
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
           if (!tokenRow) { resultText = JSON.stringify({ error: 'not_connected', hint: 'Connect Google Drive in the dashboard' }); } else {
             try {
               if (toolName === 'gdrive_list') {
@@ -2014,7 +2880,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       } else if (toolName === 'github_repos' || toolName === 'github_file') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) { resultText = JSON.stringify({ error: 'unauthorized' }); } else {
-          const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+          const integrationUserId = authUser.email || authUser.id;
+          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', '');
           if (!tokenRow) { resultText = JSON.stringify({ error: 'not_connected', hint: 'Connect GitHub in the dashboard' }); } else {
             try {
               if (toolName === 'github_repos') {
@@ -2081,9 +2948,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             });
           }
         }
+      } else if (toolName === 'imgx_generate_image' || toolName === 'imgx_edit_image' || toolName === 'imgx_list_providers') {
+        try {
+          const out = await runImgxBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'attached_file_content']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content']);
       if (!BUILTIN_TOOLS.has(toolName) && env.DB) {
         try {
           const toolRow = await env.DB.prepare('SELECT tool_category FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(toolName).first();
@@ -2200,26 +3074,42 @@ async function runTerminalCommand(env, request, command, sessionId = null) {
     const agentSessionIdForHistory = sessionId || null;
     const id1 = 'th_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
     const id2 = 'th_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    const tenantIdHistory = 'tenant_sam_primeaux';
+    let terminalSessionIdForHistory = null;
     try {
-      await env.DB.prepare(
-        'INSERT INTO terminal_history (id, direction, content, triggered_by, terminal_session_id, agent_session_id, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id1, 'input', cmd.slice(0, 50000), 'agent', null, agentSessionIdForHistory, now).run();
-      await env.DB.prepare(
-        'INSERT INTO terminal_history (id, direction, content, triggered_by, terminal_session_id, agent_session_id, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id2, 'output', cleanOutput.slice(0, 100000), 'agent', null, agentSessionIdForHistory, now).run();
-      console.log('[runTerminalCommand] terminal_history written (input + output)');
-    } catch (e1) {
-      try {
-        await env.DB.prepare(
-          'INSERT INTO terminal_history (id, direction, content, triggered_by, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(id1, 'input', cmd.slice(0, 50000), 'agent', agentSessionIdForHistory, now).run();
-        await env.DB.prepare(
-          'INSERT INTO terminal_history (id, direction, content, triggered_by, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(id2, 'output', cleanOutput.slice(0, 100000), 'agent', agentSessionIdForHistory, now).run();
-        console.log('[runTerminalCommand] terminal_history written (input + output, legacy schema)');
-      } catch (e2) {
-        console.warn('[runTerminalCommand] terminal_history', e1?.message ?? e1, e2?.message ?? e2);
+      if (request) {
+        const authUser = await getAuthUser(request, env);
+        const uid = authUser?.id || authUser?.email || null;
+        if (uid) {
+          const tsRow = await env.DB.prepare(
+            `SELECT id FROM terminal_sessions WHERE user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != '' ORDER BY updated_at DESC LIMIT 1`
+          ).bind(uid).first();
+          terminalSessionIdForHistory = tsRow?.id || null;
+        }
       }
+    } catch (_) {}
+    if (terminalSessionIdForHistory) {
+      try {
+        const seqRow = await env.DB.prepare(
+          'SELECT COALESCE(MAX(sequence), 0) AS m FROM terminal_history WHERE terminal_session_id = ?'
+        ).bind(terminalSessionIdForHistory).first();
+        let seq = Number(seqRow?.m ?? 0);
+        seq += 1;
+        const inputContent = cmd.slice(0, 50000);
+        const outputContent = cleanOutput.slice(0, 100000);
+        await env.DB.prepare(
+          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`
+        ).bind(id1, terminalSessionIdForHistory, tenantIdHistory, seq, 'input', inputContent, 'agent', agentSessionIdForHistory, now).run();
+        seq += 1;
+        await env.DB.prepare(
+          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`
+        ).bind(id2, terminalSessionIdForHistory, tenantIdHistory, seq, 'output', outputContent, 'agent', agentSessionIdForHistory, now).run();
+        console.log('[runTerminalCommand] terminal_history written (input + output)');
+      } catch (e) {
+        console.warn('[runTerminalCommand] terminal_history', e?.message ?? e);
+      }
+    } else {
+      console.warn('[runTerminalCommand] terminal_history skipped (no active terminal_session for user)');
     }
   }
   return out;
@@ -3200,12 +4090,15 @@ async function handleAgentApi(request, url, env, ctx) {
       let integrations = {};
       try {
         const session = await getSession(env, request);
-        const userId = session?.user_id;
-        if (userId) {
+        // user_oauth_tokens.user_id matches login email; superadmin sessions use user_id=sam_primeaux but _session_user_id/email is the real account
+        const oauthUserId = session && (session._session_user_id || session.email || session.user_id);
+        if (oauthUserId) {
           const tokRows = await env.DB.prepare(
             `SELECT provider FROM user_oauth_tokens WHERE user_id=?`
-          ).bind(userId).all();
+          ).bind(oauthUserId).all();
           for (const row of tokRows.results) integrations[row.provider] = true;
+          // Alias google_drive → google for frontend compatibility
+          if (integrations['google_drive']) integrations['google'] = true;
         }
       } catch (_) {}
       const payload = { agents, mcp_services, models, sessions, prompts, cidi: [], integrations, default_model_id };
@@ -3302,6 +4195,22 @@ async function handleAgentApi(request, url, env, ctx) {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
+    // One-hop terminal: return wss URL for logged-in dashboard only (avoids Worker fetch() WebSocket proxy).
+    if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
+      const session = await getSession(env, request);
+      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
+      const secret = (env.TERMINAL_SECRET || '').trim();
+      if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
+      let wssUrl = httpsUrl;
+      if (httpsUrl.startsWith('https://')) wssUrl = 'wss://' + httpsUrl.slice(8);
+      else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
+      else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
+      const sep = wssUrl.includes('?') ? '&' : '?';
+      const url = `${wssUrl}${sep}token=${encodeURIComponent(secret)}`;
+      return jsonResponse({ url });
+    }
+
     if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
       const isWebSocket = request.headers.get('Upgrade') === 'websocket';
       // Allow both HTTP/1.1 websocket upgrade and HTTP/2 (CF strips header)
@@ -3354,14 +4263,33 @@ async function handleAgentApi(request, url, env, ctx) {
           console.log('[terminal/ws] closed:', source);
         }
       };
-      const closeBoth = () => {
-        try { serverWs.close(); } catch (_) {}
+      let terminalBridgeCleaned = false;
+      const closeFromBrowserLeg = () => {
+        if (terminalBridgeCleaned) return;
+        terminalBridgeCleaned = true;
+        logClose('client');
         try { upstreamWs.close(); } catch (_) {}
       };
-      serverWs.addEventListener('close', () => { logClose('client'); closeBoth(); });
-      serverWs.addEventListener('error', () => { logClose('client'); closeBoth(); });
-      upstreamWs.addEventListener('close', () => { logClose('upstream'); closeBoth(); });
-      upstreamWs.addEventListener('error', () => { logClose('upstream'); closeBoth(); });
+      const closeFromUpstreamLeg = () => {
+        if (terminalBridgeCleaned) return;
+        terminalBridgeCleaned = true;
+        logClose('upstream');
+        try { serverWs.close(); } catch (_) {}
+      };
+      serverWs.addEventListener('close', closeFromBrowserLeg);
+      upstreamWs.addEventListener('close', closeFromUpstreamLeg);
+      serverWs.addEventListener('error', () => { console.log('[terminal/ws] client leg error (not closing bridge)'); });
+      upstreamWs.addEventListener('error', () => { console.log('[terminal/ws] upstream leg error (not closing bridge)'); });
+      ctx.waitUntil(new Promise((resolve) => {
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        serverWs.addEventListener('close', done);
+        upstreamWs.addEventListener('close', done);
+      }));
       return new Response(null, { status: 101, webSocket: clientWs });
     }
 
@@ -3528,32 +4456,55 @@ async function handleAgentApi(request, url, env, ctx) {
       } catch (e) {
         return jsonResponse({ error: 'playwright_jobs table not available' }, 503);
       }
-      if (env.MYBROWSER && env.DASHBOARD && env.DB) {
+      console.log('[playwright] bindings check:', {
+        hasMYBROWSER: !!env.MYBROWSER,
+        hasDASHBOARD: !!env.DASHBOARD,
+        hasDB: !!env.DB,
+      });
+      if (env.MYBROWSER && env.DB) {
+        let browser = null;
         try {
           const { launch } = await import('@cloudflare/playwright');
-          const browser = await launch(env.MYBROWSER);
-          try {
-            const page = await browser.newPage();
-            await page.setViewportSize({ width: 1280, height: 800 });
-            await page.goto(targetUrl || 'https://example.com', { waitUntil: 'domcontentloaded', timeout: 15000 });
-            const buf = await page.screenshot({ type: 'png' });
-            await browser.close();
-            const key = `screenshots/${id}.png`;
-            await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: 'image/png' } });
-            const resultUrl = `https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/${key}`;
-            await env.DB.prepare(
-              "UPDATE playwright_jobs SET status='completed', result_url=?, completed_at=CURRENT_TIMESTAMP WHERE id=?"
-            ).bind(resultUrl, id).run();
-            return jsonResponse({ id, status: 'completed', result_url: resultUrl });
-          } finally {
-            try { await browser.close(); } catch (_) {}
-          }
+          browser = await Promise.race([
+            launch(env.MYBROWSER),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('launch timeout')), 10000)),
+          ]);
+          console.log('[playwright] browser launched');
+          const page = await browser.newPage();
+          await page.setViewportSize({ width: 1280, height: 800 });
+          await Promise.race([
+            page.goto(targetUrl || 'https://example.com', { waitUntil: 'domcontentloaded', timeout: 6000 }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('goto timeout')), 6000)),
+          ]);
+          console.log('[playwright] goto completed');
+          await new Promise((r) => setTimeout(r, 500));
+          const buf = await page.screenshot({ type: 'png' });
+          const imagesToken = env.CLOUDFLARE_IMAGES_TOKEN || env.CLOUDFLARE_IMAGES_API_TOKEN;
+          const imagesAccountId = env.CLOUDFLARE_ACCOUNT_ID || env.CLOUDFLARE_IMAGES_ACCOUNT_HASH;
+          const formData = new FormData();
+          formData.append('file', new Blob([buf], { type: 'image/png' }), `screenshot-${id}.png`);
+          const imgRes = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${imagesAccountId}/images/v1`,
+            { method: 'POST', headers: { Authorization: `Bearer ${imagesToken}` }, body: formData }
+          );
+          const imgJson = await imgRes.json();
+          const resultUrl = imgJson?.result?.variants?.[0] ?? imgJson?.result?.id ?? null;
+          if (!resultUrl) throw new Error('CF Images upload failed: ' + JSON.stringify(imgJson?.errors));
+          await env.DB.prepare(
+            "UPDATE playwright_jobs SET status='completed', result_url=?, completed_at=CURRENT_TIMESTAMP WHERE id=?"
+          ).bind(resultUrl, id).run();
+          return jsonResponse({ id, status: 'completed', result_url: resultUrl });
         } catch (err) {
+          console.error('[playwright] FAILED:', err?.message ?? String(err));
           const errMsg = String(err?.message || err);
           await env.DB.prepare(
             "UPDATE playwright_jobs SET status='error', error=? WHERE id=?"
           ).bind(errMsg, id).run().catch(() => {});
           return jsonResponse({ id, status: 'error', error: errMsg });
+        } finally {
+          if (browser) {
+            try { await browser.close(); } catch (_) {}
+          }
         }
       }
       if (env.MY_QUEUE) await env.MY_QUEUE.send({ jobId: id, job_type: 'screenshot', url: targetUrl });
@@ -3585,6 +4536,25 @@ async function handleAgentApi(request, url, env, ctx) {
         : env.DB.prepare("SELECT * FROM ai_models WHERE is_active=1 ORDER BY provider, display_name");
       const { results } = await query.all();
       return jsonResponse(results);
+    }
+
+    const agentMcpSessionPatch = pathLower.match(/^\/api\/agent\/sessions\/([^/]+)$/);
+    if (agentMcpSessionPatch && method === 'PATCH') {
+      const conversationId = agentMcpSessionPatch[1];
+      let body = {};
+      try { body = await request.json(); } catch (_) {}
+      const status = body.status != null ? String(body.status) : 'completed';
+      const lastActivity = new Date().toISOString();
+      try {
+        await env.DB.prepare(
+          `UPDATE mcp_agent_sessions
+           SET status = ?, last_activity = ?, updated_at = unixepoch()
+           WHERE conversation_id = ?`
+        ).bind(status, lastActivity, conversationId).run();
+      } catch (e) {
+        return jsonResponse({ error: String(e && e.message ? e.message : e) }, 500);
+      }
+      return jsonResponse({ success: true });
     }
 
     if (pathLower === '/api/agent/sessions') {
@@ -3655,6 +4625,12 @@ async function handleAgentApi(request, url, env, ctx) {
       console.log('[agent/chat] model_id:', model_id);
       const bodyCompiledContextTrim = typeof bodyCompiledContext === 'string' ? bodyCompiledContext.trim() : '';
       if (!msgList || !Array.isArray(msgList) || msgList.length === 0) return jsonResponse({ error: 'messages required' }, 400);
+      const chatSession = await getSession(env, request).catch(() => null);
+      const chatUserId = chatSession?.user_id || 'sam_primeaux';
+      await ensureWorkSessionAndSignal(env, chatUserId, body?.workspace_id || 'ws_samprimeaux', 'ai', 'agent-chat', {
+        mode: chatMode,
+        message_count: msgList.length,
+      });
 
       let model;
       if (model_id === 'auto') {
@@ -3935,14 +4911,15 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const wantStream = body.stream === true && (canStreamAnthropic || canStreamOpenAI || canStreamGoogle || canStreamWorkersAI);
 
       const supportsTools = ['anthropic', 'openai', 'google'].includes(model.provider);
-      const useTools = supportsTools && !wantStream;
+      const useTools = supportsTools;
       let toolDefinitions = [];
-      if (useTools) {
+      if (supportsTools) {
         try {
           const toolRows = await env.DB.prepare(
-            'SELECT tool_name, description, input_schema FROM mcp_registered_tools WHERE enabled = 1'
+            'SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1'
           ).all();
-          toolDefinitions = (toolRows.results ?? []).map(t => {
+          const filteredToolRows = filterToolRowsByPanel(agent_id, toolRows.results ?? []);
+          toolDefinitions = filteredToolRows.map(t => {
             let rawSchema = {};
             try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
 
@@ -4065,7 +5042,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             })
             .catch(() => {});
         }
-        await upsertMcpAgentSession(env, conversationId);
+        await upsertMcpAgentSession(env, conversationId, agent_id);
 
         if (canStreamOpenAI) {
           return streamOpenAI(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
@@ -4076,16 +5053,18 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         if (canStreamWorkersAI) {
           return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx);
         }
-        if (canStreamAnthropic) {
-          let mcpToolsCount = 0;
-          try {
-            const tr = await env.DB.prepare('SELECT 1 FROM mcp_registered_tools WHERE enabled = 1 LIMIT 1').first();
-            mcpToolsCount = tr ? 1 : 0;
-          } catch (_) {}
-          if (mcpToolsCount > 0) {
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: wantStream, mode: chatMode });
+        if (toolDefinitions.length > 0) {
+          if (canStreamAnthropic) {
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode });
             if (toolsResp) return toolsResp;
           }
+          if (canStreamOpenAI || canStreamGoogle) {
+            // Fall through to runToolLoop below with stream flag
+            const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles);
+            return toolLoopResult;
+          }
+        }
+        if (canStreamAnthropic) {
         const anthropicMessagesStream = apiMessages.map((m, i) => {
           const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
           return { role: m.role, content: isLastUser ? buildAnthropicContent(m.content, images) : m.content };
@@ -4255,7 +5234,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
         }
         conversationId = conversationId ?? crypto.randomUUID();
-        await upsertMcpAgentSession(env, conversationId);
+        await upsertMcpAgentSession(env, conversationId, agent_id);
         const agentIdForTools = agent_id ?? 'agent_sam_v1';
         const modelKeyForTools = model.provider === 'anthropic' ? resolveAnthropicModelKey(model.model_key) : (model.model_key || 'gpt-4o');
         if (model.provider === 'anthropic' && env.ANTHROPIC_API_KEY) {
@@ -4388,7 +5367,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
       const assistantContent = result?.content?.[0]?.text ?? result?.choices?.[0]?.message?.content ?? result?.candidates?.[0]?.content?.parts?.[0]?.text ?? (typeof result?.message === 'string' ? result.message : '');
       conversationId = conversationId || crypto.randomUUID();
-      await upsertMcpAgentSession(env, conversationId);
+      await upsertMcpAgentSession(env, conversationId, agent_id);
       try {
         const convId = conversationId;
         if (convId) {
@@ -4676,8 +5655,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
     if (method === 'GET' && pathLower === '/api/integrations/gdrive/files') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      const integrationUserId = authUser.email || authUser.id;
       const folderId = url.searchParams.get('folderId') || 'root';
-      const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+      const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
       const res = await fetch(`https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` } });
       const data = await res.json();
@@ -4687,8 +5667,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
     if (method === 'GET' && pathLower === '/api/integrations/gdrive/file') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      const integrationUserId = authUser.email || authUser.id;
       const fileId = url.searchParams.get('fileId');
-      const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'google_drive');
+      const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` } });
       const content = await res.text();
@@ -4698,7 +5679,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
     if (method === 'GET' && pathLower === '/api/integrations/github/repos') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
-      const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+      const integrationUserId = authUser.email || authUser.id;
+      const githubAccount = url.searchParams.get('account') || '';
+      const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
       const res = await fetch('https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member', { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
       const data = await res.json();
@@ -4708,9 +5691,11 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
     if (method === 'GET' && pathLower === '/api/integrations/github/files') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      const integrationUserId = authUser.email || authUser.id;
+      const githubAccount = url.searchParams.get('account') || '';
       const repo = url.searchParams.get('repo');
       const filePath = url.searchParams.get('path') || '';
-      const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+      const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
       const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
       const data = await res.json();
@@ -4720,9 +5705,11 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
     if (method === 'GET' && pathLower === '/api/integrations/github/file') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      const integrationUserId = authUser.email || authUser.id;
+      const githubAccount = url.searchParams.get('account') || '';
       const repo = url.searchParams.get('repo');
       const filePath = url.searchParams.get('path');
-      const tokenRow = await getIntegrationToken(env.DB, authUser.id, 'github');
+      const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
       const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
       const data = await res.json();
@@ -4730,25 +5717,6 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const content = data.content ? atob(data.content.replace(/\n/g, '')) : '';
       return jsonResponse({ content, sha: data.sha, name: data.name });
     }
-    if (pathLower === '/api/integrations/status' && method === 'GET') {
-      const session = await getSession(env, request);
-      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-      const userId = session.user_id || session.email || '';
-      let google = false;
-      let github = false;
-      if (env.DB && userId) {
-        try {
-          const { results } = await env.DB.prepare(
-            `SELECT provider FROM user_oauth_tokens WHERE user_id = ? AND provider IN ('google_drive', 'github')`
-          ).bind(userId).all();
-          const providers = (results || []).map((r) => r.provider);
-          google = providers.includes('google_drive');
-          github = providers.includes('github');
-        } catch (_) {}
-      }
-      return jsonResponse({ google, github });
-    }
-
     // Playwright screenshots (R2 agent-sam/screenshots/) — list and serve
     if (pathLower === '/api/screenshots' && method === 'GET') {
       let authUser = await getAuthUser(request, env);
@@ -5073,9 +6041,10 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
   }
 }
 
-async function handleMcpApi(req, u, e) {
+async function handleMcpApi(req, u, e, ctx) {
   const pathLower = u.pathname.replace(/\/$/, '').toLowerCase();
   const method = (req.method || 'GET').toUpperCase();
+  const MCP_WF_TENANT = 'tenant_sam_primeaux';
   if (!e.DB) return jsonResponse({ error: 'DB not configured' }, 503);
   try {
     if (pathLower === '/api/mcp/status' && method === 'GET') {
@@ -5105,14 +6074,17 @@ async function handleMcpApi(req, u, e) {
           return jsonResponse({ agents: rows });
         }
         if (pathLower === '/api/mcp/tools' && method === 'GET') {
+          const panelAgent = u.searchParams.get('agent_id');
           let tools = [];
           try {
             const r = await e.DB.prepare('SELECT tool_name, description, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
-            tools = (r.results || []).map((t) => ({ tool_name: t.tool_name, description: t.description || '', category: t.tool_category || 'execute' }));
+            const rows = filterToolRowsByPanel(panelAgent, r.results || []);
+            tools = rows.map((t) => ({ tool_name: t.tool_name, description: t.description || '', category: t.tool_category || 'execute' }));
           } catch (_) {
             try {
               const r = await e.DB.prepare('SELECT tool_name, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
-              tools = (r.results || []).map((t) => ({ tool_name: t.tool_name, description: '', category: t.tool_category || 'execute' }));
+              const rows = filterToolRowsByPanel(panelAgent, r.results || []);
+              tools = rows.map((t) => ({ tool_name: t.tool_name, description: '', category: t.tool_category || 'execute' }));
             } catch (__) {}
           }
           return jsonResponse({ tools });
@@ -5164,6 +6136,89 @@ async function handleMcpApi(req, u, e) {
           }
           return jsonResponse({ ok: true, session_id: sessionId, agent_id: agentId, agent_name: agentName, routed_by: routedBy });
         }
+        if (pathLower === '/api/mcp/a11y') {
+          if (method === 'GET') {
+            return jsonResponse({
+              ok: true,
+              service: 'a11y-mcp-proxy',
+              endpoint: '/api/mcp/a11y',
+              status: 'ready',
+            }, 200);
+          }
+          if (method === 'POST') {
+            let body = {};
+            try { body = await req.json(); } catch (_) {}
+            const service = await e.DB.prepare(
+              "SELECT endpoint_url, token_secret_name, service_name FROM mcp_services WHERE id = 'mcp_a11y_server' AND is_active = 1 LIMIT 1"
+            ).first();
+            if (!service?.endpoint_url) {
+              return jsonResponse({ error: 'A11y MCP service not configured' }, 503);
+            }
+            const target = String(service.endpoint_url || '').trim();
+            if (!target || target === 'https://inneranimalmedia.com/api/mcp/a11y') {
+              return jsonResponse({ error: 'A11y MCP upstream endpoint not configured' }, 503);
+            }
+            const headers = {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json, text/event-stream',
+            };
+            if (service.token_secret_name && e[service.token_secret_name]) {
+              headers.Authorization = `Bearer ${e[service.token_secret_name]}`;
+            } else if (e.MCP_AUTH_TOKEN) {
+              headers.Authorization = `Bearer ${e.MCP_AUTH_TOKEN}`;
+            }
+            const upstream = await fetch(target, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(body || {}),
+            });
+            const raw = await upstream.text();
+            return new Response(raw, {
+              status: upstream.status,
+              headers: { 'Content-Type': upstream.headers.get('content-type') || 'text/plain; charset=utf-8' },
+            });
+          }
+        }
+        if (pathLower === '/api/mcp/imgx') {
+          if (method === 'GET') {
+            return jsonResponse({ ok: true, service: 'imgx-remote-builtin', endpoint: '/api/mcp/imgx', providers: listImgxProviders(e) }, 200);
+          }
+          if (method === 'POST') {
+            let body = {};
+            try { body = await req.json(); } catch (_) {}
+            const tool_name = String(body.tool_name || '').trim();
+            const params = body.params && typeof body.params === 'object' ? body.params : {};
+            if (!tool_name) return jsonResponse({ error: 'tool_name required' }, 400);
+            const out = await runImgxBuiltinTool(e, tool_name, params);
+            if (out && out.error) return jsonResponse(out, 400);
+            return jsonResponse({ tool_name, result: out }, 200);
+          }
+        }
+        const mcpSvcPingMatch = pathLower.match(/^\/api\/mcp\/services\/([^/]+)\/ping$/);
+        if (mcpSvcPingMatch && method === 'POST') {
+          const svcId = mcpSvcPingMatch[1];
+          const svc = await e.DB.prepare(
+            `SELECT endpoint_url FROM mcp_services WHERE id = ?`
+          ).bind(svcId).first();
+          if (!svc || !svc.endpoint_url) return jsonResponse({ error: 'Service not found' }, 404);
+          let health = 'unreachable';
+          try {
+            const res = await fetch(String(svc.endpoint_url), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+              body: JSON.stringify({ jsonrpc: '2.0', method: 'ping', id: 1 }),
+              signal: AbortSignal.timeout(3000),
+            });
+            health = res.ok ? 'healthy' : 'degraded';
+          } catch (_) { health = 'unreachable'; }
+          try {
+            await e.DB.prepare(
+              `UPDATE mcp_services SET health_status = ?, last_health_check = unixepoch(),
+               updated_at = unixepoch() WHERE id = ?`
+            ).bind(health, svcId).run();
+          } catch (_) {}
+          return jsonResponse({ id: svcId, health_status: health });
+        }
         if (pathLower === '/api/mcp/services') {
           if (method === 'GET') {
             const r = await e.DB.prepare("SELECT id, service_name, service_type, endpoint_url, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name").all();
@@ -5194,22 +6249,71 @@ async function handleMcpApi(req, u, e) {
           const params = body.params && typeof body.params === 'object' ? body.params : {};
           const session_id = body.session_id != null ? String(body.session_id) : null;
           if (!tool_name) return jsonResponse({ error: 'tool_name required' }, 400);
+          const proxyFromMcp = req.headers.get('X-IAM-MCP-Proxy') === '1';
+          if (proxyFromMcp) {
+            const out = await invokeMcpToolFromChat(e, tool_name, params, session_id || '', {
+              allowRemoteMcp: false,
+              skipApprovalCheck: true,
+              suppressTelemetry: false,
+            });
+            if (out.error) return jsonResponse({ error: out.error }, 404);
+            return jsonResponse({ tool_name, result: out.result }, 200);
+          }
           // Internal Playwright/browser tools -- run in worker (MYBROWSER) for UI validation, screenshots, navigation
           const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
           if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && e.MYBROWSER && e.DASHBOARD) {
             try {
               const out = await runInternalPlaywrightTool(e, tool_name, params);
-              e.DB.prepare(
-                `INSERT INTO mcp_tool_calls (tool_name, input_json, output_json, session_id, status, created_at)
-                 VALUES (?, ?, ?, ?, 'completed', datetime('now'))`
-              ).bind(tool_name, JSON.stringify(params), JSON.stringify(out), session_id || null).run().catch(() => {});
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'browser',
+                toolInput: params,
+                result: out,
+                error: null,
+                serviceName: 'builtin',
+              });
               return jsonResponse({ tool_name, result: out }, 200);
             } catch (err) {
               const errMsg = String(err?.message || err);
-              e.DB.prepare(
-                `INSERT INTO mcp_tool_calls (tool_name, input_json, output_json, session_id, status, created_at)
-                 VALUES (?, ?, ?, ?, 'failed', datetime('now'))`
-              ).bind(tool_name, JSON.stringify(params), JSON.stringify({ error: errMsg }), session_id || null).run().catch(() => {});
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'browser',
+                toolInput: params,
+                result: null,
+                error: errMsg,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
+            }
+          }
+          const INTERNAL_IMGX_TOOLS = ['imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers'];
+          if (INTERNAL_IMGX_TOOLS.includes(tool_name)) {
+            try {
+              const out = await runImgxBuiltinTool(e, tool_name, params);
+              const status = out && out.error ? 'failed' : 'completed';
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'image',
+                toolInput: params,
+                result: out && out.error ? null : out,
+                error: out && out.error ? String(out.error) : null,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: out }, out && out.error ? 400 : 200);
+            } catch (err) {
+              const errMsg = String(err?.message || err);
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'image',
+                toolInput: params,
+                result: null,
+                error: errMsg,
+                serviceName: 'builtin',
+              });
               return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
             }
           }
@@ -5228,9 +6332,14 @@ async function handleMcpApi(req, u, e) {
             method: 'tools/call',
             params: { name: tool_name, arguments: params }
           };
+          const targetMcpUrl = (() => {
+            const configured = String(toolRow.mcp_service_url || '').trim();
+            if (!configured || configured.toLowerCase() === 'builtin') return 'https://mcp.inneranimalmedia.com/mcp';
+            return configured;
+          })();
           let mcpRes;
           try {
-            mcpRes = await fetch('https://mcp.inneranimalmedia.com/mcp', {
+            mcpRes = await fetch(targetMcpUrl, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -5240,18 +6349,173 @@ async function handleMcpApi(req, u, e) {
               body: JSON.stringify(mcpBody)
             });
           } catch (err) {
+            await recordMcpToolCall(e, {
+              conversationId: session_id || '',
+              toolName: tool_name,
+              toolCategory: String(toolRow.tool_category || 'mcp'),
+              toolInput: params,
+              result: null,
+              error: String(err && err.message || err),
+              serviceName: 'InnerAnimalMedia MCP',
+            });
             return jsonResponse({ error: 'MCP request failed', detail: String(err && err.message || err) }, 502);
+          }
+          if (!mcpRes.ok) {
+            const failText = await mcpRes.text();
+            await recordMcpToolCall(e, {
+              conversationId: session_id || '',
+              toolName: tool_name,
+              toolCategory: String(toolRow.tool_category || 'mcp'),
+              toolInput: params,
+              result: null,
+              error: `MCP upstream ${mcpRes.status}: ${failText.slice(0, 2000)}`,
+              serviceName: 'InnerAnimalMedia MCP',
+            });
+            return jsonResponse({ error: 'MCP upstream error', status: mcpRes.status, detail: failText.slice(0, 4000) }, 502);
           }
           const rawText = await mcpRes.text();
           const dataLine = rawText.split("\n").find(l => l.startsWith("data:"));
-          const result = dataLine ? JSON.parse(dataLine.slice(5).trim()) : {};
+          let result = {};
+          try {
+            result = dataLine ? JSON.parse(dataLine.slice(5).trim()) : {};
+          } catch (parseErr) {
+            await recordMcpToolCall(e, {
+              conversationId: session_id || '',
+              toolName: tool_name,
+              toolCategory: String(toolRow.tool_category || 'mcp'),
+              toolInput: params,
+              result: null,
+              error: `MCP response parse error: ${String(parseErr?.message || parseErr)}`,
+              serviceName: 'InnerAnimalMedia MCP',
+            });
+            return jsonResponse({ error: 'MCP response parse error' }, 502);
+          }
           const content = result?.result?.content ?? result;
-          e.DB.prepare(
-            `INSERT INTO mcp_tool_calls (tool_name, input_json, output_json, session_id, status, created_at)
-             VALUES (?, ?, ?, ?, 'completed', datetime('now'))`
-          ).bind(tool_name, JSON.stringify(params), JSON.stringify(content), session_id || null).run().catch(() => {});
+          await recordMcpToolCall(e, {
+            conversationId: session_id || '',
+            toolName: tool_name,
+            toolCategory: String(toolRow.tool_category || 'mcp'),
+            toolInput: params,
+            result: content,
+            error: null,
+            serviceName: 'InnerAnimalMedia MCP',
+          });
           return jsonResponse({ tool_name, result: content }, 200);
         }
+
+        if (pathLower === '/api/mcp/workflows' && method === 'GET') {
+          const { results } = await e.DB.prepare(
+            `SELECT id, name, description, category, trigger_type, status,
+                    run_count, success_count, last_run_at, estimated_cost_usd, created_at
+             FROM mcp_workflows
+             WHERE tenant_id = ?
+             ORDER BY updated_at DESC`
+          ).bind(MCP_WF_TENANT).all();
+          return jsonResponse(results || [], 200);
+        }
+        if (pathLower === '/api/mcp/workflows' && method === 'POST') {
+          let body = {};
+          try { body = await req.json(); } catch (_) {}
+          const name = String(body.name || '').trim();
+          let stepsStr = body.steps_json;
+          if (stepsStr == null) return jsonResponse({ error: 'name and steps_json are required' }, 400);
+          if (typeof stepsStr !== 'string') stepsStr = JSON.stringify(stepsStr);
+          if (!name || !stepsStr) return jsonResponse({ error: 'name and steps_json are required' }, 400);
+          let trigStr = body.trigger_config_json;
+          if (trigStr != null && typeof trigStr !== 'string') trigStr = JSON.stringify(trigStr);
+          else if (trigStr == null) trigStr = JSON.stringify({});
+          const statusIns = body.status != null ? String(body.status) : 'draft';
+          const row = await e.DB.prepare(
+            `INSERT INTO mcp_workflows
+               (tenant_id, name, description, category, trigger_type, trigger_config_json,
+                steps_json, timeout_seconds, requires_approval, estimated_cost_usd, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING *`
+          ).bind(
+            MCP_WF_TENANT,
+            name,
+            body.description != null ? String(body.description) : null,
+            body.category != null ? String(body.category) : null,
+            body.trigger_type != null ? String(body.trigger_type) : 'manual',
+            trigStr,
+            stepsStr,
+            body.timeout_seconds != null ? Number(body.timeout_seconds) || 300 : 300,
+            body.requires_approval ? 1 : 0,
+            body.estimated_cost_usd != null ? Number(body.estimated_cost_usd) || 0 : 0,
+            statusIns
+          ).first();
+          return jsonResponse(row, 201);
+        }
+        const wfPatchMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)$/);
+        if (wfPatchMatch && method === 'PATCH') {
+          const id = wfPatchMatch[1];
+          let body = {};
+          try { body = await req.json(); } catch (_) {}
+          const fields = [];
+          const vals = [];
+          const allowed = ['name', 'description', 'category', 'trigger_type', 'trigger_config_json',
+            'steps_json', 'timeout_seconds', 'requires_approval', 'estimated_cost_usd', 'status'];
+          for (const key of allowed) {
+            if (key in body) {
+              fields.push(`${key} = ?`);
+              let v = body[key];
+              if (key === 'requires_approval') vals.push(v ? 1 : 0);
+              else if ((key === 'trigger_config_json' || key === 'steps_json') && typeof v === 'object' && v !== null) vals.push(JSON.stringify(v));
+              else vals.push(v);
+            }
+          }
+          if (!fields.length) return jsonResponse({ error: 'No valid fields to update' }, 400);
+          fields.push('updated_at = unixepoch()');
+          vals.push(id, MCP_WF_TENANT);
+          await e.DB.prepare(
+            `UPDATE mcp_workflows SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`
+          ).bind(...vals).run();
+          return jsonResponse({ success: true }, 200);
+        }
+        const wfRunMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)\/run$/);
+        if (wfRunMatch && method === 'POST') {
+          if (!ctx || typeof ctx.waitUntil !== 'function') {
+            return jsonResponse({ error: 'Async execution context not available' }, 500);
+          }
+          const workflow_id = wfRunMatch[1];
+          let body = {};
+          try { body = await req.json(); } catch (_) {}
+          const session_id = body.session_id != null ? String(body.session_id) : null;
+          const triggered_by = body.triggered_by != null ? String(body.triggered_by) : 'manual';
+          const wf = await e.DB.prepare(
+            `SELECT * FROM mcp_workflows WHERE id = ? AND status = 'active' AND tenant_id = ?`
+          ).bind(workflow_id, MCP_WF_TENANT).first();
+          if (!wf) return jsonResponse({ error: 'Workflow not found or not active' }, 404);
+          const run = await e.DB.prepare(
+            `INSERT INTO mcp_workflow_runs
+               (workflow_id, session_id, tenant_id, status, triggered_by, started_at)
+             VALUES (?, ?, ?, 'running', ?, unixepoch())
+             RETURNING *`
+          ).bind(workflow_id, session_id, MCP_WF_TENANT, triggered_by).first();
+          await e.DB.prepare(
+            `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
+             updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+          ).bind(workflow_id, MCP_WF_TENANT).run();
+          ctx.waitUntil(executeWorkflowSteps(e, wf, run.id, session_id));
+          return jsonResponse({ run_id: run.id, status: 'running' }, 202);
+        }
+        const wfRunsListMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)\/runs$/);
+        if (wfRunsListMatch && method === 'GET') {
+          const workflow_id = wfRunsListMatch[1];
+          const own = await e.DB.prepare(
+            `SELECT id FROM mcp_workflows WHERE id = ? AND tenant_id = ?`
+          ).bind(workflow_id, MCP_WF_TENANT).first();
+          if (!own) return jsonResponse({ error: 'Workflow not found' }, 404);
+          const { results } = await e.DB.prepare(
+            `SELECT id, status, triggered_by, cost_usd, duration_ms,
+                    started_at, completed_at, error_message
+             FROM mcp_workflow_runs
+             WHERE workflow_id = ?
+             ORDER BY created_at DESC LIMIT 50`
+          ).bind(workflow_id).all();
+          return jsonResponse(results || [], 200);
+        }
+
         return jsonResponse({ error: 'Not found' }, 404);
       } catch (err) {
         return jsonResponse({ error: String(err && err.message || err) }, 500);
@@ -5271,22 +6535,25 @@ async function recordMcpToolCall(env, opts) {
   const id = crypto.randomUUID();
   try {
     await env.DB.prepare(
-      `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent_sam', ?, ?, ?, ?)`
-    ).bind(id, tenant, sessionId, toolName, toolCategory || 'mcp', JSON.stringify(toolInput || {}), outputSlice, status, now, now, now, now).run();
+      `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent_sam', ?, ?, ?, ?, ?)`
+    ).bind(
+      id,
+      tenant,
+      sessionId,
+      toolName,
+      toolCategory || 'mcp',
+      JSON.stringify(toolInput || {}),
+      outputSlice,
+      status,
+      now,
+      now,
+      now,
+      now,
+      error ? String(error).slice(0, 8000) : null
+    ).run();
   } catch (e) { console.warn('[recordMcpToolCall] mcp_tool_calls', e?.message ?? e); }
-  try {
-    const successInc = error ? 0 : 1;
-    const failInc = error ? 1 : 0;
-    await env.DB.prepare(
-      `INSERT INTO mcp_usage_log (id, tenant_id, tool_name, date, call_count, success_count, failure_count)
-       VALUES (?, ?, ?, date('now'), 1, ?, ?)
-       ON CONFLICT(tenant_id, tool_name, date) DO UPDATE SET
-         call_count = call_count + 1,
-         success_count = success_count + ?,
-         failure_count = failure_count + ?`
-    ).bind(crypto.randomUUID(), tenant, toolName, successInc, failInc, successInc, failInc).run();
-  } catch (e) { console.warn('[recordMcpToolCall] mcp_usage_log', e?.message ?? e); }
+  /* mcp_usage_log: rolled up by trg_mcp_tool_calls_usage (migration 161) after INSERT into mcp_tool_calls */
   if (serviceName) {
     try {
       await env.DB.prepare(
@@ -5296,38 +6563,51 @@ async function recordMcpToolCall(env, opts) {
   }
 }
 
-/** Create or update MCP agent session at chat start. Uses conversation_id (migration 135). No-op if columns missing. */
-async function upsertMcpAgentSession(env, conversationId) {
+/** Create or update MCP agent session at chat start. Uses conversation_id (migration 135). panel from request agent_id (migration 162). No-op if columns missing. */
+async function upsertMcpAgentSession(env, conversationId, panelAgentId) {
   if (!env.DB || !conversationId) return;
   const now = new Date().toISOString();
   const nowUnix = Math.floor(Date.now() / 1000);
+  const agentIdForRow = (panelAgentId != null && String(panelAgentId).trim()) ? String(panelAgentId).trim() : 'agent_sam';
+  const panel = panelColumnFromRequestAgentId(agentIdForRow);
   try {
     await env.DB.prepare(
-      `INSERT INTO mcp_agent_sessions (id, agent_id, tenant_id, status, conversation_id, last_activity, tool_calls_count, created_at, updated_at)
-       VALUES (?, 'agent_sam', 'tenant_sam_primeaux', 'active', ?, ?, 0, ?, ?)
-       ON CONFLICT(conversation_id) DO UPDATE SET last_activity = excluded.last_activity, tool_calls_count = tool_calls_count + 1, updated_at = ?`
-    ).bind(crypto.randomUUID(), conversationId, now, nowUnix, nowUnix, nowUnix).run();
+      `INSERT INTO mcp_agent_sessions (id, agent_id, tenant_id, status, conversation_id, last_activity, tool_calls_count, panel, created_at, updated_at)
+       VALUES (?, ?, 'tenant_sam_primeaux', 'active', ?, ?, 0, ?, ?, ?)
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         agent_id = excluded.agent_id,
+         panel = excluded.panel,
+         last_activity = excluded.last_activity,
+         tool_calls_count = tool_calls_count + 1,
+         updated_at = excluded.updated_at`
+    ).bind(crypto.randomUUID(), agentIdForRow, conversationId, now, panel, nowUnix, nowUnix).run();
   } catch (e) { console.warn('[upsertMcpAgentSession]', e?.message ?? e); }
 }
 
-/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). */
+/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). */
 async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opts = {}) {
+  const allowRemoteMcp = opts.allowRemoteMcp !== false;
+  const suppressTelemetry = !!opts.suppressTelemetry;
+  const rec = async (o) => {
+    if (suppressTelemetry) return;
+    await recordMcpToolCall(env, o);
+  };
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && env.DASHBOARD) {
     try {
       const out = { result: await runInternalPlaywrightTool(env, tool_name, params) };
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
       return out;
     } catch (err) {
       const errMsg = String(err?.message || err);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
   if (tool_name === 'knowledge_search' && env.AI) {
     const query = (params.query ?? params.search_query ?? '').trim();
     if (!query) {
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: 'query required', serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: 'query required', serviceName: 'builtin' });
       return { error: 'query required' };
     }
     try {
@@ -5389,30 +6669,30 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       };
       const resultText = JSON.stringify(resultPayload);
       const out = { result: resultText };
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return out;
     } catch (e) {
       const errMsg = e?.message ?? String(e);
       console.error('[knowledge_search] AI Search error:', errMsg);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
   if (tool_name === 'terminal_execute') {
     if (!env.TERMINAL_WS_URL) {
       const errMsg = 'Terminal not configured (TERMINAL_WS_URL not set)';
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
     const command = params.command ?? '';
     try {
       const termResult = await runTerminalCommand(env, null, command, params.conversation_id ?? null);
       const out = { result: termResult.output ?? 'No output' };
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
       return out;
     } catch (err) {
       const errMsg = String(err?.message || err);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -5420,17 +6700,17 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const sql = (params.query ?? params.sql ?? '').trim();
     const normalized = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').trim().toUpperCase();
     if (!normalized.startsWith('SELECT')) {
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: 'Only SELECT queries allowed via d1_query', serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: 'Only SELECT queries allowed via d1_query', serviceName: 'builtin' });
       return { error: 'Only SELECT queries allowed via d1_query' };
     }
     try {
       const rows = await env.DB.prepare(sql).all();
       const resultText = JSON.stringify(rows.results ?? []);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
       const errMsg = `D1 error: ${e?.message ?? e}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -5439,7 +6719,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const bindParams = Array.isArray(params.params) ? params.params : [];
     const blocked = /\bdrop\s+table\b|\btruncate\b/i;
     if (blocked.test(sql)) {
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: 'Blocked: DROP TABLE and TRUNCATE require manual approval', serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: 'Blocked: DROP TABLE and TRUNCATE require manual approval', serviceName: 'builtin' });
       return { error: 'Blocked: DROP TABLE and TRUNCATE require manual approval' };
     }
     try {
@@ -5447,11 +6727,11 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       const result = bindParams.length ? await stmt.bind(...bindParams).run() : await stmt.run();
       const changes = result.meta?.changes ?? result.changes ?? 0;
       const resultText = JSON.stringify({ changes, success: true });
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
       const errMsg = `D1 error: ${e?.message ?? e}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -5460,11 +6740,11 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     try {
       const obj = await env.R2.get(key);
       const resultText = obj ? await obj.text() : `Key not found: ${key}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
       const errMsg = `R2 error: ${e?.message ?? e}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -5473,11 +6753,11 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     try {
       const list = await env.R2.list({ prefix, limit: 50 });
       const resultText = JSON.stringify(list.objects.map(o => ({ key: o.key, size: o.size })));
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
       const errMsg = `R2 error: ${e?.message ?? e}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -5492,30 +6772,62 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         `INSERT INTO agent_execution_plans (id, tenant_id, session_id, plan_json, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', unixepoch(), unixepoch())`
       ).bind(planId, tenantId, conversationId ?? '', planJson, summary.slice(0, 2000)).run();
       const resultText = JSON.stringify({ plan_id: planId, status: 'pending', message: 'Plan created; user can approve or reject in the UI.' });
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'plan', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'plan', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
       const errMsg = e?.message ?? String(e);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'plan', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'plan', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'imgx_generate_image' || tool_name === 'imgx_edit_image' || tool_name === 'imgx_list_providers') {
+    try {
+      const out = await runImgxBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: null, error: out.error, serviceName: 'builtin' });
+        return { error: out.error };
+      }
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: out, error: null, serviceName: 'builtin' });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();
   if (!toolRow) {
-    await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: 'mcp', toolInput: params, result: null, error: 'Tool not found', serviceName: null });
+    await rec( { conversationId, toolName: tool_name, toolCategory: 'mcp', toolInput: params, result: null, error: 'Tool not found', serviceName: null });
     return { error: 'Tool not found' };
   }
   if (!opts.skipApprovalCheck && toolRow.requires_approval === 1) {
-    await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: 'Tool requires approval', serviceName: null });
+    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: 'Tool requires approval', serviceName: null });
     return { error: 'Tool requires approval' };
+  }
+  if (!allowRemoteMcp) {
+    await rec({
+      conversationId,
+      toolName: tool_name,
+      toolCategory: toolRow.tool_category || 'mcp',
+      toolInput: params,
+      result: null,
+      error: 'Tool not available via main worker proxy path (no local handler)',
+      serviceName: null,
+    });
+    return { error: 'Tool not available via main worker proxy path' };
   }
   const token = env.MCP_AUTH_TOKEN;
   if (!token) {
-    await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: 'MCP auth not configured', serviceName: 'mcp_remote' });
+    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: 'MCP auth not configured', serviceName: 'mcp_remote' });
     return { error: 'MCP auth not configured' };
   }
   try {
-    const mcpRes = await fetch('https://mcp.inneranimalmedia.com/mcp', {
+    const targetMcpUrl = (() => {
+      const configured = String(toolRow.mcp_service_url || '').trim();
+      if (!configured || configured.toLowerCase() === 'builtin') return 'https://mcp.inneranimalmedia.com/mcp';
+      return configured;
+    })();
+    const mcpRes = await fetch(targetMcpUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -5533,7 +6845,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     if (!mcpRes.ok) {
       console.warn('[invokeMcpToolFromChat] MCP non-OK', mcpRes.status, rawText?.slice(0, 500));
       const errMsg = `MCP ${mcpRes.status}: ${rawText?.slice(0, 200) || mcpRes.statusText}`;
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote' });
       return { error: errMsg };
     }
     const dataLine = rawText.split('\n').find(l => l.startsWith('data:'));
@@ -5541,17 +6853,150 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const errMsg = parsed?.error?.message ?? parsed?.error;
     if (errMsg) {
       const errStr = String(errMsg);
-      await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errStr, serviceName: 'mcp_remote' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errStr, serviceName: 'mcp_remote' });
       return { error: errStr };
     }
     const content = parsed?.result?.content ?? parsed;
     const out = { result: content };
-    await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: content, error: null, serviceName: 'mcp_remote' });
+    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: content, error: null, serviceName: 'mcp_remote' });
     return out;
   } catch (err) {
     const errMsg = String(err?.message || err);
-    await recordMcpToolCall(env, { conversationId, toolName: tool_name, toolCategory: toolRow?.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote' });
+    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow?.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote' });
     return { error: errMsg };
+  }
+}
+
+/** Delegate MCP tool execution for workflow steps (skips approval; telemetry recorded per step by executeWorkflowSteps). */
+async function dispatchMcpTool(env, tool_name, input_template, session_id) {
+  const out = await invokeMcpToolFromChat(
+    env,
+    tool_name,
+    input_template && typeof input_template === 'object' ? input_template : {},
+    session_id || '',
+    { skipApprovalCheck: true, suppressTelemetry: true }
+  );
+  if (out.error) throw new Error(out.error);
+  return out.result;
+}
+
+async function executeWorkflowSteps(env, workflow, run_id, session_id) {
+  const MCP_WF_TENANT = 'tenant_sam_primeaux';
+  let lastError = null;
+  try {
+    let steps = [];
+    try {
+      steps = typeof workflow.steps_json === 'string' ? JSON.parse(workflow.steps_json || '[]') : (workflow.steps_json || []);
+    } catch (parseErr) {
+      lastError = String(parseErr?.message || parseErr);
+      await env.DB.prepare(
+        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?, step_results_json = '[]',
+         cost_usd = 0, duration_ms = 0, completed_at = unixepoch() WHERE id = ?`
+      ).bind(lastError, run_id).run();
+      return;
+    }
+    if (!Array.isArray(steps)) steps = [];
+    const stepResults = [];
+    let totalCost = 0;
+    let failed = false;
+    const startMs = Date.now();
+
+    for (const step of steps) {
+      const tool_name = step.tool_name;
+      if (!tool_name) {
+        failed = true;
+        lastError = 'step missing tool_name';
+        break;
+      }
+      const input_template = step.input_template && typeof step.input_template === 'object' ? step.input_template : {};
+      const retry_max = Math.max(1, Number(step.retry_max) || 1);
+      let attempt = 0;
+      let stepStatus = 'failed';
+      let output = null;
+      let errorMsg = null;
+      let dispatchResult = null;
+
+      while (attempt < retry_max) {
+        attempt++;
+        try {
+          dispatchResult = await dispatchMcpTool(env, tool_name, input_template, session_id);
+          output = typeof dispatchResult === 'string' ? dispatchResult : JSON.stringify(dispatchResult ?? {});
+          stepStatus = 'completed';
+          break;
+        } catch (err) {
+          errorMsg = String(err?.message || err);
+          lastError = errorMsg;
+        }
+      }
+
+      const tcId = crypto.randomUUID();
+      const callStatus = stepStatus === 'completed' ? 'completed' : 'failed';
+      const outSlice = output != null ? String(output).slice(0, 50000) : null;
+      const stepNow = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      try {
+        await env.DB.prepare(
+          `INSERT INTO mcp_tool_calls
+             (id, tenant_id, session_id, tool_name, tool_category, input_schema,
+              output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workflow_runner', ?, ?, ?, ?, ?)`
+        ).bind(
+          tcId,
+          MCP_WF_TENANT,
+          session_id ?? null,
+          tool_name,
+          step.tool_category != null ? String(step.tool_category) : 'unknown',
+          JSON.stringify(input_template),
+          outSlice,
+          callStatus,
+          stepNow,
+          stepNow,
+          stepNow,
+          stepNow,
+          errorMsg ? String(errorMsg).slice(0, 8000) : null
+        ).run();
+      } catch (dbErr) {
+        console.warn('[executeWorkflowSteps] mcp_tool_calls insert', dbErr?.message ?? dbErr);
+      }
+
+      stepResults.push({ tool_name, status: callStatus, tool_call_id: tcId });
+
+      if (callStatus === 'failed') {
+        failed = true;
+        break;
+      }
+    }
+
+    const duration = Date.now() - startMs;
+    const finalStatus = failed ? 'failed' : 'success';
+
+    await env.DB.prepare(
+      `UPDATE mcp_workflow_runs SET
+         status = ?, step_results_json = ?, cost_usd = ?,
+         duration_ms = ?, completed_at = unixepoch(), error_message = ?
+       WHERE id = ?`
+    ).bind(
+      finalStatus,
+      JSON.stringify(stepResults),
+      totalCost,
+      duration,
+      failed ? (lastError || 'Workflow step failed') : null,
+      run_id
+    ).run();
+
+    if (!failed) {
+      await env.DB.prepare(
+        `UPDATE mcp_workflows SET success_count = success_count + 1,
+         updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+      ).bind(workflow.id, MCP_WF_TENANT).run();
+    }
+  } catch (err) {
+    const msg = String(err?.message || err);
+    try {
+      await env.DB.prepare(
+        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?,
+         completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
+      ).bind(msg, run_id).run();
+    } catch (_) {}
   }
 }
 
@@ -5586,6 +7031,93 @@ async function runInternalPlaywrightTool(env, toolName, params) {
   }
 }
 
+async function uploadImgxToDashboard(env, bytes, contentType, baseName) {
+  if (!env.DASHBOARD || !bytes) return { ok: false, error: 'DASHBOARD bucket not configured' };
+  const safeBase = String(baseName || 'imgx').replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80) || 'imgx';
+  const id = crypto.randomUUID();
+  const ext = contentType && contentType.includes('webp') ? 'webp' : contentType && contentType.includes('jpeg') ? 'jpg' : 'png';
+  const key = `generated/imgx/${safeBase}-${id}.${ext}`;
+  await env.DASHBOARD.put(key, bytes, { httpMetadata: { contentType: contentType || 'image/png' } });
+  return { ok: true, key, url: `https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/${key}` };
+}
+
+function listImgxProviders(env) {
+  return [
+    { id: 'openai', available: !!env.OPENAI_API_KEY, models: ['gpt-image-1'] },
+    { id: 'gemini', available: !!env.GEMINI_API_KEY, models: ['gemini-2.0-flash-exp'] },
+  ];
+}
+
+async function runImgxBuiltinTool(env, toolName, params) {
+  if (toolName === 'imgx_list_providers') {
+    return { providers: listImgxProviders(env) };
+  }
+
+  const provider = String(params.provider || '').trim().toLowerCase() || (env.OPENAI_API_KEY ? 'openai' : (env.GEMINI_API_KEY ? 'gemini' : ''));
+  if (!provider) return { error: 'No provider configured. Set OPENAI_API_KEY and/or GEMINI_API_KEY.' };
+  if (provider !== 'openai') {
+    return { error: 'Provider not yet enabled in this remote build. Use provider=openai.' };
+  }
+  if (!env.OPENAI_API_KEY) return { error: 'OPENAI_API_KEY not configured' };
+
+  const prompt = String(params.prompt || '').trim();
+  if (!prompt) return { error: 'prompt required' };
+  const filename = String(params.filename || 'imgx').trim() || 'imgx';
+  const size = String(params.size || '1024x1024').trim() || '1024x1024';
+
+  if (toolName === 'imgx_generate_image') {
+    const res = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: String(params.model || 'gpt-image-1'),
+        prompt,
+        size,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.error?.message || 'OpenAI image generation failed' };
+    const b64 = data?.data?.[0]?.b64_json;
+    if (!b64) return { error: 'No image data returned by provider' };
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename);
+    if (!stored.ok) return { error: stored.error || 'Image storage failed' };
+    return { ok: true, provider: 'openai', model: String(params.model || 'gpt-image-1'), image_url: stored.url, key: stored.key };
+  }
+
+  if (toolName === 'imgx_edit_image') {
+    const inputUrl = String(params.input_url || '').trim();
+    if (!inputUrl) return { error: 'input_url required for imgx_edit_image' };
+    const source = await fetch(inputUrl);
+    if (!source.ok) return { error: `Failed to fetch input_url (${source.status})` };
+    const sourceBytes = await source.arrayBuffer();
+    const sourceType = source.headers.get('content-type') || 'image/png';
+    const fd = new FormData();
+    fd.append('model', String(params.model || 'gpt-image-1'));
+    fd.append('prompt', prompt);
+    fd.append('size', size);
+    fd.append('image', new Blob([sourceBytes], { type: sourceType }), 'input.png');
+    const res = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.error?.message || 'OpenAI image edit failed' };
+    const b64 = data?.data?.[0]?.b64_json;
+    if (!b64) return { error: 'No edited image data returned by provider' };
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename + '-edit');
+    if (!stored.ok) return { error: stored.error || 'Image storage failed' };
+    return { ok: true, provider: 'openai', model: String(params.model || 'gpt-image-1'), image_url: stored.url, key: stored.key };
+  }
+
+  return { error: `Unsupported IMGX tool: ${toolName}` };
+}
+
 const MCP_CHAT_TOOL_LOOP_MAX = 10;
 
 const ACTION_TOOLS = [
@@ -5614,8 +7146,9 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   const mode = opts.mode || 'agent';
   let tools = [];
   try {
-    const r = await env.DB.prepare('SELECT tool_name, description, input_schema FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
-    tools = (r.results || []).map((t) => {
+    const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
+    const filtered = filterToolRowsByPanel(agent_id, r.results || []);
+    tools = filtered.map((t) => {
       let rawSchema = {};
       try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
       let input_schema;
@@ -5657,6 +7190,25 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   const encoder = new TextEncoder();
   const enqueue = (controller, obj) => {
     controller.enqueue(encoder.encode('data: ' + JSON.stringify(obj) + '\n\n'));
+  };
+
+  const TOOL_DISPLAY = {
+    terminal_execute: 'terminal',
+    d1_query: 'D1 database',
+    r2_read: 'file',
+    r2_write: 'file',
+    github_fetch: 'GitHub',
+    web_search: 'web',
+    deploy_worker: 'deploy',
+    bash_cat: 'file',
+    bash_find: 'filesystem',
+    list_tools: 'tools',
+    query_database: 'database',
+  };
+  const pendingStateEvents = [];
+  const flushPendingToolStates = (controller) => {
+    for (const evt of pendingStateEvents) enqueue(controller, evt);
+    pendingStateEvents.length = 0;
   };
 
   while (iter < MCP_CHAT_TOOL_LOOP_MAX) {
@@ -5706,6 +7258,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         if (wantStream) {
           const streamBody = new ReadableStream({
             start(controller) {
+              flushPendingToolStates(controller);
               enqueue(controller, { type: 'text', text: lastContent });
               emitCodeBlocksFromText(lastContent, (obj) => enqueue(controller, obj));
               enqueue(controller, {
@@ -5745,6 +7298,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       if (wantStream) {
         const streamBody = new ReadableStream({
           start(controller) {
+            flushPendingToolStates(controller);
             enqueue(controller, { type: 'text', text: lastContent });
             emitCodeBlocksFromText(lastContent, (obj) => enqueue(controller, obj));
             enqueue(controller, { type: 'done', usage: { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd } });
@@ -5781,7 +7335,14 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     for (const block of toolUseBlocks) {
       const name = block.name;
       const input = block.input || {};
+      if (wantStream) {
+        const toolLabel = TOOL_DISPLAY[name] ?? name;
+        pendingStateEvents.push({ type: 'state', state: 'TOOL_CALL', context: { tool: toolLabel } });
+      }
       const out = await invokeMcpToolFromChat(env, name, input, conversationId);
+      if (wantStream) {
+        pendingStateEvents.push({ type: 'state', state: 'THINKING', context: {} });
+      }
       console.log('[chatWithToolsAnthropic] Tool invoked', {
         tool_name: name,
         tool_id: block.id,
@@ -5826,6 +7387,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   if (wantStream) {
     const streamBody = new ReadableStream({
       start(controller) {
+        flushPendingToolStates(controller);
         enqueue(controller, { type: 'text', text: lastContent || '(Tool loop limit reached.)' });
         emitCodeBlocksFromText(lastContent || '', (obj) => enqueue(controller, obj));
         enqueue(controller, { type: 'done', usage: lastUsage });
@@ -5925,6 +7487,119 @@ function jsonResponse(body, status = 200) {
   });
 }
 
+async function handleFederatedSearch(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const query = (body?.query || '').toString().trim();
+  if (!query) return jsonResponse({ error: 'query required' }, 400);
+  const limit = Math.max(1, Math.min(10, Number(body?.limit || 6)));
+  const sources = Array.isArray(body?.sources) && body.sources.length
+    ? body.sources.map((s) => String(s).toLowerCase())
+    : ['ai', 'chats', 'deployments', 'projects', 'github', 'drive', 'r2'];
+
+  const out = { ai: [], chats: [], deployments: [], projects: [], github: [], drive: [], r2: [] };
+
+  if (sources.includes('ai')) {
+    try {
+      const rag = await vectorizeRagSearch(env, query, { topK: limit });
+      const rows = rag?.results ?? rag?.data ?? [];
+      out.ai = rows.slice(0, limit).map((r, idx) => ({
+        id: r.id || `ai_${idx}`,
+        title: (r.title || r.source || 'AI result').toString(),
+        snippet: (r.content || r.text || '').toString().slice(0, 180),
+        url: (r.url || '/dashboard/agent').toString(),
+      }));
+    } catch (_) {}
+  }
+
+  if (sources.includes('chats')) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT conversation_id, content, created_at
+         FROM agent_messages
+         WHERE content LIKE ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      ).bind(`%${query}%`, limit).all();
+      out.chats = (rows?.results || []).map((r, idx) => ({
+        id: `chat_${idx}`,
+        title: 'Chat match',
+        snippet: (r.content || '').toString().slice(0, 180),
+        subtitle: r.created_at || '',
+        url: r.conversation_id ? `/dashboard/chats?conversation=${encodeURIComponent(r.conversation_id)}` : '/dashboard/chats',
+      }));
+    } catch (_) {}
+  }
+
+  if (sources.includes('deployments')) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT worker_name, status, deployed_at, deployment_notes
+         FROM cloudflare_deployments
+         WHERE worker_name LIKE ? OR deployment_notes LIKE ?
+         ORDER BY deployed_at DESC
+         LIMIT ?`
+      ).bind(`%${query}%`, `%${query}%`, limit).all();
+      out.deployments = (rows?.results || []).map((r, idx) => ({
+        id: `dep_${idx}`,
+        title: `${r.worker_name || 'worker'} - ${r.status || 'unknown'}`,
+        subtitle: r.deployed_at || '',
+        snippet: (r.deployment_notes || '').toString().slice(0, 180),
+        url: '/dashboard/cloud',
+      }));
+    } catch (_) {}
+  }
+
+  if (sources.includes('projects')) {
+    try {
+      const rows = await env.DB.prepare(
+        `SELECT id, name, status
+         FROM projects
+         WHERE name LIKE ? OR status LIKE ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      ).bind(`%${query}%`, `%${query}%`, limit).all();
+      out.projects = (rows?.results || []).map((r) => ({
+        id: r.id,
+        title: r.name || 'Project',
+        subtitle: r.status || '',
+        url: '/dashboard/projects',
+      }));
+    } catch (_) {}
+  }
+
+  // Integration-backed sources are returned as capability placeholders if no direct index exists yet.
+  if (sources.includes('github')) out.github = [];
+  if (sources.includes('drive')) out.drive = [];
+  if (sources.includes('r2')) out.r2 = [];
+
+  return jsonResponse({ ok: true, query, results: out, meta: { limit, sources } });
+}
+
+async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, source, payload) {
+  if (!env?.DB || !userId) return;
+  const wsId = workspaceId || 'ws_samprimeaux';
+  const nowIso = new Date().toISOString();
+  const sessionId = `wsess_${userId}_${wsId}`;
+  const signalId = crypto.randomUUID();
+  const safePayload = payload == null ? null : JSON.stringify(payload).slice(0, 4000);
+  await env.DB.prepare(
+    `INSERT INTO work_sessions (id, user_id, workspace_id, started_at, ended_at, source, metadata, created_at)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, unixepoch())
+     ON CONFLICT(id) DO UPDATE SET ended_at = NULL, metadata = excluded.metadata`
+  ).bind(sessionId, userId, wsId, nowIso, source || 'dashboard', safePayload).run().catch(() => {});
+  await env.DB.prepare(
+    `INSERT INTO activity_signals (id, work_session_id, signal_type, source, payload, created_at)
+     VALUES (?, ?, ?, ?, ?, unixepoch())`
+  ).bind(signalId, sessionId, signalType || 'heartbeat', source || 'dashboard', safePayload).run().catch(() => {});
+}
+
 async function getSession(env, request) {
   if (!env.DB) return null;
   const cookie = request.headers.get('Cookie') || '';
@@ -5940,19 +7615,278 @@ async function getSession(env, request) {
   return row;
 }
 
-/** Returns { id: user_id } for auth_sessions user, or null. Use for routes that need current user id. */
+/** Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
 async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
-  return { id: session.user_id };
+  const sessionUserId = session._session_user_id || session.user_id;
+  return { id: session.user_id, email: sessionUserId };
 }
 
-/** Returns { access_token, refresh_token, expires_at } from user_oauth_tokens for the given user and provider, or null. */
-async function getIntegrationToken(DB, userId, provider) {
+// ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----
+const VAULT_USER_ID = 'sam_primeaux';
+
+async function vaultGetKey(masterKeyB64) {
+  const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function vaultEncrypt(plaintext, masterKeyB64) {
+  const key = await vaultGetKey(masterKeyB64);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  const combined = new Uint8Array(iv.byteLength + ciphertext.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(ciphertext), iv.byteLength);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function vaultDecrypt(encryptedB64, masterKeyB64) {
+  const key = await vaultGetKey(masterKeyB64);
+  const combined = Uint8Array.from(atob(encryptedB64), (c) => c.charCodeAt(0));
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return new TextDecoder().decode(decrypted);
+}
+
+function vaultLast4(str) {
+  return str ? str.slice(-4) : '????';
+}
+
+function vaultNewId(prefix = 'sec') {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function vaultWriteAudit(db, { secret_id, event_type, triggered_by, previous_last4, new_last4, notes, request }) {
+  const id = `saudit_${Math.random().toString(36).slice(2, 14)}`;
+  const ip = request?.headers?.get('CF-Connecting-IP') || null;
+  const ua = request?.headers?.get('User-Agent')?.slice(0, 200) || null;
+  await db.prepare(
+    `INSERT INTO secret_audit_log (id, secret_id, event_type, triggered_by, previous_last4, new_last4, notes, ip_address, user_agent, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+  ).bind(id, secret_id, event_type, triggered_by || VAULT_USER_ID, previous_last4 || null, new_last4 || null, notes || null, ip, ua).run();
+}
+
+function vaultJson(data, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function vaultErr(message, status = 400) {
+  return vaultJson({ error: message }, status);
+}
+
+async function vaultCreateSecret(request, env) {
+  const body = await request.json();
+  const { secret_name, secret_value, service_name, description, project_label, project_id, tags, scopes_json, expires_at } = body;
+  if (!secret_name || !secret_value) return vaultErr('secret_name and secret_value are required');
+  const encrypted = await vaultEncrypt(secret_value, env.VAULT_MASTER_KEY);
+  const id = vaultNewId('sec');
+  const last4val = vaultLast4(secret_value);
+  const metadata = JSON.stringify({ last4: last4val });
+  await env.DB.prepare(
+    `INSERT INTO user_secrets (id, user_id, tenant_id, secret_name, secret_value_encrypted, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, expires_at, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+  ).bind(id, VAULT_USER_ID, 'tenant_sam_primeaux', secret_name, encrypted, service_name || null, description || null, project_label || null, project_id || null, tags || null, scopes_json ? JSON.stringify(scopes_json) : '[]', metadata, expires_at || null).run();
+  await vaultWriteAudit(env.DB, { secret_id: id, event_type: 'created', new_last4: last4val, notes: `Created for service: ${service_name || 'unspecified'}`, request });
+  return vaultJson({ success: true, id, last4: last4val });
+}
+
+async function vaultListSecrets(request, env) {
+  const url = new URL(request.url);
+  const project = url.searchParams.get('project');
+  let query = `SELECT id, secret_name, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, is_active, expires_at, last_used_at, usage_count, created_at, updated_at FROM user_secrets WHERE user_id = ?`;
+  const params = [VAULT_USER_ID];
+  if (project) { query += ` AND project_label = ?`; params.push(project); }
+  query += ` ORDER BY project_label ASC, service_name ASC, secret_name ASC`;
+  const result = params.length === 1 ? await env.DB.prepare(query).bind(...params).all() : await env.DB.prepare(query).bind(...params).all();
+  return vaultJson({ secrets: result.results });
+}
+
+async function vaultGetSecret(id, env) {
+  const row = await env.DB.prepare(
+    `SELECT id, secret_name, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, is_active, expires_at, last_used_at, usage_count, created_at, updated_at FROM user_secrets WHERE id = ? AND user_id = ?`
+  ).bind(id, VAULT_USER_ID).first();
+  if (!row) return vaultErr('Secret not found', 404);
+  return vaultJson(row);
+}
+
+async function vaultRevealSecret(id, eventType, request, env) {
+  const row = await env.DB.prepare(`SELECT * FROM user_secrets WHERE id = ? AND user_id = ? AND is_active = 1`).bind(id, VAULT_USER_ID).first();
+  if (!row) return vaultErr('Secret not found or inactive', 404);
+  let plaintext;
+  try {
+    plaintext = await vaultDecrypt(row.secret_value_encrypted, env.VAULT_MASTER_KEY);
+  } catch {
+    return vaultErr('Decryption failed — master key may have changed', 500);
+  }
+  await env.DB.prepare(`UPDATE user_secrets SET last_used_at = unixepoch(), usage_count = usage_count + 1, updated_at = unixepoch() WHERE id = ?`).bind(id).run();
+  await vaultWriteAudit(env.DB, { secret_id: id, event_type: eventType, notes: `Secret ${eventType} for ${row.service_name || 'unknown service'}`, request });
+  return vaultJson({ value: plaintext });
+}
+
+async function vaultEditSecret(id, request, env) {
+  const body = await request.json();
+  const { secret_name, description, project_label, project_id, tags, scopes_json, expires_at } = body;
+  const existing = await env.DB.prepare(`SELECT * FROM user_secrets WHERE id = ? AND user_id = ?`).bind(id, VAULT_USER_ID).first();
+  if (!existing) return vaultErr('Secret not found', 404);
+  await env.DB.prepare(
+    `UPDATE user_secrets SET secret_name = COALESCE(?, secret_name), description = COALESCE(?, description), project_label = COALESCE(?, project_label), project_id = COALESCE(?, project_id), tags = COALESCE(?, tags), scopes_json = COALESCE(?, scopes_json), expires_at = COALESCE(?, expires_at), updated_at = unixepoch() WHERE id = ?`
+  ).bind(secret_name || null, description || null, project_label || null, project_id || null, tags || null, scopes_json ? JSON.stringify(scopes_json) : null, expires_at || null, id).run();
+  await vaultWriteAudit(env.DB, { secret_id: id, event_type: 'edited', notes: 'Metadata updated', request });
+  return vaultJson({ success: true });
+}
+
+async function vaultRotateSecret(id, request, env) {
+  const body = await request.json();
+  const { new_value } = body;
+  if (!new_value) return vaultErr('new_value is required');
+  const existing = await env.DB.prepare(`SELECT * FROM user_secrets WHERE id = ? AND user_id = ?`).bind(id, VAULT_USER_ID).first();
+  if (!existing) return vaultErr('Secret not found', 404);
+  let oldLast4 = '????';
+  try {
+    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    oldLast4 = vaultLast4(oldPlain);
+  } catch {}
+  const newEncrypted = await vaultEncrypt(new_value, env.VAULT_MASTER_KEY);
+  const newLast4 = vaultLast4(new_value);
+  const newMeta = JSON.stringify({ ...JSON.parse(existing.metadata_json || '{}'), last4: newLast4 });
+  await env.DB.prepare(`UPDATE user_secrets SET secret_value_encrypted = ?, metadata_json = ?, updated_at = unixepoch() WHERE id = ?`).bind(newEncrypted, newMeta, id).run();
+  await vaultWriteAudit(env.DB, { secret_id: id, event_type: 'rotated', previous_last4: oldLast4, new_last4: newLast4, notes: 'Secret rotated', request });
+  return vaultJson({ success: true, new_last4: newLast4 });
+}
+
+async function vaultRevokeSecret(id, env, request) {
+  const existing = await env.DB.prepare(`SELECT id FROM user_secrets WHERE id = ? AND user_id = ?`).bind(id, VAULT_USER_ID).first();
+  if (!existing) return vaultErr('Secret not found', 404);
+  await env.DB.prepare(`UPDATE user_secrets SET is_active = 0, updated_at = unixepoch() WHERE id = ?`).bind(id).run();
+  await vaultWriteAudit(env.DB, { secret_id: id, event_type: 'revoked', notes: 'Secret revoked', request });
+  return vaultJson({ success: true });
+}
+
+async function vaultGetSecretAudit(id, env) {
+  const rows = await env.DB.prepare(`SELECT * FROM secret_audit_log WHERE secret_id = ? ORDER BY created_at DESC LIMIT 100`).bind(id).all();
+  return vaultJson({ audit: rows.results });
+}
+
+async function vaultListProjects(env) {
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT project_label, project_id, COUNT(*) as secret_count FROM user_secrets WHERE user_id = ? AND project_label IS NOT NULL AND is_active = 1 GROUP BY project_label ORDER BY project_label ASC`
+  ).bind(VAULT_USER_ID).all();
+  return vaultJson({ projects: rows.results });
+}
+
+async function vaultFullAudit(request, env) {
+  const url = new URL(request.url);
+  const eventType = url.searchParams.get('event_type') || '';
+  const since = url.searchParams.get('since');
+  const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+  let query = `SELECT sal.id, sal.secret_id, sal.event_type, sal.triggered_by, sal.previous_last4, sal.new_last4, sal.notes, sal.ip_address, sal.user_agent, sal.created_at, us.secret_name, us.service_name, us.project_label
+     FROM secret_audit_log sal
+     LEFT JOIN user_secrets us ON sal.secret_id = us.id
+     WHERE us.user_id = ?`;
+  const params = [VAULT_USER_ID];
+  if (eventType && ['created', 'viewed', 'copied', 'edited', 'rotated', 'revoked'].includes(eventType)) {
+    query += ` AND sal.event_type = ?`;
+    params.push(eventType);
+  }
+  if (since && /^\d+$/.test(since)) {
+    query += ` AND sal.created_at >= ?`;
+    params.push(since);
+  }
+  query += ` ORDER BY sal.created_at DESC LIMIT ?`;
+  params.push(limit);
+  const rows = await env.DB.prepare(query).bind(...params).all();
+  return vaultJson({ audit: rows.results || [], filters: { event_type: eventType || null, since: since || null, limit } });
+}
+
+function vaultRegistry() {
+  const secrets = [
+    { name: 'AI_SEARCH_TOKEN', type: 'secret', description: 'AI search / RAG' },
+    { name: 'ANTHROPIC_API_KEY', type: 'secret', description: 'Claude API' },
+    { name: 'CF_ACCESS_CLIENT_ID', type: 'secret', description: 'Zero Trust / Access' },
+    { name: 'CF_ACCESS_CLIENT_SECRET', type: 'secret', description: 'Zero Trust / Access' },
+    { name: 'CLOUDFLARE_ACCOUNT_ID', type: 'plaintext', description: 'Account ID' },
+    { name: 'CLOUDFLARE_API_TOKEN', type: 'secret', description: 'Workers, R2, D1, API' },
+    { name: 'CLOUDFLARE_IMAGES_ACCOUNT_HASH', type: 'plaintext', description: 'Images account hash' },
+    { name: 'CLOUDFLARE_IMAGES_TOKEN', type: 'secret', description: 'Images API' },
+    { name: 'CLOUDFLARE_STREAM_TOKEN', type: 'secret', description: 'Stream API' },
+    { name: 'DEPLOY_HOOK_SECRET', type: 'secret', description: 'Deploy webhooks' },
+    { name: 'GITHUB_CLIENT_ID', type: 'plaintext', description: 'GitHub OAuth' },
+    { name: 'GITHUB_CLIENT_SECRET', type: 'secret', description: 'GitHub OAuth' },
+    { name: 'GOOGLE_AI_API_KEY', type: 'secret', description: 'Google AI' },
+    { name: 'GOOGLE_CLIENT_ID', type: 'plaintext', description: 'Google OAuth' },
+    { name: 'GOOGLE_CLIENT_SECRET', type: 'secret', description: 'Google OAuth' },
+    { name: 'GOOGLE_OAUTH_CLIENT_SECRET', type: 'secret', description: 'Google OAuth (alternate)' },
+    { name: 'INTERNAL_API_SECRET', type: 'secret', description: 'Internal APIs' },
+    { name: 'MCP_AUTH_TOKEN', type: 'secret', description: 'MCP server auth' },
+    { name: 'OPENAI_API_KEY', type: 'secret', description: 'OpenAI API' },
+    { name: 'PTY_AUTH_TOKEN', type: 'secret', description: 'PTY / terminal' },
+    { name: 'R2_ACCESS_KEY_ID', type: 'secret', description: 'R2 storage' },
+    { name: 'R2_SECRET_ACCESS_KEY', type: 'secret', description: 'R2 storage' },
+    { name: 'RESEND_API_KEY', type: 'secret', description: 'Transactional email' },
+    { name: 'TENANT_ID', type: 'plaintext', description: 'Tenant identifier' },
+    { name: 'TERMINAL_SECRET', type: 'secret', description: 'Terminal auth' },
+    { name: 'TERMINAL_WS_URL', type: 'secret', description: 'Terminal WebSocket URL' },
+    { name: 'VAULT_MASTER_KEY', type: 'secret', description: 'Vault encryption' },
+  ];
+  const domains = [
+    { type: 'workers.dev', value: 'inneranimalmedia.meauxbility.workers.dev', description: 'Preview URLs: *-inneranimalmedia.meauxbility.workers.dev' },
+    { type: 'route', value: 'inneranimalmedia.com/*', description: 'Route' },
+    { type: 'route', value: 'www.inneranimalmedia.com/*', description: 'Route' },
+    { type: 'route', value: 'webhooks.inneranimalmedia.com/*', description: 'Route' },
+    { type: 'custom_domain', value: 'inneranimalmedia.com', description: 'Custom domain' },
+    { type: 'custom_domain', value: 'www.inneranimalmedia.com', description: 'Custom domain' },
+    { type: 'custom_domain', value: 'webhooks.inneranimalmedia.com', description: 'Custom domain' },
+  ];
+  return vaultJson({ secrets, domains });
+}
+
+async function handleVaultRequest(request, env) {
+  if (!env.VAULT_MASTER_KEY) return vaultErr('VAULT_MASTER_KEY not configured. Run: wrangler secret put VAULT_MASTER_KEY', 500);
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method;
+
+  if (path === '/api/vault/registry' && method === 'GET') return vaultRegistry();
+  if (path === '/api/vault/projects' && method === 'GET') return vaultListProjects(env);
+  if (path === '/api/vault/audit' && method === 'GET') return vaultFullAudit(request, env);
+
+  if (path === '/api/vault/secrets') {
+    if (method === 'GET') return vaultListSecrets(request, env);
+    if (method === 'POST') return vaultCreateSecret(request, env);
+  }
+
+  const secretMatch = path.match(/^\/api\/vault\/secrets\/([^/]+)(\/(.+))?$/);
+  if (secretMatch) {
+    const id = secretMatch[1];
+    const action = secretMatch[3];
+    if (action === 'reveal' && method === 'POST') return vaultRevealSecret(id, 'viewed', request, env);
+    if (action === 'copy' && method === 'POST') return vaultRevealSecret(id, 'copied', request, env);
+    if (action === 'rotate' && method === 'POST') return vaultRotateSecret(id, request, env);
+    if (action === 'audit' && method === 'GET') return vaultGetSecretAudit(id, env);
+    if (!action && method === 'GET') return vaultGetSecret(id, env);
+    if (!action && method === 'PUT') return vaultEditSecret(id, request, env);
+    if (!action && method === 'DELETE') return vaultRevokeSecret(id, env, request);
+  }
+
+  return vaultErr('Not found', 404);
+}
+
+/** Returns { access_token, refresh_token, expires_at } from user_oauth_tokens for the given user, provider, and optional account_identifier. For github with accountId empty, returns first row. */
+async function getIntegrationToken(DB, userId, provider, accountId) {
   if (!DB || !userId || !provider) return null;
+  const aid = accountId != null ? String(accountId) : '';
+  if (provider === 'github' && aid === '') {
+    const row = await DB.prepare(
+      `SELECT access_token, refresh_token, expires_at FROM user_oauth_tokens WHERE user_id = ? AND provider = 'github' ORDER BY account_identifier ASC LIMIT 1`
+    ).bind(userId).first();
+    return row || null;
+  }
   const row = await DB.prepare(
-    `SELECT access_token, refresh_token, expires_at FROM user_oauth_tokens WHERE user_id = ? AND provider = ?`
-  ).bind(userId, provider).first();
+    `SELECT access_token, refresh_token, expires_at FROM user_oauth_tokens WHERE user_id = ? AND provider = ? AND account_identifier = ?`
+  ).bind(userId, provider, aid).first();
   return row || null;
 }
 
@@ -6887,6 +8821,8 @@ async function handleOverviewActivityStrip(request, url, env) {
       taskCountWeek,
       taskRows24h,
       deployRows24h,
+      deploymentRows24h,
+      cicdRows24h,
       taskCount24h,
       deployCount24h,
       timeWeekRow,
@@ -6906,6 +8842,8 @@ async function handleOverviewActivityStrip(request, url, env) {
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE created_at >= unixepoch(?) AND status = 'completed'`).bind(sevenDaysAgo).first()).catch(() => ({ c: 0 })),
       safe(env.DB.prepare(`SELECT 'task' as type, instruction as label, 'cursor' as agent, datetime(created_at,'unixepoch') as ts FROM cursor_tasks WHERE created_at >= unixepoch('now','-24 hours') ORDER BY created_at DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
       safe(env.DB.prepare(`SELECT 'deploy' as type, (project_name || ' -- ' || COALESCE(triggered_by,'manual')) as label, COALESCE(triggered_by,'manual') as agent, deployed_at as ts FROM cloudflare_deployments WHERE deployed_at >= datetime('now','-24 hours') AND status = 'success' ORDER BY deployed_at DESC LIMIT 5`).all()),
+      safe(env.DB.prepare(`SELECT 'deploy' as type, (version || ' -- ' || COALESCE(deployed_by,'script')) as label, COALESCE(deployed_by,'script') as agent, timestamp as ts FROM deployments WHERE timestamp >= datetime('now','-24 hours') AND status = 'success' ORDER BY timestamp DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
+      safe(env.DB.prepare(`SELECT 'ci' as type, (workflow_name || ' -- ' || COALESCE(status,'')) as label, COALESCE(conclusion,status,'ci') as agent, COALESCE(completed_at,started_at) as ts FROM ci_di_workflow_runs WHERE COALESCE(completed_at,started_at) >= datetime('now','-24 hours') ORDER BY COALESCE(completed_at,started_at) DESC LIMIT 5`).all()).catch(() => ({ results: [] })),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE created_at >= unixepoch('now','-24 hours')`).first()).catch(() => ({ c: 0 })),
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE deployed_at >= datetime('now','-24 hours') AND status = 'success'`).first()).catch(() => ({ c: 0 })),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE start_time >= date('now','weekday 1') AND user_id IN (${userList}) AND is_active = 0`).bind(...userIdVariants).first()),
@@ -6934,10 +8872,14 @@ async function handleOverviewActivityStrip(request, url, env) {
 
     const taskRows = taskRows24h?.results || taskRows24h || [];
     const deployRows = deployRows24h?.results || deployRows24h || [];
+    const deploymentRows = deploymentRows24h?.results || deploymentRows24h || [];
+    const ciRows = cicdRows24h?.results || cicdRows24h || [];
     const recentEvents = []
       .concat(
         taskRows.map((r) => ({ type: 'task', label: (r.label || '').slice(0, 200), agent: r.agent || 'cursor', ts: r.ts })),
-        deployRows.map((r) => ({ type: 'deploy', label: (r.label || '').slice(0, 200), agent: r.agent || 'manual', ts: r.ts }))
+        deployRows.map((r) => ({ type: 'deploy', label: (r.label || '').slice(0, 200), agent: r.agent || 'manual', ts: r.ts })),
+        deploymentRows.map((r) => ({ type: 'deploy', label: (r.label || '').slice(0, 200), agent: r.agent || 'script', ts: r.ts })),
+        ciRows.map((r) => ({ type: 'ci', label: (r.label || '').slice(0, 200), agent: r.agent || 'ci', ts: r.ts }))
       )
       .sort((a, b) => new Date(b.ts || 0) - new Date(a.ts || 0))
       .slice(0, 10);
@@ -7051,7 +8993,21 @@ async function handleOverviewDeployments(request, url, env) {
         completed_at: r.completed_at,
       }));
     } catch (_) {
-      // cicd_runs table may not exist
+      // cicd_runs table may not exist; fall back to ci_di_workflow_runs
+      try {
+        const altRows = await env.DB.prepare(
+          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM ci_di_workflow_runs ORDER BY started_at DESC LIMIT 10`
+        ).all();
+        cicd_runs = (altRows?.results ?? altRows ?? []).map((r) => ({
+          run_id: r.run_id,
+          workflow_name: r.workflow_name,
+          branch: r.branch,
+          status: r.status,
+          conclusion: r.conclusion,
+          started_at: r.started_at,
+          completed_at: r.completed_at,
+        }));
+      } catch (_) {}
     }
 
     return jsonResponse({ cloudflare_deployments, cicd_runs });
@@ -7297,6 +9253,7 @@ async function handleTimeTrack(request, url, env) {
         await env.DB.prepare(
           `UPDATE project_time_entries SET duration_seconds = (julianday('now') - julianday(start_time)) * 86400 WHERE id = ?`
         ).bind(active.id).run();
+          await ensureWorkSessionAndSignal(env, userId, 'ws_samprimeaux', 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
         return jsonResponse({ success: true, entry_id: active.id, duration_updated: true });
       }
       const id = crypto.randomUUID();
@@ -7304,6 +9261,7 @@ async function handleTimeTrack(request, url, env) {
         `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'))`
       ).bind(id, userId, PROJECT_ID, session.id, now, null, 'dashboard_heartbeat').run();
+      await ensureWorkSessionAndSignal(env, userId, 'ws_samprimeaux', 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
       return jsonResponse({ success: true, entry_id: id, started_at: now });
     }
 
@@ -7923,6 +9881,20 @@ async function verifyPassword(password, saltHex, hashHex) {
   return derivedHex === hashHex.toLowerCase();
 }
 
+/** Generate new salt (32 bytes hex) and PBKDF2-SHA256 hash for change-password. Returns { saltHex, hashHex }. */
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    key,
+    256
+  );
+  const hashHex = Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { saltHex, hashHex };
+}
+
 /** POST /api/auth/login -- body: { email, password }. Creates session and redirects to /dashboard/overview. */
 async function handleEmailPasswordLogin(request, url, env) {
   if (!env.DB) {
@@ -7963,6 +9935,49 @@ async function handleEmailPasswordLogin(request, url, env) {
   const headers = new Headers({ Location: `${origin(url)}/dashboard/overview` });
   headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
   return new Response(null, { status: 302, headers });
+}
+
+/** POST /api/auth/backup-code -- body: { email, code }. Verifies one-time backup code, marks it used, creates session. Returns 200 + Set-Cookie + { ok, redirect }. */
+async function handleBackupCodeLogin(request, url, env) {
+  if (!env.DB) {
+    return new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return new Response(JSON.stringify({ error: 'Invalid request' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const email = (body.email || '').toString().toLowerCase().trim();
+  const code = (body.code || '').toString().replace(/\s/g, '');
+  if (!email || !code) {
+    return new Response(JSON.stringify({ error: 'Email and backup code are required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code));
+  const codeHash = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const row = await env.DB.prepare(
+    `SELECT id, user_id FROM user_backup_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL LIMIT 1`
+  ).bind(email, codeHash).first();
+  if (!row) {
+    return new Response(JSON.stringify({ error: 'Invalid or already used backup code' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
+  const user = await env.DB.prepare(`SELECT id FROM auth_users WHERE id = ?`).bind(email).first();
+  if (!user) {
+    return new Response(JSON.stringify({ error: 'Account not found' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
+  await env.DB.prepare(`UPDATE user_backup_codes SET used_at = unixepoch() WHERE id = ?`).bind(row.id).run();
+  const sessionId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const ua = request.headers.get('user-agent') || '';
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
+  ).bind(sessionId, email, expiresAt, ip, ua).run();
+  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
+  return new Response(JSON.stringify({ ok: true, redirect: redirectUrl }), { status: 200, headers });
 }
 
 /** POST /api/auth/logout -- clear session cookie and redirect to sign-in. */
@@ -8311,7 +10326,7 @@ async function handleGoogleOAuthStart(request, url, env) {
   const statePayload = JSON.stringify({
     redirectUri: redirectUri,
     returnTo: safeReturn,
-    connectDrive: safeReturn === '/dashboard/agent' || returnTo === '/dashboard/agent'
+    connectDrive: !!connectDrive
   });
   await env.SESSION_CACHE.put(`oauth_state_${state}`, statePayload, { expirationTtl: 600 });
   const params = new URLSearchParams({
@@ -8395,9 +10410,10 @@ async function handleGoogleOAuthCallback(request, url, env) {
     if (!sessionUser) {
       return Response.redirect(`${origin(url)}/auth/signin?error=session_required`, 302);
     }
+    const driveUserId = sessionUser.email || sessionUser.id;
     await env.DB.prepare(
-      `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scope) VALUES (?, 'google_drive', ?, ?, ?, ?)`
-    ).bind(sessionUser.id, tokens.access_token, tokens.refresh_token ?? null, tokens.expires_in ? Math.floor(Date.now()/1000) + tokens.expires_in : null, tokens.scope ?? null).run();
+      `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, account_identifier, access_token, refresh_token, expires_at, scope) VALUES (?, 'google_drive', '', ?, ?, ?, ?)`
+    ).bind(driveUserId, tokens.access_token, tokens.refresh_token ?? null, tokens.expires_in ? Math.floor(Date.now()/1000) + tokens.expires_in : null, tokens.scope ?? null).run();
     return new Response(
       `<script>window.opener?.postMessage({type:'oauth_success',provider:'google'},window.location.origin);window.close();</script>`,
       { headers: { 'Content-Type': 'text/html' } }
@@ -8519,13 +10535,15 @@ async function handleGitHubOAuthCallback(request, url, env) {
     if (!sessionUser) {
       return Response.redirect(`${url.origin}/auth/signin?error=session_required`, 302);
     }
+    const ghUserId = sessionUser.email || sessionUser.id;
+    const ghLogin = (userInfo.login || '').toString() || 'github';
     if (tokens.access_token && env.DB) {
       try {
         const expiresAtTs = tokens.expires_in ? Math.floor(Date.now() / 1000) + Number(tokens.expires_in) : null;
         await env.DB.prepare(
-          `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scope)
-           VALUES (?, 'github', ?, ?, ?, ?)`
-        ).bind(sessionUser.id, tokens.access_token || '', tokens.refresh_token || null, expiresAtTs, (tokens.scope || '').toString()).run();
+          `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, account_identifier, access_token, refresh_token, expires_at, scope)
+           VALUES (?, 'github', ?, ?, ?, ?, ?)`
+        ).bind(ghUserId, ghLogin, tokens.access_token || '', tokens.refresh_token || null, expiresAtTs, (tokens.scope || '').toString()).run();
       } catch (e) {
         console.error('[oauth/github/callback] user_oauth_tokens upsert failed:', e?.message ?? e);
       }
@@ -8551,18 +10569,14 @@ async function handleGitHubOAuthCallback(request, url, env) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).bind(sessionId, userId, expiresAt, ip, ua).run();
+  const ghLogin = (userInfo.login || '').toString() || 'github';
   if (tokens.access_token && env.DB) {
     try {
-      const existingUser = await env.DB.prepare(`SELECT id FROM auth_users WHERE email = ?`).bind(email).first();
-      if (existingUser) {
-        const sessionUser = await getAuthUser(request, env);
-        const tokenUserId = sessionUser?.id || existingUser.id;
-        const expiresAtTs = tokens.expires_in ? Math.floor(Date.now() / 1000) + Number(tokens.expires_in) : null;
-        await env.DB.prepare(
-          `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scope)
-           VALUES (?, 'github', ?, ?, ?, ?)`
-        ).bind(tokenUserId, tokens.access_token || '', tokens.refresh_token || null, expiresAtTs, (tokens.scope || '').toString()).run();
-      }
+      const expiresAtTs = tokens.expires_in ? Math.floor(Date.now() / 1000) + Number(tokens.expires_in) : null;
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO user_oauth_tokens (user_id, provider, account_identifier, access_token, refresh_token, expires_at, scope)
+         VALUES (?, 'github', ?, ?, ?, ?, ?)`
+      ).bind(userId, ghLogin, tokens.access_token || '', tokens.refresh_token || null, expiresAtTs, (tokens.scope || '').toString()).run();
     } catch (e) {
       console.error('[oauth/github/callback] user_oauth_tokens upsert failed:', e?.message ?? e);
     }

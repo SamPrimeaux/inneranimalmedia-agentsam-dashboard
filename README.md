@@ -66,7 +66,7 @@ URLs: `https://inneranimalmedia.com/dashboard/<name>` (e.g. `/dashboard/agent`, 
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
   ```
   Success: SSE output with `"serverInfo":{"name":"InnerAnimalMedia MCP","version":"1.0.0"}` and `"protocolVersion":"2024-11-05"`.
-- **Deploy MCP:** From `inneranimalmedia-mcp-server/`: `npx wrangler deploy` (separate from main worker). Config: `inneranimalmedia-mcp-server/wrangler.toml` (`name = "inneranimalmedia-mcp-server"`).
+- **Deploy MCP:** From `inneranimalmedia-mcp-server/`: `npx wrangler deploy -c wrangler.toml` (required so Wrangler does not pick the repo root `wrangler.jsonc`). Or `npm run deploy` in that folder. Config: `inneranimalmedia-mcp-server/wrangler.toml` (`name = "inneranimalmedia-mcp-server"`).
 - **Reference:** `docs/MCP_CURSOR_TERMINAL_SYNC.md` and `.cursor/rules/mcp-reference.mdc`.
 
 ### Terminal server (PTY)

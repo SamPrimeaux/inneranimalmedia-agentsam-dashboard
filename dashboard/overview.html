@@ -711,7 +711,7 @@
                 <span></span>
                 <span></span>
             </button>
-            <img id="ia-logo" class="app-logo" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="Inner Animal Media">
+            
         </div>
         <div class="topbar-center" style="display: flex; align-items: center; gap: 16px;">
             <div class="search-wrap" id="searchWrap">
@@ -734,21 +734,6 @@
             </select>
         </div>
         <div class="topbar-right">
-            <div class="clock-wrap" style="position: relative;">
-                <button type="button" id="clock-btn" class="nav-icon-btn" aria-label="Time &amp; tracking" title="Time &amp; tracking" style="border: none; background: transparent; cursor: pointer; padding: 6px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: inherit;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-                </button>
-                <div id="clock-dropdown" style="position: absolute; right: 0; top: 100%; margin-top: 8px; width: 280px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 45px rgba(0,0,0,0.15); padding: 16px; display: none; z-index: 10001;">
-                    <div id="clock-time" style="font-size: 24px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums;">--:--:--</div>
-                    <div id="clock-date" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">--</div>
-                    <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;">
-                        <a href="/dashboard/time-tracking" style="display: block; padding: 10px 12px; border-radius: 8px; background: var(--bg-canvas); color: var(--text-primary); font-size: 13px; text-decoration: none;">Time tracking</a>
-                        <button type="button" id="clock-start-timer" style="text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-primary); font-size: 13px; cursor: pointer;">Start timer</button>
-                        <button type="button" id="clock-set-reminder" style="text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text-primary); font-size: 13px; cursor: pointer;">Set reminder</button>
-                    </div>
-                </div>
-            </div>
-            <button type="button" id="agent-drawer-btn" class="nav-icon-btn" aria-label="Open agent_sam" title="agent_sam chat" style="border: none; background: transparent; cursor: pointer; padding: 6px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: inherit; font-size: 18px; font-weight: 700; line-height: 1;">?</button>
             <button id="notifications-btn" class="nav-icon-btn" aria-label="Notifications" style="position: relative; border: none; background: transparent; cursor: pointer; padding: 6px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: inherit;">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.172V11a6 6 0 1 0-12 0v3.172a2 2 0 0 1-.586 1.414L4 17h5" />
@@ -766,7 +751,7 @@
                 </div>
             </div>
             <div class="profile-wrap">
-                <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b5557284-485e-4305-2c5a-49c6acf99a00/thumbnail" 
+                <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" 
                      alt="Agent Sam" 
                      class="agent-sam-avatar"
                      id="profileAvatar">
@@ -815,7 +800,7 @@
                 <button type="button" class="sidenav-toggle" id="sidenavToggle" aria-label="Collapse sidebar" title="Collapse sidebar">
                     <span class="hamburger-bars" aria-hidden="true"><span></span><span></span><span></span></span>
                 </button>
-                <h2 style="font-size: 16px; font-weight: 600;">Dashboard</h2>
+                
             </div>
             <nav class="sidenav-nav">
                 <div class="nav-group">
@@ -1041,55 +1026,6 @@
             });
         }
 
-        // Clock (watch icon) — live time, link to time tracking, timer/reminder
-        const clockBtn = document.getElementById('clock-btn');
-        const clockDropdown = document.getElementById('clock-dropdown');
-        const clockTimeEl = document.getElementById('clock-time');
-        const clockDateEl = document.getElementById('clock-date');
-        const TIMER_START_KEY = 'dashboard_timer_start';
-        const REMINDER_KEY = 'dashboard_reminder';
-        function updateClockDisplay() {
-            var d = new Date();
-            if (clockTimeEl) clockTimeEl.textContent = d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            if (clockDateEl) clockDateEl.textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-        }
-        if (clockBtn && clockDropdown) {
-            updateClockDisplay();
-            setInterval(updateClockDisplay, 1000);
-            clockBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                var open = clockDropdown.style.display !== 'block';
-                clockDropdown.style.display = open ? 'block' : 'none';
-            });
-            document.addEventListener('click', function () { clockDropdown.style.display = 'none'; });
-            clockDropdown.addEventListener('click', function (e) { e.stopPropagation(); });
-        }
-        if (document.getElementById('clock-start-timer')) {
-            document.getElementById('clock-start-timer').addEventListener('click', function () {
-                try {
-                    localStorage.setItem(TIMER_START_KEY, String(Date.now()));
-                    window.location.href = '/dashboard/time-tracking';
-                } catch (e) {}
-            });
-        }
-        if (document.getElementById('clock-set-reminder')) {
-            document.getElementById('clock-set-reminder').addEventListener('click', function () {
-                var mins = prompt('Reminder in how many minutes?', '15');
-                if (mins == null || mins === '') return;
-                var m = parseInt(mins, 10);
-                if (isNaN(m) || m < 1) return;
-                if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
-                setTimeout(function () {
-                    try {
-                        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification('Reminder', { body: 'Time\'s up!' });
-                        else alert('Reminder — time\'s up!');
-                    } catch (e) { alert('Reminder — time\'s up!'); }
-                    try { localStorage.removeItem(REMINDER_KEY); } catch (e) {}
-                }, m * 60 * 1000);
-                try { localStorage.setItem(REMINDER_KEY, JSON.stringify({ at: Date.now() + m * 60 * 1000, label: 'Reminder' })); } catch (e) {}
-                if (clockDropdown) clockDropdown.style.display = 'none';
-            });
-        }
         
         // Load saved theme on page load (dynamic from API)
         function applyDynamicTheme(themeName, themeData) {
@@ -1167,56 +1103,140 @@
             }
         })();
 
-        // Search: dropdown on focus, history from localStorage, mobile magnifier
+        // Workspace dropdown: keep the core 4 visible and persisted
+        (function () {
+            const select = document.getElementById('workspaceSelect');
+            if (!select) return;
+            fetch('/api/settings/workspaces', { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('workspace fetch failed')); })
+                .then(function (d) {
+                    const rows = (d && (d.workspaces || d.data)) || [];
+                    if (!rows || !rows.length) return;
+                    select.innerHTML = rows.map(function (w) {
+                        const id = w.id || w.workspace_id || '';
+                        const name = w.name || w.workspace_name || id;
+                        return '<option value="' + id + '">' + name + '</option>';
+                    }).join('');
+                    const current = (d && d.current) || localStorage.getItem('iam-current-workspace') || rows[0].id;
+                    if (current) select.value = current;
+                })
+                .catch(function () {});
+            select.addEventListener('change', function () {
+                const id = select.value;
+                if (!id) return;
+                localStorage.setItem('iam-current-workspace', id);
+                fetch('/api/settings/workspace/default', {
+                    method: 'PUT',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspace_id: id })
+                }).catch(function () {});
+            });
+        })();
+
+        // Search: federated (AI/AutoRAG + local sources)
         (function () {
             const wrap = document.getElementById('searchWrap');
             const input = document.getElementById('searchInput');
             const dropdown = document.getElementById('searchDropdown');
             const mobileBtn = document.getElementById('searchMobileBtn');
-            const SEARCH_HISTORY_KEY = 'dashboard-search-history';
-            const maxHistory = 10;
+            if (!input || !dropdown) return;
 
-            function getHistory() {
-                try { return JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]'); } catch { return []; }
+            function escapeHtml(s) {
+                return String(s || '').replace(/[&<>"']/g, function (ch) {
+                    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+                });
             }
-            function addToHistory(label, url) {
-                const h = getHistory().filter(function (x) { return x.url !== url; });
-                h.unshift({ label: label || url, url: url });
-                localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(h.slice(0, maxHistory)));
-            }
-            function renderSuggestions() {
-                const h = getHistory();
-                const navItems = ['Overview', 'Finance', 'Billing', 'Clients', 'Calendar', 'Dev Tools', 'MCP', 'Cloud', 'Images', 'Draw', 'Meet', 'Kanban', 'Time Tracking', 'CMS', 'Mail', 'Pipelines', 'User Settings', 'Onboarding', 'Agent'];
-                const urls = ['/dashboard/overview', '/dashboard/finance', '/dashboard/billing', '/dashboard/clients', '/dashboard/calendar', '/dashboard/tools', '/dashboard/mcp', '/dashboard/cloud', '/dashboard/images', '/dashboard/draw', '/dashboard/meet', '/dashboard/kanban', '/dashboard/time-tracking', '/dashboard/cms', '/dashboard/mail', '/dashboard/pipelines', '/dashboard/user-settings', '/dashboard/onboarding', '/dashboard/agent', '/dashboard/chats'];
+            function renderGrouped(results) {
+                const groups = [
+                    ['ai', 'AI / AutoRAG'],
+                    ['chats', 'Chats'],
+                    ['deployments', 'Deployments'],
+                    ['projects', 'Projects'],
+                    ['github', 'GitHub'],
+                    ['drive', 'Drive'],
+                    ['r2', 'R2']
+                ];
                 let html = '';
-                h.forEach(function (x) { html += '<div class="item" data-url="' + (x.url || '') + '">' + (x.label || x.url) + '</div>'; });
-                if (html) html = '<div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary);">Recent</div>' + html;
-                navItems.forEach(function (label, i) { if (!h.some(function (x) { return x.url === urls[i]; })) html += '<div class="item" data-url="' + urls[i] + '">' + label + '</div>'; });
-                if (dropdown) dropdown.innerHTML = html || '<div class="item" style="color: var(--text-secondary);">No history yet</div>';
+                groups.forEach(function (g) {
+                    const key = g[0];
+                    const label = g[1];
+                    const list = (results && results[key]) || [];
+                    if (!list.length) return;
+                    html += '<div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary); text-transform: uppercase;">' + label + '</div>';
+                    list.slice(0, 6).forEach(function (item) {
+                        const title = escapeHtml(item.title || item.text || item.name || 'Result');
+                        const subtitle = escapeHtml(item.subtitle || item.snippet || '');
+                        const url = item.url || '';
+                        html += '<div class="item" data-url="' + escapeHtml(url) + '" style="display:flex; flex-direction:column; gap:2px;">'
+                            + '<span>' + title + '</span>'
+                            + (subtitle ? '<small style="opacity:.7; font-size:11px;">' + subtitle + '</small>' : '')
+                            + '</div>';
+                    });
+                });
+                if (!html) html = '<div class="item" style="color: var(--text-secondary);">No matching results</div>';
+                dropdown.innerHTML = html;
                 dropdown.querySelectorAll('.item[data-url]').forEach(function (el) {
                     el.addEventListener('click', function () {
                         const u = el.getAttribute('data-url');
-                        if (u) { addToHistory(el.textContent.trim(), u); window.location.href = u; }
+                        if (u && u !== '#') window.location.href = u;
                     });
                 });
             }
-            if (input) {
-                input.addEventListener('focus', function () { dropdown.classList.add('open'); renderSuggestions(); });
-                input.addEventListener('blur', function () { setTimeout(function () { dropdown.classList.remove('open'); }, 150); });
-                input.addEventListener('keydown', function (e) {
-                    if (e.key === 'Enter') {
-                        const v = input.value.trim();
-                        if (v) { addToHistory(v, '/dashboard/overview'); window.location.href = '/dashboard/overview'; }
-                    }
-                });
+            async function runFederatedSearch() {
+                const q = (input.value || '').trim();
+                if (!q) return;
+                dropdown.classList.add('open');
+                dropdown.innerHTML = '<div class="item" style="color: var(--text-secondary);">Searching...</div>';
+                try {
+                    const resp = await fetch('/api/search/federated', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query: q, sources: ['ai', 'chats', 'deployments', 'projects', 'github', 'drive', 'r2'], limit: 6, context: { page: window.location.pathname, workspace: (localStorage.getItem('iam-current-workspace') || '') } })
+                    });
+                    const data = await resp.json();
+                    renderGrouped(data.results || {});
+                } catch (e) {
+                    dropdown.innerHTML = '<div class="item" style="color: var(--text-secondary);">Search failed</div>';
+                }
             }
-            if (mobileBtn) {
+
+            input.addEventListener('focus', function () { dropdown.classList.add('open'); });
+            input.addEventListener('blur', function () { setTimeout(function () { dropdown.classList.remove('open'); }, 180); });
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    runFederatedSearch();
+                }
+            });
+            let debounce = null;
+            input.addEventListener('input', function () {
+                clearTimeout(debounce);
+                debounce = setTimeout(runFederatedSearch, 220);
+            });
+            if (mobileBtn && wrap) {
                 mobileBtn.addEventListener('click', function () {
                     wrap.classList.toggle('expanded');
-                    if (wrap.classList.contains('expanded')) { input.focus(); renderSuggestions(); dropdown.classList.add('open'); }
+                    if (wrap.classList.contains('expanded')) input.focus();
                 });
             }
-            renderSuggestions();
+        })();
+
+        // Automatic background time tracking (no manual start/stop)
+        (function () {
+            function beat() {
+                return fetch('/api/dashboard/time-track/heartbeat', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: 'overview' })
+                }).catch(function () {});
+            }
+            beat();
+            setInterval(function () { if (!document.hidden) beat(); }, 60000);
+            document.addEventListener('visibilitychange', function () { if (!document.hidden) beat(); });
+            window.addEventListener('focus', beat);
         })();
 
         // Profile dropdown

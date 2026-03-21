@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Time the deploy, then record it in D1 with deploy_time_seconds and build_time_seconds.
+# Time the deploy, then record it in D1 (deploy_time_seconds via post-deploy-record.sh).
 # Usage: run from repo root. Expects CLOUDFLARE_* from .env.cloudflare (via with-cloudflare-env.sh).
 #   ./scripts/deploy-with-record.sh
 #
@@ -39,6 +39,18 @@ echo "Cache bust: v${CURRENT_V} -> v${NEXT_V}"
 ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file agent-dashboard/dist/agent-dashboard.css --content-type "text/css" --config wrangler.production.toml --remote
 ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file dashboard/agent.html --content-type "text/html" --config wrangler.production.toml --remote
 
+# Log agent dashboard R2 uploads to dashboard_versions (D1)
+JS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.js 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.js | awk '{print $1}')
+CSS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.css 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.css | awk '{print $1}')
+HTML_HASH=$(md5 -q dashboard/agent.html 2>/dev/null || md5sum dashboard/agent.html | awk '{print $1}')
+JS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.js | tr -d ' ')
+CSS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.css | tr -d ' ')
+HTML_SIZE=$(wc -c < dashboard/agent.html | tr -d ' ')
+DEPLOY_TS=$(date +%s)
+D1_DASH_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ('agent-js-v${NEXT_V}-${DEPLOY_TS}', 'agent', 'v${NEXT_V}', '${JS_HASH}', ${JS_SIZE}, 'static/dashboard/agent/agent-dashboard.js', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-css-v${NEXT_V}-${DEPLOY_TS}', 'agent-css', 'v${NEXT_V}', '${CSS_HASH}', ${CSS_SIZE}, 'static/dashboard/agent/agent-dashboard.css', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-html-v${NEXT_V}-${DEPLOY_TS}', 'agent-html', 'v${NEXT_V}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch())"
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote --config "$CONFIG" --command "$D1_DASH_SQL"
+echo "Logged dashboard_versions for agent v${NEXT_V} (js/css/html)"
+
 # Upload source files for AI indexing (Vectorize codebase search)
 echo "Uploading source files for AI indexing..."
 ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/source/worker.js --file=worker.js --content-type="application/javascript" --config wrangler.production.toml --remote
@@ -57,25 +69,20 @@ echo "Source files uploaded; reindex triggered"
 
 DEPLOY_START=$(date +%s)
 echo "Deploying worker..."
-if ! ./scripts/with-cloudflare-env.sh wrangler deploy --config "$CONFIG"; then
+set -o pipefail
+DEPLOY_LOG=$(mktemp)
+if ! ./scripts/with-cloudflare-env.sh wrangler deploy --config "$CONFIG" 2>&1 | tee "$DEPLOY_LOG"; then
+  rm -f "$DEPLOY_LOG"
+  set +o pipefail
   exit 1
 fi
+CLOUDFLARE_VERSION_ID=$(grep 'Current Version ID:' "$DEPLOY_LOG" | tail -1 | awk '{print $NF}')
+export CLOUDFLARE_VERSION_ID
+rm -f "$DEPLOY_LOG"
+set +o pipefail
+echo "Captured version ID: $CLOUDFLARE_VERSION_ID"
 DEPLOY_END=$(date +%s)
 DEPLOY_SECONDS=$((DEPLOY_END - DEPLOY_START))
 export DEPLOY_SECONDS
 echo "Deploy finished in ${DEPLOY_SECONDS}s. Recording in D1..."
 ./scripts/post-deploy-record.sh
-
-# Also log to deployments table (Overview "Recent Deployments" widget) when token is set
-if [[ -n "$DEPLOY_TRACKING_TOKEN" ]]; then
-  GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "")
-  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  VERSION="${DEPLOY_VERSION:-deploy-$(date +%s)}"
-  DESC="${DEPLOYMENT_NOTES:-${TRIGGERED_BY:-npm run deploy}}"
-  DESC_ESC="${DESC//\"/\\\"}"
-  VER_ESC="${VERSION//\"/\\\"}"
-  curl -s -X POST "https://inneranimalmedia.com/api/deployments/log" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $DEPLOY_TRACKING_TOKEN" \
-    -d "{\"version\":\"$VER_ESC\",\"description\":\"$DESC_ESC\",\"git_hash\":\"$GIT_HASH\",\"timestamp\":\"$TIMESTAMP\",\"status\":\"success\",\"deployed_by\":\"${TRIGGERED_BY:-deploy-with-record}\",\"environment\":\"production\",\"duration_seconds\":$DEPLOY_SECONDS}" > /dev/null 2>&1 && echo "Logged to deployments (Overview widget)." || true
-fi

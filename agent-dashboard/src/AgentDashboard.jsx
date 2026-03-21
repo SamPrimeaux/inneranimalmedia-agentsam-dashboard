@@ -146,6 +146,250 @@ const MODE_ICONS = {
   ),
 };
 
+function DiffProposalCard({ filename, content, onOpenInEditor, onAccept, onReject }) {
+  const [expanded, setExpanded] = useState(false);
+  const name = filename || "file";
+  const lines = (content || "").split("\n");
+  const lineCount = lines.length;
+  const previewLines = lines.slice(0, 20);
+  return (
+    <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", margin: "6px 0", maxWidth: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid var(--border)", background: "var(--bg-canvas)" }}>
+        <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+        <span style={{ fontSize: 10, color: "var(--mode-ask)", fontFamily: "monospace" }}>{lineCount} lines</span>
+        <button type="button" onClick={() => setExpanded((v) => !v)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontFamily: "monospace" }}>
+          {expanded ? "^ collapse" : "v preview"}
+        </button>
+      </div>
+      {expanded && (
+        <div style={{ maxHeight: 200, overflowY: "auto", padding: "8px 12px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.6, background: "var(--bg-canvas)", color: "var(--text-primary)" }}>
+          {previewLines.map((line, i) => (
+            <div key={i} style={{ color: line.startsWith("+") ? "var(--mode-ask)" : line.startsWith("-") ? "var(--color-danger)" : "var(--text-secondary)" }}>{line}</div>
+          ))}
+          {lineCount > 20 && <div style={{ color: "var(--text-muted)", marginTop: 4 }}>... {lineCount - 20} more lines</div>}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, padding: "8px 12px", borderTop: expanded ? "1px solid var(--border)" : "none", flexWrap: "wrap" }}>
+        <button type="button" onClick={onOpenInEditor} style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 11 }}>
+          Open in Editor
+        </button>
+        <button type="button" onClick={onAccept} style={{ background: "var(--mode-ask)", border: "1px solid var(--border)", color: "var(--color-on-mode)", padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 11, fontWeight: 600 }}>
+          Accept
+        </button>
+        <button type="button" onClick={onReject} style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-muted)", padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 11 }}>
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TerminalOutputCard({ message, onOpenTerminal }) {
+  const [expanded, setExpanded] = useState(true);
+  const isRunning = message.status === "running";
+  const isError = message.status === "error";
+  const borderColor = isError
+    ? "var(--danger, var(--color-danger))"
+    : isRunning
+      ? "var(--accent)"
+      : "var(--border)";
+
+  return (
+    <div
+      style={{
+        background: "var(--bg-canvas)",
+        border: `1px solid ${borderColor}`,
+        borderRadius: 6,
+        margin: "6px 0",
+        overflow: "hidden",
+        maxWidth: "100%",
+      }}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 12px",
+          background: "var(--bg-elevated)",
+          borderBottom: expanded ? "1px solid var(--border)" : "none",
+          cursor: "pointer",
+        }}
+      >
+        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>
+          Terminal
+        </span>
+        <span
+          style={{
+            flex: 1,
+            fontSize: 11,
+            fontFamily: "monospace",
+            color: "var(--text-primary)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          $ {message.command}
+        </span>
+        {isRunning && (
+          <span style={{ fontSize: 10, color: "var(--accent)", animation: "spPulse 1s infinite" }}>
+            running...
+          </span>
+        )}
+        {!isRunning && (
+          <span style={{ fontSize: 10, color: isError ? "var(--danger, var(--color-danger))" : "var(--success, var(--color-success))" }}>
+            {isError ? "error" : "done"}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+          {expanded ? "^" : "v"}
+        </span>
+      </div>
+      {expanded && (
+        <div
+          style={{
+            maxHeight: 220,
+            overflowY: "auto",
+            padding: "8px 12px",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.6,
+            background: "var(--bg-canvas)",
+            color: "var(--text-primary)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {message.output || (isRunning ? "..." : "(no output)")}
+        </div>
+      )}
+      {!isRunning && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            padding: "6px 12px",
+            borderTop: expanded ? "1px solid var(--border)" : "none",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenTerminal) onOpenTerminal();
+            }}
+            style={{
+              fontSize: 10,
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            View in Terminal
+          </button>
+          <button
+            type="button"
+            onClick={() => navigator.clipboard?.writeText(message.output || "")}
+            style={{
+              fontSize: 10,
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            Copy
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeployStatusPill({ message }) {
+  const isDeploying = message.status === "deploying";
+  const isSuccess = message.status === "success";
+  const color = isDeploying ? "var(--accent)" : isSuccess ? "var(--success, var(--color-success))" : "var(--danger, var(--color-danger))";
+  const statusMark = isDeploying ? "..." : isSuccess ? "ok" : "fail";
+  const label = isDeploying
+    ? `Deploying ${message.worker || "worker"}...`
+    : isSuccess
+      ? `Deployed ${message.worker || "worker"}${message.version_id ? ` · ${message.version_id.slice(0, 8)}` : ""}`
+      : `Deploy failed · ${message.worker || "worker"}`;
+
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "4px 12px",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: 20,
+        fontSize: 11,
+        margin: "4px 0",
+      }}
+    >
+      <span
+        style={{
+          color,
+          fontFamily: "monospace",
+          fontSize: 10,
+          animation: isDeploying ? "spPulse 1s infinite" : "none",
+        }}
+      >
+        {statusMark}
+      </span>
+      <span style={{ color: "var(--text-secondary)" }}>{label}</span>
+      {message.duration_ms != null && (
+        <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
+          {(message.duration_ms / 1000).toFixed(1)}s
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ViewerPanelStripIcon({ tab, size }) {
+  const dim = size ?? (tab === "files" || tab === "settings" ? 18 : 16);
+  const a = { width: dim, height: dim, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2 };
+  if (tab === "terminal") return <svg {...a}><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>;
+  if (tab === "browser") return <svg {...a}><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>;
+  if (tab === "files") return <svg {...a}><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M13 2v7h7" /></svg>;
+  if (tab === "code") return <svg {...a}><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>;
+  if (tab === "view") return <svg {...a}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /></svg>;
+  if (tab === "git") return <svg {...a}><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>;
+  if (tab === "settings") return <svg {...a}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>;
+  return null;
+}
+
+const VIEWER_STRIP_TAB_ORDER = ["terminal", "browser", "files", "code", "view", "git", "settings"];
+
+const VIEWER_STRIP_TITLES = {
+  terminal: "Terminal",
+  browser: "Browser",
+  files: "Files",
+  code: "Code",
+  view: "View",
+  git: "Git",
+  settings: "Settings",
+};
+
 export default function AgentDashboard() {
   // ── Core chat state ───────────────────────────────────────────────────────
   const [messages, setMessages] = useState([
@@ -159,6 +403,7 @@ export default function AgentDashboard() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [agentActivity, setAgentActivity] = useState(null);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [sessionName, setSessionName] = useState("New Conversation");
   const [isEditingName, setIsEditingName] = useState(false);
@@ -169,6 +414,7 @@ export default function AgentDashboard() {
   const [projects, setProjects] = useState([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const sessionNameInputRef = useRef(null);
+  const chatMenuRef = useRef(null);
   const [loadingSaying] = useState(
     () => LOADING_SAYINGS[Math.floor(Math.random() * LOADING_SAYINGS.length)]
   );
@@ -197,11 +443,6 @@ export default function AgentDashboard() {
   const connectorPopupRef = useRef(null);
 
   // ── Knowledge search (RAG) panel ─────────────────────────────────────────
-  const [knowledgeSearchOpen, setKnowledgeSearchOpen] = useState(false);
-  const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState("");
-  const [knowledgeSearchResults, setKnowledgeSearchResults] = useState([]);
-  const [knowledgeSearchLoading, setKnowledgeSearchLoading] = useState(false);
-  const knowledgeSearchRef = useRef(null);
 
   const [mode, setMode] = useState("ask");
   const [useStreaming, setUseStreaming] = useState(false);
@@ -267,6 +508,8 @@ export default function AgentDashboard() {
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768
   );
+  const [mobileIconsOpen, setMobileIconsOpen] = useState(false);
+  const mobileIconsStripRef = useRef(null);
 
   // ── File context (for agent) ──────────────────────────────────────────────
   const [codeContent, setCodeContent] = useState("");
@@ -282,16 +525,6 @@ export default function AgentDashboard() {
 
   const [recentFiles, setRecentFiles] = useState([]);
 
-  // ── Source Control panel (multi bucket / multi repo) ───────────────────────
-  const [showSourcePanel, setShowSourcePanel] = useState(false);
-  const [selectedSource, setSelectedSource] = useState("");
-  const [sourceTab, setSourceTab] = useState("Recent Files");
-  const [r2Buckets, setR2Buckets] = useState([]);
-  const [githubRepos, setGithubRepos] = useState([]);
-  const [sourceRecentFiles, setSourceRecentFiles] = useState([]);
-  const [gitChanges, setGitChanges] = useState(null);
-  const [gitInfo, setGitInfo] = useState(null);
-  const [bucketInfo, setBucketInfo] = useState(null);
   const defaultBucketForMonacoRef = useRef(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
@@ -375,127 +608,6 @@ export default function AgentDashboard() {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
-
-  // ── Multi-source search (R2 all buckets + RAG + conversations) ─────────────
-  useEffect(() => {
-    if (!knowledgeSearchOpen || knowledgeSearchQuery.trim().length < 2) {
-      setKnowledgeSearchResults([]);
-      return;
-    }
-    const query = knowledgeSearchQuery.trim();
-    const t = setTimeout(async () => {
-      setKnowledgeSearchLoading(true);
-      const results = [];
-      try {
-        const [bucketsResp, kbResp, chatResp] = await Promise.all([
-          fetch("/api/r2/buckets", { credentials: "same-origin" }),
-          fetch("/api/agent/rag/query", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ query }),
-          }),
-          fetch(`/api/agent/conversations/search?q=${encodeURIComponent(query)}`, { credentials: "same-origin" }),
-        ]);
-        const bucketsData = await bucketsResp.json().catch(() => ({}));
-        const bucketNames = (bucketsData.bound_bucket_names || (bucketsData.buckets || []).map((b) => b.bucket_name || b.name)).filter(Boolean);
-        for (const bucketName of bucketNames) {
-          try {
-            const searchResp = await fetch(
-              `/api/r2/search?bucket=${encodeURIComponent(bucketName)}&q=${encodeURIComponent(query)}`,
-              { credentials: "same-origin" }
-            );
-            const files = await searchResp.json().catch(() => []);
-            if (Array.isArray(files)) {
-              files.forEach((f) =>
-                results.push({
-                  type: "file",
-                  title: f.name || f.key,
-                  path: f.path || f.key,
-                  bucket: bucketName,
-                  id: `${bucketName}/${f.key}`,
-                })
-              );
-            }
-          } catch (_) {}
-        }
-        const kbData = await kbResp.json().catch(() => ({}));
-        const matches = (kbData && kbData.matches) ? kbData.matches : [];
-        (Array.isArray(matches) ? matches : []).forEach((m, i) =>
-          results.push({
-            type: "knowledge",
-            title: typeof m === "string" ? m.slice(0, 60) + (m.length > 60 ? "..." : "") : "Knowledge",
-            source: typeof m === "string" ? m : "",
-            id: `kb-${i}`,
-          })
-        );
-        const chats = await chatResp.json().catch(() => []);
-        (Array.isArray(chats) ? chats : []).forEach((c) =>
-          results.push({
-            type: "chat",
-            title: c.title || "Chat",
-            path: `/dashboard/agent?session=${c.id}`,
-            id: c.id,
-          })
-        );
-      } catch (_) {}
-      setKnowledgeSearchResults(results);
-      setKnowledgeSearchLoading(false);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [knowledgeSearchOpen, knowledgeSearchQuery]);
-
-  // ── Load all sources (R2 buckets + GitHub repos) for Source Control ───────
-  useEffect(() => {
-    if (!showSourcePanel) return;
-    Promise.all([
-      fetch("/api/r2/buckets", { credentials: "same-origin" }).then((r) => r.json()),
-      fetch("/api/integrations/github/repos", { credentials: "same-origin" }).then((r) => r.json()).catch(() => []),
-    ]).then(([bucketsData, reposData]) => {
-      const boundNames = bucketsData.bound_bucket_names;
-      const bucketList = boundNames && Array.isArray(boundNames)
-        ? boundNames.map((n) => ({ name: n }))
-        : (bucketsData.buckets || []).map((b) => ({ name: b.bucket_name || b.name })).filter((b) => b.name);
-      setR2Buckets(bucketList);
-      const repos = Array.isArray(reposData) ? reposData : (reposData && reposData.repos) ? reposData.repos : [];
-      setGithubRepos(repos.map((r) => ({ name: r.full_name || r.name || r.repo })).filter((r) => r.name));
-      if (bucketList.length > 0 && !selectedSource) setSelectedSource(`r2:${bucketList[0].name}`);
-      else if (repos.length > 0 && !selectedSource) setSelectedSource(`git:${repos[0].name}`);
-      if (bucketList.length > 0 && !defaultBucketForMonacoRef.current) defaultBucketForMonacoRef.current = bucketList[0].name;
-    });
-  }, [showSourcePanel]);
-
-  useEffect(() => {
-    if (!selectedSource) return;
-    if (selectedSource.startsWith("r2:")) {
-      const bucketName = selectedSource.replace("r2:", "");
-      fetch(`/api/r2/list?bucket=${encodeURIComponent(bucketName)}&prefix=&recursive=1`, { credentials: "same-origin" })
-        .then((r) => r.json())
-        .then((d) => {
-          const objects = (d && d.objects) ? d.objects : [];
-          const sorted = objects.slice().sort((a, b) => (b.last_modified || "").localeCompare(a.last_modified || ""));
-          setSourceRecentFiles(sorted.slice(0, 20).map((o) => ({ name: (o.key || "").split("/").pop(), path: o.key, updated_at: o.last_modified })));
-        })
-        .catch(() => setSourceRecentFiles([]));
-      setBucketInfo({ object_count: 0 });
-      fetch("/api/r2/buckets", { credentials: "same-origin" })
-        .then((r) => r.json())
-        .then((data) => {
-          const b = (data.buckets || []).find((x) => (x.bucket_name || x.name) === bucketName);
-          if (b) setBucketInfo({ object_count: b.object_count ?? 0, size: b.size_bytes ?? 0 });
-        })
-        .catch(() => {});
-    } else if (selectedSource.startsWith("git:")) {
-      setSourceRecentFiles([]);
-      fetch("/api/git/status", { credentials: "same-origin" })
-        .then((r) => r.json())
-        .then((s) => {
-          setGitChanges(s);
-          setGitInfo(s ? { branch: s.branch, last_commit: s.last_commit } : null);
-        })
-        .catch(() => { setGitChanges(null); setGitInfo(null); });
-    }
-  }, [selectedSource]);
 
   // ── Load session messages ─────────────────────────────────────────────────
   useEffect(() => {
@@ -675,12 +787,10 @@ export default function AgentDashboard() {
 
   // ── Close pickers on outside click ───────────────────────────────────────
   useEffect(() => {
-    if (!connectorPopupOpen && !costPopoverOpen && !modelPickerOpen && !agentPickerOpen && !showModeDropdown && !showModelDropdown && !knowledgeSearchOpen) return;
+    if (!connectorPopupOpen && !costPopoverOpen && !modelPickerOpen && !agentPickerOpen && !showModeDropdown && !showModelDropdown && !showChatMenu) return;
     const onDocClick = (e) => {
       if (connectorPopupRef.current && !connectorPopupRef.current.contains(e.target))
         setConnectorPopupOpen(false);
-      if (knowledgeSearchRef.current && !knowledgeSearchRef.current.contains(e.target))
-        setKnowledgeSearchOpen(false);
       if (costPopoverRef.current && !costPopoverRef.current.contains(e.target))
         setCostPopoverOpen(false);
       if (modelPickerRef.current && !modelPickerRef.current.contains(e.target))
@@ -691,10 +801,23 @@ export default function AgentDashboard() {
         setShowModeDropdown(false);
       if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target))
         setShowModelDropdown(false);
+      if (chatMenuRef.current && !chatMenuRef.current.contains(e.target))
+        setShowChatMenu(false);
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [connectorPopupOpen, costPopoverOpen, modelPickerOpen, agentPickerOpen, showModeDropdown, showModelDropdown, knowledgeSearchOpen]);
+  }, [connectorPopupOpen, costPopoverOpen, modelPickerOpen, agentPickerOpen, showModeDropdown, showModelDropdown, showChatMenu]);
+
+  useEffect(() => {
+    if (!mobileIconsOpen) return;
+    const onDoc = (e) => {
+      if (mobileIconsStripRef.current && !mobileIconsStripRef.current.contains(e.target)) {
+        setMobileIconsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [mobileIconsOpen]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
@@ -710,6 +833,7 @@ export default function AgentDashboard() {
       }
       if (e.key === "Escape") {
         setPreviewOpen(false);
+        setMobileIconsOpen(false);
         setConnectorPopupOpen(false);
         setShowModeDropdown(false);
         setShowModelDropdown(false);
@@ -901,8 +1025,27 @@ export default function AgentDashboard() {
       const commandParts = trimmedInput.slice(1).split(/\s+/);
       const commandName = commandParts[0] || "";
       const paramsStr = commandParts.slice(1).join(" ").trim();
-      setMessages((prev) => [...prev, { id: `m${Date.now()}`, role: "user", content: text, provider: null, created_at: Date.now() }]);
+      const ts = Date.now();
+      const userMsgId = `m${ts}`;
+      const termCardId = `tc_${ts}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: userMsgId, role: "user", content: text, provider: null, created_at: ts },
+        {
+          id: termCardId,
+          role: "tool",
+          type: "terminal_output",
+          command: trimmedInput,
+          output: "",
+          status: "running",
+          created_at: ts,
+        },
+      ]);
       setInput("");
+      setAgentActivity({
+        label: `Running: ${trimmedInput.slice(0, 40)}${trimmedInput.length > 40 ? "..." : ""}`,
+        type: "terminal",
+      });
       try {
         const response = await fetch("/api/agent/commands/execute", {
           method: "POST",
@@ -911,30 +1054,31 @@ export default function AgentDashboard() {
           body: JSON.stringify({
             command_name: commandName,
             parameters: paramsStr ? { raw: paramsStr } : {},
+            session_id: currentSessionId,
           }),
         });
-        const data = await response.json();
-        const systemMsg = {
-          id: `cmd${Date.now()}`,
-          role: "assistant",
-          content: data.success
-            ? `Command /${commandName} executed:\n${typeof data.result?.output === "string" ? data.result.output : JSON.stringify(data.result, null, 2)}`
-            : `Command /${commandName} failed: ${data.error || "Unknown error"}`,
-          provider: "system",
-          created_at: Date.now(),
-        };
-        setMessages((prev) => [...prev, systemMsg]);
+        const data = await response.json().catch(() => ({}));
+        const success = !!(data && data.success);
+        const outText = success
+          ? typeof data.result?.output === "string"
+            ? data.result.output
+            : JSON.stringify(data.result, null, 2)
+          : data.error || "Unknown error";
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === termCardId ? { ...m, output: outText, status: success ? "success" : "error" } : m
+          )
+        );
       } catch (e) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `cmd${Date.now()}`,
-            role: "assistant",
-            content: `Command /${commandName} error: ${e.message}`,
-            provider: "system",
-            created_at: Date.now(),
-          },
-        ]);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === termCardId
+              ? { ...m, output: e.message || "Request failed", status: "error" }
+              : m
+          )
+        );
+      } finally {
+        setAgentActivity(null);
       }
       return;
     }
@@ -950,6 +1094,7 @@ export default function AgentDashboard() {
       provider: null,
       created_at: Date.now(),
       attachedImagePreviews: attachedImages.length ? attachedImages.map((img) => img.dataUrl).filter(Boolean) : undefined,
+      attachedImageUrls: attachedImages.length ? attachedImages.map((img) => img.url).filter(Boolean) : undefined,
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
@@ -1322,7 +1467,7 @@ export default function AgentDashboard() {
         const reader = new FileReader();
         reader.onload = () => {
           setAttachedImages((prev) =>
-            [...prev, { name: `screenshot-${Date.now()}.png`, dataUrl: reader.result }].slice(-3)
+            [...prev, { name: `screenshot-${Date.now()}.png`, dataUrl: reader.result, url }].slice(-3)
           );
           setScreenshotAttachFeedback("Screenshot attached to message");
           setTimeout(() => setScreenshotAttachFeedback(""), 2500);
@@ -1332,6 +1477,47 @@ export default function AgentDashboard() {
       })
       .catch(() => setScreenshotAttachFeedback("Could not attach screenshot"));
   }, []);
+
+  const handleDeployStart = useCallback((worker) => {
+    const pillId = `dp_${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: pillId,
+        role: "tool",
+        type: "deploy_status",
+        worker: worker || "inneranimalmedia",
+        status: "deploying",
+        created_at: Date.now(),
+      },
+    ]);
+    return pillId;
+  }, []);
+
+  const handleDeployComplete = useCallback((pillId, success, versionId, durationMs) => {
+    if (pillId == null) return;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === pillId
+          ? {
+              ...m,
+              status: success ? "success" : "failed",
+              version_id: versionId,
+              duration_ms: durationMs,
+            }
+          : m
+      )
+    );
+  }, []);
+
+  const handleOpenInBrowser = useCallback((url) => {
+    if (!url || typeof url !== "string") return;
+    const u = url.trim();
+    const normalized = u.startsWith("http") || u.startsWith("/") ? u : `https://${u}`;
+    setBrowserUrl(normalized);
+    setActiveTab("browser");
+    setPreviewOpen(true);
+  }, [setBrowserUrl, setActiveTab, setPreviewOpen]);
 
   // ── File attach (text vs binary) ───────────────────────────────────────────
   const IMAGE_SIZE_LIMIT = 10 * 1024 * 1024;
@@ -1499,10 +1685,6 @@ export default function AgentDashboard() {
       : isLoading || agentState !== AGENT_STATES.IDLE
         ? "Add a follow up..."
         : "Reply";
-  const spendDisplay =
-    telemetry.total_cost != null ? Number(telemetry.total_cost).toFixed(2) : "0.00";
-  const spendPct = Math.min(100, (Number(telemetry.total_cost) || 0) / 100);
-
   // ── Provider bubble color ─────────────────────────────────────────────────
   const providerBorderColor = (provider) => {
     if (!provider || provider === "system") return "var(--color-border)";
@@ -1559,6 +1741,7 @@ export default function AgentDashboard() {
         style={{
           display: "flex",
           flex: "1 1 0%",
+          height: "100%",
           overflow: "hidden",
           minHeight: 0,
           flexDirection: "row",
@@ -1568,7 +1751,7 @@ export default function AgentDashboard() {
         <div
           className="iam-chat-pane"
           style={{
-            flex: previewOpen ? `0 0 ${100 - panelWidthPct}%` : "1 1 0%",
+            flex: previewOpen && !isMobile ? `0 0 ${100 - panelWidthPct}%` : "1 1 0%",
             minWidth: 0,
             minHeight: 0,
             display: "flex",
@@ -1581,110 +1764,18 @@ export default function AgentDashboard() {
             border: "none",
           }}
         >
-          {/* Icon bar */}
+          {/* Chat title with actions */}
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "4px",
-              padding: "6px 12px 0 12px",
+              gap: "8px",
+              padding: "8px 12px",
               background: "var(--bg-canvas)",
               borderBottom: "1px solid var(--color-border)",
-              flexShrink: 0,
             }}
           >
-            <button
-              type="button"
-              title="Files"
-              onClick={() => {
-                if (previewOpen && activeTab === "files") {
-                  setPreviewOpen(false);
-                } else {
-                  setActiveTab("files");
-                  setPreviewOpen(true);
-                }
-              }}
-              style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "6px", borderRadius: "4px", display: "flex", alignItems: "center" }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg>
-            </button>
-            <button
-              type="button"
-              title="Search All"
-              onClick={() => {
-                setConnectorPopupOpen(false);
-                setKnowledgeSearchOpen(true);
-                setKnowledgeSearchQuery("");
-                setKnowledgeSearchResults([]);
-              }}
-              style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "6px", borderRadius: "4px", display: "flex", alignItems: "center" }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            </button>
-            <button
-              type="button"
-              title="Source control"
-              onClick={() => setShowSourcePanel((v) => !v)}
-              style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "6px", borderRadius: "4px", display: "flex", alignItems: "center" }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-            </button>
-            <button
-              type="button"
-              title="Terminal"
-              onClick={() => {
-                if (previewOpen && activeTab === "terminal") {
-                  setPreviewOpen(false);
-                } else {
-                  setActiveTab("terminal");
-                  setPreviewOpen(true);
-                }
-              }}
-              style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "6px", borderRadius: "4px", display: "flex", alignItems: "center" }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-            </button>
-            <button
-              type="button"
-              title="Browser"
-              onClick={() => {
-                if (previewOpen && activeTab === "browser") {
-                  setPreviewOpen(false);
-                } else {
-                  setPreviewOpen(true);
-                  setActiveTab("browser");
-                }
-              }}
-              style={{ background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "6px", borderRadius: "4px", display: "flex", alignItems: "center" }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-            </button>
-            <button
-              title="Settings & Commands"
-              onClick={() => {
-                setPreviewOpen(true);
-                setActiveTab("settings");
-              }}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                padding: "6px",
-                borderRadius: "4px",
-                display: "flex",
-                alignItems: "center",
-                transition: "opacity 200ms",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-text)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-            </button>
-            <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingLeft: "8px" }}>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "6px" }}>
               {isEditingName ? (
                 <input
                   ref={sessionNameInputRef}
@@ -1701,8 +1792,9 @@ export default function AgentDashboard() {
                   onBlur={saveSessionName}
                   placeholder="Chat name"
                   style={{
-                    width: "100%",
-                    maxWidth: "220px",
+                    flex: 1,
+                    minWidth: 0,
+                    maxWidth: "280px",
                     padding: "4px 8px",
                     fontSize: "12px",
                     background: "var(--bg-elevated)",
@@ -1725,150 +1817,122 @@ export default function AgentDashboard() {
                   style={{
                     background: "transparent",
                     border: "none",
-                    color: "var(--text-muted)",
+                    color: "var(--color-text)",
                     cursor: "pointer",
-                    padding: "4px 8px",
+                    padding: "4px 6px",
                     borderRadius: "4px",
-                    fontSize: "12px",
-                    maxWidth: "220px",
+                    fontSize: "14px",
+                    fontWeight: 500,
+                    maxWidth: "100%",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    textAlign: "right",
+                    textAlign: "left",
                   }}
                 >
-                  {sessionName}
+                  {sessionName || "What are you doing today?"}
                 </button>
               )}
+              {/* Session action menu */}
+              <div ref={chatMenuRef} style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowChatMenu((v) => !v)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    fontSize: 14,
+                    lineHeight: 1,
+                  }}
+                  title="Session options"
+                >
+                  {"\u2022\u2022\u2022"}
+                </button>
+                {showChatMenu && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      right: 0,
+                      zIndex: 200,
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: 4,
+                      minWidth: 160,
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                    }}
+                  >
+                    {[
+                      {
+                        label: "Rename",
+                        action: () => {
+                          setShowChatMenu(false);
+                          setEditNameValue(sessionName);
+                          setIsEditingName(true);
+                          setTimeout(() => sessionNameInputRef.current?.focus(), 0);
+                        },
+                      },
+                      {
+                        label: isStarred ? "Unstar conversation" : "Star conversation",
+                        action: () => {
+                          toggleStar();
+                          setShowChatMenu(false);
+                        },
+                      },
+                      {
+                        label: "Add to project",
+                        action: () => {
+                          openProjectSelector();
+                          setShowChatMenu(false);
+                        },
+                      },
+                      {
+                        label: "Delete",
+                        action: () => {
+                          setShowDeleteConfirm(true);
+                          setShowChatMenu(false);
+                        },
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={item.action}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          background: "none",
+                          border: "none",
+                          color: "var(--text-secondary)",
+                          padding: "6px 10px",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          fontSize: 12,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "var(--bg-canvas)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "none";
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Chat title with actions */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "8px 12px",
-              background: "var(--bg-canvas)",
-              borderBottom: "1px solid var(--color-border)",
-            }}
-          >
-            <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                onClick={() => setShowChatMenu(!showChatMenu)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  background: "transparent",
-                  border: "none",
-                  color: "var(--color-text)",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  padding: "4px 6px",
-                  borderRadius: "4px",
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-                <span>{sessionName || "What are you doing today?"}</span>
-              </button>
-
-              {showChatMenu && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: "12px",
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: "6px",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                    zIndex: 1000,
-                    minWidth: "180px",
-                    marginTop: "4px",
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={toggleStar}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      padding: "8px 12px",
-                      textAlign: "left",
-                      border: "none",
-                      background: "none",
-                      color: "var(--color-text)",
-                      fontSize: "13px",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    {isStarred ? "Unstar" : "Star"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openProjectSelector}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      padding: "8px 12px",
-                      textAlign: "left",
-                      border: "none",
-                      background: "none",
-                      color: "var(--color-text)",
-                      fontSize: "13px",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    Add to Project
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowChatMenu(false); setEditNameValue(sessionName); setIsEditingName(true); setTimeout(() => sessionNameInputRef.current?.focus(), 0); }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      padding: "8px 12px",
-                      textAlign: "left",
-                      border: "none",
-                      background: "none",
-                      color: "var(--color-text)",
-                      fontSize: "13px",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowChatMenu(false); setShowDeleteConfirm(true); }}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      padding: "8px 12px",
-                      textAlign: "left",
-                      border: "none",
-                      background: "none",
-                      color: "var(--color-danger)",
-                      fontSize: "13px",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    Delete
-                  </button>
-                </div>
-              )}
-
-              {showProjectSelector && (
+          {showProjectSelector && (
                 <div
                   style={{
                     position: "fixed",
@@ -1945,7 +2009,7 @@ export default function AgentDashboard() {
                 </div>
               )}
 
-              {showDeleteConfirm && (
+          {showDeleteConfirm && (
                 <div
                   style={{
                     position: "fixed",
@@ -2014,11 +2078,10 @@ export default function AgentDashboard() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
 
           {/* Messages (drop zone so dropping on scroll area also attaches) */}
           <div
+            className="messages-container"
             onDrop={onDropFiles}
             onDragOver={onDragOverFiles}
             onDragEnter={onDragEnterFiles}
@@ -2034,6 +2097,7 @@ export default function AgentDashboard() {
               minHeight: 0,
               minWidth: 0,
               scrollBehavior: "smooth",
+              wordBreak: "break-word",
             }}
           >
             {messages.length <= 1 && messages[0]?.role === "assistant" ? (
@@ -2128,23 +2192,37 @@ export default function AgentDashboard() {
                     <div
                       style={{
                         maxWidth: "72%",
+                        minWidth: 0,
                         background: msg.role === "user" ? "var(--bg-canvas)" : "var(--bg-elevated)",
                         border: `1px solid ${providerBorderColor(msg.provider)}`,
                         borderRadius: msg.role === "user" ? "12px 4px 12px 12px" : "4px 12px 12px 12px",
                         padding: "10px 14px",
+                        overflowX: "hidden",
                       }}
                     >
-                      <div
-                        style={{
-                          fontSize: "13px",
-                          color: "var(--color-text)",
-                          lineHeight: "1.65",
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {msg.content}
-                      </div>
+                      {msg.type === "terminal_output" && (
+                        <TerminalOutputCard
+                          message={msg}
+                          onOpenTerminal={() => {
+                            setActiveTab("terminal");
+                            setPreviewOpen(true);
+                          }}
+                        />
+                      )}
+                      {msg.type === "deploy_status" && <DeployStatusPill message={msg} />}
+                      {msg.type !== "terminal_output" && msg.type !== "deploy_status" && (
+                        <div
+                          style={{
+                            fontSize: "13px",
+                            color: "var(--color-text)",
+                            lineHeight: "1.65",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {msg.content}
+                        </div>
+                      )}
                       {msg.role === "user" && msg.attachedImagePreviews?.length > 0 && (
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                           {msg.attachedImagePreviews.map((dataUrl, i) => (
@@ -2152,7 +2230,14 @@ export default function AgentDashboard() {
                           ))}
                         </div>
                       )}
-                      {msg.generatedCode && (
+                      {msg.role === "user" && msg.attachedImageUrls?.length > 0 && (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                          {msg.attachedImageUrls.map((url, i) => (
+                            <img key={i} src={url} alt="" style={{ maxWidth: 120, maxHeight: 120, objectFit: "cover", borderRadius: 6, border: "1px solid var(--color-border)" }} />
+                          ))}
+                        </div>
+                      )}
+                      {msg.generatedCode && (msg.language === "bash" || msg.language === "sh" || msg.language === "shell") && (
                         <div
                           className="message-code-block"
                           style={{
@@ -2189,8 +2274,12 @@ export default function AgentDashboard() {
                             style={{
                               fontSize: 13,
                               fontFamily: "monospace",
-                              overflow: "auto",
+                              overflowX: "auto",
+                              overflowY: "auto",
+                              maxWidth: "100%",
                               maxHeight: 300,
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-word",
                               background: "var(--bg-elevated)",
                               padding: 12,
                               borderRadius: 6,
@@ -2198,7 +2287,7 @@ export default function AgentDashboard() {
                               color: "var(--color-text)",
                             }}
                           >
-                            <code>
+                            <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                               {msg.generatedCode.split("\n").slice(0, 15).join("\n")}
                               {msg.generatedCode.split("\n").length > 15 && (
                                 <div
@@ -2227,13 +2316,30 @@ export default function AgentDashboard() {
                               {msg.generatedCode.split("\n").length} lines total
                             </span>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              {!(msg.commandDenied || msg.commandRun) && (msg.language === "bash" || msg.language === "sh" || msg.language === "shell") && (
+                              {!(msg.commandDenied || msg.commandRun) && (
                                 <>
                                   <button
                                     type="button"
                                     onClick={async () => {
                                       const cmd = (msg.generatedCode || "").trim();
                                       if (!cmd) return;
+                                      const termCardId = `tc_${Date.now()}`;
+                                      setMessages((prev) => [
+                                        ...prev,
+                                        {
+                                          id: termCardId,
+                                          role: "tool",
+                                          type: "terminal_output",
+                                          command: cmd,
+                                          output: "",
+                                          status: "running",
+                                          created_at: Date.now(),
+                                        },
+                                      ]);
+                                      setAgentActivity({
+                                        label: `Running: ${cmd.slice(0, 40)}${cmd.length > 40 ? "..." : ""}`,
+                                        type: "terminal",
+                                      });
                                       try {
                                         const res = await fetch("/api/agent/terminal/run", {
                                           method: "POST",
@@ -2242,25 +2348,43 @@ export default function AgentDashboard() {
                                           body: JSON.stringify({ command: cmd, session_id: currentSessionId }),
                                         });
                                         const data = await res.json().catch(() => ({}));
+                                        const errText = data.error || (!res.ok ? "Request failed" : null);
+                                        const outText = data.output || errText || "(no output)";
                                         setMessages((prev) =>
-                                          prev.map((m) =>
-                                            m.id === msg.id
-                                              ? { ...m, commandRun: true, terminalOutput: data.output ?? data.error }
-                                              : m
-                                          )
+                                          prev.map((m) => {
+                                            if (m.id === termCardId) {
+                                              return {
+                                                ...m,
+                                                output: outText,
+                                                status: errText ? "error" : "success",
+                                              };
+                                            }
+                                            if (m.id === msg.id) {
+                                              return { ...m, commandRun: true, terminalOutput: data.output ?? data.error };
+                                            }
+                                            return m;
+                                          })
                                         );
                                       } catch (_) {
                                         setMessages((prev) =>
-                                          prev.map((m) =>
-                                            m.id === msg.id ? { ...m, commandRun: true, terminalOutput: "Request failed" } : m
-                                          )
+                                          prev.map((m) => {
+                                            if (m.id === termCardId) {
+                                              return { ...m, output: "Request failed", status: "error" };
+                                            }
+                                            if (m.id === msg.id) {
+                                              return { ...m, commandRun: true, terminalOutput: "Request failed" };
+                                            }
+                                            return m;
+                                          })
                                         );
+                                      } finally {
+                                        setAgentActivity(null);
                                       }
                                     }}
                                     style={{
                                       padding: "6px 12px",
                                       background: "var(--color-primary)",
-                                      color: "var(--color-on-primary, #fff)",
+                                      color: "var(--color-on-primary)",
                                       border: "none",
                                       borderRadius: 6,
                                       cursor: "pointer",
@@ -2316,6 +2440,31 @@ export default function AgentDashboard() {
                               </button>
                             </div>
                           </div>
+                        </div>
+                      )}
+                      {msg.generatedCode && !(msg.language === "bash" || msg.language === "sh" || msg.language === "shell") && (
+                        <div style={{ marginTop: 12 }}>
+                          <DiffProposalCard
+                            filename={msg.filename}
+                            content={msg.generatedCode}
+                            onOpenInEditor={() => openInMonaco(msg)}
+                            onAccept={() => {
+                              setProposedFileChange({
+                                filename: msg.filename ?? "snippet",
+                                content: msg.generatedCode,
+                                bucket: msg.bucket || defaultBucketForMonacoRef.current,
+                              });
+                              setPreviewOpen(true);
+                              setActiveTab("code");
+                            }}
+                            onReject={() =>
+                              setMessages((prev) =>
+                                prev.map((m) =>
+                                  m.id === msg.id ? { ...m, generatedCode: undefined, filename: undefined, language: undefined } : m
+                                )
+                              )
+                            }
+                          />
                         </div>
                       )}
                       {(msg.tokens != null && msg.tokens !== 0) && (
@@ -2529,7 +2678,13 @@ export default function AgentDashboard() {
           <div style={{ "--mode-color": `var(--mode-${mode})`, flexShrink: 0 }}>
             {/* ── Input bar (Cursor-style: one container) ─────────────────── */}
             <div
-              style={{ flexShrink: 0, padding: "12px 16px", background: "var(--bg-nav)", borderTop: "1px solid var(--color-border)" }}
+              style={{
+                flexShrink: 0,
+                padding: "12px 16px",
+                paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
+                background: "var(--bg-nav)",
+                borderTop: "1px solid var(--color-border)",
+              }}
               onDrop={onDropFiles}
               onDragOver={onDragOverFiles}
               onDragEnter={onDragEnterFiles}
@@ -2547,9 +2702,10 @@ export default function AgentDashboard() {
                   borderRadius: 10,
                   minHeight: 48,
                   width: "100%",
-                  maxWidth: 900,
+                  maxWidth: "min(900px, 100%)",
                   margin: "0 auto",
                   position: "relative",
+                  boxSizing: "border-box",
                 }}
               >
                 {isDraggingOver && (
@@ -2651,7 +2807,7 @@ export default function AgentDashboard() {
                         { label: "GitHub", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>, action: () => { window.open("/api/oauth/github/start?return_to=/dashboard/agent", "oauth_github", "width=500,height=600"); setConnectorPopupOpen(false); } },
                         { label: "Cloudflare", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>, action: () => { setInput("@cloudflare list my workers and D1 databases"); setTimeout(() => textareaRef.current?.focus(), 50); setConnectorPopupOpen(false); } },
                         { label: "Take Screenshot", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>, action: () => { setPreviewOpen(true); setActiveTab("browser"); setConnectorPopupOpen(false); } },
-                        { label: "Search knowledge base", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>, action: () => { setConnectorPopupOpen(false); setKnowledgeSearchOpen(true); setKnowledgeSearchQuery(""); setKnowledgeSearchResults([]); } },
+                        { label: "Search knowledge base", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>, action: () => { setConnectorPopupOpen(false); setActiveTab("files"); setPreviewOpen(true); } },
                       ].map((item) => (
                         <button
                           key={item.label}
@@ -2734,96 +2890,6 @@ export default function AgentDashboard() {
                         </div>
                       </>
                     )}
-                    </div>
-                  )}
-                  {knowledgeSearchOpen && (
-                    <div
-                      ref={knowledgeSearchRef}
-                      style={{
-                        position: "absolute",
-                        left: 0,
-                        bottom: "100%",
-                        marginBottom: "8px",
-                        width: "320px",
-                        maxWidth: "90vw",
-                        background: "var(--bg-elevated)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "12px",
-                        boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-                        padding: "12px",
-                        zIndex: 9999,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "8px",
-                        maxHeight: "360px",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
-                        <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--color-text)" }}>Search (R2, knowledge, chats)</span>
-                        <button type="button" onClick={() => setKnowledgeSearchOpen(false)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "4px", fontSize: "14px" }} aria-label="Close">x</button>
-                      </div>
-                      <input
-                        type="text"
-                        placeholder="Type to search (min 2 chars)..."
-                        value={knowledgeSearchQuery}
-                        onChange={(e) => setKnowledgeSearchQuery(e.target.value)}
-                        autoFocus
-                        style={{
-                          width: "100%",
-                          padding: "8px 12px",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: "8px",
-                          background: "var(--bg-canvas)",
-                          color: "var(--color-text)",
-                          fontSize: "13px",
-                          outline: "none",
-                        }}
-                      />
-                      <div style={{ flex: 1, overflowY: "auto", minHeight: "80px" }}>
-                        {knowledgeSearchLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)", padding: "8px" }}>Searching...</div>}
-                        {!knowledgeSearchLoading && knowledgeSearchQuery.trim().length >= 2 && knowledgeSearchResults.length === 0 && (
-                          <div style={{ fontSize: "12px", color: "var(--text-muted)", padding: "8px" }}>No matches</div>
-                        )}
-                        {!knowledgeSearchLoading && knowledgeSearchResults.slice(0, 15).map((result, i) => (
-                          <button
-                            key={result.id || i}
-                            type="button"
-                            onClick={() => {
-                              if (result.type === "file") {
-                                setInput((prev) => prev + (prev ? "\n\n" : "") + "Context: file " + (result.bucket ? result.bucket + "/" : "") + (result.path || result.title) + " from R2. ");
-                              } else if (result.type === "knowledge") {
-                                setInput((prev) => prev + (prev ? "\n\n" : "") + "Context from knowledge base:\n\n" + (result.source || result.title) + "\n\nBased on this, ");
-                              } else if (result.type === "chat") {
-                                setCurrentSessionId(result.id);
-                                setSessionName(result.title || "Chat");
-                              }
-                              setKnowledgeSearchOpen(false);
-                              setKnowledgeSearchQuery("");
-                              setKnowledgeSearchResults([]);
-                              setTimeout(() => textareaRef.current?.focus(), 50);
-                            }}
-                            style={{
-                              display: "block",
-                              width: "100%",
-                              padding: "10px 12px",
-                              textAlign: "left",
-                              border: "none",
-                              borderBottom: "1px solid var(--color-border)",
-                              background: "none",
-                              color: "var(--color-text)",
-                              fontSize: "12px",
-                              cursor: "pointer",
-                              fontFamily: "inherit",
-                              lineHeight: 1.4,
-                            }}
-                          >
-                            <div style={{ fontWeight: 500 }}>{result.title}</div>
-                            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>
-                              {result.type} {result.bucket && `${result.bucket}/`}{result.path || result.source || ""}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
                     </div>
                   )}
                 </div>
@@ -3122,9 +3188,9 @@ export default function AgentDashboard() {
                 <button
                   type="button"
                   ref={costPopoverRef}
-                  title={`Context (est.) ${contextUsedK}k / ${contextLimitK}k — Spend $${spendDisplay}`}
+                  title={`Context (est.) ${contextUsedK}k / ${contextLimitK}k`}
                   onClick={() => setCostPopoverOpen((prev) => !prev)}
-                  aria-label="Context and cost usage"
+                  aria-label="Estimated context usage"
                   style={{
                     position: "relative",
                     width: 20,
@@ -3167,15 +3233,12 @@ export default function AgentDashboard() {
                         zIndex: 1001,
                       }}
                     >
-                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8, color: "var(--color-text)" }}>Context and cost</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8, color: "var(--color-text)" }}>Context</div>
                       <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                         Est. tokens: {estimatedTokens.toLocaleString()} / 200k (from conversation)
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
                         Context: {contextUsedK}k / {contextLimitK}k ({contextPctLabel}%)
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                        Cost: ${spendDisplay}
                       </div>
                     </div>
                   )}
@@ -3253,7 +3316,18 @@ export default function AgentDashboard() {
               flexShrink: 0,
             }}
           >
-            <span>Agent Sam</span>
+            {agentActivity ? (
+              <>
+                <span style={{ color: "var(--accent)", animation: "spPulse 1s infinite" }} aria-hidden>
+                  *
+                </span>
+                <span style={{ color: "var(--text-secondary)", fontSize: 11, marginLeft: 4 }}>
+                  {agentActivity.label}
+                </span>
+              </>
+            ) : (
+              <span>Agent Sam</span>
+            )}
             <span>
               {selectedModel?.id === "auto"
                 ? (lastUsedModel ? `Auto (${MODEL_LABELS[lastUsedModel] ?? lastUsedModel})` : "Auto")
@@ -3267,8 +3341,8 @@ export default function AgentDashboard() {
           )}
         </div>
 
-        {/* ── Panel resize divider ────────────────────────────────────────── */}
-        {previewOpen && (
+        {/* ── Panel resize divider (desktop, tool panel open) ─────────────── */}
+        {previewOpen && !isMobile && (
           <div
             ref={dragRef}
             onMouseDown={handlePanelResize}
@@ -3303,175 +3377,332 @@ export default function AgentDashboard() {
           </div>
         )}
 
-        {/* ── Floating preview panel ──────────────────────────────────────── */}
-        {previewOpen && (
-          <FloatingPreviewPanel
-            open={previewOpen}
-            onClose={() => setPreviewOpen(false)}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            previewHtml={previewHtml}
-            onPreviewHtmlChange={setPreviewHtml}
-            browserUrl={browserUrl}
-            onBrowserUrlChange={setBrowserUrl}
-            onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
-            codeContent={codeContent}
-            onCodeContentChange={setCodeContent}
-            onFileContextChange={handleFileContextChange}
-            isDarkTheme={true}
-            activeThemeSlug={activeThemeSlug}
-            proposedFileChange={proposedFileChange}
-            onProposedChangeResolved={() => setProposedFileChange(null)}
-            monacoDiffFromChat={monacoDiffFromChat}
-            onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
-            openFileKey={openFileKeyForPanel}
-            onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
-            connectedIntegrations={connectedIntegrations}
-            runCommandRunnerRef={runCommandRunnerRef}
-            availableCommands={availableCommands}
-          />
-        )}
-
-        {showSourcePanel && (
-          <div
-            style={{
-              position: "fixed",
-              top: 60,
-              right: 20,
-              width: 350,
-              maxHeight: 500,
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--color-border)",
-              borderRadius: 12,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-              zIndex: 2000,
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <div style={{ padding: 16, borderBottom: "1px solid var(--color-border)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <span style={{ fontWeight: 600, fontSize: 14, color: "var(--color-text)" }}>Source Control</span>
-                <button type="button" onClick={() => setShowSourcePanel(false)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", opacity: 0.6, color: "var(--color-text)" }} aria-label="Close">&#215;</button>
-              </div>
-              <select
-                value={selectedSource}
-                onChange={(e) => setSelectedSource(e.target.value)}
+        {/* ── Mobile: side drawer from right + backdrop + collapsed strip ─ */}
+        {isMobile && (
+          <>
+            {previewOpen && (
+              <div
+                onClick={() => setPreviewOpen(false)}
                 style={{
-                  width: "100%",
-                  padding: "6px 10px",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: 6,
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(0,0,0,0.5)",
+                  zIndex: 998,
+                }}
+              />
+            )}
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                right: 0,
+                width: "85vw",
+                maxWidth: 420,
+                height: "100%",
+                zIndex: 999,
+                background: "var(--bg-elevated)",
+                borderLeft: "1px solid var(--border)",
+                display: "flex",
+                flexDirection: "row",
+                overflow: "hidden",
+                transform: previewOpen ? "translateX(0)" : "translateX(100%)",
+                transition: "transform 250ms cubic-bezier(0.4, 0, 0.2, 1)",
+                boxShadow: previewOpen ? "-4px 0 24px rgba(0,0,0,0.3)" : "none",
+              }}
+            >
+              <div
+                className="iam-viewer-icon-strip"
+                style={{
+                  width: 44,
+                  flexShrink: 0,
                   background: "var(--bg-canvas)",
-                  fontSize: 12,
-                  color: "var(--color-text)",
+                  borderRight: "1px solid var(--border)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  paddingTop: 34,
+                  paddingBottom: 110,
+                  gap: 4,
+                  overflowY: "auto",
+                  scrollbarWidth: "none",
                 }}
               >
-                <optgroup label="R2 Buckets">
-                  {r2Buckets.map((b) => (
-                    <option key={`r2-${b.name}`} value={`r2:${b.name}`}>{b.name}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="GitHub Repos">
-                  {githubRepos.map((r) => (
-                    <option key={`git-${r.name}`} value={`git:${r.name}`}>{r.name}</option>
-                  ))}
-                </optgroup>
-              </select>
+                {VIEWER_STRIP_TAB_ORDER.map((tab) => {
+                  const isActive = previewOpen && activeTab === tab;
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      title={VIEWER_STRIP_TITLES[tab]}
+                      onClick={() => {
+                        if (previewOpen && activeTab === tab) {
+                          setPreviewOpen(false);
+                        } else {
+                          setPreviewOpen(true);
+                          setActiveTab(tab);
+                        }
+                      }}
+                      style={{
+                        width: 36,
+                        height: 36,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: isActive ? "var(--bg-elevated)" : "transparent",
+                        border: "none",
+                        borderRight: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                        borderRadius: "4px 0 0 4px",
+                        color: isActive ? "var(--accent)" : "var(--text-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <ViewerPanelStripIcon tab={tab} size={16} />
+                    </button>
+                  );
+                })}
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  overflow: "hidden",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <FloatingPreviewPanel
+                  open={previewOpen}
+                  onClose={() => setPreviewOpen(false)}
+                  activeTab={activeTab}
+                  onTabChange={setActiveTab}
+                  previewHtml={previewHtml}
+                  onPreviewHtmlChange={setPreviewHtml}
+                  browserUrl={browserUrl}
+                  onBrowserUrlChange={setBrowserUrl}
+                  onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
+                  codeContent={codeContent}
+                  onCodeContentChange={setCodeContent}
+                  onFileContextChange={handleFileContextChange}
+                  isDarkTheme={true}
+                  activeThemeSlug={activeThemeSlug}
+                  proposedFileChange={proposedFileChange}
+                  onProposedChangeResolved={() => setProposedFileChange(null)}
+                  monacoDiffFromChat={monacoDiffFromChat}
+                  onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
+                  openFileKey={openFileKeyForPanel}
+                  onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
+                  connectedIntegrations={connectedIntegrations}
+                  runCommandRunnerRef={runCommandRunnerRef}
+                  availableCommands={availableCommands}
+                  onOpenInBrowser={handleOpenInBrowser}
+                  onDeployStart={handleDeployStart}
+                  onDeployComplete={handleDeployComplete}
+                />
+              </div>
             </div>
-            <div style={{ display: "flex", borderBottom: "1px solid var(--color-border)" }}>
-              {["Recent Files", "Changes", "Info"].map((tab) => (
+            {!previewOpen && (
+              <div
+                ref={mobileIconsStripRef}
+                className="iam-mobile-icon-toggle"
+                style={{
+                  position: "fixed",
+                  top: "calc(52px + env(safe-area-inset-top, 0px))",
+                  right: 0,
+                  zIndex: 50,
+                }}
+              >
                 <button
-                  key={tab}
                   type="button"
-                  onClick={() => setSourceTab(tab)}
+                  onClick={() => setMobileIconsOpen((v) => !v)}
                   style={{
-                    flex: 1,
-                    padding: "8px 12px",
-                    background: sourceTab === tab ? "var(--bg-canvas)" : "transparent",
-                    border: "none",
-                    borderBottom: sourceTab === tab ? "2px solid var(--mode-color)" : "none",
-                    fontSize: 12,
+                    width: 32,
+                    height: 32,
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)",
+                    borderRight: "none",
+                    borderRadius: "6px 0 0 6px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-muted)",
                     cursor: "pointer",
-                    color: "var(--color-text)",
                   }}
+                  aria-expanded={mobileIconsOpen}
+                  aria-label="Open tools menu"
                 >
-                  {tab}
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+                    <circle cx="4" cy="4" r="1.5" />
+                    <circle cx="12" cy="4" r="1.5" />
+                    <circle cx="4" cy="12" r="1.5" />
+                    <circle cx="12" cy="12" r="1.5" />
+                  </svg>
                 </button>
-              ))}
-            </div>
-            <div style={{ maxHeight: 350, overflowY: "auto", padding: 12 }}>
-              {sourceTab === "Recent Files" && (
-                sourceRecentFiles.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>No recent files for this source.</div>
-                ) : (
-                sourceRecentFiles.map((file) => (
+                {mobileIconsOpen && (
                   <div
-                    key={file.path}
-                    onClick={() => { setPreviewOpen(true); setActiveTab("files"); }}
                     style={{
-                      padding: "8px 12px",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      marginBottom: 4,
+                      position: "absolute",
+                      top: 32,
+                      right: 0,
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--border)",
+                      borderRight: "none",
+                      borderRadius: "6px 0 0 6px",
+                      padding: "4px 0",
                       display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      background: "var(--bg-canvas)",
+                      flexDirection: "column",
+                      gap: 2,
+                      boxShadow: "-2px 4px 12px rgba(0,0,0,0.3)",
                     }}
                   >
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text)" }}>{file.name}</div>
-                      <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>{file.path}</div>
-                    </div>
-                    <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>{file.updated_at ? new Date(file.updated_at).toLocaleDateString() : ""}</div>
+                    {VIEWER_STRIP_TAB_ORDER.map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        title={VIEWER_STRIP_TITLES[tab]}
+                        onClick={() => {
+                          setActiveTab(tab);
+                          setPreviewOpen(true);
+                          setMobileIconsOpen(false);
+                        }}
+                        style={{
+                          width: 36,
+                          height: 36,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--text-muted)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <ViewerPanelStripIcon tab={tab} size={14} />
+                      </button>
+                    ))}
                   </div>
-                ))
-                )
-              )}
-              {sourceTab === "Changes" && (
-                <>
-                  {selectedSource.startsWith("git:") && gitChanges && (
-                    <>
-                      {(gitChanges.modified || []).map((f, i) => (
-                        <div key={i} style={{ padding: "6px 10px", fontSize: 11, marginBottom: 4, borderRadius: 4, background: "var(--bg-canvas)", color: "var(--color-text)" }}>
-                          <span style={{ color: "var(--mode-plan)", marginRight: 8 }}>M</span>
-                          {typeof f === "string" ? f : f.file || f.name}
-                        </div>
-                      ))}
-                      {(gitChanges.staged || []).map((f, i) => (
-                        <div key={i} style={{ padding: "6px 10px", fontSize: 11, marginBottom: 4, borderRadius: 4, background: "var(--bg-canvas)", color: "var(--color-text)" }}>
-                          <span style={{ color: "var(--mode-ask)", marginRight: 8 }}>+</span>
-                          {typeof f === "string" ? f : f.file || f.name}
-                        </div>
-                      ))}
-                    </>
-                  )}
-                  {selectedSource.startsWith("r2:") && (
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Recent uploads to {selectedSource.replace("r2:", "")}</div>
-                  )}
-                </>
-              )}
-              {sourceTab === "Info" && (
-                <>
-                  {selectedSource.startsWith("r2:") && (
-                    <div style={{ fontSize: 11, color: "var(--color-text)" }}>
-                      <div style={{ marginBottom: 8 }}><strong>Bucket:</strong> {selectedSource.replace("r2:", "")}</div>
-                      <div style={{ marginBottom: 8 }}><strong>Objects:</strong> {bucketInfo?.object_count ?? 0}</div>
-                      <div><strong>Size:</strong> {bucketInfo?.size != null ? (bucketInfo.size / 1024).toFixed(1) + " KB" : "—"}</div>
-                    </div>
-                  )}
-                  {selectedSource.startsWith("git:") && (
-                    <div style={{ fontSize: 11, color: "var(--color-text)" }}>
-                      <div style={{ marginBottom: 8 }}><strong>Repo:</strong> {selectedSource.replace("git:", "")}</div>
-                      <div style={{ marginBottom: 8 }}><strong>Branch:</strong> {gitInfo?.branch ?? "—"}</div>
-                      <div><strong>Last commit:</strong> {gitInfo?.last_commit ?? "—"}</div>
-                    </div>
-                  )}
-                </>
-              )}
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Desktop: vertical icon strip (left edge of viewer) + tool panel ─ */}
+        {!isMobile && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              flex: previewOpen && !isMobile ? `0 0 ${panelWidthPct}%` : "0 0 48px",
+              minWidth: 0,
+              minHeight: 0,
+              alignSelf: "stretch",
+              overflow: "hidden",
+              transition: dragging ? "none" : "flex 0.15s ease",
+            }}
+          >
+            <div
+              className="iam-viewer-icon-strip"
+              style={{
+                width: 48,
+                flexShrink: 0,
+                position: "relative",
+                alignSelf: "stretch",
+                minHeight: 0,
+                background: "transparent",
+                borderLeft: "none",
+                borderRight: previewOpen ? "1px solid var(--border)" : "none",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                alignItems: "flex-end",
+                gap: 4,
+                overflowY: "auto",
+                overflowX: "hidden",
+                scrollbarWidth: "none",
+              }}
+            >
+              {VIEWER_STRIP_TAB_ORDER.map((tab) => {
+                const isActive = previewOpen && activeTab === tab;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    title={VIEWER_STRIP_TITLES[tab]}
+                    onClick={() => {
+                      if (previewOpen && activeTab === tab) {
+                        setPreviewOpen(false);
+                      } else {
+                        setPreviewOpen(true);
+                        setActiveTab(tab);
+                      }
+                    }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: isActive ? "var(--bg-canvas)" : "transparent",
+                      border: "none",
+                      borderLeft: "none",
+                      borderRight: isActive ? "2px solid var(--accent)" : "2px solid transparent",
+                      borderRadius: isActive ? "4px 0 0 4px" : 4,
+                      color: isActive ? "var(--accent)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      fontFamily: "monospace",
+                      fontSize: 13,
+                      transition: "all 150ms",
+                    }}
+                    onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = "var(--text-primary)"; }}
+                    onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = "var(--text-muted)"; }}
+                  >
+                    <ViewerPanelStripIcon tab={tab} />
+                  </button>
+                );
+              })}
             </div>
+            {previewOpen && (
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                  overflow: "hidden",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <FloatingPreviewPanel
+                  open={previewOpen}
+                  onClose={() => setPreviewOpen(false)}
+                  activeTab={activeTab}
+                  onTabChange={setActiveTab}
+                  previewHtml={previewHtml}
+                  onPreviewHtmlChange={setPreviewHtml}
+                  browserUrl={browserUrl}
+                  onBrowserUrlChange={setBrowserUrl}
+                  onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
+                  codeContent={codeContent}
+                  onCodeContentChange={setCodeContent}
+                  onFileContextChange={handleFileContextChange}
+                  isDarkTheme={true}
+                  activeThemeSlug={activeThemeSlug}
+                  proposedFileChange={proposedFileChange}
+                  onProposedChangeResolved={() => setProposedFileChange(null)}
+                  monacoDiffFromChat={monacoDiffFromChat}
+                  onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
+                  openFileKey={openFileKeyForPanel}
+                  onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
+                  connectedIntegrations={connectedIntegrations}
+                  runCommandRunnerRef={runCommandRunnerRef}
+                  availableCommands={availableCommands}
+                  onOpenInBrowser={handleOpenInBrowser}
+                  onDeployStart={handleDeployStart}
+                  onDeployComplete={handleDeployComplete}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -3480,6 +3711,16 @@ export default function AgentDashboard() {
         @keyframes agentPulse {
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.5; transform: scale(0.85); }
+        }
+        @keyframes spPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.35; }
+        }
+        .iam-viewer-icon-strip {
+          min-height: 0;
+        }
+        .iam-viewer-icon-strip::-webkit-scrollbar {
+          display: none;
         }
       `}</style>
     </div>

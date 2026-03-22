@@ -5358,3 +5358,20 @@ Use **info@inneranimals.com** as sandbox email and a chosen password for CIDI wo
 
 ### Security note
 Password was shared in chat; consider rotating the sandbox secret if logs retention is a concern.
+
+---
+
+## [2026-03-22] Sandbox handoff doc + upload-repo-to-r2-sandbox.sh (Overview Vite)
+
+### What was asked
+Document why Overview was empty on sandbox (missing `static/dashboard/overview/*` Vite output), handoff for other Cursor sessions, and extend sandbox upload script to push `overview-dashboard/dist/*` to R2.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md`: OAuth locks, buckets, R2 keys, builds, promote checklist, copy-paste prompt.
+- `scripts/upload-repo-to-r2-sandbox.sh`: uploads `dashboard/overview.html`, `overview-dashboard/dist/*` → `static/dashboard/overview/`; optional `agent-dashboard/dist/*` + `dashboard/agent.html` when present; uses `with-cloudflare-env.sh` + `wrangler.production.toml` defaults.
+
+### Deploy status
+- Worker/R2: not run from agent (script ready for Sam).
+
+### Known issues / next steps
+- Run `cd overview-dashboard && npm run build` before `./scripts/upload-repo-to-r2-sandbox.sh` when Overview sources change.

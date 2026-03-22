@@ -25,6 +25,6 @@ INSERT INTO cidi_activity_log (
   'cursor_agent',
   datetime('now'),
   NULL,
-  NULL,
+  'composer2_agentsam',
   '{"repo":"SamPrimeaux/inneranimalmedia-agentsam-dashboard","branch":"cursor/platform-ui-stability-1eca","worker":"inneranimalmedia","event":"cidi_activity_seed"}'
 );

@@ -5051,3 +5051,21 @@ Insert a row in `cidi_activity_log`.
 ### Deploy status
 - Worker deployed: no.
 - D1 write: yes — one INSERT into `cidi_activity_log`.
+
+---
+
+## [2026-03-22] D1 `cidi_activity_log.user_agent` — Composer 2
+
+### What was asked
+Set `user_agent` to `composer2_agentsam` for the Cursor Composer 2 row.
+
+### What was done
+- **UPDATE** on production `cidi_activity_log` `id=11` (`cidi_id=4`): `user_agent='composer2_agentsam'`.
+- Updated `migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql` INSERT template to use that `user_agent` for future reference.
+- Added `migrations/_oneoff_cidi_activity_log_user_agent_2026-03-22.sql` (the UPDATE applied to prod).
+
+### Files changed
+- `migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql`, `migrations/_oneoff_cidi_activity_log_user_agent_2026-03-22.sql`, `docs/cursor-session-log.md`.
+
+### Deploy status
+- D1 write: yes — one UPDATE.

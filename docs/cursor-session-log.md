@@ -5639,3 +5639,17 @@ GitHub **main** has source parity for agent shell + dashboard + worker; producti
 
 ### Known issues / next steps
 - Run `npm run build` in `agent-dashboard` before R2 upload so `v=122` matches bundle bytes; upload `dashboard/agent.html` then worker deploy when approved.
+
+## [2026-03-22] .env.cloudflare.example + Cursor session rules + settings
+
+### What was asked
+**go:** Push names-only `.env.cloudflare.example`, D1 session-start query fixes, Cursor settings; session log.
+
+### Files changed
+- `.env.cloudflare.example` — minimal local vars; commented inventories (plaintext + secret **names** only); bindings / crons / routes checklists; no production IDs or secrets in file; optional R2 S3 key names for sync scripts.
+- `.cursor/rules/session-start-d1-context.mdc` — `agent_memory_index` queries use `tenant_id = 'system'`; optional `dashboard_version` query; note on `tenant_sam_primeaux`.
+- `.cursor/settings.json` — enable `continual-learning` MCP block.
+- `docs/cursor-session-log.md` — this entry.
+
+### Deploy status
+- Git push: yes — https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main` (hash in `git log -1`)

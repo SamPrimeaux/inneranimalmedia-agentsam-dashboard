@@ -5557,3 +5557,25 @@ Clone or push live `agent-sam` contents into new bucket `agent-sam-sandbox-cidi`
 
 ### Deploy status
 - N/A
+
+## [2026-03-22] Webhook triage doc + GitHub ping confirmed
+
+### What was asked
+Document that “webhooks not firing” is usually path/source mismatch, verification failure, or missing `webhook_endpoints` row — not a duplicate endpoint for the same URL; `secret_hash` NULL can be fine; fix Worker env first. Note GitHub hook working at `/api/webhooks/github`.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — section 4 expanded: triage order, `/api/webhooks/*` vs `/api/hooks/*` D1 path alignment, anti-pattern (duplicate rows), production confirmation for repo **inneranimalmedia-agentsam-dashboard** `ping` to `https://inneranimalmedia.com/api/webhooks/github`; copy-paste prompt bullet updated.
+
+### Files NOT changed (and why)
+- `worker.js`: no code change.
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: no
+- Git push: not run from this session (commit/push if Sam wants GitHub doc sync)
+
+### What is live now
+Unchanged Worker behavior; documentation only.
+
+### Known issues / next steps
+- If GitHub uses `/api/hooks/github`, ensure D1 `endpoint_path` matches that path (Worker supports both routes with distinct `endpointPath` lookups).

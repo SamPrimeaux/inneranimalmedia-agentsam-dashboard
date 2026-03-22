@@ -58,15 +58,27 @@ WHERE id = 1;
 
 **Stats:** `webhook_event_stats` is updated by **scheduled/cron logic** in the Worker (rollup from `webhook_events`). If cron isn’t firing or events aren’t inserted, stats stay stale.
 
-**Checklist when “not firing”:**
+**When deliveries look like “not firing” — usual causes (in order):**
+
+1. **Path / source mismatch** — The URL GitHub (or the provider) calls must match a row: same `source` and same **`endpoint_path`** (Worker compares `lower(trim(endpoint_path))` to the path for that request). The Worker exposes both **`/api/webhooks/github`** and **`/api/hooks/github`**, but D1 must have the row for the path that is actually hit; they are not interchangeable for the DB lookup.
+2. **Verification failing** — Wrong or missing Worker secret (e.g. **`GITHUB_WEBHOOK_SECRET`** must match the hook’s secret in GitHub). Fix **Worker env / verification first**.
+3. **No matching `webhook_endpoints` row** (or `is_active` off) — then **`handleInboundWebhook`** returns **503** and **no** `webhook_events` row.
+
+**Not the fix:** Adding **another** `webhook_endpoints` row for the **same** URL/path. That does not repair path mismatch or bad signatures.
+
+**`secret_hash` NULL:** Often fine. Production verification uses **Worker secrets** (and/or vault), not D1 plaintext. **`secret_hash` in D1 can be NULL** if verification uses **only** Worker secrets and the column is optional metadata. **Do not store raw secrets in D1.** If you add hashes, store **SHA-256** of the configured secret, never plaintext.
+
+**Checklist:**
 
 1. `GET /api/webhooks/health` (or `/api/hooks/health`) — lists endpoints and subscription counts.
-2. Confirm the **exact** URL path matches **`webhook_endpoints.endpoint_path`** for that `source`.
+2. Confirm the **exact** incoming path matches **`webhook_endpoints.endpoint_path`** for that `source`.
 3. Confirm **`is_active`** on the endpoint.
-4. For **GitHub/Cursor/Stripe**, signature verification must pass (secrets in Worker env / vault). **`secret_hash` in D1 can be NULL** if verification uses **only** Worker secrets and the DB column is reserved for future “hash of shared secret for dashboard display.” **Do not store raw secrets in D1.** If you add hashes, store **SHA-256** of the configured secret, never plaintext.
-5. **New provider?** Add a **new** `webhook_endpoints` row + route in Worker — don’t overload an existing path without Sam.
+4. For **GitHub/Cursor/Stripe**, confirm signature verification passes after env is correct.
+5. **New provider or new path?** Add a **new** `webhook_endpoints` row + route in Worker — don’t overload an existing path without Sam.
 
-**Do you need another endpoint row?** Only if you add a **new path or new source**; you do **not** need duplicates for the same path.
+**Production confirmation (Sam, 2026-03-22):** GitHub repo hook **POST** `https://inneranimalmedia.com/api/webhooks/github` with hook secret aligned to **`GITHUB_WEBHOOK_SECRET`** — **`ping`** deliveries succeed (repository **inneranimalmedia-agentsam-dashboard**). Same Worker code also serves **`/api/hooks/github`** if D1 has a row for that path.
+
+**Do you need another endpoint row?** Only for a **new path or new source** — not duplicates for the same URL.
 
 ---
 
@@ -117,7 +129,7 @@ Rules:
 - Do not change worker.js OAuth callbacks without explicit approval.
 - For D1 writes: prefer scripts/d1-*.sql + wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml; propose SQL before running if not already approved.
 - After deploys: insert or update deployments + deployment_tracking (and deployment_changes if you have file list); optional metrics tables only when you have real timings.
-- Webhooks: no row in webhook_events means handleInboundWebhook did not match webhook_endpoints or verify failed — fix path/source/secrets, not duplicate endpoints blindly. secret_hash NULL is OK if verification uses Worker secrets only; never store plaintext secrets in D1.
+- Webhooks: “not firing” is usually path/source mismatch, verify failing (fix Worker env first), or missing webhook_endpoints row — not a second endpoint for the same URL. secret_hash NULL can be fine; never store plaintext secrets in D1.
 - workflow_locks: optional mutex for concurrent automation (lock_key, expires_at).
 - Agent UI promotion path: wf_cidi_agent_ui_sandbox_to_prod in mcp_workflows; scripts upload-repo-to-r2-sandbox.sh and PROMOTE_OK=1 promote-agent-dashboard-to-production.sh.
 

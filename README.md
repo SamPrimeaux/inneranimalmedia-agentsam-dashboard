@@ -2,6 +2,9 @@
 
 This repo is the single source of truth for the **Agent Sam** dashboard, the Cloudflare Worker that serves it, public marketing pages, the MCP server, and the terminal server. Use this README to orient and pick up exactly where you left off (see **Where we left off** and **Key docs**).
 
+**Full system map (2-zone Cloudflare CIDI, sibling repos, D1 clusters, Mermaid + ASCII):**  
+[`docs/SYSTEM_CIDI_ARCHITECTURE_README.md`](docs/SYSTEM_CIDI_ARCHITECTURE_README.md)
+
 ---
 
 ## What's in the repo
@@ -53,6 +56,7 @@ URLs: `https://inneranimalmedia.com/dashboard/<name>` (e.g. `/dashboard/agent`, 
 
 ### MCP server (InnerAnimalMedia)
 
+- **Sibling repo (canonical deploy source):** [github.com/SamPrimeaux/inneranimalmedia-mcp-server](https://github.com/SamPrimeaux/inneranimalmedia-mcp-server) — Worker **inneranimalmedia-mcp-server**. Vendored copy in this monorepo: `inneranimalmedia-mcp-server/`.
 - **Endpoint:** `https://mcp.inneranimalmedia.com/mcp`
 - **Auth:** `Authorization: Bearer <token>` (token in `.cursor/mcp.json` only; do not commit).
 - **Required header:** `Accept: application/json, text/event-stream` (missing header returns 406).
@@ -71,6 +75,7 @@ URLs: `https://inneranimalmedia.com/dashboard/<name>` (e.g. `/dashboard/agent`, 
 
 ### Terminal server (PTY)
 
+- **Sibling repo (tunnel / isolated PTY):** [github.com/SamPrimeaux/iam-pty](https://github.com/SamPrimeaux/iam-pty) — production entry **terminal.inneranimalmedia.com** (tunnel + backup story). This repo may still contain `server/` for local/dev; align with iam-pty for production terminal.
 - **Path:** `server/`. Node app using `node-pty` and WebSocket for browser terminal and Agent tool execution.
 - **Run locally:** `./server/run-terminal-server.sh` (or `node server/terminal.js` with env).
 - **Production:** May run behind a tunnel (see `server/tunnel.yml.example`). Not deployed as part of the Cloudflare Worker; separate process/machine.
@@ -96,6 +101,8 @@ Worker never uses **iam-platform** for serving worker/dashboard code; that bucke
 | Script | Purpose |
 |--------|--------|
 | `./scripts/with-cloudflare-env.sh <cmd>` | Loads `.env.cloudflare` (or env) so `CLOUDFLARE_API_TOKEN` is set; **always** use for wrangler R2/deploy commands. |
+| `./scripts/upload-repo-to-r2-sandbox.sh` | Syncs dashboard HTML + Vite outputs to R2 **agent-sam-sandbox-cidi** (CIDI sandbox zone). |
+| `PROMOTE_OK=1 ./scripts/promote-agent-dashboard-to-production.sh` | Builds agent-dashboard; uploads `agent.html` + bundle to **agent-sam** (production R2 only; no Worker deploy). |
 | `npm run deploy` | Runs `./scripts/deploy-with-record.sh`: sources env, deploys worker via wrangler, records deploy in D1. **Do not run without explicit "deploy approved".** |
 | `./agent-dashboard/deploy-to-r2.sh` | Builds agent-dashboard (and optionally overview-dashboard, time-tracking-dashboard), uploads JS/CSS/HTML to R2 **agent-sam**. Does not deploy the worker. Run from repo root. |
 | `./scripts/deploy-with-record.sh` | Called by `npm run deploy`. Uploads agent dist + selected dashboard HTML to R2 then runs wrangler deploy. |
@@ -164,6 +171,9 @@ After building, upload changed assets and any changed dashboard HTML to R2 (see 
 
 | Doc | Purpose |
 |-----|--------|
+| `docs/SYSTEM_CIDI_ARCHITECTURE_README.md` | **Architecture:** production vs sandbox Workers, R2 buckets, MCP + PTY repos, Mermaid diagrams, D1 table clusters, CIDI 2-step UI lane. |
+| `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` | **Agents:** which D1 tables to touch per action; webhooks; `workflow_locks`; copy-paste Cursor prompt. |
+| `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` | **Agents:** sandbox UI iteration and safe promotion to production R2. |
 | `docs/LOCATIONS_AND_DEPLOY_AUDIT.md` | Worker/dashboard locations, R2 keys, deploy flow, quick commands. |
 | `docs/cursor-session-log.md` | Per-session what was asked, files changed, deploy status, what is live, known issues. |
 | `docs/TOMORROW.md` | Handoff: shipped today, P1 issues, roadmap, version, last deploy. |

@@ -4951,3 +4951,62 @@ Agent dashboard **v120** with slash picker and terminal running animations; work
 
 ### Known issues / next steps
 - Commit `dashboard/agent.html` (`?v=120`) if not already in git.
+
+---
+
+## [2026-03-22] D1 audit attempt (inneranimalmedia-business)
+
+### What was asked
+Audit production D1 `inneranimalmedia-business` (`cf87b717-d4e2-4cf8-bab0-a81268e32d49`, binding `DB`) for context.
+
+### What happened
+- Ran `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"` from Cloud Agent environment.
+- **Failed:** Cloudflare API `Authentication error [code: 10000]` / `Invalid access token [code: 9109]` — no valid token in this environment; **no live rows read**.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry only).
+
+### Deploy status
+- Worker deployed: no — read-only documentation.
+
+### What you should run locally (copy-paste)
+With a valid `CLOUDFLARE_API_TOKEN` (D1 read + Account read) via `scripts/with-cloudflare-env.sh`:
+
+```bash
+DB=inneranimalmedia-business
+CFG=wrangler.production.toml
+W='./scripts/with-cloudflare-env.sh npx wrangler d1 execute '"$DB"' --remote -c '"$CFG"' --command'
+$W "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+$W "SELECT key, substr(value,1,200) AS value_preview FROM agent_memory_index WHERE tenant_id='tenant_sam_primeaux' AND key IN ('active_priorities','build_progress','today_todo');"
+$W "SELECT title, status FROM roadmap_steps WHERE plan_id='plan_iam_dashboard_v1' ORDER BY order_index;"
+$W "SELECT COUNT(*) AS n FROM spend_ledger;"
+$W "SELECT COUNT(*) AS n FROM agent_telemetry;"
+$W "SELECT datetime(MAX(created_at),'unixepoch') AS last_telemetry_at FROM agent_telemetry;"
+$W "SELECT deployment_id, deployed_at, status FROM cloudflare_deployments ORDER BY deployed_at DESC LIMIT 5;"
+$W "SELECT COUNT(*) AS active_terminal_sessions FROM terminal_sessions WHERE status='active';"
+```
+
+### Known issues / next steps
+- Re-run the same commands where the token works; compare `sqlite_master` to `migrations/*.sql` for drift.
+
+---
+
+## [2026-03-22] Local Cloudflare credentials (.env.cloudflare)
+
+### What was asked
+Configure Cloudflare API credentials for the repo env (gitignored), without documenting operational notes about key lifecycle in the file.
+
+### Files changed
+- `.env.cloudflare` (created/updated locally — **gitignored**, not committed): `CLOUDFLARE_ACCOUNT_ID` set from `/accounts` (single account); `CLOUDFLARE_API_TOKEN` set from user-supplied value.
+- `docs/cursor-session-log.md` (this entry).
+
+### Deploy status
+- Worker deployed: no.
+- Token verify: `GET /user/tokens/verify` returned success/active.
+- D1 smoke test: `wrangler d1 execute inneranimalmedia-business --remote` with `SELECT 1` succeeded.
+
+### What is live now
+No production deploy; local/CI environments that load `.env.cloudflare` via `scripts/with-cloudflare-env.sh` can use Wrangler against remote D1/R2 when this file is present.
+
+### Known issues / next steps
+- Prefer storing the token only in a password manager and on machines you control; if it may have been copied from an insecure channel, create a replacement token in the Cloudflare dashboard and update `.env.cloudflare` locally.

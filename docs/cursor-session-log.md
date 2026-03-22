@@ -6126,3 +6126,25 @@ Sign-in UI live at `inneranimal-dashboard.meauxbility.workers.dev/auth/signin` b
 ### Note for Sam
 If this breaks again after Git/Workers Builds deploys, set the same secret again or use PBKDF2 hex secrets; avoid storing Cloudflare API tokens as Worker plaintext vars.
 
+---
+
+## [2026-03-23] D1 backfill: `cidi_activity_log`, `cidi_recent_completions` (view), `cicd_runs`
+
+### What was asked
+Properly backfill `cidi_activity_log`, `cidi_recent_completions`, and `cicd_runs`.
+
+### Complicating factors (resolved in script)
+- **`cidi_recent_completions`** in production is a **VIEW** on `cidi` (completed + `actual_completion_date` within 90 days), not an insertable table — PRAGMA in tooling can look like a wide table. Backfill uses **`UPDATE cidi`** only when `actual_completion_date` was missing on completed rows (none changed for current data).
+- **`cicd_runs.status`** CHECK allows `queued|in_progress|success|failure|cancelled|skipped|timed_out` — not GitHub’s `completed`. Mapped deployment **`success`** → **`success`** for both `status` and `conclusion`.
+- D1 remote **`BEGIN TRANSACTION`** rejected — script uses sequential statements only.
+
+### Files changed
+- `scripts/d1-backfill-cidi-activity-completions-cicd-20260323.sql` — idempotent inserts: activity for `cidi_id` 3 (SWAMP-002 inception) + four IAM (`cidi_id` 4) milestones with `metadata_json.backfill_id`; `UPDATE cidi` for completion dates; `INSERT` into `cicd_runs` from **`deployments`** with `id` = `bfcd_` + sanitized deployment id, `run_id` = deployment `id`, FK `cloudflare_deployment_id` set.
+
+### Deploy status
+- Executed: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-backfill-cidi-activity-completions-cicd-20260323.sql`
+- Result: **7** statements; **~178** rows written; **`cicd_runs` = 51** (all `deployments` mirrored); **`cidi_activity_log` = 16** (was 11); **`cidi_recent_completions` view** still **1** row (Swamp completed still in 90-day window).
+
+### Re-run
+Safe to re-run; guards use `metadata_json LIKE '%bf_…%'` and `NOT EXISTS` on `cicd_runs.run_id`.
+

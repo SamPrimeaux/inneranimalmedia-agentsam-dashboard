@@ -5632,7 +5632,7 @@ Land local WIP on GitHub so sandbox refine/debug is easier; acknowledge tight ru
 - Built: no (not requested)
 - R2 uploaded: no
 - Worker deployed: no — **deploy approved** not given; production Worker unchanged until Sam deploys
-- Git push: yes — app + worker **c016d05**; session log row recorded in follow-up commit
+- Git push: yes — sources **c016d05**, session log **08c2939** on https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
 
 ### What is live now
 GitHub **main** has source parity for agent shell + dashboard + worker; production still prior deploy until build/R2/deploy.

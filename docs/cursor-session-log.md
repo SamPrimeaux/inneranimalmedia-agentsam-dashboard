@@ -5152,3 +5152,29 @@ Review `projects` labeling for the build; add five efficient `workflows` for com
 
 ### Deploy status
 - D1: projects UPDATE + ai_projects UPDATE + 5 workflow INSERTs (ai_projects UPDATE also run once via wrangler before file edit; migration file now includes it for a single replay).
+
+---
+
+## [2026-03-22] workspaces + workspace_available_tools (VIEW)
+
+### What was asked
+Note `workspace_available_tools`; align `workspaces` with the build/company.
+
+### Investigation
+- **`workspace_available_tools`** is a **VIEW** over **`workspace_tool_access`** JOIN **`agent_commands`** (+ capability joins). Rows appear when **`workspace_tool_access.is_enabled=1`**; the view **fans out** one row per capability mapping (e.g. ~1386 visible rows for 77 enabled commands on `ws_inneranimal_app`).
+- **`ws_samprimeaux`** had **zero** `workspace_tool_access` rows before (owner workspace had no tool matrix).
+- **`ws_inneranimal`** had **77** command grants (same as other client workspaces).
+
+### What was done
+- **UPDATE `ws_inneranimal`:** `handle=inneranimalmedia`, `default_tenant_id=tenant_sam_primeaux`.
+- **UPDATE `ws_samprimeaux`:** `handle=samprimeaux`, `default_tenant_id=tenant_sam_primeaux`.
+- **INSERT `workspaces`:** **`ws_inneranimal_app`** — Inner Animal App, `category=client`, handles **`inneranimalapp`**, theme `inner-animal-dark`, tenant `tenant_sam_primeaux`.
+- **INSERT `workspace_tool_access`:** cloned from `ws_inneranimal` onto **`ws_inneranimal_app`** and **`ws_samprimeaux`** (77 commands each).
+- **UPDATE `projects`:** `metadata_json` keys **`workspace_entity`**, **`workspace_client_app`**, **`workspace_owner`** for `proj_iam_agentsam_composer2_20260322`.
+
+### Files changed
+- `migrations/_oneoff_workspaces_tool_access_align_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- D1: 2 workspace UPDATEs + 1 workspace INSERT + 154 workspace_tool_access INSERTs + projects json_set.

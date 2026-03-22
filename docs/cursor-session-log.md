@@ -5572,10 +5572,10 @@ Document that “webhooks not firing” is usually path/source mismatch, verific
 ### Deploy status
 - Worker deployed: no
 - R2 uploaded: no
-- Git push: not run from this session (commit/push if Sam wants GitHub doc sync)
+- Git push: yes — `main` **c73d7cb** to https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
 
 ### What is live now
-Unchanged Worker behavior; documentation only.
+Unchanged Worker behavior; handoff doc + session log on GitHub **main**.
 
 ### Known issues / next steps
 - If GitHub uses `/api/hooks/github`, ensure D1 `endpoint_path` matches that path (Worker supports both routes with distinct `endpointPath` lookups).

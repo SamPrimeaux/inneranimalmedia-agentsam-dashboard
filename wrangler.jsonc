@@ -1,7 +1,23 @@
+// Cloudflare Workers Builds (Git integration) — sandbox worker only.
+// Default URL: https://inneranimal-dashboard.meauxbility.workers.dev
+//
+// Production worker (inneranimalmedia.com, webhooks, D1 bindings, etc.): deploy only via
+//   ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml
+// with Sam approval per repo rules — do not treat this file as production config.
+//
+// Goal: validate CIDI + pipeline stability on sandbox before UI enhancements on prod.
+
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "inneranimalmedia",
-  "compatibility_date": "2025-09-27",
+  "name": "inneranimal-dashboard",
+  "main": "worker.js",
+  "compatibility_date": "2026-01-20",
+  "workers_dev": true,
+  "preview_urls": true,
+  "no_bundle": false,
+  "build": {
+    "command": ""
+  },
   "observability": {
     "enabled": true
   },

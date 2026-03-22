@@ -5219,3 +5219,22 @@ Record that the agent can follow code changes while dashboard Monaco + Agent UI/
 
 ### Deploy status
 - D1: 2 INSERTs + 1 projects `json_set` (wrangler `--file`).
+
+---
+
+## [2026-03-22] wrangler.jsonc — Git Builds sandbox `inneranimal-dashboard`
+
+### What was asked
+Align repo `wrangler.jsonc` with Cloudflare Workers Git-connected build; sandbox `https://inneranimal-dashboard.meauxbility.workers.dev`; stabilize CIDI before UI work.
+
+### Files changed
+- `wrangler.jsonc`: `name` **inneranimal-dashboard**; `main` **worker.js**; `compatibility_date` **2026-01-20** (match `wrangler.production.toml`); `workers_dev` + `preview_urls`; `no_bundle` false + empty `build.command`; comments document sandbox vs production deploy path.
+
+### Deploy status
+- Worker deployed: no (config-only). Production remains `wrangler.production.toml` / **inneranimalmedia** with Sam approval.
+
+### What is live now
+- Unchanged until Cloudflare Builds runs from Git using this config.
+
+### Known issues / next steps
+- Cloudflare may open a PR for Wrangler 3.109+ schema parity (dashboard copy); local `wrangler deploy --dry-run -c wrangler.jsonc` needs `npm install` so `@cloudflare/playwright` resolves (same as prod bundle expectations).

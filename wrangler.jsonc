@@ -1,11 +1,16 @@
 // Cloudflare Workers Builds (Git integration) — sandbox worker only.
 // Default URL: https://inneranimal-dashboard.meauxbility.workers.dev
 //
-// Production worker (inneranimalmedia.com, webhooks, D1 bindings, etc.): deploy only via
-//   ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml
-// with Sam approval per repo rules — do not treat this file as production config.
+// R2: cloned dashboard/static lives in agent-sam-sandbox-cidi. Worker code uses BOTH:
+//   - ASSETS (index.html, public routes in inneranimalmedia-assets on prod)
+//   - DASHBOARD (static/dashboard/*, auth-signin, uploads on prod → agent-sam)
+// Bind BOTH to the same sandbox bucket so keys match worker.js lookups.
 //
-// Goal: validate CIDI + pipeline stability on sandbox before UI enhancements on prod.
+// D1: inneranimalmedia-business matches prod — full parity for CIDI/sandbox testing; writes from
+// this worker affect production data. Use read-only tests or accept shared DB risk.
+//
+// Production deploy: ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml
+// (worker inneranimalmedia) with Sam approval — do not confuse with this file.
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -18,6 +23,23 @@
   "build": {
     "command": ""
   },
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "agent-sam-sandbox-cidi"
+    },
+    {
+      "binding": "DASHBOARD",
+      "bucket_name": "agent-sam-sandbox-cidi"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "inneranimalmedia-business",
+      "database_id": "cf87b717-d4e2-4cf8-bab0-a81268e32d49"
+    }
+  ],
   "observability": {
     "enabled": true
   },

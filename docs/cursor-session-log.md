@@ -5267,3 +5267,16 @@ Separate Git + sandbox URLs with a delimiter for parsers/UI.
 
 ### Deploy status
 - D1: wrangler `--file` UPDATE applied.
+
+---
+
+## [2026-03-22] Sandbox R2 clone + wrangler.jsonc — ASSETS + DASHBOARD + DB
+
+### Context
+CIDI sandbox worker: R2 **agent-sam-sandbox-cidi** (clone), D1 **inneranimalmedia-business**. Worker.js serves dashboard from **env.DASHBOARD**, not only **env.ASSETS**.
+
+### Repo
+- `wrangler.jsonc`: **both** `ASSETS` and `DASHBOARD` bound to `agent-sam-sandbox-cidi`; `DB` → same D1 id as prod (documented risk: sandbox writes hit prod DB).
+
+### Deploy status
+- Config-only commit; production `wrangler.production.toml` unchanged.

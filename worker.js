@@ -17,6 +17,17 @@ function normalizeThemeSlug(value) {
 
 const SUPERADMIN_EMAILS = ['info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com'];
 
+/** Normalize inbound host (Workers: prefer Host header over URL hostname). */
+function inboundHostname(request, url) {
+  const raw =
+    request.headers.get('Host') ||
+    request.headers.get('host') ||
+    request.headers.get('X-Forwarded-Host') ||
+    url.hostname ||
+    '';
+  return String(raw).split(':')[0].toLowerCase().replace(/\.$/, '');
+}
+
 /** Git-builds sandbox worker (wrangler.jsonc name inneranimal-dashboard). Not production inneranimalmedia.com. */
 function isInneranimalDashboardSandboxHost(hostname) {
   if (!hostname || typeof hostname !== 'string') return false;
@@ -24,6 +35,7 @@ function isInneranimalDashboardSandboxHost(hostname) {
   if (h === 'inneranimal-dashboard.meauxbility.workers.dev') return true;
   if (h.endsWith('.inneranimal-dashboard.meauxbility.workers.dev')) return true;
   if (/-inneranimal-dashboard\.meauxbility\.workers\.dev$/.test(h)) return true;
+  if (h.endsWith('.meauxbility.workers.dev') && h.includes('inneranimal-dashboard')) return true;
   return false;
 }
 
@@ -1117,9 +1129,11 @@ const worker = {
       const pathLower = path.toLowerCase();
       const methodUpper = (request.method || 'GET').toUpperCase();
 
-      // CIDI sandbox: root -> sign-in early (when this Worker runs). If "/" still serves a Vite shell, Static Assets may run before the Worker — see docs/CIDI_WORKER_inneranimal-dashboard_RUNBOOK.md
+      // CIDI sandbox: / -> /auth/signin early. Prefer Host header — url.hostname can differ on some Workers routes.
+      // If "/" still shows a Vite shell, Static Assets may run before this script; see docs/CIDI_WORKER_inneranimal-dashboard_RUNBOOK.md
+      const inboundHost = inboundHostname(request, url);
       if (
-        isInneranimalDashboardSandboxHost(url.hostname) &&
+        isInneranimalDashboardSandboxHost(inboundHost) &&
         methodUpper === 'GET' &&
         (path === '/' || pathLower === '/index.html')
       ) {
@@ -11847,7 +11861,7 @@ async function handleSandboxDashboardPasswordLogin(request, url, env) {
 
 /** POST /api/auth/login -- body: { email, password }. Creates session and redirects to /dashboard/overview. */
 async function handleEmailPasswordLogin(request, url, env) {
-  if (isInneranimalDashboardSandboxHost(url.hostname)) {
+  if (isInneranimalDashboardSandboxHost(inboundHostname(request, url))) {
     return handleSandboxDashboardPasswordLogin(request, url, env);
   }
   if (!env.DB) {

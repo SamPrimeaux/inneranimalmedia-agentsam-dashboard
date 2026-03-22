@@ -5130,3 +5130,25 @@ Wire Inner Animal App client `client_51838412025944c5` into related AI tables; u
 
 ### Deploy status
 - D1: UPDATE + 2 INSERT project_memory + 1 routing + 1 ai_projects + 3 ai_tasks.
+
+---
+
+## [2026-03-22] projects labeling + five IAM workflows
+
+### What was asked
+Review `projects` labeling for the build; add five efficient `workflows` for company/build.
+
+### Investigation
+- `proj_iam_agentsam_composer2_20260322` had **client_id** `client_51838412025944c5` (Inner Animal App) but **client_name** still **Inner Animal Media** — inconsistent with `clients.name` and confusing for joins/UI. **metadata_json** already had correct `client_name` for Inner Animal App.
+
+### What was done
+- **UPDATE projects:** `client_name` = Inner Animal App; clearer **name** and **description** (client vs operator brand); **metadata_json** extended (`build_kind`, `surface`, `company_brand`, `github_repo`, `label_version`); **tags_json** expanded.
+- **UPDATE ai_projects:** same title/description alignment (shared id with `projects`).
+- **INSERT workflows (5):** `wf_iam_deploy_worker_r2_first`, `wf_iam_d1_health_snapshot`, `wf_iam_terminal_regression`, `wf_iam_settings_rollout`, `wf_iam_cursor_session_document` — short 4-step JSON playbooks (deploy, observability, QA, feature rollout, documentation).
+
+### Files changed
+- `migrations/_oneoff_projects_label_iam_workflows_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- D1: projects UPDATE + ai_projects UPDATE + 5 workflow INSERTs (ai_projects UPDATE also run once via wrangler before file edit; migration file now includes it for a single replay).

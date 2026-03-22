@@ -1,26 +1,28 @@
--- Align projects row with clients FK; add five IAM platform workflows (efficient step lists).
--- Client FK: client_51838412025944c5 = Inner Animal App (clients.name).
+-- Align projects row for InnerAnimalMedia SaaS / Agent Sam dashboard build; add five IAM workflows.
+-- Product: InnerAnimalMedia; company: Inner Animal Media (not the separate "Inner Animal App" client SKU).
 
 UPDATE projects SET
-  client_name = 'Inner Animal App',
-  name = 'IAM Agent Sam dashboard — platform UI build (Inner Animal App)',
-  description = 'Build track for inneranimalmedia.com Agent Sam / dashboard: terminal, Settings control plane, UI polish, D1 observability. Client record Inner Animal App (client_51838412025944c5); operating brand Inner Animal Media. Repo branch cursor/platform-ui-stability-1eca; Worker inneranimalmedia; D1 inneranimalmedia-business.',
+  client_id = NULL,
+  client_name = 'Inner Animal Media',
+  name = 'InnerAnimalMedia — Agent Sam SaaS (platform UI build)',
+  description = 'InnerAnimalMedia SaaS / Agent Sam dashboard: terminal, Settings control plane, UI polish, D1 observability. Company Inner Animal Media; Worker inneranimalmedia; D1 inneranimalmedia-business; branch cursor/platform-ui-stability-1eca.',
   metadata_json = json_set(
     COALESCE(NULLIF(metadata_json, ''), '{}'),
-    '$.build_kind', 'platform_dashboard',
+    '$.product', 'InnerAnimalMedia',
+    '$.build_kind', 'saas_agentsam_dashboard',
     '$.surface', 'agent_sam_dashboard',
     '$.company_brand', 'Inner Animal Media',
     '$.github_repo', 'SamPrimeaux/inneranimalmedia-agentsam-dashboard',
     '$.label_version', '2026-03-22'
   ),
-  tags_json = '["inner-animal-app","inner-animal-media","agent-sam","platform-ui","composer2","d1","worker-inneranimalmedia","client_51838412025944c5"]',
+  tags_json = '["inneranimalmedia","agent-sam","saas","platform-ui","composer2","d1","worker-inneranimalmedia"]',
   updated_at = CURRENT_TIMESTAMP
 WHERE id = 'proj_iam_agentsam_composer2_20260322';
 
 -- Mirror title/description on ai_projects (same id as projects for ai_tasks FK)
 UPDATE ai_projects SET
-  name = 'IAM Agent Sam dashboard — platform UI build (Inner Animal App)',
-  description = 'Inner Animal App client_51838412025944c5: terminal, Settings, Agent polish; branch cursor/platform-ui-stability-1eca. Operator brand Inner Animal Media.',
+  name = 'InnerAnimalMedia — Agent Sam SaaS (platform UI build)',
+  description = 'InnerAnimalMedia SaaS / Agent Sam dashboard: terminal, Settings, Agent polish; branch cursor/platform-ui-stability-1eca. Company Inner Animal Media.',
   updated_at = CURRENT_TIMESTAMP
 WHERE id = 'proj_iam_agentsam_composer2_20260322';
 
@@ -31,7 +33,7 @@ INSERT INTO workflows (id, name, description, workflow_type, trigger_type, trigg
   'Ship dashboard HTML/JS to R2, then npm run deploy (worker); never skip R2 when dashboard paths changed.',
   'deploy',
   'manual',
-  '{"project_id":"proj_iam_agentsam_composer2_20260322","client_id":"client_51838412025944c5"}',
+  '{"project_id":"proj_iam_agentsam_composer2_20260322","product":"InnerAnimalMedia"}',
   '[{"step":1,"name":"list_dashboard_changes","type":"check","action":"git diff name-only dashboard static/dashboard agent-dashboard/src","description":"See R2-served path changes"},{"step":2,"name":"upload_r2","type":"script","action":"with-cloudflare-env wrangler r2 object put agent-sam static dashboard files remote","description":"Upload changed assets"},{"step":3,"name":"deploy_worker","type":"script","action":"npm run deploy with TRIGGERED_BY DEPLOYMENT_NOTES","description":"Worker inneranimalmedia after Sam deploy approved"},{"step":4,"name":"record_deploy","type":"log","action":"deployments table via post-deploy script","description":"Audit trail"}]',
   1
 ),

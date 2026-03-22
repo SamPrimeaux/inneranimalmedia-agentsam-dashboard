@@ -1,20 +1,9 @@
 -- ai_projects.ai_provider CHECK allows: claude, openai, gemini, vertex, workers-ai (use claude; put cursor in metadata).
--- Link IAM Composer 2 platform build to client Inner Animal App; populate memory (ai_project_memory_context view),
--- ai_routing_rules, ai_projects + ai_tasks. Client: client_51838412025944c5 (clients.name = Inner Animal App).
+-- InnerAnimalMedia SaaS / Agent Sam dashboard build — memory, routing, ai_projects + ai_tasks.
+-- Do not link this platform project to clients.id Inner Animal App; see _fix_inneranimalmedia_labeling_2026-03-22.sql if prod was corrected.
 -- Production D1 inneranimalmedia-business. 2026-03-22.
 
--- 1) projects row: set clients.id FK
-UPDATE projects
-SET client_id = 'client_51838412025944c5',
-    updated_at = CURRENT_TIMESTAMP,
-    metadata_json = json_set(
-      COALESCE(NULLIF(metadata_json, ''), '{}'),
-      '$.client_id', 'client_51838412025944c5',
-      '$.client_name', 'Inner Animal App'
-    )
-WHERE id = 'proj_iam_agentsam_composer2_20260322';
-
--- 2) project_memory -> visible via VIEW ai_project_memory_context (non-expired)
+-- 1) project_memory -> visible via VIEW ai_project_memory_context (non-expired)
 INSERT INTO project_memory (
   id,
   project_id,
@@ -34,7 +23,7 @@ INSERT INTO project_memory (
   'tenant_sam_primeaux',
   'workflow',
   'composer2_platform_build',
-  '{"client_id":"client_51838412025944c5","client_name":"Inner Animal App","user_agent":"composer2_agentsam","git_branch":"cursor/platform-ui-stability-1eca","worker":"inneranimalmedia","d1":"inneranimalmedia-business","cidi_workflow_id":"CIDI-IAM-AGENTSAM-20260322","artifacts":["agent_tools","agent_telemetry","agent_runtime_configs","ai_models composer2-agentsam"]}',
+  '{"product":"InnerAnimalMedia","company_brand":"Inner Animal Media","user_agent":"composer2_agentsam","git_branch":"cursor/platform-ui-stability-1eca","worker":"inneranimalmedia","d1":"inneranimalmedia-business","cidi_workflow_id":"CIDI-IAM-AGENTSAM-20260322","artifacts":["agent_tools","agent_telemetry","agent_runtime_configs","ai_models composer2-agentsam"]}',
   0.95,
   0.92,
   'composer2_agentsam',
@@ -55,7 +44,7 @@ INSERT INTO project_memory (
   unixepoch()
 );
 
--- 3) ai_routing_rules — Composer 2 / IAM dashboard lane (catalog model; not API completion path)
+-- 2) ai_routing_rules — Composer 2 / IAM dashboard lane (catalog model; not API completion path)
 INSERT INTO ai_routing_rules (
   id,
   rule_name,
@@ -70,19 +59,19 @@ INSERT INTO ai_routing_rules (
   updated_at
 ) VALUES (
   'route_composer2_iam_client_51838412025944c5',
-  'Cursor Composer 2 — Inner Animal App (client_51838412025944c5)',
+  'Cursor Composer 2 — InnerAnimalMedia Agent Sam',
   7,
   'intent',
   'composer2_agentsam,cursor_composer,iam_dashboard,inneranimalmedia_agentsam',
   'composer2-agentsam',
   'cursor',
-  'IDE session / catalog routing for Inner Animal App (clients.id client_51838412025944c5). Agent Sam dashboard platform UI workstream; target is D1 catalog model, not a remote chat API.',
+  'IDE session / catalog routing for InnerAnimalMedia SaaS / Agent Sam dashboard; target is D1 catalog model composer2-agentsam, not a remote chat API.',
   1,
   unixepoch(),
   unixepoch()
 );
 
--- 4) ai_projects — same id as projects row for cross-table linkage; FK for ai_tasks
+-- 3) ai_projects — same id as projects row for cross-table linkage; FK for ai_tasks
 INSERT INTO ai_projects (
   id,
   name,
@@ -97,17 +86,17 @@ INSERT INTO ai_projects (
 ) VALUES (
   'proj_iam_agentsam_composer2_20260322',
   'Agent Sam dashboard — platform UI (Composer 2)',
-  'Inner Animal App client_51838412025944c5: terminal, Settings control plane, Agent polish; branch cursor/platform-ui-stability-1eca.',
+  'InnerAnimalMedia SaaS / Agent Sam: terminal, Settings control plane, Agent polish; branch cursor/platform-ui-stability-1eca.',
   'build',
   'active',
   'claude',
   CURRENT_TIMESTAMP,
   CURRENT_TIMESTAMP,
   'composer2_agentsam',
-  '{"client_id":"client_51838412025944c5","client_name":"Inner Animal App","user_agent":"composer2_agentsam","ide_lane":"cursor_composer2","projects_table_id":"proj_iam_agentsam_composer2_20260322"}'
+  '{"product":"InnerAnimalMedia","company_brand":"Inner Animal Media","user_agent":"composer2_agentsam","ide_lane":"cursor_composer2","projects_table_id":"proj_iam_agentsam_composer2_20260322"}'
 );
 
--- 5) ai_tasks
+-- 4) ai_tasks
 INSERT INTO ai_tasks (
   id,
   project_id,
@@ -126,7 +115,7 @@ INSERT INTO ai_tasks (
   'in_progress',
   10,
   NULL,
-  '{"client_id":"client_51838412025944c5","stream":"platform_ui"}'
+  '{"product":"InnerAnimalMedia","stream":"platform_ui"}'
 ),
 (
   'task_iam_settings_plane_20260322',
@@ -136,7 +125,7 @@ INSERT INTO ai_tasks (
   'todo',
   9,
   NULL,
-  '{"client_id":"client_51838412025944c5","stream":"platform_ui"}'
+  '{"product":"InnerAnimalMedia","stream":"platform_ui"}'
 ),
 (
   'task_iam_agent_polish_20260322',
@@ -146,5 +135,5 @@ INSERT INTO ai_tasks (
   'todo',
   8,
   NULL,
-  '{"client_id":"client_51838412025944c5","stream":"platform_ui"}'
+  '{"product":"InnerAnimalMedia","stream":"platform_ui"}'
 );

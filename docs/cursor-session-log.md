@@ -5112,17 +5112,17 @@ Add Composer 2 / IAM workflow rows to `agent_tools`, `agent_telemetry`, `agent_r
 
 ---
 
-## [2026-03-22] D1 client_51838412025944c5 — project_memory, ai_routing_rules, ai_projects, ai_tasks
+## [2026-03-22] D1 project_memory, ai_routing_rules, ai_projects, ai_tasks (InnerAnimalMedia build)
 
 ### What was asked
-Wire Inner Animal App client `client_51838412025944c5` into related AI tables; use/update `ai_project_memory_context`, `ai_routing_rules`, `ai_tasks`.
+Wire related AI tables for the platform build; use/update `ai_project_memory_context`, `ai_routing_rules`, `ai_tasks`. (Initial run mistakenly tied `projects.client_id` to `client_51838412025944c5` / “Inner Animal App” wording — **corrected** in `_fix_inneranimalmedia_labeling_2026-03-22.sql`; product is **InnerAnimalMedia** SaaS / Agent Sam.)
 
 ### What was done
-- **`projects`:** `proj_iam_agentsam_composer2_20260322` now has **`client_id=client_51838412025944c5`** (Inner Animal App); `metadata_json` updated via `json_set`.
+- **`projects`:** briefly had **`client_id=client_51838412025944c5`** (later **cleared**; build is not the separate Inner Animal App SKU).
 - **`project_memory`:** two rows (`workflow` / `goal_context`) so **`ai_project_memory_context` VIEW** returns them for that `project_id`.
-- **`ai_routing_rules`:** `route_composer2_iam_client_51838412025944c5`, priority 7, target **`composer2-agentsam`** / **cursor**, reason cites client id.
-- **`ai_projects`:** row id **`proj_iam_agentsam_composer2_20260322`** (matches `projects.id`) for **`ai_tasks` FK**; `ai_provider` **claude** (schema CHECK); metadata holds **client_id** + **ide_lane** cursor_composer2.
-- **`ai_tasks`:** three tasks (terminal in_progress, settings + polish todo) with **client_id** in each `metadata`.
+- **`ai_routing_rules`:** `route_composer2_iam_client_51838412025944c5` (id retained), priority 7, target **`composer2-agentsam`** / **cursor**; rule text updated to InnerAnimalMedia wording in fix migration.
+- **`ai_projects`:** row id **`proj_iam_agentsam_composer2_20260322`** for **`ai_tasks` FK**; `ai_provider` **claude** (schema CHECK).
+- **`ai_tasks`:** three tasks; **`metadata`** now **`product: InnerAnimalMedia`** (per fix migration).
 
 ### Files changed
 - `migrations/_oneoff_client_composer2_memory_routing_tasks_2026-03-22.sql`
@@ -5139,10 +5139,10 @@ Wire Inner Animal App client `client_51838412025944c5` into related AI tables; u
 Review `projects` labeling for the build; add five efficient `workflows` for company/build.
 
 ### Investigation
-- `proj_iam_agentsam_composer2_20260322` had **client_id** `client_51838412025944c5` (Inner Animal App) but **client_name** still **Inner Animal Media** — inconsistent with `clients.name` and confusing for joins/UI. **metadata_json** already had correct `client_name` for Inner Animal App.
+- `proj_iam_agentsam_composer2_20260322` labeling drifted toward the wrong product name (“Inner Animal App”); the build is **InnerAnimalMedia** SaaS / Agent Sam (company **Inner Animal Media**).
 
 ### What was done
-- **UPDATE projects:** `client_name` = Inner Animal App; clearer **name** and **description** (client vs operator brand); **metadata_json** extended (`build_kind`, `surface`, `company_brand`, `github_repo`, `label_version`); **tags_json** expanded.
+- **UPDATE projects:** naming and tags toward InnerAnimalMedia + company brand (superseded again by `_fix_inneranimalmedia_labeling_2026-03-22.sql` for final `client_id` NULL and metadata keys).
 - **UPDATE ai_projects:** same title/description alignment (shared id with `projects`).
 - **INSERT workflows (5):** `wf_iam_deploy_worker_r2_first`, `wf_iam_d1_health_snapshot`, `wf_iam_terminal_regression`, `wf_iam_settings_rollout`, `wf_iam_cursor_session_document` — short 4-step JSON playbooks (deploy, observability, QA, feature rollout, documentation).
 
@@ -5168,9 +5168,9 @@ Note `workspace_available_tools`; align `workspaces` with the build/company.
 ### What was done
 - **UPDATE `ws_inneranimal`:** `handle=inneranimalmedia`, `default_tenant_id=tenant_sam_primeaux`.
 - **UPDATE `ws_samprimeaux`:** `handle=samprimeaux`, `default_tenant_id=tenant_sam_primeaux`.
-- **INSERT `workspaces`:** **`ws_inneranimal_app`** — Inner Animal App, `category=client`, handles **`inneranimalapp`**, theme `inner-animal-dark`, tenant `tenant_sam_primeaux`.
+- **INSERT `workspaces`:** **`ws_inneranimal_app`** — InnerAnimalMedia Agent Sam / SaaS surface (handle later **`inneranimalmedia_saas`**), theme `inner-animal-dark`, tenant `tenant_sam_primeaux`.
 - **INSERT `workspace_tool_access`:** cloned from `ws_inneranimal` onto **`ws_inneranimal_app`** and **`ws_samprimeaux`** (77 commands each).
-- **UPDATE `projects`:** `metadata_json` keys **`workspace_entity`**, **`workspace_client_app`**, **`workspace_owner`** for `proj_iam_agentsam_composer2_20260322`.
+- **UPDATE `projects`:** `metadata_json` keys **`workspace_entity`**, **`workspace_saas_agentsam`** (was `workspace_client_app` briefly), **`workspace_owner`** for `proj_iam_agentsam_composer2_20260322`.
 
 ### Files changed
 - `migrations/_oneoff_workspaces_tool_access_align_2026-03-22.sql`
@@ -5178,3 +5178,25 @@ Note `workspace_available_tools`; align `workspaces` with the build/company.
 
 ### Deploy status
 - D1: 2 workspace UPDATEs + 1 workspace INSERT + 154 workspace_tool_access INSERTs + projects json_set.
+
+---
+
+## [2026-03-22] CORRECTION — InnerAnimalMedia SaaS / Agent Sam (not Inner Animal App)
+
+### What was asked
+Relabel anything that treated this build as “Inner Animal App”; product is **InnerAnimalMedia** (SaaS / Agent Sam dashboard).
+
+### What was done (D1)
+- **`projects`:** `client_id` **NULL**; `client_name` **Inner Animal Media**; **name** / **description** / **metadata_json** / **tags** = InnerAnimalMedia SaaS + company brand; **`workspace_saas_agentsam`**; removed **`workspace_client_app`** key.
+- **`ai_projects`**, **`workspaces`** (`ws_inneranimal_app`), **`project_memory`**, **`ai_routing_rules`**, **`ai_tasks`**, **`workflows`** trigger_config, **`agent_tools`**, **`agent_telemetry`**, **`agent_runtime_configs`**, **`ai_models`** — text/JSON aligned to InnerAnimalMedia.
+
+### Files changed
+- `migrations/_fix_inneranimalmedia_labeling_2026-03-22.sql` (applied to production)
+- Updated historical one-off SQL comments/bodies: `_oneoff_workspaces_tool_access_align_2026-03-22.sql`, `_oneoff_projects_label_iam_workflows_2026-03-22.sql`, `_oneoff_client_composer2_memory_routing_tasks_2026-03-22.sql`, `_oneoff_composer2_workflow_agent_tables_2026-03-22.sql`, `_oneoff_ai_models_composer2_agentsam_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Note
+- **`ai_routing_rules.id`** `route_composer2_iam_client_51838412025944c5` kept for stability; display **rule_name** / **reason** corrected. Rename id only if no code depends on the old string.
+
+### Deploy status
+- D1: 12 UPDATE-style statements via wrangler `--file` (see fix migration).

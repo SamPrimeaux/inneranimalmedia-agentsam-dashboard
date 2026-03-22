@@ -1,6 +1,6 @@
 -- workspaces alignment + workspace_available_tools (VIEW) via workspace_tool_access.
 -- workspace_available_tools = VIEW on workspace_tool_access JOIN agent_commands; insert into workspace_tool_access only.
--- Client app: client_51838412025944c5 Inner Animal App -> workspace ws_inneranimal_app.
+-- ws_inneranimal_app = InnerAnimalMedia SaaS / Agent Sam dashboard (not the separate "Inner Animal App" client product).
 -- Clone tool matrix from ws_inneranimal (77 commands) onto ws_inneranimal_app and ws_samprimeaux (was 0).
 
 -- 1) Entity workspace: default tenant + stable handle
@@ -17,7 +17,7 @@ UPDATE workspaces SET
   updated_at = datetime('now')
 WHERE id = 'ws_samprimeaux';
 
--- 3) Product workspace for Inner Animal App (clients.id client_51838412025944c5)
+-- 3) Workspace for InnerAnimalMedia SaaS / Agent Sam dashboard surface
 INSERT INTO workspaces (
   id,
   name,
@@ -32,19 +32,19 @@ INSERT INTO workspaces (
   updated_at
 ) VALUES (
   'ws_inneranimal_app',
-  'Inner Animal App',
+  'InnerAnimalMedia — Agent Sam (SaaS dashboard)',
   NULL,
   'client',
   'active',
   datetime('now'),
   'tenant_sam_primeaux',
   'tenant_sam_primeaux',
-  'inneranimalapp',
+  'inneranimalmedia_saas',
   'inner-animal-dark',
   datetime('now')
 );
 
--- 4) Tool access: Inner Animal App workspace (same command set as main IAM entity)
+-- 4) Tool access: InnerAnimalMedia SaaS workspace (same command set as main IAM entity)
 INSERT INTO workspace_tool_access (
   workspace_id,
   command_id,
@@ -95,7 +95,7 @@ UPDATE projects SET
   metadata_json = json_set(
     COALESCE(NULLIF(metadata_json, ''), '{}'),
     '$.workspace_entity', 'ws_inneranimal',
-    '$.workspace_client_app', 'ws_inneranimal_app',
+    '$.workspace_saas_agentsam', 'ws_inneranimal_app',
     '$.workspace_owner', 'ws_samprimeaux'
   ),
   updated_at = CURRENT_TIMESTAMP

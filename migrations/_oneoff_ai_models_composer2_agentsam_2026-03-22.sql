@@ -1,4 +1,4 @@
--- One-off: catalog row for Cursor Composer 2 sessions (Agent Sam / IAM).
+-- One-off: catalog row for Cursor Composer 2 sessions (InnerAnimalMedia Agent Sam / IAM SaaS).
 -- Not an API-callable LLM; show_in_picker=0 so dashboard chat does not offer it as a completion target.
 -- Applied to production D1 via wrangler 2026-03-22.
 
@@ -33,7 +33,7 @@ INSERT INTO ai_models (
   'composer2-agentsam',
   'cursor',
   'composer2-agentsam',
-  'Cursor Composer 2 (Agent Sam)',
+  'Cursor Composer 2 (InnerAnimalMedia Agent Sam)',
   'tokens',
   0,
   200000,
@@ -44,7 +44,7 @@ INSERT INTO ai_models (
   0,
   'medium',
   1,
-  '{"user_agent_label":"composer2_agentsam","product":"Cursor Composer 2","role":"Inner Animal Media IDE agent"}',
+  '{"user_agent_label":"composer2_agentsam","product":"InnerAnimalMedia","saas":"Agent Sam dashboard","role":"IDE agent session"}',
   unixepoch(),
   unixepoch(),
   NULL,

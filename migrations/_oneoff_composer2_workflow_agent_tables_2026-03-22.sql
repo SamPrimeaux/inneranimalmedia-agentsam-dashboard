@@ -16,7 +16,7 @@ INSERT INTO agent_tools (
   'role_agent_sam',
   'cursor_composer2_agent_session',
   'CURSOR_COMPOSER2',
-  '{"user_agent":"composer2_agentsam","ai_models_id":"composer2-agentsam","cidi_workflow_id":"CIDI-IAM-AGENTSAM-20260322","cidi_activity_log_id":11,"repo":"SamPrimeaux/inneranimalmedia-agentsam-dashboard","git_branch":"cursor/platform-ui-stability-1eca","worker":"inneranimalmedia","d1_database":"inneranimalmedia-business","focus":["terminal_session_alignment","settings_control_plane","agent_ui_polish","d1_audit"]}',
+  '{"user_agent":"composer2_agentsam","product":"InnerAnimalMedia","ai_models_id":"composer2-agentsam","cidi_workflow_id":"CIDI-IAM-AGENTSAM-20260322","cidi_activity_log_id":11,"repo":"SamPrimeaux/inneranimalmedia-agentsam-dashboard","git_branch":"cursor/platform-ui-stability-1eca","worker":"inneranimalmedia","d1_database":"inneranimalmedia-business","focus":["terminal_session_alignment","settings_control_plane","agent_ui_polish","d1_audit"]}',
   1,
   datetime('now')
 );
@@ -51,7 +51,7 @@ INSERT INTO agent_telemetry (
   'cursor_composer_iam_session_checkpoint',
   1,
   unixepoch(),
-  '{"summary":"D1 rows: cidi id=4, cidi_activity_log id=11 user_agent composer2_agentsam, ai_models composer2-agentsam. Migrations and session log in repo. PR branch cursor/platform-ui-stability-1eca.","artifacts":["migrations/_oneoff_cidi_iam_platform_ui_2026-03-22.sql","migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql","migrations/_oneoff_cidi_activity_log_user_agent_2026-03-22.sql","migrations/_oneoff_ai_models_composer2_agentsam_2026-03-22.sql"]}',
+  '{"summary":"InnerAnimalMedia SaaS / Agent Sam build: D1 cidi id=4, cidi_activity_log id=11, composer2_agentsam, ai_models composer2-agentsam. Migrations + session log in repo. Branch cursor/platform-ui-stability-1eca.","artifacts":["migrations/_oneoff_cidi_iam_platform_ui_2026-03-22.sql","migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql","migrations/_oneoff_cidi_activity_log_user_agent_2026-03-22.sql","migrations/_oneoff_ai_models_composer2_agentsam_2026-03-22.sql"]}',
   'composer2-agentsam',
   0,
   0,
@@ -91,7 +91,7 @@ INSERT INTO agent_runtime_configs (
   'structured',
   'iam_platform_cursor_session',
   NULL,
-  '{"user_agent":"composer2_agentsam","environment":"cursor_composer2","not_api_routed":true,"notes":"Catalog model id only; chat completions use provider APIs separately."}',
+  '{"user_agent":"composer2_agentsam","environment":"cursor_composer2","product":"InnerAnimalMedia","not_api_routed":true,"notes":"Catalog model id only; chat completions use provider APIs separately."}',
   1,
   datetime('now'),
   datetime('now')
@@ -116,7 +116,7 @@ INSERT INTO projects (
   tags_json
 ) VALUES (
   'proj_iam_agentsam_composer2_20260322',
-  'Agent Sam dashboard — platform UI (Composer 2)',
+  'InnerAnimalMedia — Agent Sam SaaS (platform UI build)',
   'Inner Animal Media',
   'internal-tool',
   'development',
@@ -126,7 +126,7 @@ INSERT INTO projects (
   'inneranimalmedia-business (cf87b717-d4e2-4cf8-bab0-a81268e32d49)',
   'agent-sam, iam-platform',
   'inneranimalmedia.com',
-  'Cursor Composer 2 cloud session documenting IAM stack: terminal sessionId vs worker runTerminalCommand alignment, SettingsPanel control plane, Agent polish, D1 audits (cidi, hooks, spend_ledger). GitHub branch cursor/platform-ui-stability-1eca.',
-  '{"composer2":{"user_agent_label":"composer2_agentsam"},"cidi":{"workflow_id":"CIDI-IAM-AGENTSAM-20260322","cidi_id":4},"roadmap_plan":"plan_iam_dashboard_v1","mar23_sprint":"terminal_settings_agent_polish"}',
-  '["composer2","agent-sam","platform-ui","d1","inneranimalmedia"]'
+  'InnerAnimalMedia SaaS / Agent Sam dashboard build: terminal sessionId vs worker runTerminalCommand, SettingsPanel, Agent polish, D1 (cidi, hooks, spend_ledger). Branch cursor/platform-ui-stability-1eca.',
+  '{"composer2":{"user_agent_label":"composer2_agentsam"},"product":"InnerAnimalMedia","cidi":{"workflow_id":"CIDI-IAM-AGENTSAM-20260322","cidi_id":4},"roadmap_plan":"plan_iam_dashboard_v1","mar23_sprint":"terminal_settings_agent_polish"}',
+  '["inneranimalmedia","agent-sam","saas","platform-ui","composer2","d1"]'
 );

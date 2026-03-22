@@ -5640,6 +5640,37 @@ GitHub **main** has source parity for agent shell + dashboard + worker; producti
 ### Known issues / next steps
 - Run `npm run build` in `agent-dashboard` before R2 upload so `v=122` matches bundle bytes; upload `dashboard/agent.html` then worker deploy when approved.
 
+## [2026-03-22] Agent terminal: Enter fallback when WebSocket not OPEN
+
+### What was asked
+Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel OK. Fix send path and confusing Disconnected + Connected lines.
+
+### Root cause
+`sendTerminalKey` returned early when `readyState !== WebSocket.OPEN` (no user feedback). UI showed static `Disconnected.` while scrollback still contained `Connected.` after the socket closed.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` — `ws.onclose`: append `\r\n[Disconnected]\r\n` to stream; remove duplicate static `Disconnected.` line; `sendTerminalKey`: if WS open, keep JSON `{type:input}`; else **POST** `/api/agent/terminal/run` via `runCommandInTerminal` for non-empty trimmed line (one-shot run, same Worker path as `type:run` PTY).
+- `dashboard/agent.html` — agent bundle cache **v=122 to v=123** (2 lines).
+
+### Files NOT changed (and why)
+- `worker.js`: HTTP terminal run already implemented.
+
+### Deploy status
+- Built: yes — `npm run build` in `agent-dashboard` before commit
+- R2 uploaded: no until Sam approves and runs the three `wrangler r2 object put` commands below from repo root
+- Worker deployed: no
+- Git push: recorded after push (see commit on `main`)
+
+### R2 (run only after you approve — repo root)
+```bash
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file=agent-dashboard/dist/agent-dashboard.js --content-type=application/javascript --remote -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file=agent-dashboard/dist/agent-dashboard.css --content-type=text/css --remote -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file=dashboard/agent.html --content-type=text/html --remote -c wrangler.production.toml
+```
+
+### Known issues / next steps
+- Interactive PTY still needs stable WSS; fallback is line-at-a-time only. Reconnect still resets output when effect re-runs.
+
 ## [2026-03-22] .env.cloudflare.example + Cursor session rules + settings
 
 ### What was asked

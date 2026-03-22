@@ -5668,6 +5668,8 @@ Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel
 ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file=dashboard/agent.html --content-type=text/html --remote -c wrangler.production.toml
 ```
 
+**Executed 2026-03-22 (Sam request):** `npm run build` in `agent-dashboard/` then all three `r2 object put` to bucket **agent-sam** — `static/dashboard/agent/agent-dashboard.js`, `.css`, `static/dashboard/agent.html` (`?v=123`). Worker not redeployed.
+
 ### Known issues / next steps
 - Interactive PTY still needs stable WSS; fallback is line-at-a-time only. Reconnect still resets output when effect re-runs.
 

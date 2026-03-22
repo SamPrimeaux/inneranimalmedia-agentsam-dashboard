@@ -14,6 +14,9 @@
 //
 // Sandbox login (Worker secrets on inneranimal-dashboard only):
 //   SANDBOX_DASHBOARD_PASSWORD (plain) or PBKDF2 pair; optional SANDBOX_DASHBOARD_LOGIN_EMAIL (default info@inneranimals.com).
+//
+// Do not put CLOUDFLARE_API_TOKEN in this file or as a Worker plaintext variable (wide blast radius).
+// Use gitignored .env.cloudflare + scripts/with-cloudflare-env.sh for CLI only. Rotate any token that was pasted into chat/UI logs.
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -44,7 +47,20 @@
     }
   ],
   "observability": {
-    "enabled": true
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "destinations": ["inneranimalmedia-selfhosted"],
+      "persist": true,
+      "head_sampling_rate": 1
+    }
   },
   // Do not add wrangler "assets" here: it steals the ASSETS binding from R2 and breaks worker.js (blank /).
   "compatibility_flags": [

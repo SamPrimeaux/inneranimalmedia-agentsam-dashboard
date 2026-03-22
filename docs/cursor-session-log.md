@@ -5407,3 +5407,20 @@ User message ended with `Task: [describe what Sam wants next]` — **no concrete
 
 ### Files changed
 - `docs/cursor-session-log.md` (this entry).
+
+---
+
+## [2026-03-22] wrangler.jsonc observability parity + token hygiene note
+
+### What was asked
+Align repo `wrangler.jsonc` with Cloudflare dashboard observability block for **inneranimal-dashboard**; user also pasted Worker env vars including a Cloudflare API token.
+
+### Files changed
+- `wrangler.jsonc`: `observability` block matched dashboard (logs/traces persist, trace destination `inneranimalmedia-selfhosted`, top-level `enabled: false`); comment warns against storing API tokens in Worker env or repo.
+- `docs/CIDI_WORKER_inneranimal-dashboard_RUNBOOK.md`: security section — do not use plaintext `CLOUDFLARE_API_TOKEN` on Worker; rotate if exposed.
+
+### Security (Sam)
+- **Revoke** the API token that was pasted in chat and **remove** it from Worker plaintext variables; use `.env.cloudflare` for CLI only. Token value **not** recorded in repo or this log.
+
+### Deploy status
+- `wrangler deploy -c wrangler.jsonc`: not run this turn (Sam rule: exact **deploy approved** for `wrangler deploy`). Dry-run passed locally.

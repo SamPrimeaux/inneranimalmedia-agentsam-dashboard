@@ -5283,3 +5283,31 @@ CIDI sandbox worker: R2 **agent-sam-sandbox-cidi** (clone), D1 **inneranimalmedi
 
 ### Follow-up (Sam, Cloudflare UI)
 - Confirmed: sandbox worker **`inneranimal-dashboard`** now has R2 binding **`DASHBOARD` → `agent-sam-sandbox-cidi`** in the dashboard (matches `wrangler.jsonc`).
+
+---
+
+## [2026-03-22] CIDI sandbox: fix blank `/`, sign-in, password gate (no OAuth)
+
+### What was asked
+`https://inneranimal-dashboard.meauxbility.workers.dev/` was a blank page; serve sign-in like R2 `static/auth-signin.html`, then after login land on `/dashboard/overview` (`static/dashboard/overview.html`). Use a separate password-based flow that does not change production OAuth handlers.
+
+### Files changed
+- `wrangler.jsonc`: removed `assets.directory` (it shadowed the R2 **ASSETS** binding and served empty Vite shell → blank `/`). Comment documents optional sandbox Worker secrets for login.
+- `worker.js`: `isInneranimalDashboardSandboxHost()`, sandbox GET `/` → 302 `/auth/signin`; `handleSandboxDashboardPasswordLogin` (PBKDF2 hex secrets or plain `SANDBOX_DASHBOARD_PASSWORD`); `handleEmailPasswordLogin` delegates to it only on sandbox host; session `user_id` `cidi_sandbox_dashboard@inneranimal-dashboard.local`; JSON `{ ok, redirect }` + `Set-Cookie` for existing `fetch` in sign-in page.
+- `dashboard/auth-signin.html`: hide OAuth row + backup-code prompt on sandbox host; optional email; subtitle text for CIDI sandbox.
+
+### Files NOT changed (and why)
+- `handleGoogleOAuthCallback` / `handleGitHubOAuthCallback`: not touched (locked routes).
+
+### Deploy status
+- Built: no
+- R2 uploaded: no — **Sam must upload** `dashboard/auth-signin.html` to `agent-sam-sandbox-cidi` key `static/auth-signin.html` after Git/build deploy if the live bucket copy is stale.
+- Worker deployed: no (Git Builds / Sam approval for sandbox worker).
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until sandbox worker redeploys from branch and secrets are set; R2 HTML should match repo for sign-in UX.
+
+### Known issues / next steps
+- Set Worker secrets on **inneranimal-dashboard** (see `wrangler.jsonc` header comment); without them, POST `/api/auth/login` returns 503 JSON explaining missing config.
+- Longer term: move sandbox credentials to D1-only table if Sam wants zero plain secrets in Worker config.

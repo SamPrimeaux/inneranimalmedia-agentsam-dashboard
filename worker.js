@@ -17,6 +17,18 @@ function normalizeThemeSlug(value) {
 
 const SUPERADMIN_EMAILS = ['info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com'];
 
+/** Git-builds sandbox worker (wrangler.jsonc name inneranimal-dashboard). Not production inneranimalmedia.com. */
+function isInneranimalDashboardSandboxHost(hostname) {
+  if (!hostname || typeof hostname !== 'string') return false;
+  const h = hostname.toLowerCase();
+  if (h === 'inneranimal-dashboard.meauxbility.workers.dev') return true;
+  if (h.endsWith('.inneranimal-dashboard.meauxbility.workers.dev')) return true;
+  if (/-inneranimal-dashboard\.meauxbility\.workers\.dev$/.test(h)) return true;
+  return false;
+}
+
+const SANDBOX_DASHBOARD_SESSION_USER_ID = 'cidi_sandbox_dashboard@inneranimal-dashboard.local';
+
 function getSamContext(email) {
   return {
     id: email === 'sam@inneranimalmedia.com' ? 32 : 24,
@@ -1808,6 +1820,9 @@ const worker = {
 
       // ----- Public (ASSETS) -----
       if (path === '/' || path === '/index.html') {
+        if (isInneranimalDashboardSandboxHost(url.hostname)) {
+          return Response.redirect(new URL('/auth/signin', url.origin).toString(), 302);
+        }
         const obj = await env.ASSETS.get('index-v3.html') ?? await env.ASSETS.get('index-v2.html') ?? await env.ASSETS.get('index.html');
         if (obj) return respondWithR2Object(obj, 'text/html');
         return notFound(path);
@@ -10259,8 +10274,70 @@ async function hashPassword(password) {
   return { saltHex, hashHex };
 }
 
+/**
+ * Sandbox-only password gate for inneranimal-dashboard.*.workers.dev.
+ * Does not use OAuth or auth_users. Set Worker secrets (this worker only):
+ *   SANDBOX_DASHBOARD_PBKDF2_SALT_HEX + SANDBOX_DASHBOARD_PBKDF2_HASH_HEX (same PBKDF2 as prod auth_users), or
+ *   SANDBOX_DASHBOARD_PASSWORD (plain; dev convenience).
+ * Returns JSON { ok, redirect } + Set-Cookie so dashboard/auth-signin.html fetch() flow works.
+ */
+async function handleSandboxDashboardPasswordLogin(request, url, env) {
+  if (!env.DB) {
+    return Response.json({ ok: false, error: 'Database unavailable' }, { status: 503, headers: { 'Content-Type': 'application/json' } });
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return Response.json({ ok: false, error: 'Invalid JSON body' }, { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const password = (body.password || '').toString();
+  if (!password) {
+    return Response.json({ ok: false, error: 'Password required' }, { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  const saltHex = (env.SANDBOX_DASHBOARD_PBKDF2_SALT_HEX || '').toString().trim();
+  const hashHex = (env.SANDBOX_DASHBOARD_PBKDF2_HASH_HEX || '').toString().trim();
+  const plainSecret = (env.SANDBOX_DASHBOARD_PASSWORD || '').toString();
+  let ok = false;
+  if (saltHex && hashHex) {
+    ok = await verifyPassword(password, saltHex, hashHex);
+  } else if (plainSecret) {
+    const a = new TextEncoder().encode(password);
+    const b = new TextEncoder().encode(plainSecret);
+    ok = a.length === b.length && (await crypto.subtle.timingSafeEqual(a, b));
+  } else {
+    return Response.json(
+      {
+        ok: false,
+        error: 'Sandbox login not configured. Set secrets SANDBOX_DASHBOARD_PBKDF2_SALT_HEX + SANDBOX_DASHBOARD_PBKDF2_HASH_HEX or SANDBOX_DASHBOARD_PASSWORD on worker inneranimal-dashboard.',
+      },
+      { status: 503, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+  if (!ok) {
+    return Response.json({ ok: false, error: 'Invalid password' }, { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
+  const sessionId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const ua = request.headers.get('user-agent') || '';
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
+  ).bind(sessionId, SANDBOX_DASHBOARD_SESSION_USER_ID, expiresAt, ip, ua).run();
+  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const nextRaw = body.next && typeof body.next === 'string' ? body.next : '';
+  const safeNext =
+    nextRaw.startsWith('/') && !nextRaw.startsWith('//') && !nextRaw.includes(':') ? nextRaw : '/dashboard/overview';
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
+  return new Response(JSON.stringify({ ok: true, redirect: safeNext }), { status: 200, headers });
+}
+
 /** POST /api/auth/login -- body: { email, password }. Creates session and redirects to /dashboard/overview. */
 async function handleEmailPasswordLogin(request, url, env) {
+  if (isInneranimalDashboardSandboxHost(url.hostname)) {
+    return handleSandboxDashboardPasswordLogin(request, url, env);
+  }
   if (!env.DB) {
     return Response.redirect(`${origin(url)}/auth/signin?error=unavailable`, 302);
   }

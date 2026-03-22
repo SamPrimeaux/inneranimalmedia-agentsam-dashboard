@@ -11,6 +11,9 @@
 //
 // Production deploy: ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml
 // (worker inneranimalmedia) with Sam approval — do not confuse with this file.
+//
+// Sandbox login (optional Worker secrets on inneranimal-dashboard only):
+//   SANDBOX_DASHBOARD_PBKDF2_SALT_HEX + SANDBOX_DASHBOARD_PBKDF2_HASH_HEX, or SANDBOX_DASHBOARD_PASSWORD (plain).
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -43,9 +46,7 @@
   "observability": {
     "enabled": true
   },
-  "assets": {
-    "directory": "overview-dashboard"
-  },
+  // Do not add wrangler "assets" here: it steals the ASSETS binding from R2 and breaks worker.js (blank /).
   "compatibility_flags": [
     "nodejs_compat"
   ]

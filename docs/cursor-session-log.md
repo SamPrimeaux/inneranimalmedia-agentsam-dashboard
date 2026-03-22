@@ -5652,4 +5652,5 @@ GitHub **main** has source parity for agent shell + dashboard + worker; producti
 - `docs/cursor-session-log.md` — this entry.
 
 ### Deploy status
-- Git push: yes — https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main` (hash in `git log -1`)
+- Git push: yes — **20f49bf** https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main`
+

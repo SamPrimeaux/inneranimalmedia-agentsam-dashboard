@@ -5200,3 +5200,22 @@ Relabel anything that treated this build as “Inner Animal App”; product is *
 
 ### Deploy status
 - D1: 12 UPDATE-style statements via wrangler `--file` (see fix migration).
+
+---
+
+## [2026-03-22] D1 note — Monaco / Agent Sam dashboard UI capability gap
+
+### What was asked
+Record that the agent can follow code changes while dashboard Monaco + Agent UI/UX is not yet solidified for full in-product use.
+
+### What was done
+- **`project_memory`:** `pmem_iam_monaco_ui_ux_note_20260322` — `best_practice` / `monaco_agents_ui_ux_capability_gap` on `proj_iam_agentsam_composer2_20260322` (JSON: capability vs gap, `documented_gap`).
+- **`agent_memory_index`:** `mem_ui_monaco_agents_gap_20260322` — `user_context` key `inneranimalmedia_dashboard_monaco_agent_ux` for Agent Sam bootstrap.
+- **`projects.metadata_json`:** `ui_ux_monaco_agents` object (capability / gap / priority).
+
+### Files changed
+- `migrations/_note_ui_monaco_agents_ux_gap_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- D1: 2 INSERTs + 1 projects `json_set` (wrangler `--file`).

@@ -5311,3 +5311,30 @@ Unchanged until sandbox worker redeploys from branch and secrets are set; R2 HTM
 ### Known issues / next steps
 - Set Worker secrets on **inneranimal-dashboard** (see `wrangler.jsonc` header comment); without them, POST `/api/auth/login` returns 503 JSON explaining missing config.
 - Longer term: move sandbox credentials to D1-only table if Sam wants zero plain secrets in Worker config.
+
+---
+
+## [2026-03-22] Deploy approved: sandbox worker + R2 auth-signin
+
+### What was asked
+Sam typed **deploy approved** for the CIDI sandbox changes.
+
+### What was done
+- R2 (remote): `agent-sam-sandbox-cidi/static/auth-signin.html` from repo `dashboard/auth-signin.html` (`wrangler r2 object put` with `-c wrangler.production.toml`).
+- `npm install` (repo root) so Wrangler could resolve `@cloudflare/playwright` for bundle.
+- Deploy: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.jsonc` → worker **inneranimal-dashboard**, version **b775ee39-77d3-46b9-bc70-e3e54c28d39c**, URL `https://inneranimal-dashboard.meauxbility.workers.dev`.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry only).
+
+### Deploy status
+- Worker **inneranimal-dashboard** deployed: yes — version ID **b775ee39-77d3-46b9-bc70-e3e54c28d39c**.
+- R2 uploaded: yes — `agent-sam-sandbox-cidi/static/auth-signin.html`.
+- Worker **inneranimalmedia** (production): not deployed.
+- Deploy approved by Sam: yes.
+
+### What is live now
+Sandbox worker serves updated routing (root → sign-in, sandbox password login path); sign-in HTML in sandbox bucket matches repo.
+
+### Known issues / next steps
+- Set sandbox Worker secrets if login should succeed (otherwise 503 from `/api/auth/login`).

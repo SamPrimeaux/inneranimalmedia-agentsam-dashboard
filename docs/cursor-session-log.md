@@ -5375,3 +5375,35 @@ Document why Overview was empty on sandbox (missing `static/dashboard/overview/*
 
 ### Known issues / next steps
 - Run `cd overview-dashboard && npm run build` before `./scripts/upload-repo-to-r2-sandbox.sh` when Overview sources change.
+
+---
+
+## [2026-03-22] Read-first CIDI protocol + session-start D1 (no writes)
+
+### What was asked
+Follow ordered reads (SYSTEM_CIDI, D1 CIDI handoff, sandbox UI handoff, `.env.cloudflare.example`, session-start D1); report D1 reads; note D1/write discipline and backfill script paths.
+
+### Read status (repo)
+- `docs/SYSTEM_CIDI_ARCHITECTURE_README.md`: **not in repo** (0 matches).
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md`: **not in repo**.
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md`: **present** (prior commit).
+- `.env.cloudflare.example`: **present** — documents `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`; full inventory points to `.env.example`.
+- `.cursor/rules/session-start-d1-context.mdc`: **present** — four `agent_memory_index` / `roadmap_steps` SELECTs before coding.
+
+### Referenced scripts (repo check)
+- `scripts/d1-cidi-bootstrap-20260322.sql`, `scripts/d1-dev-workflows-insert-cidi-setup.sql`, `scripts/promote-agent-dashboard-to-production.sh`: **not present** in `/workspace/scripts` at this time.
+- `scripts/upload-repo-to-r2-sandbox.sh`: **present**.
+
+### D1 session-start reads (remote `inneranimalmedia-business`, read-only)
+Executed via `./scripts/with-cloudflare-env.sh npx wrangler d1 execute ... --remote -c wrangler.production.toml` (no `tenant` column on these keys — `system` filter not applicable to the standard four queries).
+
+1. **`active_priorities`:** Long value — last sync 2026-03-22; worker webhooks/cron/RAG; TOP 3 NEXT: (1) Terminal sessionId / FloatingPreviewPanel vs worker, (2) SettingsPanel parity, (3) Agent Sam polish; plan doc referenced `docs/plans/TOMORROW_2026-03-23_UI_SETTINGS_TERMINAL_PLAN.md`.
+2. **`build_progress`:** ~12+ roadmap steps done; webhook platform + D1 analytics; IN PROGRESS: terminal persistence, SettingsPanel, R2 UI, memory, cost, progress UI, Monaco; `dashboard_versions` v120 note; agent.html may use `?v=122` until next R2 sync.
+3. **`roadmap_steps` (`plan_iam_dashboard_v1`):** 44 rows returned — examples: `not_started` Agent page solidify, Memory protocols; `completed` Terminal live shell, MCP 19 tools, theme system; `in_progress` R2 Manager, AutoRAG, cost tracking, progress UI, Monaco, Mar 23 sprint, Sandbox agent UI to production, Agent first-load theme; `blocked` GCP Vertex key/JWT.
+4. **`today_todo`:** Three sprints — (1) terminal sessionId alignment, (2) SettingsPanel two-column + tabs, (3) Agent dock CSS/icons; same TOMORROW plan path.
+
+### Task placeholder
+User message ended with `Task: [describe what Sam wants next]` — **no concrete implementation task** beyond onboarding; no D1 writes proposed.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry).

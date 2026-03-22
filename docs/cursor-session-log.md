@@ -5032,3 +5032,22 @@ Add a row in `cidi` for this repo/build.
 
 ### Known issues / next steps
 - Re-running the same file will fail if `workflow_id` must stay unique; use a new `workflow_id` for additional rows.
+
+---
+
+## [2026-03-22] D1 `cidi_activity_log` row — IAM CIDI id 4
+
+### What was asked
+Insert a row in `cidi_activity_log`.
+
+### What was done
+- Inserted one row linked to `cidi.id=4` (`workflow_id` **CIDI-IAM-AGENTSAM-20260322**): `action_type=updated`, `changed_by=cursor_agent`, `metadata_json` with repo/branch/worker.
+- Executed via `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql` (new log row id **11**).
+
+### Files changed
+- `migrations/_oneoff_cidi_activity_log_iam_2026-03-22.sql`
+- `docs/cursor-session-log.md` (this entry).
+
+### Deploy status
+- Worker deployed: no.
+- D1 write: yes — one INSERT into `cidi_activity_log`.

@@ -24,6 +24,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/static/dashboard/styles_themes.css">
+    <link rel="stylesheet" href="/static/dashboard/shell.css">
     <style>
         /* === THEME SYSTEM === */
         :root {
@@ -717,8 +719,8 @@
 <script>document.body.classList.add('agent-dashboard-page');</script>
 <div id="agent-dashboard-root" style="width:100%;height:100%;overflow:hidden;"></div>
 
-<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=120">
-    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=120"></script>
+<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=123">
+    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=123"></script>
         </main>
     </div>
 
@@ -976,10 +978,18 @@
         if (savedTheme) {
             document.documentElement.setAttribute('data-theme', savedTheme);
             updateHeaderLogo();
-            fetch('/api/settings/theme', { credentials: 'same-origin' }).then(function(r) { return r.json(); }).then(function(d) {
-                if (d.theme === savedTheme && d.variables) applyDynamicTheme(savedTheme, { css_vars: d.variables });
-            }).catch(function() {});
         }
+        fetch('/api/settings/theme', { credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+                if (!d || !d.theme) return;
+                var t = String(d.theme).trim();
+                document.documentElement.setAttribute('data-theme', t);
+                try { localStorage.setItem('dashboard-theme', t); } catch (e) {}
+                if (d.variables && Object.keys(d.variables).length) applyDynamicTheme(t, { css_vars: d.variables });
+                updateHeaderLogo();
+            })
+            .catch(function () {});
 
         // Simple notifications dropdown (UI shell only; data wiring can be added later)
         (function () {

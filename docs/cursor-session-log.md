@@ -5013,6 +5013,690 @@ No production deploy; local/CI environments that load `.env.cloudflare` via `scr
 
 ---
 
+## Session log merge: `origin/main` (through 2026-03-22)
+
+## 2026-03-21 worker.js: /workflow slash via workflow_execute + dry_run preview
+
+### What was asked
+Wire Agent Sam slash command to POST `/api/mcp/workflows/:id/run` with `workflow_execute` builtin; add `dry_run` preview in `wfRunMatch`; D1 UPDATE for `cmd-execute-workflow` deferred until after deploy confirmed.
+
+### Files changed
+- `worker.js` lines ~958-996: added `workflow_execute` builtin in `/api/agent/commands/execute` (fetch run URL with `dry_run`, `--execute` for real run).
+- `worker.js` lines ~6628-6668: `POST .../workflows/:id/run` returns 200 JSON preview when `body.dry_run === true`; moved `ctx.waitUntil` check to after dry-run branch so preview does not require async execution context.
+
+### Files NOT changed (and why)
+- `AgentDashboard.jsx` / `dashboard/agent.html`: not required; slash already posts to commands/execute with `command_name` + `parameters.raw`.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: yes — **Version ID** `12275eec-ea7b-4805-899e-7f9dafab9518`
+- Deploy approved by Sam: yes
+- D1: `UPDATE agent_commands` for `cmd-execute-workflow` (slug `workflow`, `implementation_ref` `workflow_execute`) executed on remote `inneranimalmedia-business`.
+
+### What is live now
+Production worker **12275eec-ea7b-4805-899e-7f9dafab9518** serves `workflow_execute` and MCP workflow `dry_run` preview; slash **`/workflow <id>`** resolves via updated `agent_commands` row.
+
+### Known issues / next steps
+- Superseded: `workflow_execute` no longer uses `fetch` / `resp.json()` (see next entry).
+
+## 2026-03-21 worker.js: triggerWorkflowRun (no self-fetch for /workflow)
+
+### What was asked
+Replace `workflow_execute` self-`fetch` (522) with direct `triggerWorkflowRun`; share logic with `POST /api/mcp/workflows/:id/run`.
+
+### Files changed
+- `worker.js`: new `triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run)` before `handleMcpApi`; `workflow_execute` builtin calls it with `ctx`; `wfRunMatch` delegates to it; non–dry-run requires `ctx.waitUntil` before INSERT (avoids orphaned runs).
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `3a3bc33f-67ed-435d-bd83-f1c48f772f84`
+- Deploy approved by Sam: yes
+- `node --check worker.js`: pass
+
+### What is live now
+Production worker **3a3bc33f-67ed-435d-bd83-f1c48f772f84**: `/workflow` uses `triggerWorkflowRun` (no Worker self-fetch).
+
+### Known issues / next steps
+- None for this change.
+
+## 2026-03-21 iam-pty: prefer /bin/zsh over /bin/bash
+
+### What was asked
+In `~/iam-pty/server.js`, prefer zsh for `pty.spawn` (suppress macOS bash upgrade nag); restart PTY on 3099; health check; commit and push to GitHub.
+
+### Files changed
+- `/Users/samprimeaux/iam-pty/server.js` line 16: `listShellCandidates()` array order `"/bin/zsh"` before `"/bin/bash"` (spawn loop uses first successful candidate; there is no literal `/bin/bash` inside `pty.spawn`).
+
+### Files NOT changed (and why)
+- `march1st-inneranimalmedia` worker/dashboard: out of scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: N/A (local PTY only)
+
+### What is live now
+Local PTY restarted on 127.0.0.1:3099; `curl http://localhost:3099/health` returns `ok`. GitHub `iam-pty` main advanced `277f38d` to `f892f44` (note: that commit includes the full prior working-tree `server.js` diff vs old HEAD, not only line 16).
+
+### Known issues / next steps
+- Remote suggests using `https://github.com/SamPrimeaux/iam-pty.git` as canonical URL for `git remote`.
+
+## 2026-03-21 AgentDashboard: safe chat messages + slash picker UX
+
+### What was asked
+Fix null/empty message content after slash commands (conversation payload for `/api/agent/chat`); improve slash picker (`applySlashCommandSelection` + list row UI). `npm run build` + R2 upload only; no `worker.js`.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: slash `/api/agent/commands/execute` result normalized to non-empty string; `conversationMessages` excludes non-terminal `tool` rows, maps `terminal_output` to user text, coerces user/assistant `content` to `"(empty)"` when missing; `applySlashCommandSelection` sends immediately when `command_text` has no `<...>` placeholders (else `setInput`); picker rows show category badge (top-right) and clean name + description.
+
+### Files NOT changed (and why)
+- `worker.js`: out of scope.
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`
+- Worker deployed: no
+- Deploy approved by Sam: yes (frontend build + R2 only)
+
+### What is live now
+Production R2 serves updated agent dashboard bundle/CSS for Agent Sam chat.
+
+### Known issues / next steps
+- None for this change.
+
+## 2026-03-21 dashboard/agent.html: cache-bust v bump + R2
+
+### What was asked
+Bump `?v=` in `dashboard/agent.html` and upload to R2 only; no build or worker deploy.
+
+### Files changed
+- `dashboard/agent.html`: `?v=120` → `?v=121` on agent-dashboard CSS/JS asset URLs (2 places).
+
+### Deploy status
+- Built: no
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`
+- Worker deployed: no
+- Deploy approved by Sam: yes
+
+### What is live now
+Production serves `agent.html` with `v=121` cache-bust for the agent dashboard bundle links.
+
+### Known issues / next steps
+- None.
+
+## 2026-03-21 Worker deploy (deploy approved)
+
+### What was asked
+Deploy main worker after Sam typed deploy approved.
+
+### Files changed
+- Deploy used current repo `worker.js` (and wrangler bundle per `wrangler.production.toml`).
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `30204abe-274d-469a-b200-e501e7ee0ad2`
+- Command: `npm run deploy` (`wrangler deploy -c wrangler.production.toml`)
+- Deploy approved by Sam: yes
+
+### What is live now
+Production Worker **30204abe-274d-469a-b200-e501e7ee0ad2** on `inneranimalmedia.com`.
+
+### Known issues / next steps
+- Working tree still has uncommitted edits (`agent-dashboard`, `dashboard/agent.html`, `docs/cursor-session-log.md`, `worker.js`) until you commit.
+
+## 2026-03-21 Agent dashboard R2: build + JS/CSS + agent.html v122
+
+### What was asked
+`npm run build` in `agent-dashboard`, upload `agent-dashboard.js`, `agent-dashboard.css`, bump `?v=` in `dashboard/agent.html` and upload; no worker deploy.
+
+### Files changed
+- `dashboard/agent.html`: `?v=121` → `?v=122` (CSS/JS query params).
+- `agent-dashboard/dist/*` from build (not necessarily committed).
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`
+- Worker deployed: no
+
+### What is live now
+R2 serves refreshed agent bundle/CSS and `agent.html` with **v=122**.
+
+### Known issues / next steps
+- None.
+
+## 2026-03-21 worker.js: executeWorkflowSteps step.tool + step.params
+
+### What was asked
+Surgical `executeWorkflowSteps` fix: `tool_name` from `step.tool_name || step.tool`; `input_template` fallback to `step.params`; `node --check`; deploy approved.
+
+### Files changed
+- `worker.js` (~7359–7367): tool name and input template resolution for workflow JSON variants.
+
+### Deploy status
+- `node --check worker.js`: pass
+- Worker deployed: yes — **Version ID** `9d8bef9d-4271-4f0c-a022-0c0ed897cb95`
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker accepts workflow steps that use `tool` / `params` in addition to `tool_name` / `input_template`.
+
+### Known issues / next steps
+- None.
+
+## 2026-03-21 worker.js: generate_daily_summary_email builtin
+
+### What was asked
+Add `generate_daily_summary_email` handler in `invokeMcpToolFromChat` (D1 + Haiku + Resend); `node --check`; deploy approved.
+
+### Files changed
+- `worker.js`: new builtin before `mcp_registered_tools` lookup; uses `params` (`to`, `from`, optional `step_results`); safe query wrappers; requires `RESEND_API_KEY` and `ANTHROPIC_API_KEY`.
+
+### Deploy status
+- `node --check worker.js`: pass
+- Worker deployed: yes — **Version ID** `c8e644df-806e-49f2-8211-0a0fc535b344`
+- Deploy approved by Sam: yes
+
+### What is live now
+Tool callable via `invokeMcpToolFromChat` when secrets/bindings are set (Resend + Anthropic).
+
+### Known issues / next steps
+- Register tool in D1 / MCP if not already present for dashboard discovery; ensure `RESEND_API_KEY` secret exists on the Worker.
+
+## 2026-03-21 worker.js: d1_write agent_memory_index defaults
+
+### What was asked
+Audit grep on worker.js; surgical fix so d1_write INSERT into `agent_memory_index` injects `agent_config_id` and `tenant_id` when missing from the column list; deploy; post-deploy D1 SELECT.
+
+### Files changed
+- `worker.js` (~2633–2728): `splitTopLevelCommaListSql`, `ensureAgentMemoryIndexInsertDefaults` (INSERT-only guard for `agent_memory_index`).
+- `worker.js` (~2945–2946, ~7014–7015): `runToolLoop` and `invokeMcpToolFromChat` pass SQL through `ensureAgentMemoryIndexInsertDefaults` before `prepare`.
+
+### Files NOT changed (and why)
+- Schema, table DDL, other tables, other worker logic: not touched per scope.
+
+### Deploy status
+- Built: no (worker-only)
+- R2 uploaded: no
+- Worker deployed: yes — **Version ID** `76441037-6d79-46e1-8c58-689a3c705969`
+- Deploy approved by Sam: yes (user instructed `npm run deploy` in task)
+
+### What is live now
+`d1_write` rewrites explicit-column `INSERT INTO agent_memory_index (...) VALUES (...)` when `agent_config_id` and/or `tenant_id` are omitted, appending literals `'agent-sam-primary'` and `'tenant_sam_primeaux'`.
+
+### Known issues / next steps
+- Inserts without an explicit column list, or column/value arity mismatch, are left unchanged (returns original SQL).
+
+## 2026-03-22 worker.js: /api/hooks/* inbound webhooks
+
+### What was asked
+Add POST `/api/hooks/github|cursor|stripe|internal`, GET `/api/hooks/health`; verify signatures; INSERT `webhook_events`; match `hook_subscriptions`; run action handlers; INSERT `hook_executions`; update event + endpoint counters; `npm run deploy`; D1 verify `webhook_endpoints` / `hook_subscriptions`.
+
+### Files changed
+- `worker.js`: webhook crypto helpers, `handleInboundWebhook`, `handleHooksHealth`, `executeHookSubscriptionAction` (`write_d1` sql / table+map / github raw, `log_deployment` into real `deployment_tracking`, `update_cidi` with production `cidi_activity_log` columns, `notify_agent` → `agent_request_queue`); routes after `/api/health`. Implementation aligned to production D1 column names (`is_active`, `payload_json`, `error_message`, TEXT datetimes, `hook_subscriptions.endpoint_id` = `webhook_endpoints.id` by `source`).
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `1c55eb10-24d3-4880-9b12-bf188de190ce`
+- D1 verify: `SELECT * FROM webhook_endpoints` / `hook_subscriptions` run on remote (rows present).
+
+### What is live now
+Hooks resolve `webhook_endpoints` by `source` (`github`, `cursor`, `stripe`, `internal`). Secrets: `GITHUB_WEBHOOK_SECRET`, `CURSOR_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`, `WEBHOOK_IAM_SECRET` or `INTERNAL_API_SECRET`. Cursor accepts `X-Cursor-Signature` or Cursor doc `X-Webhook-Signature` (`sha256=` HMAC). Optional `WEBHOOK_NOTIFY_DEFAULT_SESSION_ID` for `notify_agent` without `session_id`.
+
+### Known issues / next steps
+- DB `endpoint_path` values may still reference `/api/webhooks/...`; live URLs must use `/api/hooks/...` per this worker. `update_cidi` with `update_active_workflows` returns not-implemented. `write_d1` configs that only set `action`/`field` without `sql`/`map` may need config or code follow-up.
+
+## 2026-03-21 MASTER BRIEF — webhooks, CloudConvert, Meshy, webhook_events cron (worker.js)
+
+### What was asked
+Audit (four greps + line count); CHANGE 1 fix webhook secret env keys per route; CHANGE 2 CloudConvert builtins; CHANGE 3 Meshy AI builtins with approval on text/image; CHANGE 4 scheduled maintenance for `webhook_events` + `webhook_event_stats`; note wrangler cron; then deploy + post-deploy checks + session log. Scope: `worker.js` only for code (session log allowed).
+
+### Audit (before edits)
+1. `RESEND_INBOUND`: not present; `DEPLOY_TRACKING_TOKEN` at ~193; `CURSOR_WEBHOOK_SECRET` / `SUPABASE_WEBHOOK_SECRET` in verify; `CF_WEBHOOK_SECRET` and internal fallback chain (`IAM_INTERNAL_SECRET` / `WEBHOOK_IAM_SECRET` / `INTERNAL_API_SECRET`) in `verifyWebhookSignature`.
+2. No `cloudconvert` / `meshy` / `CLOUDCONVERT` / `MESHYAI` matches.
+3. `worker.scheduled` present; crons `*/30`, `0 0`, `0 6`, `30 13`; `webhook_events` INSERT/UPDATE paths; no prior `payload_json` NULL maintenance SQL.
+4. `wc -l worker.js` → **12078**.
+
+### Files changed
+- `worker.js`: `verifyWebhookSignature` — `resend_inbound` → `RESEND_INBOUND_WEBHOOK_SECRET`; `cloudflare` → `DEPLOY_TRACKING_TOKEN`; `internal` → **only** `INTERNAL_API_SECRET` (no fallback). `/api/email/inbound` uses `verifyKind: 'resend_inbound'`. `/api/webhooks/resend` unchanged (`resend` + `RESEND_WEBHOOK_SECRET`).
+- `worker.js`: `runCloudConvertBuiltinTool`, `runMeshyBuiltinTool`, helpers; `runToolLoop` + `BUILTIN_TOOLS`; `invokeMcpToolFromChat` (approval gate + execution); `ACTION_TOOLS` for Meshy text/image; `/api/mcp/invoke` branches (Meshy text/image → 202 pending; CloudConvert + `meshyai_get_task` inline).
+- `worker.js`: `runWebhookEventsMaintenanceCron` + `ctx.waitUntil` from existing `0 6 * * *` cron (delete old events, compress payloads, stats rollup).
+- `worker.js` line count after edits: **12433**.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml` — locked; **manual note**: `[triggers] crons` already includes `"0 6 * * *"`. Webhook maintenance runs inside that handler; no extra cron entry required unless you want a different schedule.
+- `agent.html`, dashboards, D1 schema/migrations, R2 uploads — not in scope for this implementation pass.
+
+### Deploy status
+- Built: no (worker deploy only)
+- R2 uploaded: no (not part of this deploy)
+- Worker deployed: yes — **Version ID** `5d3af751-5dbe-4467-b27a-1864ec394e8b` (`npm run deploy` after **deploy approved**)
+- Deploy approved by Sam: yes (2026-03-21)
+
+### Post-deploy verification
+- `GET https://inneranimalmedia.com/api/webhooks/health` → `200`, `ok: true`, endpoint rows present (cloudflare, cursor, github, internal, resend x2 paths, stripe, supabase).
+- D1 `webhook_endpoints` (remote): 8 rows ordered by source; GitHub `total_received: 1`.
+- D1 `hook_subscriptions` (remote): 15 rows, `ORDER BY endpoint_id`.
+- D1 `mcp_registered_tools` where `tool_category IN ('file_conversion','ai_3d_generation')`: 5 rows (both CloudConvert + three Meshy), all `enabled: 1`.
+- `worker.js` line count: **12433** (local repo).
+- `dashboard/agent.html` cache-bust: `agent-dashboard.css` / `.js` **`?v=122`** (no R2 upload this session; bump `v` when you upload new built assets).
+
+### What is live now
+Production worker **inneranimalmedia** includes webhook secret key alignment (`RESEND_INBOUND_WEBHOOK_SECRET` on `/api/email/inbound`, `DEPLOY_TRACKING_TOKEN` for Cloudflare webhooks, internal-only `INTERNAL_API_SECRET`), CloudConvert/Meshy builtins, and `runWebhookEventsMaintenanceCron` on the `0 6 * * *` schedule.
+
+### Known issues / next steps
+- Ensure Worker secrets are set for new names where applicable (`RESEND_INBOUND_WEBHOOK_SECRET`, `DEPLOY_TRACKING_TOKEN`, `INTERNAL_API_SECRET`, `CLOUDCONVERT_API_KEY`, `MESHYAI_API_KEY`).
+- First 6am UTC run will exercise `webhook_event_stats` rollup; if the table or columns differ, logs will show `[cron] webhook_event_stats rollup` warnings.
+
+## 2026-03-22 worker.js: hook_subscriptions `event_filter` wildcard + hook_executions log
+
+### What was asked
+Audit grep; fix GitHub ping (and others) so `event_filter = '*'` matches without relying on SQL `LIKE`; add visibility on `hook_executions` INSERT failure; deploy; verify `hook_executions` SELECT.
+
+### Files changed
+- `worker.js`: `hookSubscriptionMatchesEventFilter()` (trimmed `*` = match all; else `event_filter.includes(event_type)`; empty `event_type` matches all active subs to mirror prior `LIKE '%%'` behavior). Subscription load: SELECT all active rows for `endpoint_id` with `event_filter` column, filter in JS. `hook_executions` catch: `console.log` with `subscription_id`, `webhook_event_id`, `error` in addition to `console.error`.
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `276dead1-f3e5-4565-8dca-386f385fb761`
+- Post-deploy D1: `hook_executions` **COUNT = 0**; `SELECT ... ORDER BY started_at DESC LIMIT 5` returned no rows (expected until next webhook delivery after deploy).
+
+### What is live now
+Wildcard and substring matching for hook subscriptions is applied in application code after loading active subscriptions for the resolved endpoint.
+
+## 2026-03-22 worker.js: hook_executions INSERT audit + pre-INSERT console.log
+
+### What was asked
+Grep audit for `hook_executions` / `hxe_`; compare INSERT to canonical schema; fix if needed; log before INSERT; deploy; D1 `SELECT *` and tail.
+
+### Audit (grep, exact lines)
+- `323`: comment referencing `hook_executions`
+- `1043`–`1052`: `INSERT INTO hook_executions` (multi-line)
+- `1059`–`1064`: INSERT failure `console.error` / `console.log`
+- No `hxe_` matches in `worker.js`.
+
+**Full INSERT (pre-change column list already matched schema):**
+```sql
+INSERT INTO hook_executions (
+  id, subscription_id, webhook_event_id, tenant_id, attempt, status,
+  result_json, error_message, duration_ms, started_at, completed_at
+) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, datetime('now'), datetime('now'))
+```
+
+### Files changed
+- `worker.js` (~1041–1047): `console.log('[hooks] attempting hook_executions INSERT', { subscription_id, webhook_event_id: eventId, status: execStatus, duration_ms })` immediately before the INSERT try. No INSERT column changes (already aligned with 11-column schema).
+
+### Secrets note
+`wrangler secret list` shows **`INTERNAL_API_SECRET`** (no `INTERNAL_WEBHOOK_SECRET` name in list).
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `a993320c-03ea-4e9d-ba6a-883b48ed2c71`
+- D1 `SELECT * FROM hook_executions LIMIT 5`: **empty** until next webhook delivery.
+
+### Next steps
+Redeliver GitHub ping, then re-run the SELECT; run `wrangler tail inneranimalmedia -c wrangler.production.toml` locally to capture `[hooks] attempting hook_executions INSERT`.
+
+## 2026-03-22 INTERNAL_API_SECRET + INTERNAL_WEBHOOK_SECRET rotation
+
+### What was asked
+Fresh `INTERNAL_API_SECRET` and `INTERNAL_WEBHOOK_SECRET` so internal auth is clearly separated and aligned.
+
+### Files changed
+- `worker.js` (`verifyWebhookSignature` `internal` case): verify HMAC with **`INTERNAL_WEBHOOK_SECRET`** only (no longer `INTERNAL_API_SECRET` for `/api/webhooks/internal`).
+- `worker.js` (env catalog array): document both secrets — `INTERNAL_API_SECRET` for post-deploy / `X-Internal-Secret` / admin; `INTERNAL_WEBHOOK_SECRET` for internal webhooks `X-IAM-Signature`.
+
+### Operations
+- `wrangler secret put INTERNAL_API_SECRET` and `INTERNAL_WEBHOOK_SECRET` (new random values) on Worker **inneranimalmedia** via `with-cloudflare-env.sh`. **Values are not recorded in this log** — store from your secure terminal / password manager.
+- If `getVaultSecrets` / KV vault overrides these keys, update vault to match or remove overrides.
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `fcfcca3b-9e49-45a1-a1ae-d05454a5b6c5`
+
+### What you must update manually
+- **Post-deploy / CI / scripts** using `Authorization: Bearer` or `X-Internal-Secret`: new **`INTERNAL_API_SECRET`**.
+- **Callers of `/api/webhooks/internal`** (HMAC `X-IAM-Signature`): new **`INTERNAL_WEBHOOK_SECRET`** (different from API secret).
+
+---
+
+## HOTFIX 2026-03-22 — `hook_executions.status` success value
+
+### What was asked
+Surgical change: successful hook execution rows must use `status = 'success'` instead of `'completed'` so D1 INSERT matches schema / consumers expecting `success`.
+
+### Files changed
+- `worker.js` line ~1040: `execStatus = out.ok ? 'success' : 'failed'` (was `'completed'`).
+
+### Deploy status
+- Worker deployed: yes — **Version ID** `452a61ce-07dc-445a-8af8-ef933e484f7b`
+
+### Post-deploy verify (you run)
+1. Redeliver GitHub webhook ping.
+2. `SELECT subscription_id, status, duration_ms FROM hook_executions ORDER BY started_at DESC LIMIT 5;` — expect **`status = 'success'`** for successful runs after this deploy.
+
+## 2026-03-22 Morning to-do email (Resend)
+
+### What was asked
+Email a morning work plan / to-do to meauxbility@gmail.com from sam@inneranimalmedia.com based on `docs/plans/TOMORROW_2026-03-23_UI_SETTINGS_TERMINAL_PLAN.md`.
+
+### Files changed
+- None (one-shot `node` + Resend API using `RESEND_API_KEY` from `.env.cloudflare`).
+
+### Operations
+- Resend **email id** `9e2462d0-a666-4807-9bd5-969aa519aa58`; subject `[IAM] Morning to-do — Mar 23 (terminal, Settings, Agent polish)`.
+
+### Deploy status
+- N/A
+
+## 2026-03-22 D1 sync — agent_memory_index, roadmap_steps, dashboard_version note
+
+### What was asked
+Document current platform state in D1 (`dashboard_version` / roadmap / memory keys) so sessions and digest stay aligned.
+
+### Files changed
+- `scripts/d1-sync-session-2026-03-22.sql` — UPDATE `active_priorities`, `build_progress` (`tenant_id=system`); INSERT OR REPLACE `dashboard_version`, `today_todo`; INSERT `roadmap_steps` `step_mar23_ui_sprint` (plan `plan_iam_dashboard_v1`, `in_progress`, order 22).
+- `docs/memory/D1_CANONICAL_AGENT_KEYS.md` — canonical tenant + keys + re-run instructions.
+- `.cursor/rules/session-start-d1-context.mdc` — SELECT examples use `tenant_id = 'system'`; optional `dashboard_version` query.
+
+### Operations
+- Remote D1 **inneranimalmedia-business**: executed SQL file successfully (5 statements).
+
+### Deploy status
+- N/A
+
+## 2026-03-22 Morning brief — scheduled 8:30am (Resend)
+
+### What was asked
+Deliver the morning to-do at **8:30am** instead of only sending immediately at ~2:35am.
+
+### Files changed
+- `scripts/send-morning-brief-email.mjs` — Resend with **`scheduled_at`** (default `today at 8:30am America/Chicago`), `--now` for immediate; env `MORNING_BRIEF_SCHEDULED_AT`, `MORNING_BRIEF_FROM`, `MORNING_BRIEF_TO`.
+- `docs/plans/TOMORROW_2026-03-23_UI_SETTINGS_TERMINAL_PLAN.md` — “Morning email (Resend)” section.
+
+### Operations
+- Scheduled send **Resend id** `476c6663-2d75-4a02-9310-4316ac8093c3` at `today at 8:30am America/Chicago`.
+
+### Deploy status
+- N/A
+
+## 2026-03-22 ai_knowledge_base — D1 canonical doc + sync SQL
+
+### What was asked
+Insert the D1 canonical / session-sync documentation into `ai_knowledge_base` and `ai_knowledge_chunks` using real `tenant_id` and `client_id`.
+
+### Files changed
+- `scripts/d1-kb-insert-canonical-knowledge.sql` — `INSERT OR REPLACE` into `ai_knowledge_base` (`kb-iam-d1-canonical-keys-20260322`, `tenant_sam_primeaux`, `client_sam_primeaux` in `metadata_json`) and `ai_knowledge_chunks` (`kb-iam-d1-canonical-keys-20260322-c0`); full body = `D1_CANONICAL_AGENT_KEYS.md` + `d1-sync-session-2026-03-22.sql`; `is_indexed = 0` for vectorize pipeline.
+- `docs/memory/D1_CANONICAL_AGENT_KEYS.md` — section documenting KB row ids, metadata, regen/apply commands.
+
+### Files NOT changed (and why)
+- `worker.js`, `dashboard/agent.html`, `FloatingPreviewPanel.jsx` — not required for D1 KB insert.
+
+### Operations
+- Remote D1 **inneranimalmedia-business**: executed `scripts/d1-kb-insert-canonical-knowledge.sql` (2 queries, success). Verified SELECT on base + chunk rows.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: N/A
+
+### What is live now
+Production D1 holds the KB document and one chunk for RAG; embeddings not updated until **`POST /api/admin/vectorize-kb`** or equivalent runs (`is_indexed` still 0).
+
+### Known issues / next steps
+- Run vectorize for pending KB rows if AutoRAG should see this content immediately.
+
+## 2026-03-22 D1_CANONICAL doc — clients is source of client_id
+
+### What was asked
+Clarify that **`clients`** holds the canonical **`client_id`** (vs only mentioning `metadata_json` on KB tables).
+
+### Files changed
+- `docs/memory/D1_CANONICAL_AGENT_KEYS.md` — KB section table row: `clients` as source of truth; `metadata_json` as denormalized copy on `ai_knowledge_base` / chunks (no `client_id` column there).
+
+### Deploy status
+- N/A
+
+## 2026-03-22 infrastructure_documentation — D1 canonical MD registry
+
+### What was asked
+Add a row to `infrastructure_documentation` so the D1 canonical / sync doc stays discoverable (we had been forgetting to keep it in sync).
+
+### Files changed
+- `scripts/d1-insert-infra-doc-d1-canonical.sql` — `INSERT OR REPLACE` row `infra-doc-d1-canonical-keys-20260322` (`tenant_sam_primeaux`, bucket `iam-platform`, `r2_key` `memory/D1_CANONICAL_AGENT_KEYS.md`, category `d1-operations`, `size_bytes` 3145 after doc edit, tags + preview).
+- `docs/memory/D1_CANONICAL_AGENT_KEYS.md` — `## infrastructure_documentation` cross-link to registry id and R2 key.
+
+### Operations
+- Remote D1 **inneranimalmedia-business**: executed SQL file successfully. Verified SELECT by `id`.
+
+### Deploy status
+- N/A
+
+### Known issues / next steps
+- `last_synced_at` is NULL until the MD is uploaded to R2 at that key; bump `size_bytes` / preview in the SQL if the file grows.
+
+## 2026-03-22 R2 sandbox upload — agent-sam-sandbox-cidi (MPA mirror)
+
+### What was asked
+Upload production dashboard / agent code into new bucket `agent-sam-sandbox-cidi` with clear layout; prioritize `/dashboard/agent` safety for sandbox UI work.
+
+### Files changed
+- `scripts/upload-repo-to-r2-sandbox.sh` — uploads manifest, `agent-sam/static/**`, repo `static/dashboard/**`, all `dashboard/*.html` (except auth duplicate), `dashboard/pages/*.html`, `dashboard/*.jsx`, `static/auth-signin.html`, `agent-dashboard/dist` to `static/dashboard/agent/`, `source/worker.js`; skips `.DS_Store`; fixed R2 keys to use full `static/dashboard/...` for repo static tree; auth-signin only at `static/auth-signin.html`.
+
+### Operations
+- Ran script twice (second after key fix). Deleted mistaken first-run keys under `dashboard/*`, `static/.DS_Store`, `_sandbox/health.txt`, and duplicate `static/dashboard/auth-signin.html`.
+
+### Deploy status
+- Production `agent-sam` untouched. Worker still bound to `agent-sam`. No worker deploy.
+
+### What is live now
+Sandbox bucket holds production-parity keys for dashboard HTML, fragments, agent bundle, and worker snapshot. Browsing via r2.dev uses absolute object keys; same-origin `/api/*` still requires prod or a sandbox worker binding.
+
+## 2026-03-22 Sandbox handoff doc + overview R2 on sandbox
+
+### What was asked
+Prompt for another Cursor on sandbox vs production deploy/workflow; overview page empty on sandbox while agent looked fine.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` — handoff: OAuth locks, R2 keys, sandbox upload script, promotion checklist, why overview needs `static/dashboard/overview/*`.
+- `scripts/upload-repo-to-r2-sandbox.sh` — upload `overview-dashboard/dist/*` to `static/dashboard/overview/`.
+
+### Operations
+- Uploaded `overview-dashboard/dist/*` to `agent-sam-sandbox-cidi/static/dashboard/overview/`.
+
+### Deploy status
+- Production worker: not deployed
+
+## 2026-03-22 Agent theme FOUC + roadmap + promote script
+
+### What was asked
+Fix recurring `/dashboard/agent` weird first paint until navigation; document roadmap_steps; scripts/workflow for sandbox to prod agent UI; multistep CIDI vision.
+
+### Files changed
+- `dashboard/agent.html` — after fonts: `styles_themes.css` (pub R2) + `/static/dashboard/shell.css`; theme block always `fetch('/api/settings/theme')` and apply `data-theme` + `applyDynamicTheme`, not only when `localStorage` had a preset.
+- `scripts/promote-agent-dashboard-to-production.sh` — `PROMOTE_OK=1` gate; `npm run build` in agent-dashboard; R2 put `agent.html` + bundle to **agent-sam** (no Worker deploy).
+- `scripts/d1-roadmap-sandbox-agent-workflow-20260322.sql` — `roadmap_steps` `step_agent_theme_initial_paint` (order 28), `step_sandbox_agent_promote_workflow` (order 29), status `in_progress`.
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` — items 6–9: FOUC cause, promote script, roadmap ids, future `/workflow` note.
+
+### Operations
+- Remote D1: executed roadmap SQL. Uploaded `dashboard/agent.html` to **agent-sam-sandbox-cidi** `static/dashboard/agent.html`.
+
+### Deploy status
+- Production **agent-sam** / worker: not updated (Sam can run promote script + R2 put + deploy approved when ready).
+
+## 2026-03-22 SYSTEM_CIDI_ARCHITECTURE_README + README links
+
+### What was asked
+Visual wireframe + Mermaid system map (2-zone CIDI, D1 clusters, MCP + iam-pty repos); ensure docs live in inneranimalmedia-agentsam-dashboard repo for other Cursor.
+
+### Files changed
+- `docs/SYSTEM_CIDI_ARCHITECTURE_README.md` — ASCII two-zone diagram, CIDI 2-step flow, 3 Mermaid charts (components, repos, D1 clusters), URL table, agent rules, cross-links to handoff SQL/scripts.
+- `README.md` — link to architecture doc; Key docs rows for SYSTEM + two CURSOR_HANDOFF files; sandbox/promote scripts in table; MCP + Terminal sibling GitHub links.
+
+### Deploy status
+- Git push: yes — `origin` https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git (after rebase conflict fix in `docs/cursor-session-log.md`).
+
+## 2026-03-22 D1 CIDI orchestration handoff + bootstrap SQL
+
+### What was asked
+Master prompt/script for other Cursor to sync many D1 tables on actions; validate github_repositories UPDATE; mcp_workflows 2-step CIDI; r2_buckets sandbox; webhooks/workflow_locks guidance; worker_registry.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map, webhook pipeline, workflow_locks, copy-paste Cursor prompt, MCP workflow id reference.
+- `scripts/d1-cidi-bootstrap-20260322.sql` — `r2_buckets` `r2_agent_sam_sandbox_cidi`, `mcp_workflows` `wf_cidi_agent_ui_sandbox_to_prod`, `worker_registry` `wr_inneranimal_dashboard_001` (worker_type **staging** — CHECK disallows `preview`), `github_repositories` id=1 `status_notes`.
+
+### Operations
+- Remote D1: executed bootstrap SQL (4 statements, success).
+
+### Deploy status
+- Worker: not deployed
+
+## 2026-03-22 R2 sandbox clone script (agent-sam to agent-sam-sandbox-cidi)
+
+### What was asked
+Clone or push live `agent-sam` contents into new bucket `agent-sam-sandbox-cidi` for safe sandbox/testing; prefer wrangler or terminal bulk approach.
+
+### Files changed
+- `scripts/r2-clone-agent-sam-to-sandbox.sh` — `aws s3 sync` against `https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com`, optional `SYNC_PREFIX`, `DRY_RUN`, `DELETE`; documents rclone alternative.
+- `.env.cloudflare.example` — commented optional `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` for S3 API (not HTTP API token).
+
+### Operations
+- Did not run sync from this session (requires R2 S3 API token on Sam machine).
+
+### Deploy status
+- N/A
+
+## [2026-03-22] Webhook triage doc + GitHub ping confirmed
+
+### What was asked
+Document that “webhooks not firing” is usually path/source mismatch, verification failure, or missing `webhook_endpoints` row — not a duplicate endpoint for the same URL; `secret_hash` NULL can be fine; fix Worker env first. Note GitHub hook working at `/api/webhooks/github`.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — section 4 expanded: triage order, `/api/webhooks/*` vs `/api/hooks/*` D1 path alignment, anti-pattern (duplicate rows), production confirmation for repo **inneranimalmedia-agentsam-dashboard** `ping` to `https://inneranimalmedia.com/api/webhooks/github`; copy-paste prompt bullet updated.
+
+### Files NOT changed (and why)
+- `worker.js`: no code change.
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: no
+- Git push: yes — `main` **c73d7cb** to https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
+
+### What is live now
+Unchanged Worker behavior; handoff doc + session log on GitHub **main**.
+
+### Known issues / next steps
+- If GitHub uses `/api/hooks/github`, ensure D1 `endpoint_path` matches that path (Worker supports both routes with distinct `endpointPath` lookups).
+
+## [2026-03-22] dev_workflows seed script (CIDI platform row)
+
+### What was asked
+Explain “local WIP”; add a `dev_workflows` row for the CIDI / dual-zone + MCP + PTY setup.
+
+### Files changed
+- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — `CREATE TABLE IF NOT EXISTS dev_workflows` + index + `INSERT OR REPLACE` row `dw_cidi_inneranimal_platform` (`related_json` documents prod/sandbox, repos, scripts, webhook path note).
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map row for `dev_workflows` + script path.
+
+### Deploy status
+- D1: not executed from this session; Sam runs wrangler `d1 execute` with the script after approving new table on `inneranimalmedia-business`.
+- Git push: not run unless Sam says go.
+
+### What is live now
+Repo-only until SQL is applied on remote D1.
+
+### Known issues / next steps
+- No Worker/dashboard reader for `dev_workflows` yet; row is for agents and ad-hoc queries (`SELECT * FROM dev_workflows WHERE id='dw_cidi_inneranimal_platform'`).
+
+## [2026-03-22] dev_workflows INSERT aligned to remote D1 schema + executed
+
+### What was asked
+Match remote `dev_workflows` table shape; run wrangler `d1 execute` with the seed script.
+
+### Files changed
+- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — removed wrong `CREATE TABLE`; `INSERT OR REPLACE` uses production columns (`category`, `steps_json`, `command_sequence`, `estimated_time_minutes`, `is_template`, `tags`, `created_by`, `use_count`, etc.).
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map note: remote schema, not local CREATE.
+
+### Operations
+- Remote D1: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-dev-workflows-insert-cidi-setup.sql` — success (1 query, rows written reported).
+
+### Deploy status
+- Worker: no
+- Git push: yes — `main` **ca081db** (script + handoff + session log) to https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
+
+## [2026-03-22] Commit agent.html + AgentDashboard.jsx + worker.js for sandbox parity
+
+### What was asked
+Land local WIP on GitHub so sandbox refine/debug is easier; acknowledge tight rules on agent.html (changes were already local, commit only).
+
+### Files changed
+- `dashboard/agent.html` — `styles_themes.css` + `shell.css` after fonts; theme `fetch` always applies `data-theme` / `applyDynamicTheme`; agent bundle cache **v122**.
+- `agent-dashboard/src/AgentDashboard.jsx` — terminal card output normalization; conversation slice maps `terminal_output` to user text and `(empty)` guard; slash `applySlashCommandSelection` instant send when no `<...>` placeholders.
+- `worker.js` — inbound webhooks (`/api/hooks/*`, `/api/webhooks/*` aliases), signature verify, `webhook_events` / hook pipeline, related `runToolLoop` / MCP / workflow / cron / vault catalog touches (OAuth callback functions not edited per diff review).
+
+### Files NOT changed (and why)
+- `agent-dashboard/dist/*`: gitignored; rebuild + R2 when promoting to production.
+
+### Deploy status
+- Built: no (not requested)
+- R2 uploaded: no
+- Worker deployed: no — **deploy approved** not given; production Worker unchanged until Sam deploys
+- Git push: yes — sources **c016d05**, session log **08c2939** on https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
+
+### What is live now
+GitHub **main** has source parity for agent shell + dashboard + worker; production still prior deploy until build/R2/deploy.
+
+### Known issues / next steps
+- Run `npm run build` in `agent-dashboard` before R2 upload so `v=122` matches bundle bytes; upload `dashboard/agent.html` then worker deploy when approved.
+
+## [2026-03-22] Agent terminal: Enter fallback when WebSocket not OPEN
+
+### What was asked
+Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel OK. Fix send path and confusing Disconnected + Connected lines.
+
+### Root cause
+`sendTerminalKey` returned early when `readyState !== WebSocket.OPEN` (no user feedback). UI showed static `Disconnected.` while scrollback still contained `Connected.` after the socket closed.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` — `ws.onclose`: append `\r\n[Disconnected]\r\n` to stream; remove duplicate static `Disconnected.` line; `sendTerminalKey`: if WS open, keep JSON `{type:input}`; else **POST** `/api/agent/terminal/run` via `runCommandInTerminal` for non-empty trimmed line (one-shot run, same Worker path as `type:run` PTY).
+- `dashboard/agent.html` — agent bundle cache **v=122 to v=123** (2 lines).
+
+### Files NOT changed (and why)
+- `worker.js`: HTTP terminal run already implemented.
+
+### Deploy status
+- Built: yes — `npm run build` in `agent-dashboard` before commit
+- R2 uploaded: no until Sam approves and runs the three `wrangler r2 object put` commands below from repo root
+- Worker deployed: no
+- Git push: yes — **ad55319** https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main`
+
+### R2 (run only after you approve — repo root)
+```bash
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file=agent-dashboard/dist/agent-dashboard.js --content-type=application/javascript --remote -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file=agent-dashboard/dist/agent-dashboard.css --content-type=text/css --remote -c wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file=dashboard/agent.html --content-type=text/html --remote -c wrangler.production.toml
+```
+
+**Executed 2026-03-22 (Sam request):** `npm run build` in `agent-dashboard/` then all three `r2 object put` to bucket **agent-sam** — `static/dashboard/agent/agent-dashboard.js`, `.css`, `static/dashboard/agent.html` (`?v=123`). Worker not redeployed.
+
+### Known issues / next steps
+- Interactive PTY still needs stable WSS; fallback is line-at-a-time only. Reconnect still resets output when effect re-runs.
+
+## [2026-03-22] .env.cloudflare.example + Cursor session rules + settings
+
+### What was asked
+**go:** Push names-only `.env.cloudflare.example`, D1 session-start query fixes, Cursor settings; session log.
+
+### Files changed
+- `.env.cloudflare.example` — minimal local vars; commented inventories (plaintext + secret **names** only); bindings / crons / routes checklists; no production IDs or secrets in file; optional R2 S3 key names for sync scripts.
+- `.cursor/rules/session-start-d1-context.mdc` — `agent_memory_index` queries use `tenant_id = 'system'`; optional `dashboard_version` query; note on `tenant_sam_primeaux`.
+- `.cursor/settings.json` — enable `continual-learning` MCP block.
+- `docs/cursor-session-log.md` — this entry.
+
+### Deploy status
+- Git push: yes — **20f49bf** https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main`
+
+---
+
+## Session log merge: branch `cursor/platform-ui-stability-1eca` (CIDI / sandbox)
+
+---
+
 ## [2026-03-22] D1 `cidi` row — IAM Agent Sam platform UI build
 
 ### What was asked
@@ -5441,3 +6125,4 @@ Sign-in UI live at `inneranimal-dashboard.meauxbility.workers.dev/auth/signin` b
 
 ### Note for Sam
 If this breaks again after Git/Workers Builds deploys, set the same secret again or use PBKDF2 hex secrets; avoid storing Cloudflare API tokens as Worker plaintext vars.
+

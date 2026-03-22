@@ -11,16 +11,21 @@ alwaysApply: true
 Before starting work, read these from the D1 database and confirm what you read before touching any code:
 
 1. **Active priorities**  
-   `SELECT value FROM agent_memory_index WHERE key = 'active_priorities'`
+   `SELECT value FROM agent_memory_index WHERE tenant_id = 'system' AND key = 'active_priorities'`  
+   (Production canonical rows for these keys use **`tenant_id = 'system'`**; also check `tenant_sam_primeaux` if you added tenant-specific copies.)
 
 2. **Build progress**  
-   `SELECT value FROM agent_memory_index WHERE key = 'build_progress'`
+   `SELECT value FROM agent_memory_index WHERE tenant_id = 'system' AND key = 'build_progress'`
 
 3. **Roadmap steps (IAM dashboard plan)**  
    `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v1' ORDER BY order_index`
 
 4. **Today's to-do (realtime production list)**  
-   `SELECT value FROM agent_memory_index WHERE key = 'today_todo'`
+   `SELECT value FROM agent_memory_index WHERE tenant_id = 'system' AND key = 'today_todo'`
+
+5. **Dashboard bundle note (optional)**  
+   `SELECT value FROM agent_memory_index WHERE tenant_id = 'system' AND key = 'dashboard_version'`  
+   Summarizes `dashboard_versions` table vs `agent.html` `?v=` cache bust; re-run sync script after major UI drops if needed.
 
 Then confirm what you read before touching any code.
 

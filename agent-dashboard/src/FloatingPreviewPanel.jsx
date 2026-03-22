@@ -858,6 +858,7 @@ export default function FloatingPreviewPanel({
       if (terminalWsRef.current !== ws) return;
       terminalWsRef.current = null;
       terminalSessionIdRef.current = null;
+      setTerminalOutput((prev) => (prev && !prev.endsWith("[Disconnected]\r\n") ? prev + "\r\n[Disconnected]\r\n" : prev || "[Disconnected]\r\n"));
       setTerminalWsState("disconnected");
     };
     ws.onerror = () => {
@@ -889,23 +890,6 @@ export default function FloatingPreviewPanel({
     if (terminalOutputRef.current) terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
   }, [terminalOutput]);
 
-  const sendTerminalKey = useCallback((e) => {
-    const isEnter = e.key === "Enter" || e.key === "NumpadEnter";
-    if (!isEnter) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const ws = terminalWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const line = terminalInput.trimEnd() + "\n";
-    try {
-      ws.send(JSON.stringify({ type: "input", data: line }));
-    } catch (_) {
-      return;
-    }
-    setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + terminalInput + "\r\n");
-    setTerminalInput("");
-  }, [terminalInput]);
-
   const runCommandInTerminal = useCallback(async (command) => {
     try {
       const res = await fetch("/api/agent/terminal/run", {
@@ -927,6 +911,37 @@ export default function FloatingPreviewPanel({
       return { ok: false, error: err?.message ?? String(err) };
     }
   }, [onTabChange]);
+
+  /** Enter: PTY via WebSocket when OPEN; otherwise one-shot HTTP /api/agent/terminal/run (same as mac tunnel run path). */
+  const sendTerminalKey = useCallback((e) => {
+    const isEnter = e.key === "Enter" || e.key === "NumpadEnter";
+    if (!isEnter) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ws = terminalWsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const line = terminalInput.trimEnd() + "\n";
+      try {
+        ws.send(JSON.stringify({ type: "input", data: line }));
+      } catch (_) {
+        return;
+      }
+      setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + terminalInput + "\r\n");
+      setTerminalInput("");
+      return;
+    }
+    const cmd = terminalInput.trim();
+    if (!cmd) return;
+    void (async () => {
+      setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + cmd + "\r\n");
+      setTerminalInput("");
+      const r = await runCommandInTerminal(cmd);
+      if (r && !r.ok) {
+        const errLine = r.error ? String(r.error) : "Terminal run failed";
+        setTerminalOutput((prev) => prev + "\r\n" + errLine + "\r\n");
+      }
+    })();
+  }, [terminalInput, runCommandInTerminal]);
 
   useEffect(() => {
     if (runCommandRunnerRef) {
@@ -1599,7 +1614,6 @@ export default function FloatingPreviewPanel({
             <div ref={terminalOutputRef} style={{ flex: 1, overflow: "auto", padding: "10px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
               {terminalWsState === "connecting" && "Connecting to terminal..."}
               {terminalWsState === "error" && "Connection error."}
-              {terminalWsState === "disconnected" && "Disconnected."}
               {terminalOutput}
             </div>
             <div style={{ borderTop: "1px solid var(--border)", padding: "7px 10px", display: "flex", alignItems: "center", gap: "6px" }}>

@@ -1,104 +1,126 @@
 #!/usr/bin/env bash
-# Upload Overview (and optional Agent) Vite builds + key HTML to the CIDI sandbox R2 bucket.
-# Default bucket: agent-sam-sandbox-cidi (worker inneranimal-dashboard / wrangler.jsonc).
+# Upload dashboard MPA + agent bundle + overview Vite output + optional trees to R2 sandbox bucket.
+# Keys mirror production agent-sam layout (static/dashboard/...) so URLs stay predictable.
 #
-# Prerequisites:
-#   - Repo root; ./scripts/with-cloudflare-env.sh + .env.cloudflare (CLOUDFLARE_*).
-#   - overview-dashboard: cd overview-dashboard && npm install && npm run build
-#   - agent-dashboard (optional): cd agent-dashboard && npm install && npm run build
+# Usage:
+#   ./scripts/upload-repo-to-r2-sandbox.sh
+# Env:
+#   SANDBOX_BUCKET=agent-sam-sandbox-cidi   (default; alias SANDBOX_R2_BUCKET)
+#   R2_CONFIG=wrangler.production.toml     (default; account/token via with-cloudflare-env.sh)
 #
-# Usage: ./scripts/upload-repo-to-r2-sandbox.sh
-# Env: SANDBOX_R2_BUCKET (default agent-sam-sandbox-cidi), R2_CONFIG (default wrangler.production.toml)
-
 set -euo pipefail
 shopt -s nullglob
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
-
+BUCKET="${SANDBOX_R2_BUCKET:-${SANDBOX_BUCKET:-agent-sam-sandbox-cidi}}"
 CONFIG="${R2_CONFIG:-wrangler.production.toml}"
-BUCKET="${SANDBOX_R2_BUCKET:-agent-sam-sandbox-cidi}"
+WRAP=(./scripts/with-cloudflare-env.sh npx wrangler r2 object put)
 
-r2_put() {
-  local key="$1"
-  local file="$2"
-  local ct="$3"
-  ./scripts/with-cloudflare-env.sh npx wrangler r2 object put "${BUCKET}/${key}" --file="$file" --content-type="$ct" --remote -c "$CONFIG"
-}
-
-content_type_for() {
-  local base="$1"
-  case "$base" in
-    *.js)   echo "application/javascript; charset=utf-8" ;;
-    *.mjs)  echo "application/javascript; charset=utf-8" ;;
-    *.css)  echo "text/css; charset=utf-8" ;;
-    *.html) echo "text/html; charset=utf-8" ;;
-    *.json) echo "application/json; charset=utf-8" ;;
-    *.map)  echo "application/json; charset=utf-8" ;;
-    *.svg)  echo "image/svg+xml" ;;
-    *.woff2) echo "font/woff2" ;;
-    *.woff) echo "font/woff" ;;
-    *.ttf)  echo "font/ttf" ;;
-    *.png)  echo "image/png" ;;
-    *.jpg|*.jpeg) echo "image/jpeg" ;;
-    *.ico)  echo "image/x-icon" ;;
-    *)      echo "application/octet-stream" ;;
+content_type() {
+  case "${1##*.}" in
+    html|htm) echo "text/html; charset=utf-8" ;;
+    js|mjs|cjs) echo "application/javascript; charset=utf-8" ;;
+    jsx) echo "application/javascript; charset=utf-8" ;;
+    css) echo "text/css; charset=utf-8" ;;
+    json) echo "application/json; charset=utf-8" ;;
+    map) echo "application/json; charset=utf-8" ;;
+    svg) echo "image/svg+xml" ;;
+    png) echo "image/png" ;;
+    jpg|jpeg) echo "image/jpeg" ;;
+    woff2) echo "font/woff2" ;;
+    woff) echo "font/woff" ;;
+    ttf) echo "font/ttf" ;;
+    ico) echo "image/x-icon" ;;
+    txt|md) echo "text/plain; charset=utf-8" ;;
+    *) echo "application/octet-stream" ;;
   esac
 }
 
-upload_dir_flat() {
-  local src_dir="$1"
-  local r2_prefix="$2"
-  local label="$3"
-  if [[ ! -d "$src_dir" ]]; then
-    echo "WARN: skip ${label}: missing directory ${src_dir}"
+put_file() {
+  local file="$1" key="$2"
+  if [[ ! -f "$file" ]]; then
+    echo "SKIP missing: $file" >&2
     return 0
   fi
-  local found=0
-  for f in "$src_dir"/*; do
-    [[ -f "$f" ]] || continue
-    found=1
-    base=$(basename "$f")
-    ct=$(content_type_for "$base")
-    echo "  -> ${r2_prefix}${base} (${ct%%;*})"
-    r2_put "${r2_prefix}${base}" "$f" "$ct"
-  done
-  if [[ "$found" -eq 0 ]]; then
-    echo "WARN: ${label}: no files in ${src_dir}"
-  fi
+  local ct
+  ct="$(content_type "$file")"
+  echo "PUT s3://$BUCKET/$key <= $file"
+  "${WRAP[@]}" "${BUCKET}/${key}" --file="$file" --content-type="$ct" --remote -c "$CONFIG"
 }
 
-echo "Sandbox R2 upload -> ${BUCKET} (config ${CONFIG})"
-echo ""
+echo "=== Sandbox bucket: $BUCKET (config: $CONFIG) — production-parity keys under static/) ==="
 
-if [[ -f dashboard/overview.html ]]; then
-  echo "Overview HTML -> static/dashboard/overview.html"
-  r2_put static/dashboard/overview.html dashboard/overview.html "text/html; charset=utf-8"
-  echo ""
+# --- 0) Manifest (plain text for easy read in dashboard)
+MANIFEST="$(mktemp)"
+{
+  echo "agent-sam-sandbox-cidi — mirror of production R2 key layout (agent-sam)"
+  echo "Same paths as prod: /dashboard/<page> -> static/dashboard/<page>.html"
+  echo "Agent app: static/dashboard/agent.html + static/dashboard/agent/agent-dashboard.{js,css}"
+  echo "Generated: $(date -u +%Y-%m-%dT%H:%MZ)"
+  echo "Repo: inneranimalmedia-agentsam-dashboard"
+} >"$MANIFEST"
+put_file "$MANIFEST" "_sandbox/MANIFEST.txt"
+rm -f "$MANIFEST"
+
+# --- 1) Legacy / build tree under agent-sam/static (page fragments, shell-v2, etc.)
+if [[ -d agent-sam/static ]]; then
+  while IFS= read -r -d '' file; do
+    rel="${file#agent-sam/}"
+    put_file "$file" "$rel"
+  done < <(find agent-sam/static -type f ! -name '.DS_Store' -print0 2>/dev/null)
+fi
+
+# --- 2) Repo static/dashboard (mcp-workflows-panel.js, draw, glb-viewer, etc.)
+if [[ -d static/dashboard ]]; then
+  while IFS= read -r -d '' file; do
+    put_file "$file" "$file"
+  done < <(find static/dashboard -type f ! -name '.DS_Store' -print0 2>/dev/null)
+fi
+
+# --- 3) Dashboard HTML shells (MPA)
+if [[ -d dashboard ]]; then
+  for file in dashboard/*.html; do
+    [[ -f "$file" ]] || continue
+    [[ "$(basename "$file")" == "auth-signin.html" ]] && continue
+    put_file "$file" "static/dashboard/$(basename "$file")"
+  done
+  if [[ -d dashboard/pages ]]; then
+    for file in dashboard/pages/*.html; do
+      [[ -f "$file" ]] || continue
+      put_file "$file" "static/dashboard/pages/$(basename "$file")"
+    done
+  fi
+  for file in dashboard/*.jsx; do
+    [[ -f "$file" ]] || continue
+    put_file "$file" "static/dashboard/$(basename "$file")"
+  done
+fi
+
+# --- 4) Auth route (prod uses static/auth-signin.html)
+put_file "dashboard/auth-signin.html" "static/auth-signin.html"
+
+# --- 4b) Overview page Vite output (overview.html loads /static/dashboard/overview/overview-dashboard.js + chunks)
+if [[ -d overview-dashboard/dist ]]; then
+  while IFS= read -r -d '' file; do
+    put_file "$file" "static/dashboard/overview/$(basename "$file")"
+  done < <(find overview-dashboard/dist -type f ! -name '.DS_Store' -print0 2>/dev/null)
 else
-  echo "WARN: dashboard/overview.html not found"
-  echo ""
+  echo "WARN: overview-dashboard/dist missing — run: cd overview-dashboard && npm install && npm run build" >&2
 fi
 
-OVERVIEW_DIST="overview-dashboard/dist"
-if [[ -d "$OVERVIEW_DIST" ]]; then
-  echo "Overview Vite bundle -> static/dashboard/overview/"
-  upload_dir_flat "$OVERVIEW_DIST" "static/dashboard/overview/" "Overview dist"
-  echo ""
+# --- 5) Agent Vite bundle (must match live /dashboard/agent)
+if [[ -f agent-dashboard/dist/agent-dashboard.js ]]; then
+  put_file "agent-dashboard/dist/agent-dashboard.js" "static/dashboard/agent/agent-dashboard.js"
 else
-  echo "WARN: ${OVERVIEW_DIST} missing. Run: cd overview-dashboard && npm install && npm run build"
-  echo ""
+  echo "WARN: agent-dashboard/dist/agent-dashboard.js missing — run: cd agent-dashboard && npm run build" >&2
+fi
+if [[ -f agent-dashboard/dist/agent-dashboard.css ]]; then
+  put_file "agent-dashboard/dist/agent-dashboard.css" "static/dashboard/agent/agent-dashboard.css"
 fi
 
-if [[ -d agent-dashboard/dist ]]; then
-  echo "Agent Vite bundle -> static/dashboard/agent/"
-  upload_dir_flat "agent-dashboard/dist" "static/dashboard/agent/" "Agent dist"
-  echo ""
+# --- 6) Worker snapshot (reference only; not served from R2 in prod)
+if [[ -f worker.js ]]; then
+  put_file "worker.js" "source/worker.js"
 fi
 
-if [[ -f dashboard/agent.html ]]; then
-  echo "Agent HTML -> static/dashboard/agent.html"
-  r2_put static/dashboard/agent.html dashboard/agent.html "text/html; charset=utf-8"
-  echo ""
-fi
-
-echo "Done. Hard-refresh /dashboard/overview (and /dashboard/agent if updated) on the sandbox host."
+echo "=== Done. Keys: static/dashboard/agent.html, static/dashboard/agent/agent-dashboard.{js,css}, static/dashboard/overview/*, static/auth-signin.html ==="

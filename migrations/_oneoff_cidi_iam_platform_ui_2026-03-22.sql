@@ -1,0 +1,46 @@
+-- One-off: CIDI row for IAM Agent Sam dashboard / platform UI stability work (Mar 2026).
+-- Applied to production D1 via wrangler 2026-03-22. Safe to re-run only if workflow_id is unique.
+
+INSERT INTO cidi (
+  workflow_id,
+  client_id,
+  client_name,
+  project_id,
+  workflow_type,
+  workflow_category,
+  workflow_name,
+  implementation_status,
+  priority,
+  description,
+  technical_notes,
+  assigned_to,
+  tech_stack,
+  created_at,
+  updated_at,
+  created_by,
+  last_modified_by,
+  tags,
+  external_references,
+  notes
+) VALUES (
+  'CIDI-IAM-AGENTSAM-20260322',
+  NULL,
+  'Inner Animal Media',
+  NULL,
+  'development',
+  'IAM platform — Agent Sam dashboard & Worker',
+  'Agent Sam dashboard — platform UI stability (terminal, Settings, polish)',
+  'in_progress',
+  'high',
+  'Cursor branch: terminal sessionId alignment with worker runTerminalCommand; SettingsPanel control plane; Agent Sam UI polish; D1 + Cloudflare API context verified for inneranimalmedia-business.',
+  'Repo SamPrimeaux/inneranimalmedia-agentsam-dashboard. Branch cursor/platform-ui-stability-1eca. Production Worker inneranimalmedia; D1 database inneranimalmedia-business (binding DB). Dashboard assets served from R2 (agent-sam/static/dashboard).',
+  'Sam Primeaux',
+  'Cloudflare Workers, D1, R2, KV, Vite, React',
+  datetime('now'),
+  datetime('now'),
+  'cursor_agent',
+  'cursor_agent',
+  'inneranimalmedia,agent-sam,dashboard,platform-ui,terminal,settings,d1,wrangler',
+  'https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard/tree/cursor/platform-ui-stability-1eca',
+  'Row created from Cursor Cloud Agent for build tracking and CIDI / daily plan visibility.'
+);

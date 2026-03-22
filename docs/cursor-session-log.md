@@ -5010,3 +5010,25 @@ No production deploy; local/CI environments that load `.env.cloudflare` via `scr
 
 ### Known issues / next steps
 - Prefer storing the token only in a password manager and on machines you control; if it may have been copied from an insecure channel, create a replacement token in the Cloudflare dashboard and update `.env.cloudflare` locally.
+
+---
+
+## [2026-03-22] D1 `cidi` row — IAM Agent Sam platform UI build
+
+### What was asked
+Add a row in `cidi` for this repo/build.
+
+### What was done
+- Inserted one row into production D1 `inneranimalmedia-business`: `id=4`, `workflow_id=CIDI-IAM-AGENTSAM-20260322`, `implementation_status=in_progress`, `priority=high`, client **Inner Animal Media**, workflow name and notes referencing GitHub repo, branch `cursor/platform-ui-stability-1eca`, Worker **inneranimalmedia**, D1 **inneranimalmedia-business**.
+- Executed via `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/_oneoff_cidi_iam_platform_ui_2026-03-22.sql`.
+
+### Files changed
+- `migrations/_oneoff_cidi_iam_platform_ui_2026-03-22.sql` (one-off INSERT; documents exact SQL applied).
+- `docs/cursor-session-log.md` (this entry).
+
+### Deploy status
+- Worker deployed: no.
+- D1 write: yes — one INSERT into `cidi`.
+
+### Known issues / next steps
+- Re-running the same file will fail if `workflow_id` must stay unique; use a new `workflow_id` for additional rows.

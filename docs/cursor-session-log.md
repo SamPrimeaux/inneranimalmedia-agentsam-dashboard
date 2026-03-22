@@ -5613,4 +5613,4 @@ Match remote `dev_workflows` table shape; run wrangler `d1 execute` with the see
 
 ### Deploy status
 - Worker: no
-- Git push: not run unless Sam says go
+- Git push: yes — `main` **ca081db** (script + handoff + session log) to https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git

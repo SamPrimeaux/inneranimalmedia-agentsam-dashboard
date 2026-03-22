@@ -5086,3 +5086,26 @@ Add a row in `ai_models` for Cursor Composer 2 / Agent Sam.
 
 ### Deploy status
 - D1 write: yes — one INSERT into `ai_models`.
+
+---
+
+## [2026-03-22] D1 agent_tools, agent_telemetry, agent_runtime_configs, projects + ai_project_context view
+
+### What was asked
+Add Composer 2 / IAM workflow rows to `agent_tools`, `agent_telemetry`, `agent_runtime_configs`, and `ai_project_context` (plus related context).
+
+### What was done
+- **`agent_tools`:** `tool_composer2_agentsam_ide` for `role_agent_sam`, binding `CURSOR_COMPOSER2`, `config_json` links cidi, ai_models, repo branch.
+- **`agent_telemetry`:** `atel_composer2_iam_workflow_20260322` — `metric_type` **platform_workflow**, `metric_name` **cursor_composer_iam_session_checkpoint**, zero tokens, `provider` **cursor**, `model_used` **composer2-agentsam**, `metadata_json` summarizes artifacts.
+- **`agent_runtime_configs`:** `cfg_agent_sam_composer2` — `config_key` **composer2_agentsam**, `model_id` **composer2-agentsam**, `intent_slug` **iam_platform_cursor_session**.
+- **`projects`:** `proj_iam_agentsam_composer2_20260322`, `project_type` **internal-tool**, `status` **development** (required by `projects` CHECK).
+- **`ai_project_context`:** view recreated in `_oneoff_ai_project_context_view_fix_2026-03-22.sql` — `WHERE` now uses valid in-flight statuses (`discovery`, `design`, `development`, `qa`, `staging`) so rows can appear (old filter used `planning`/`active`, incompatible with CHECK).
+
+### Files changed
+- `migrations/_oneoff_composer2_workflow_agent_tables_2026-03-22.sql`
+- `migrations/_oneoff_ai_project_context_view_fix_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- Worker deployed: no.
+- D1: four INSERTs + view DROP/CREATE.

@@ -5424,3 +5424,20 @@ Align repo `wrangler.jsonc` with Cloudflare dashboard observability block for **
 
 ### Deploy status
 - `wrangler deploy -c wrangler.jsonc`: not run this turn (Sam rule: exact **deploy approved** for `wrangler deploy`). Dry-run passed locally.
+
+---
+
+## [2026-03-22] Sandbox DB-driven login: SANDBOX_DASHBOARD_PASSWORD missing on worker
+
+### What was asked
+Sign-in UI live at `inneranimal-dashboard.meauxbility.workers.dev/auth/signin` but Connect showed “Sandbox login not configured…” (no password secret on Worker).
+
+### What was done
+- Re-applied Worker secret **`SANDBOX_DASHBOARD_PASSWORD`** on **`inneranimal-dashboard`** via `printf … | wrangler secret put … -c wrangler.jsonc` (value not logged).
+- Verified **`POST /api/auth/login`** returns **200** with **`{ ok: true, redirect }`** and **`Set-Cookie: session=…`**.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry).
+
+### Note for Sam
+If this breaks again after Git/Workers Builds deploys, set the same secret again or use PBKDF2 hex secrets; avoid storing Cloudflare API tokens as Worker plaintext vars.

@@ -5280,3 +5280,6 @@ CIDI sandbox worker: R2 **agent-sam-sandbox-cidi** (clone), D1 **inneranimalmedi
 
 ### Deploy status
 - Config-only commit; production `wrangler.production.toml` unchanged.
+
+### Follow-up (Sam, Cloudflare UI)
+- Confirmed: sandbox worker **`inneranimal-dashboard`** now has R2 binding **`DASHBOARD` → `agent-sam-sandbox-cidi`** in the dashboard (matches `wrangler.jsonc`).

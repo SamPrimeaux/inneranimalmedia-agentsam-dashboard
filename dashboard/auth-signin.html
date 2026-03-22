@@ -584,8 +584,8 @@
         if (oauthRow) oauthRow.style.display = 'none';
         var emailEl = document.getElementById('email');
         if (emailEl) {
-            emailEl.removeAttribute('required');
-            emailEl.placeholder = 'Sandbox (optional)';
+            emailEl.setAttribute('required', 'required');
+            emailEl.placeholder = 'Email Address';
         }
         var subs = document.querySelectorAll('.login-card > p.subtitle');
         for (var si = 0; si < subs.length; si++) {

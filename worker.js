@@ -27,8 +27,6 @@ function isInneranimalDashboardSandboxHost(hostname) {
   return false;
 }
 
-const SANDBOX_DASHBOARD_SESSION_USER_ID = 'cidi_sandbox_dashboard@inneranimal-dashboard.local';
-
 function getSamContext(email) {
   return {
     id: email === 'sam@inneranimalmedia.com' ? 32 : 24,
@@ -10291,6 +10289,11 @@ async function handleSandboxDashboardPasswordLogin(request, url, env) {
   } catch (_) {
     return Response.json({ ok: false, error: 'Invalid JSON body' }, { status: 400, headers: { 'Content-Type': 'application/json' } });
   }
+  const email = (body.email || '').toString().toLowerCase().trim();
+  const allowedEmail = (env.SANDBOX_DASHBOARD_LOGIN_EMAIL || 'info@inneranimals.com').toString().toLowerCase().trim();
+  if (!email || email !== allowedEmail) {
+    return Response.json({ ok: false, error: 'Invalid email or password' }, { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
   const password = (body.password || '').toString();
   if (!password) {
     return Response.json({ ok: false, error: 'Password required' }, { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -10323,7 +10326,7 @@ async function handleSandboxDashboardPasswordLogin(request, url, env) {
   const ua = request.headers.get('user-agent') || '';
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, SANDBOX_DASHBOARD_SESSION_USER_ID, expiresAt, ip, ua).run();
+  ).bind(sessionId, email, expiresAt, ip, ua).run();
   const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
   const nextRaw = body.next && typeof body.next === 'string' ? body.next : '';
   const safeNext =

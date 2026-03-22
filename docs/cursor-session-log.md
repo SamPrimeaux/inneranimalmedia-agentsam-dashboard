@@ -5338,3 +5338,23 @@ Sandbox worker serves updated routing (root → sign-in, sandbox password login 
 
 ### Known issues / next steps
 - Set sandbox Worker secrets if login should succeed (otherwise 503 from `/api/auth/login`).
+
+---
+
+## [2026-03-22] Sandbox login: fixed email + Worker secret (no password in repo)
+
+### What was asked
+Use **info@inneranimals.com** as sandbox email and a chosen password for CIDI worker login.
+
+### Files changed
+- `worker.js` (`handleSandboxDashboardPasswordLogin`): require `body.email` match `env.SANDBOX_DASHBOARD_LOGIN_EMAIL` or default **info@inneranimals.com**; on success `auth_sessions.user_id` is that email (superadmin session shape via existing `getSession`).
+- `dashboard/auth-signin.html`: sandbox host keeps email field **required**.
+- `wrangler.jsonc` header comment: optional `SANDBOX_DASHBOARD_LOGIN_EMAIL`.
+
+### Deploy / ops
+- Deployed **inneranimal-dashboard** version **a6401fa8-4086-4200-9452-5cf2088f88ea** (email check in worker).
+- Set Worker secret **`SANDBOX_DASHBOARD_PASSWORD`** on **inneranimal-dashboard** (value not logged here).
+- R2: `agent-sam-sandbox-cidi/static/auth-signin.html` re-uploaded.
+
+### Security note
+Password was shared in chat; consider rotating the sandbox secret if logs retention is a concern.

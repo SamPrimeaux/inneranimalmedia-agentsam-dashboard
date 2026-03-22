@@ -29,6 +29,7 @@ Paste the **block at the end** into a new Cursor chat. Use this file as the cano
 | **R2** | `r2_buckets`, `r2_intended_paths`, `r2_object_inventory`, `r2_object_media` | New bucket → `r2_buckets`; optional inventory sync from scripts. |
 | **Roadmap** | `roadmap_plans`, `roadmap_steps` | When Sam finishes a milestone; keep `plan_iam_dashboard_v1` in sync with reality. |
 | **MCP / CIDI** | `mcp_workflows` | Defined workflows; runner may log to `workflow_runs` / `workflow_executions` if wired. |
+| **Dev lane (agent context)** | `dev_workflows` | Registry row `dw_cidi_inneranimal_platform` (dual Worker + R2 + repos + scripts). Schema is fixed on D1 (`steps_json`, `command_sequence`, `category`, etc.); (re)seed with `scripts/d1-dev-workflows-insert-cidi-setup.sql`. |
 | **Workspaces** | `workspaces`, `workspace_projects`, `projects` | When client or project scope changes. |
 | **Registry** | `worker_registry`, `github_repositories` | When Workers or repos change names, URLs, or bindings. |
 | **Schema** | `schema_versions`, `tracking_metrics` | After migrations or metric definition changes. |

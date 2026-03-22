@@ -5579,3 +5579,38 @@ Unchanged Worker behavior; handoff doc + session log on GitHub **main**.
 
 ### Known issues / next steps
 - If GitHub uses `/api/hooks/github`, ensure D1 `endpoint_path` matches that path (Worker supports both routes with distinct `endpointPath` lookups).
+
+## [2026-03-22] dev_workflows seed script (CIDI platform row)
+
+### What was asked
+Explain “local WIP”; add a `dev_workflows` row for the CIDI / dual-zone + MCP + PTY setup.
+
+### Files changed
+- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — `CREATE TABLE IF NOT EXISTS dev_workflows` + index + `INSERT OR REPLACE` row `dw_cidi_inneranimal_platform` (`related_json` documents prod/sandbox, repos, scripts, webhook path note).
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map row for `dev_workflows` + script path.
+
+### Deploy status
+- D1: not executed from this session; Sam runs wrangler `d1 execute` with the script after approving new table on `inneranimalmedia-business`.
+- Git push: not run unless Sam says go.
+
+### What is live now
+Repo-only until SQL is applied on remote D1.
+
+### Known issues / next steps
+- No Worker/dashboard reader for `dev_workflows` yet; row is for agents and ad-hoc queries (`SELECT * FROM dev_workflows WHERE id='dw_cidi_inneranimal_platform'`).
+
+## [2026-03-22] dev_workflows INSERT aligned to remote D1 schema + executed
+
+### What was asked
+Match remote `dev_workflows` table shape; run wrangler `d1 execute` with the seed script.
+
+### Files changed
+- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — removed wrong `CREATE TABLE`; `INSERT OR REPLACE` uses production columns (`category`, `steps_json`, `command_sequence`, `estimated_time_minutes`, `is_template`, `tags`, `created_by`, `use_count`, etc.).
+- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map note: remote schema, not local CREATE.
+
+### Operations
+- Remote D1: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-dev-workflows-insert-cidi-setup.sql` — success (1 query, rows written reported).
+
+### Deploy status
+- Worker: no
+- Git push: not run unless Sam says go

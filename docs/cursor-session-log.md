@@ -5614,3 +5614,28 @@ Match remote `dev_workflows` table shape; run wrangler `d1 execute` with the see
 ### Deploy status
 - Worker: no
 - Git push: yes — `main` **ca081db** (script + handoff + session log) to https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
+
+## [2026-03-22] Commit agent.html + AgentDashboard.jsx + worker.js for sandbox parity
+
+### What was asked
+Land local WIP on GitHub so sandbox refine/debug is easier; acknowledge tight rules on agent.html (changes were already local, commit only).
+
+### Files changed
+- `dashboard/agent.html` — `styles_themes.css` + `shell.css` after fonts; theme `fetch` always applies `data-theme` / `applyDynamicTheme`; agent bundle cache **v122**.
+- `agent-dashboard/src/AgentDashboard.jsx` — terminal card output normalization; conversation slice maps `terminal_output` to user text and `(empty)` guard; slash `applySlashCommandSelection` instant send when no `<...>` placeholders.
+- `worker.js` — inbound webhooks (`/api/hooks/*`, `/api/webhooks/*` aliases), signature verify, `webhook_events` / hook pipeline, related `runToolLoop` / MCP / workflow / cron / vault catalog touches (OAuth callback functions not edited per diff review).
+
+### Files NOT changed (and why)
+- `agent-dashboard/dist/*`: gitignored; rebuild + R2 when promoting to production.
+
+### Deploy status
+- Built: no (not requested)
+- R2 uploaded: no
+- Worker deployed: no — **deploy approved** not given; production Worker unchanged until Sam deploys
+- Git push: yes — app + worker **c016d05**; session log row recorded in follow-up commit
+
+### What is live now
+GitHub **main** has source parity for agent shell + dashboard + worker; production still prior deploy until build/R2/deploy.
+
+### Known issues / next steps
+- Run `npm run build` in `agent-dashboard` before R2 upload so `v=122` matches bundle bytes; upload `dashboard/agent.html` then worker deploy when approved.

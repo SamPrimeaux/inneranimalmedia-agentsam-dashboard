@@ -1338,11 +1338,17 @@ export default function AgentDashboard() {
         });
         const data = await response.json().catch(() => ({}));
         const success = !!(data && data.success);
-        const outText = success
-          ? typeof data.result?.output === "string"
-            ? data.result.output
-            : JSON.stringify(data.result, null, 2)
+        const r = data?.result;
+        let outText = success
+          ? r?.output || r?.result || (r != null ? JSON.stringify(r, null, 2) : "(command completed)")
           : data.error || "Unknown error";
+        if (success) {
+          if (outText == null || String(outText).trim() === "" || String(outText) === "null") {
+            outText = "(command completed)";
+          } else {
+            outText = String(outText);
+          }
+        }
         setMessages((prev) =>
           prev.map((m) =>
             m.id === termCardId ? { ...m, output: outText, status: success ? "success" : "error" } : m
@@ -1386,9 +1392,30 @@ export default function AgentDashboard() {
     abortControllerRef.current = controller;
 
     const conversationMessages = messages
-      .filter((m) => m.role !== "system")
+      .filter((m) => {
+        if (m.role === "system") return false;
+        if (m.role === "user" || m.role === "assistant") return true;
+        if (m.role === "tool" && m.type === "terminal_output") return true;
+        return false;
+      })
       .slice(-20)
-      .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      .map((m) => {
+        if (m.role === "tool" && m.type === "terminal_output") {
+          const cmd = m.command != null ? String(m.command) : "";
+          const out = m.output != null ? String(m.output) : "";
+          const safeContent = out.trim()
+            ? (cmd ? `[${cmd}]\n${out}` : out).trim()
+            : cmd
+              ? `(command completed) ${cmd}`
+              : "(command completed)";
+          return { role: "user", content: safeContent };
+        }
+        const role = m.role === "assistant" ? "assistant" : "user";
+        const raw = m.content;
+        const safeContent =
+          raw != null && String(raw).trim() !== "" ? String(raw) : "(empty)";
+        return { role, content: safeContent };
+      });
 
     setAgentState(AGENT_STATES.THINKING);
     setPendingToolApproval(null);
@@ -1626,15 +1653,23 @@ export default function AgentDashboard() {
         slugKey.startsWith("bash-") ||
         slugKey.startsWith("wrangler-") ||
         looksLikeShellCommandText(ct));
+    const hasRequiredParams = /<[^>]+>/.test(ct);
     setSlashPickerSuppressed(false);
     setSlashHighlightIndex(0);
     setInput("");
+    const buildSendLine = () => {
+      if (ct) {
+        if (ct.startsWith("/")) return ct;
+        return `/${slugKey} ${ct}`.trim();
+      }
+      return slugRaw.startsWith("/") ? slugRaw : `/${slugKey}`;
+    };
     if (instant) {
       void sendMessage(`/run ${ct}`);
-    } else if (ct) {
-      setInput(ct);
+    } else if (!hasRequiredParams) {
+      void sendMessage(buildSendLine());
     } else {
-      setInput(slugRaw.startsWith("/") ? slugRaw : `/${slugRaw}`);
+      setInput(ct || (slugRaw.startsWith("/") ? slugRaw : `/${slugRaw}`));
     }
     setTimeout(() => textareaRef.current?.focus(), 0);
   };
@@ -3084,7 +3119,11 @@ export default function AgentDashboard() {
                     ) : (
                       filteredSlashCommands.map((cmd, idx) => {
                         const slugLabel = String(cmd.slug || cmd.name || "command").trim() || "command";
+                        const cleanName = String(cmd.name || cmd.slug || "command")
+                          .replace(/^\//, "")
+                          .trim() || "command";
                         const desc = String(cmd.description || "").trim();
+                        const categoryBadge = String(cmd.category || "general").trim() || "general";
                         const selected = idx === slashSafeIndex;
                         return (
                           <div
@@ -3095,7 +3134,8 @@ export default function AgentDashboard() {
                             onClick={() => applySlashCommandSelection(cmd)}
                             onMouseEnter={() => setSlashHighlightIndex(idx)}
                             style={{
-                              padding: "8px 12px",
+                              position: "relative",
+                              padding: "8px 44px 8px 12px",
                               cursor: "pointer",
                               fontSize: 12,
                               borderBottom: "1px solid var(--color-border)",
@@ -3103,8 +3143,26 @@ export default function AgentDashboard() {
                               color: "var(--color-text)",
                             }}
                           >
-                            <div style={{ fontWeight: 600, fontFamily: "monospace", fontSize: 11 }}>
-                              /{slugLabel.startsWith("/") ? slugLabel.slice(1) : slugLabel}
+                            <div
+                              style={{
+                                position: "absolute",
+                                top: 6,
+                                right: 8,
+                                fontSize: 9,
+                                fontWeight: 600,
+                                letterSpacing: "0.04em",
+                                textTransform: "uppercase",
+                                color: "var(--text-muted)",
+                                maxWidth: 72,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {categoryBadge}
+                            </div>
+                            <div style={{ fontWeight: 600, fontSize: 12, lineHeight: 1.35 }}>
+                              {cleanName}
                             </div>
                             {desc ? (
                               <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2, lineHeight: 1.35 }}>

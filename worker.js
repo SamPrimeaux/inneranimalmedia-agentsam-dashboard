@@ -318,6 +318,784 @@ async function getVaultSecrets(env) {
   }
 }
 
+// ----- Inbound webhooks (/api/hooks/*) -----
+// Matches production D1: webhook_endpoints (source, is_active, total_*, TEXT datetimes), webhook_events (payload_json, tenant_id, source, ...),
+// hook_subscriptions (is_active, run_order), hook_executions (subscription_id first, error_message, status, TEXT datetimes), deployment_tracking (full deploy row).
+
+function timingSafeEqualUtf8(a, b) {
+  if (a.length !== b.length) return false;
+  let x = 0;
+  for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return x === 0;
+}
+
+async function hmacSha256HexFromUtf8Key(secretUtf8, messageUtf8) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secretUtf8),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(messageUtf8));
+  return [...new Uint8Array(sig)].map((c) => c.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacSha256HexFromRawKey(keyBytes, messageUtf8) {
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(messageUtf8));
+  return [...new Uint8Array(sig)].map((c) => c.toString(16).padStart(2, '0')).join('');
+}
+
+function decodeStripeSigningSecret(secret) {
+  if (!secret || typeof secret !== 'string') return null;
+  const m = secret.match(/^whsec_(.+)$/);
+  if (!m) return new TextEncoder().encode(secret);
+  try {
+    const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+async function verifyGithubHubSignature256(secret, rawBody, sigHeader) {
+  if (!secret || !sigHeader) return false;
+  const expected = `sha256=${await hmacSha256HexFromUtf8Key(secret, rawBody)}`;
+  const got = sigHeader.trim();
+  return timingSafeEqualUtf8(expected.toLowerCase(), got.toLowerCase());
+}
+
+async function verifySha256EqualsSecretHmac(secret, rawBody, sigHeader) {
+  if (!secret || !sigHeader) return false;
+  const got = sigHeader.trim();
+  const prefix = 'sha256=';
+  const bodyHex = got.toLowerCase().startsWith(prefix) ? got.slice(prefix.length).trim().toLowerCase() : got.toLowerCase();
+  const expectedHex = await hmacSha256HexFromUtf8Key(secret, rawBody);
+  return timingSafeEqualUtf8(expectedHex.toLowerCase(), bodyHex);
+}
+
+async function verifyStripeSignatureHeader(secret, rawBody, sigHeader) {
+  const keyBytes = decodeStripeSigningSecret(secret);
+  if (!keyBytes || !sigHeader) return false;
+  const parts = sigHeader.split(',').map((p) => p.trim());
+  let t = null;
+  const v1s = [];
+  for (const p of parts) {
+    const eq = p.indexOf('=');
+    if (eq < 0) continue;
+    const k = p.slice(0, eq);
+    const v = p.slice(eq + 1);
+    if (k === 't') t = v;
+    if (k === 'v1') v1s.push(v);
+  }
+  if (!t || v1s.length === 0) return false;
+  const now = Math.floor(Date.now() / 1000);
+  const ts = Number(t);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > 300) return false;
+  const signedPayload = `${t}.${rawBody}`;
+  const expectedHex = await hmacSha256HexFromRawKey(keyBytes, signedPayload);
+  const expLower = expectedHex.toLowerCase();
+  for (const v1 of v1s) {
+    if (timingSafeEqualUtf8(expLower, (v1 || '').toLowerCase())) return true;
+  }
+  return false;
+}
+
+function base64FromArrayBuffer(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+async function verifySvixResendSignature(secret, rawBody, svixId, svixTimestamp, svixSigHeader) {
+  if (!secret || !svixId || !svixTimestamp || !svixSigHeader) return false;
+  const ts = Number(svixTimestamp);
+  if (!Number.isFinite(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > 300) return false;
+  const keyBytes = decodeStripeSigningSecret(secret);
+  const keyRaw = keyBytes ?? new TextEncoder().encode(secret);
+  const signedContent = `${svixId}.${svixTimestamp}.${rawBody}`;
+  const key = await crypto.subtle.importKey('raw', keyRaw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedContent));
+  const expectedB64 = base64FromArrayBuffer(sigBuf);
+  const parts = svixSigHeader.trim().split(/\s+/);
+  for (const part of parts) {
+    const idx = part.indexOf(',');
+    if (idx < 0) continue;
+    const ver = part.slice(0, idx).trim();
+    const sig = part.slice(idx + 1).trim();
+    if (ver === 'v1' && timingSafeEqualUtf8(sig, expectedB64)) return true;
+  }
+  return false;
+}
+
+async function verifySupabaseWebhookSignature(secret, rawBody, sigHeader) {
+  if (!secret || !sigHeader) return false;
+  const got = sigHeader.replace(/^sha256=/i, '').trim().toLowerCase();
+  const expectedHex = (await hmacSha256HexFromUtf8Key(secret, rawBody)).toLowerCase();
+  return timingSafeEqualUtf8(expectedHex, got);
+}
+
+function normalizeWebhookRequestPath(pathname) {
+  if (!pathname || typeof pathname !== 'string') return '';
+  let p = pathname.trim();
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p.toLowerCase();
+}
+
+const WEBHOOK_ENDPOINT_PATH_ALIASES = {
+  '/api/hooks/github': '/api/webhooks/github',
+  '/api/hooks/cursor': '/api/webhooks/cursor',
+  '/api/hooks/stripe': '/api/webhooks/stripe',
+  '/api/hooks/internal': '/api/webhooks/internal',
+};
+
+function webhookCaptureHeaders(request) {
+  const names = [
+    'X-GitHub-Event',
+    'X-GitHub-Delivery',
+    'X-Hub-Signature-256',
+    'X-Cursor-Signature',
+    'X-Webhook-Signature',
+    'X-Webhook-ID',
+    'X-Webhook-Event',
+    'Stripe-Signature',
+    'X-IAM-Signature',
+    'svix-id',
+    'svix-timestamp',
+    'svix-signature',
+    'x-supabase-signature',
+    'X-CF-Signature',
+  ];
+  const o = {};
+  for (const n of names) {
+    const v = request.headers.get(n);
+    if (v) o[n] = v.length > 2000 ? `${v.slice(0, 2000)}...` : v;
+  }
+  return JSON.stringify(o);
+}
+
+function webhookResolveEventType(source, request, rawBody) {
+  if (source === 'github') {
+    return (request.headers.get('X-GitHub-Event') || 'unknown').toLowerCase();
+  }
+  if (source === 'cursor') {
+    const h = request.headers.get('X-Webhook-Event');
+    if (h) return h;
+    try {
+      const j = JSON.parse(rawBody || '{}');
+      return j.event || j.type || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+  if (source === 'stripe') {
+    try {
+      return JSON.parse(rawBody || '{}').type || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+  if (source === 'resend') {
+    try {
+      const j = JSON.parse(rawBody || '{}');
+      return j.type || j.event?.type || j.event_type || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+  if (source === 'supabase') {
+    try {
+      const j = JSON.parse(rawBody || '{}');
+      return j.type || j.table || j.record?.type || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+  if (source === 'cloudflare') {
+    try {
+      const j = JSON.parse(rawBody || '{}');
+      return j.type || j.event?.type || j.meta?.type || 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+  try {
+    const j = JSON.parse(rawBody || '{}');
+    return j.event_type || j.type || j.event || 'internal';
+  } catch {
+    return 'internal';
+  }
+}
+
+async function verifyWebhookSignature(verifyKind, resolveSecret, request, rawBody) {
+  switch (verifyKind) {
+    case 'none':
+      return { ok: true };
+    case 'github': {
+      const s = resolveSecret('GITHUB_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'GITHUB_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('X-Hub-Signature-256') || '';
+      const ok = await verifyGithubHubSignature256(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid X-Hub-Signature-256' };
+    }
+    case 'stripe': {
+      const s = resolveSecret('STRIPE_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'STRIPE_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('Stripe-Signature') || '';
+      const ok = await verifyStripeSignatureHeader(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid Stripe-Signature' };
+    }
+    case 'cursor': {
+      const s = resolveSecret('CURSOR_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'CURSOR_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('X-Cursor-Signature') || request.headers.get('X-Webhook-Signature') || '';
+      const ok = await verifySha256EqualsSecretHmac(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid Cursor webhook signature' };
+    }
+    case 'resend': {
+      const s = resolveSecret('RESEND_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'RESEND_WEBHOOK_SECRET not configured' };
+      const id = request.headers.get('svix-id') || request.headers.get('Svix-Id') || '';
+      const ts = request.headers.get('svix-timestamp') || request.headers.get('Svix-Timestamp') || '';
+      const sig = request.headers.get('svix-signature') || request.headers.get('Svix-Signature') || '';
+      const ok = await verifySvixResendSignature(s, rawBody, id, ts, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid Resend/Svix signature' };
+    }
+    case 'resend_inbound': {
+      const s = resolveSecret('RESEND_INBOUND_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'RESEND_INBOUND_WEBHOOK_SECRET not configured' };
+      const id = request.headers.get('svix-id') || request.headers.get('Svix-Id') || '';
+      const ts = request.headers.get('svix-timestamp') || request.headers.get('Svix-Timestamp') || '';
+      const sig = request.headers.get('svix-signature') || request.headers.get('Svix-Signature') || '';
+      const ok = await verifySvixResendSignature(s, rawBody, id, ts, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid Resend/Svix signature' };
+    }
+    case 'supabase': {
+      const s = resolveSecret('SUPABASE_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'SUPABASE_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('x-supabase-signature') || request.headers.get('X-Supabase-Signature') || '';
+      const ok = await verifySupabaseWebhookSignature(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid x-supabase-signature' };
+    }
+    case 'cloudflare': {
+      const s = resolveSecret('DEPLOY_TRACKING_TOKEN');
+      if (!s) return { ok: false, status: 501, message: 'DEPLOY_TRACKING_TOKEN not configured' };
+      const sig = request.headers.get('X-CF-Signature') || request.headers.get('x-cf-signature') || '';
+      const ok = await verifySha256EqualsSecretHmac(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid X-CF-Signature' };
+    }
+    case 'internal': {
+      const s = resolveSecret('INTERNAL_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'INTERNAL_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('X-IAM-Signature') || '';
+      const ok = await verifySha256EqualsSecretHmac(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid X-IAM-Signature' };
+    }
+    default:
+      return { ok: false, status: 400, message: 'Unknown webhook verify kind' };
+  }
+}
+
+function webhookPayloadGetByPath(root, pathStr) {
+  if (root == null || !pathStr) return undefined;
+  const parts = String(pathStr).split('.').filter((p) => p.length > 0);
+  let cur = root;
+  for (const p of parts) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    if (/^\d+$/.test(p)) cur = cur[Number(p)];
+    else if (Object.prototype.hasOwnProperty.call(cur, p)) cur = cur[p];
+    else return undefined;
+  }
+  return cur;
+}
+
+async function resolveWebhookEndpoint(db, source, requestPath) {
+  const norm = normalizeWebhookRequestPath(requestPath);
+  const tryPaths = new Set([norm]);
+  const alias = WEBHOOK_ENDPOINT_PATH_ALIASES[norm];
+  if (alias) tryPaths.add(normalizeWebhookRequestPath(alias));
+  for (const p of tryPaths) {
+    if (!p) continue;
+    const row = await db.prepare(
+      `SELECT id, tenant_id FROM webhook_endpoints WHERE source = ? AND COALESCE(is_active, 1) = 1 AND lower(trim(endpoint_path)) = ? LIMIT 1`
+    ).bind(source, p).first();
+    if (row?.id) return row;
+  }
+  const ambiguousSources = new Set(['resend']);
+  if (ambiguousSources.has(source)) return null;
+  return await db.prepare(
+    `SELECT id, tenant_id FROM webhook_endpoints WHERE source = ? AND COALESCE(is_active, 1) = 1 ORDER BY updated_at DESC LIMIT 1`
+  ).bind(source).first();
+}
+
+function extractWebhookDeliveryContext(source, eventType, rawBody, request) {
+  let payload = {};
+  try {
+    payload = JSON.parse(rawBody || '{}');
+  } catch {
+    payload = {};
+  }
+  let externalEventId = null;
+  let repo = null;
+  let branch = null;
+  let sha = null;
+  let actor = null;
+  if (source === 'github') {
+    externalEventId = request.headers.get('X-GitHub-Delivery') || null;
+    repo = payload.repository?.full_name ?? null;
+    branch = payload.ref
+      ? String(payload.ref).replace(/^refs\/heads\//, '')
+      : (payload.workflow_run?.head_branch ?? null);
+    sha = payload.after ?? payload.head_commit?.id ?? payload.workflow_run?.head_sha ?? null;
+    actor = payload.sender?.login ?? payload.pusher?.name ?? null;
+  } else if (source === 'cursor') {
+    externalEventId = request.headers.get('X-Webhook-ID') || payload.id || null;
+  } else if (source === 'stripe') {
+    externalEventId = payload.id ?? null;
+  } else if (source === 'resend') {
+    externalEventId = request.headers.get('svix-id') || request.headers.get('Svix-Id') || payload.id || null;
+  } else {
+    externalEventId = payload.id ?? payload.delivery_id ?? null;
+  }
+  return { payload, externalEventId, repo, branch, sha, actor };
+}
+
+const CIDI_WEBHOOK_PATCH_KEYS = new Set([
+  'implementation_status', 'priority', 'title', 'workflow_name', 'client_name', 'description', 'notes', 'technical_notes', 'billing_status',
+]);
+
+const CIDI_MATCH_COLUMNS = new Set(['id', 'client_id', 'workflow_id']);
+
+async function runWriteD1MapInsert(env, cfg, ctx) {
+  const table = cfg.table != null ? String(cfg.table) : '';
+  if (!table || !/^[a-zA-Z0-9_]+$/.test(table)) return { ok: false, error: 'write_d1: invalid table' };
+  const map = cfg.map && typeof cfg.map === 'object' && !Array.isArray(cfg.map) ? cfg.map : null;
+  if (!map) return { ok: false, error: 'write_d1: map required for table insert' };
+  let parsed = {};
+  try {
+    parsed = JSON.parse(ctx.rawBody || '{}');
+  } catch {
+    parsed = {};
+  }
+  const row = {};
+  for (const [col, path] of Object.entries(map)) {
+    if (!/^[a-zA-Z0-9_]+$/.test(col)) continue;
+    const pathStr = String(path);
+    let v = webhookPayloadGetByPath(parsed, pathStr);
+    if (v === undefined || v === null) v = webhookPayloadGetByPath({ payload: parsed }, pathStr);
+    if ((v === undefined || v === null) && pathStr.startsWith('payload.')) {
+      v = webhookPayloadGetByPath(parsed, pathStr.slice('payload.'.length));
+    }
+    row[col] = v == null ? null : typeof v === 'object' ? JSON.stringify(v) : v;
+  }
+  if (cfg.defaults && typeof cfg.defaults === 'object' && !Array.isArray(cfg.defaults)) {
+    for (const [k, v] of Object.entries(cfg.defaults)) {
+      if (/^[a-zA-Z0-9_]+$/.test(k)) row[k] = v;
+    }
+  }
+  if (ctx.webhookEventId && Object.prototype.hasOwnProperty.call(row, 'webhook_event_id') === false && table === 'cicd_runs') {
+    row.webhook_event_id = ctx.webhookEventId;
+  }
+  const cols = Object.keys(row);
+  if (!cols.length) return { ok: false, error: 'write_d1: map produced no columns' };
+  const placeholders = cols.map(() => '?').join(', ');
+  const verb = cfg.insert_only === true ? 'INSERT' : 'INSERT OR REPLACE';
+  const sql = `${verb} INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`;
+  if (/\bdrop\s+table\b|\btruncate\b/i.test(sql)) return { ok: false, error: 'write_d1: blocked statement' };
+  try {
+    const stmt = env.DB.prepare(sql);
+    const result = await stmt.bind(...cols.map((c) => row[c])).run();
+    return { ok: true, result: { changes: result.meta?.changes ?? result.changes ?? 0 } };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function runWriteD1GithubRaw(env, cfg, ctx) {
+  const table = cfg.table != null ? String(cfg.table) : '';
+  if (table !== 'github_webhook_events') return { ok: false, error: 'write_d1: raw only supported for github_webhook_events' };
+  let parsed = {};
+  try {
+    parsed = JSON.parse(ctx.rawBody || '{}');
+  } catch {
+    parsed = {};
+  }
+  const repo = parsed.repository?.full_name != null ? String(parsed.repository.full_name) : 'unknown';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO github_webhook_events (event_type, repo_full_name, payload_json) VALUES (?, ?, ?)`
+    ).bind(ctx.eventType, repo, ctx.rawBody).run();
+    return { ok: true, result: { inserted: true } };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function executeHookSubscriptionAction(env, actionType, actionConfigJson, ctx) {
+  let cfg = {};
+  try {
+    cfg = typeof actionConfigJson === 'string' ? JSON.parse(actionConfigJson || '{}') : (actionConfigJson || {});
+  } catch {
+    return { ok: false, error: 'Invalid action_config_json' };
+  }
+
+  if (actionType === 'write_d1') {
+    const sql = (cfg.sql || '').trim();
+    const params = Array.isArray(cfg.params) ? cfg.params : [];
+    if (sql) {
+      if (/\bdrop\s+table\b|\btruncate\b/i.test(sql)) return { ok: false, error: 'write_d1: blocked statement' };
+      try {
+        const stmt = env.DB.prepare(sql);
+        const result = params.length ? await stmt.bind(...params).run() : await stmt.run();
+        return { ok: true, result: { changes: result.meta?.changes ?? result.changes ?? 0 } };
+      } catch (e) {
+        return { ok: false, error: String(e?.message || e) };
+      }
+    }
+    if (cfg.raw === true && cfg.table) return runWriteD1GithubRaw(env, cfg, ctx);
+    if (cfg.table && cfg.map) return runWriteD1MapInsert(env, cfg, ctx);
+    return { ok: false, error: 'write_d1: sql, or table+map, or table+raw required' };
+  }
+
+  if (actionType === 'log_deployment') {
+    const rowId = `dpt_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    let workerName = 'inneranimalmedia';
+    if (cfg.worker_name != null) workerName = String(cfg.worker_name);
+    else if (cfg.worker_name_from != null) {
+      let pObj = {};
+      try {
+        pObj = JSON.parse(ctx.rawBody || '{}');
+      } catch {
+        pObj = {};
+      }
+      const p = String(cfg.worker_name_from).replace(/^payload\./, '');
+      const v = webhookPayloadGetByPath(pObj, p) ?? webhookPayloadGetByPath({ payload: pObj }, String(cfg.worker_name_from));
+      if (v != null) workerName = String(v);
+    }
+    const environment = cfg.environment != null ? String(cfg.environment) : 'production';
+    const triggerType = cfg.trigger_type != null ? String(cfg.trigger_type) : (cfg.trigger != null ? String(cfg.trigger) : 'webhook');
+    const triggeredBy = cfg.triggered_by != null ? String(cfg.triggered_by) : ctx.source;
+    const metadata = JSON.stringify({
+      webhook_event_id: ctx.webhookEventId,
+      event_type: ctx.eventType,
+      source: ctx.source,
+      config: cfg,
+    });
+    try {
+      await env.DB.prepare(
+        `INSERT INTO deployment_tracking (
+          id, tenant_id, worker_name, environment, trigger_type, triggered_by,
+          status, metadata_json, queued_at, created_at, updated_at
+        ) VALUES (?, 'tenant_sam_primeaux', ?, ?, ?, ?, 'completed', ?, datetime('now'), datetime('now'), datetime('now'))`
+      ).bind(rowId, workerName, environment, triggerType, triggeredBy, metadata).run();
+      return { ok: true, result: { deployment_tracking_id: rowId } };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  if (actionType === 'update_cidi') {
+    if (cfg.update_active_workflows) {
+      return { ok: false, error: 'update_cidi: update_active_workflows not implemented' };
+    }
+    const field = cfg.field != null ? String(cfg.field) : null;
+    const matchBy = cfg.match_by != null ? String(cfg.match_by) : null;
+    const fromPath = cfg.from != null ? String(cfg.from) : null;
+    if (field && cfg.value !== undefined && matchBy && fromPath && CIDI_MATCH_COLUMNS.has(matchBy) && CIDI_WEBHOOK_PATCH_KEYS.has(field)) {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(ctx.rawBody || '{}');
+      } catch {
+        parsed = {};
+      }
+      let matchVal = webhookPayloadGetByPath(parsed, fromPath.replace(/^payload\./, ''));
+      if (matchVal === undefined) matchVal = webhookPayloadGetByPath({ payload: parsed }, fromPath);
+      if (matchVal == null) return { ok: false, error: 'update_cidi: match value missing from payload' };
+      try {
+        await env.DB.prepare(
+          `UPDATE cidi SET ${field} = ?, updated_at = datetime('now') WHERE ${matchBy} = ?`
+        ).bind(cfg.value, matchVal).run();
+        const cidiRow = await env.DB.prepare(`SELECT id, workflow_id FROM cidi WHERE ${matchBy} = ? LIMIT 1`).bind(matchVal).first();
+        if (cidiRow?.id != null && cidiRow?.workflow_id) {
+          await env.DB.prepare(
+            `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json)
+             VALUES (?, ?, 'webhook', ?, ?, 'stripe webhook', 'webhook', ?)`
+          ).bind(
+            cidiRow.id,
+            cidiRow.workflow_id,
+            field,
+            String(cfg.value),
+            JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType })
+          ).run();
+        }
+        return { ok: true, result: { field, match_by: matchBy } };
+      } catch (e) {
+        return { ok: false, error: String(e?.message || e) };
+      }
+    }
+
+    const cidiIdRaw = cfg.cidi_id != null ? String(cfg.cidi_id) : '';
+    const cidiIdNum = Number(cidiIdRaw);
+    if (!cidiIdRaw || !Number.isFinite(cidiIdNum)) return { ok: false, error: 'update_cidi: cidi_id required (or field/match_by/from branch)' };
+    const patch = cfg.set || cfg.patch || {};
+    const keys = Object.keys(patch).filter((k) => CIDI_WEBHOOK_PATCH_KEYS.has(k));
+    if (!keys.length) return { ok: false, error: 'update_cidi: no allowed patch keys' };
+    const setClause = keys.map((k) => `${k} = ?`).join(', ');
+    const vals = keys.map((k) => patch[k]);
+    try {
+      const existing = await env.DB.prepare('SELECT workflow_id FROM cidi WHERE id = ?').bind(cidiIdNum).first();
+      if (!existing?.workflow_id) return { ok: false, error: 'update_cidi: cidi row not found' };
+      await env.DB.prepare(`UPDATE cidi SET ${setClause}, updated_at = datetime('now') WHERE id = ?`).bind(...vals, cidiIdNum).run();
+      const actType = cfg.action_type != null ? String(cfg.action_type) : 'webhook';
+      const changedBy = cfg.changed_by != null ? String(cfg.changed_by) : 'webhook';
+      await env.DB.prepare(
+        `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        cidiIdNum,
+        existing.workflow_id,
+        actType,
+        keys.join(','),
+        JSON.stringify(patch),
+        cfg.change_description != null ? String(cfg.change_description) : 'webhook patch',
+        changedBy,
+        JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType })
+      ).run();
+      return { ok: true, result: { cidi_id: cidiIdNum } };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  if (actionType === 'notify_agent') {
+    const tenantId = cfg.tenant_id != null ? String(cfg.tenant_id) : (env.TENANT_ID || 'tenant_sam_primeaux');
+    const agentCfg = cfg.agent_config_id != null ? String(cfg.agent_config_id) : 'agent-sam-primary';
+    const memKey =
+      cfg.key != null
+        ? String(cfg.key)
+        : (cfg.memory_key != null ? String(cfg.memory_key) : `webhook_notify_${ctx.webhookEventId}`);
+    let valueStr = '';
+    try {
+      if (cfg.value != null) valueStr = typeof cfg.value === 'string' ? cfg.value : JSON.stringify(cfg.value);
+      else {
+        valueStr = JSON.stringify({
+          message: cfg.message != null ? String(cfg.message) : (cfg.text != null ? String(cfg.text) : ''),
+          webhook_event_id: ctx.webhookEventId,
+          event_type: ctx.eventType,
+          source: ctx.source,
+          priority: cfg.priority != null ? cfg.priority : undefined,
+        });
+      }
+    } catch {
+      valueStr = String(cfg.message || cfg.text || '');
+    }
+    const score = Number(cfg.importance_score) >= 0 && Number(cfg.importance_score) <= 1 ? Number(cfg.importance_score) : 0.75;
+    try {
+      await env.DB.prepare(
+        `INSERT INTO agent_memory_index (tenant_id, agent_config_id, memory_type, key, value, importance_score, created_at, updated_at) VALUES (?, ?, 'execution_outcome', ?, ?, ?, unixepoch(), unixepoch()) ON CONFLICT(key) DO UPDATE SET value=excluded.value, importance_score=excluded.importance_score, updated_at=unixepoch()`
+      ).bind(tenantId, agentCfg, memKey, valueStr, score).run();
+      invalidateCompiledContextCache(env);
+      return { ok: true, result: { memory_key: memKey } };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  if (actionType === 'send_notification') {
+    const deploymentId = cfg.deployment_id != null ? String(cfg.deployment_id) : ctx.webhookEventId;
+    const notifType = cfg.notification_type != null ? String(cfg.notification_type) : 'webhook';
+    const recipient = cfg.recipient != null ? String(cfg.recipient) : 'sam@inneranimalmedia.com';
+    const subject = cfg.subject != null ? String(cfg.subject) : `Webhook: ${ctx.eventType}`;
+    const message =
+      cfg.message != null
+        ? String(cfg.message)
+        : (cfg.body != null ? String(cfg.body) : JSON.stringify({ webhook_event_id: ctx.webhookEventId, source: ctx.source }));
+    try {
+      await env.DB.prepare(
+        `INSERT INTO deployment_notifications (deployment_id, notification_type, recipient, subject, message, status) VALUES (?, ?, ?, ?, ?, 'pending')`
+      ).bind(deploymentId, notifType, recipient, subject, message).run();
+      return { ok: true, result: { deployment_id: deploymentId } };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  return { ok: false, error: `Unknown action_type: ${actionType}` };
+}
+
+function hookSubscriptionMatchesEventFilter(eventFilter, eventType) {
+  const efRaw = eventFilter == null ? '' : String(eventFilter);
+  const ef = efRaw.trim();
+  if (ef === '*') return true;
+  const et = String(eventType ?? '').trim();
+  if (!et) return true;
+  return ef.includes(et);
+}
+
+async function handleHooksHealth(env) {
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT e.*,
+        (SELECT COUNT(*) FROM hook_subscriptions h WHERE h.endpoint_id = e.id) AS subscription_count
+       FROM webhook_endpoints e
+       ORDER BY e.source, e.slug`
+    ).all();
+    return jsonResponse({ ok: true, endpoints: results || [] });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e?.message || e), endpoints: [] }, 500);
+  }
+}
+
+/**
+ * opts: { verifyKind, source, endpointPath }
+ * verifyKind: github | stripe | cursor | resend | supabase | cloudflare | internal | none
+ */
+async function handleInboundWebhook(env, request, resolveSecret, opts) {
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  const verifyKind = opts.verifyKind;
+  const source = opts.source;
+  const endpointPath = opts.endpointPath || '';
+  const rawBody = await request.text();
+  const v = await verifyWebhookSignature(verifyKind, resolveSecret, request, rawBody);
+  if (!v.ok) return jsonResponse({ error: v.message || 'Unauthorized' }, v.status || 401);
+
+  const url = new URL(request.url);
+  const pathForMatch = normalizeWebhookRequestPath(endpointPath || url.pathname);
+  const ep = await resolveWebhookEndpoint(env.DB, source, pathForMatch);
+  if (!ep?.id) {
+    return jsonResponse({ error: `No active webhook_endpoints row for source=${source} path=${pathForMatch}` }, 503);
+  }
+
+  const eventType = String(webhookResolveEventType(source, request, rawBody));
+  const headersJson = webhookCaptureHeaders(request);
+  const payloadStore = rawBody.length > 500000 ? `${rawBody.slice(0, 500000)}\n...[truncated]` : rawBody;
+  const { externalEventId, repo, branch, sha, actor } = extractWebhookDeliveryContext(source, eventType, rawBody, request);
+  const tenantId = ep.tenant_id || 'tenant_sam_primeaux';
+  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || '';
+
+  const eventId = crypto.randomUUID();
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO webhook_events (
+        id, endpoint_id, tenant_id, source, event_type, event_id,
+        repo_full_name, branch, commit_sha, actor,
+        payload_json, headers_json, signature_valid, ip_address, status, received_at, processed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'received', datetime('now'), NULL)`
+    ).bind(
+      eventId,
+      ep.id,
+      tenantId,
+      source,
+      eventType,
+      externalEventId,
+      repo,
+      branch,
+      sha,
+      actor,
+      payloadStore,
+      headersJson,
+      ip || null
+    ).run();
+  } catch (e) {
+    console.error('[hooks] webhook_events INSERT', e?.message ?? e);
+    return jsonResponse({ error: String(e?.message || e) }, 500);
+  }
+
+  const ctx = {
+    webhookEventId: eventId,
+    rawBody,
+    eventType,
+    source,
+  };
+
+  let subs = [];
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, action_type, action_config_json, event_filter FROM hook_subscriptions
+       WHERE endpoint_id = ?
+       AND COALESCE(is_active, 1) = 1
+       ORDER BY COALESCE(run_order, 0) ASC, id ASC`
+    ).bind(ep.id).all();
+    const allSubs = results || [];
+    subs = allSubs.filter((row) => hookSubscriptionMatchesEventFilter(row.event_filter, eventType));
+  } catch (e) {
+    console.error('[hooks] hook_subscriptions SELECT', e?.message ?? e);
+    try {
+      await env.DB.prepare(`UPDATE webhook_events SET status = 'failed', processed_at = datetime('now') WHERE id = ?`).bind(eventId).run();
+    } catch (_) {}
+    return jsonResponse({ error: String(e?.message || e), event_id: eventId }, 500);
+  }
+
+  const executionSummaries = [];
+  for (const sub of subs) {
+    const t0 = Date.now();
+    const out = await executeHookSubscriptionAction(env, sub.action_type, sub.action_config_json, ctx);
+    const durationMs = Date.now() - t0;
+    const execId = crypto.randomUUID();
+    const execStatus = out.ok ? 'success' : 'failed';
+    console.log('[hooks] attempting hook_executions INSERT', {
+      subscription_id: sub.id,
+      webhook_event_id: eventId,
+      status: execStatus,
+      duration_ms: durationMs,
+    });
+    try {
+      await env.DB.prepare(
+        `INSERT INTO hook_executions (
+          id, subscription_id, webhook_event_id, tenant_id, attempt, status,
+          result_json, error_message, duration_ms, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      ).bind(
+        execId,
+        sub.id,
+        eventId,
+        tenantId,
+        execStatus,
+        out.ok ? JSON.stringify(out.result ?? {}) : JSON.stringify({}),
+        out.ok ? null : (out.error || 'error'),
+        durationMs
+      ).run();
+    } catch (e) {
+      const errStr = String(e?.message || e);
+      console.error('[hooks] hook_executions INSERT', errStr);
+      console.log('[hooks] hook_executions INSERT failed', {
+        subscription_id: sub.id,
+        webhook_event_id: eventId,
+        error: errStr,
+      });
+    }
+    executionSummaries.push({ subscription_id: sub.id, action_type: sub.action_type, ok: out.ok, duration_ms: durationMs, error: out.error || null });
+  }
+
+  try {
+    await env.DB.prepare(`UPDATE webhook_events SET status = 'processed', processed_at = datetime('now') WHERE id = ?`).bind(eventId).run();
+    await env.DB.prepare(
+      `UPDATE webhook_endpoints SET
+        last_received_at = datetime('now'),
+        total_received = COALESCE(total_received, 0) + 1,
+        total_processed = COALESCE(total_processed, 0) + 1,
+        updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(ep.id).run();
+  } catch (e) {
+    console.error('[hooks] final UPDATE', e?.message ?? e);
+  }
+
+  return jsonResponse({
+    ok: true,
+    event_id: eventId,
+    endpoint_id: ep.id,
+    event_type: eventType,
+    subscriptions_matched: subs.length,
+    executions: executionSummaries,
+  });
+}
+
 const worker = {
   async fetch(request, env, ctx) {
     try {
@@ -327,6 +1105,7 @@ const worker = {
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/$/, '') || '/';
       const pathLower = path.toLowerCase();
+      const methodUpper = (request.method || 'GET').toUpperCase();
 
       // Health / sanity
       if (path === '/api/health' || pathLower === '/api/health') {
@@ -335,6 +1114,49 @@ const worker = {
           headers: { 'Content-Type': 'application/json' },
           status: ok ? 200 : 503,
         });
+      }
+
+      // ----- API: Webhooks (canonical /api/webhooks/* + /api/email/inbound; legacy /api/hooks/*) -----
+      if ((pathLower === '/api/webhooks/health' || pathLower === '/api/hooks/health') && methodUpper === 'GET') {
+        return handleHooksHealth(env);
+      }
+      if (methodUpper === 'POST') {
+        if (pathLower === '/api/email/inbound') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend_inbound', source: 'resend', endpointPath: '/api/email/inbound' });
+        }
+        if (pathLower === '/api/webhooks/resend') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend', source: 'resend', endpointPath: '/api/webhooks/resend' });
+        }
+        if (pathLower === '/api/webhooks/stripe') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/webhooks/stripe' });
+        }
+        if (pathLower === '/api/webhooks/github') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/webhooks/github' });
+        }
+        if (pathLower === '/api/webhooks/cursor') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/webhooks/cursor' });
+        }
+        if (pathLower === '/api/webhooks/cloudflare') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cloudflare', source: 'cloudflare', endpointPath: '/api/webhooks/cloudflare' });
+        }
+        if (pathLower === '/api/webhooks/supabase') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/webhooks/supabase' });
+        }
+        if (pathLower === '/api/webhooks/internal') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/webhooks/internal' });
+        }
+        if (pathLower === '/api/hooks/github') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/hooks/github' });
+        }
+        if (pathLower === '/api/hooks/cursor') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/hooks/cursor' });
+        }
+        if (pathLower === '/api/hooks/stripe') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/hooks/stripe' });
+        }
+        if (pathLower === '/api/hooks/internal') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/hooks/internal' });
+        }
       }
 
       // ----- API: Internal post-deploy (knowledge sync to R2) -----
@@ -951,6 +1773,39 @@ const worker = {
                 try {
                   const { output } = await runTerminalCommand(env, request, cmdToRun, body.session_id ?? null);
                   return { output: output || '(no output)' };
+                } catch (e) {
+                  return { output: `Error: ${e?.message ?? String(e)}` };
+                }
+              },
+              workflow_execute: async () => {
+                const raw = (parameters.raw || '').trim();
+                const parts = raw.split(/\s+/);
+                const workflow_id = parts[0];
+                const dryRun = !parts.includes('--execute');
+                if (!workflow_id) {
+                  return {
+                    output:
+                      'Usage: /workflow <id> [--execute]\nAvailable: wf_worker_health_check, wf_d1_schema_audit, wf_cost_telemetry_report, wf_dashboard_deploy, wf_knowledge_reindex',
+                  };
+                }
+                try {
+                  const data = await triggerWorkflowRun(
+                    env,
+                    ctx,
+                    workflow_id,
+                    body.session_id != null ? String(body.session_id) : null,
+                    'slash_command',
+                    dryRun
+                  );
+                  if (data.error) return { output: `Error: ${data.error}` };
+                  if (dryRun) {
+                    return {
+                      output: `DRY RUN — ${data.name}\n${JSON.stringify(data, null, 2)}\n\nTo execute: /workflow ${workflow_id} --execute`,
+                    };
+                  }
+                  return {
+                    output: `Workflow started: ${data.run_id}\nStatus: ${data.status}\nCheck: use d1_query on mcp_workflow_runs`,
+                  };
                 } catch (e) {
                   return { output: `Error: ${e?.message ?? String(e)}` };
                 }
@@ -2597,6 +3452,106 @@ const stripAdditionalProperties = (obj) => {
   return result;
 };
 
+/** Split SQL parenthesized list at top-level commas; respects single-quoted strings (including ''). */
+function splitTopLevelCommaListSql(expr) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  let inSingle = false;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (inSingle) {
+      if (c === "'") {
+        if (expr[i + 1] === "'") {
+          i++;
+          continue;
+        }
+        inSingle = false;
+      }
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth === 0) {
+      parts.push(expr.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(expr.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+/**
+ * d1_write guard: INSERT INTO agent_memory_index without agent_config_id / tenant_id gets canonical defaults.
+ * Does not alter other statements or tables.
+ */
+function ensureAgentMemoryIndexInsertDefaults(sql) {
+  if (typeof sql !== 'string' || !sql.trim()) return sql;
+  const s = sql.trim();
+  const lead = /^INSERT\s+(?:OR\s+\S+\s+)?INTO\s+`?agent_memory_index`?\s*\(/i;
+  const lm = s.match(lead);
+  if (!lm) return sql;
+  const colStart = lm.index + lm[0].length;
+  let depth = 1;
+  let i = colStart;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  if (depth !== 0) return sql;
+  const colEnd = i;
+  const columnsStr = s.slice(colStart, colEnd);
+  const colsRaw = splitTopLevelCommaListSql(columnsStr);
+  const colsNorm = colsRaw.map((c) => c.replace(/^`|`$/g, '').trim().toLowerCase());
+
+  const afterParen = s.slice(colEnd + 1).trimStart();
+  if (!/^VALUES\s*\(/i.test(afterParen)) return sql;
+  const openVal = colEnd + 1 + afterParen.indexOf('(') + 1;
+  depth = 1;
+  i = openVal;
+  for (; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  if (depth !== 0) return sql;
+  const valEnd = i;
+  const valuesStr = s.slice(openVal, valEnd);
+  const vals = splitTopLevelCommaListSql(valuesStr);
+
+  if (colsNorm.length !== vals.length) return sql;
+
+  const needAgent = !colsNorm.includes('agent_config_id');
+  const needTenant = !colsNorm.includes('tenant_id');
+  if (!needAgent && !needTenant) return sql;
+
+  const newCols = [...colsRaw];
+  const newVals = [...vals];
+  if (needAgent) {
+    newCols.push('agent_config_id');
+    newVals.push("'agent-sam-primary'");
+  }
+  if (needTenant) {
+    newCols.push('tenant_id');
+    newVals.push("'tenant_sam_primeaux'");
+  }
+
+  const prefix = s.slice(0, colStart);
+  const suffix = s.slice(valEnd + 1);
+  return `${prefix}${newCols.join(', ')}) VALUES (${newVals.join(', ')}${suffix}`;
+}
+
 /** Multi-provider tool loop (non-streaming). Supports anthropic, openai, google. Returns final assistant text. */
 async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest) {
   let messages = [...apiMessages];
@@ -2810,7 +3765,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           }
         }
       } else if (toolName === 'd1_write') {
-        const sql = (params.sql ?? '').trim();
+        const sql = ensureAgentMemoryIndexInsertDefaults((params.sql ?? '').trim());
         const bindParams = Array.isArray(params.params) ? params.params : [];
         const blocked = /\bdrop\s+table\b|\btruncate\b/i;
         if (blocked.test(sql)) {
@@ -3059,9 +4014,27 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       } else if (toolName === 'context_progressive_disclosure') {
         const { text = '', level = 1 } = params;
         resultText = text.slice(0, level === 1 ? 500 : level === 2 ? 2000 : text.length);
+      } else if (toolName === 'cloudconvert_create_job' || toolName === 'cloudconvert_get_job') {
+        try {
+          const out = await runCloudConvertBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
+      } else if (toolName === 'meshyai_text_to_3d' || toolName === 'meshyai_image_to_3d') {
+        resultText = JSON.stringify({
+          error: 'Tool requires approval. Approve in the UI or call /api/agent/chat/execute-approved-tool with the same tool_name and params.',
+        });
+      } else if (toolName === 'meshyai_get_task') {
+        try {
+          const out = await runMeshyBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
       if (!BUILTIN_TOOLS.has(toolName) && env.DB) {
         try {
           const toolRow = await env.DB.prepare('SELECT tool_category FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(toolName).first();
@@ -6154,6 +7127,63 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
   }
 }
 
+/**
+ * Start an MCP minion workflow run or return a dry-run preview. Shared by POST /api/mcp/workflows/:id/run
+ * and the Agent Sam /workflow slash builtin (avoids Worker self-fetch, which can fail with 522).
+ */
+async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run) {
+  const MCP_WF_TENANT = 'tenant_sam_primeaux';
+  const sid = session_id != null ? String(session_id) : null;
+  const trig = triggered_by != null ? String(triggered_by) : 'manual';
+  const wf = await env.DB.prepare(
+    `SELECT * FROM mcp_workflows WHERE id = ? AND status = 'active' AND tenant_id = ?`
+  ).bind(workflow_id, MCP_WF_TENANT).first();
+
+  if (!wf) return { error: 'Workflow not found or not active' };
+
+  if (dry_run) {
+    let steps = [];
+    try {
+      steps = typeof wf.steps_json === 'string' ? JSON.parse(wf.steps_json) : wf.steps_json || [];
+    } catch (_) {}
+    return {
+      dry_run: true,
+      workflow_id: wf.id,
+      name: wf.name,
+      description: wf.description,
+      step_count: steps.length,
+      estimated_cost_usd: wf.estimated_cost_usd,
+      requires_approval: wf.requires_approval === 1,
+      steps: steps.map((s, i) => ({
+        step: i + 1,
+        name: s.name,
+        tool: s.tool || s.tool_name,
+        agent: s.agent,
+        requires_approval: s.requires_approval || false,
+      })),
+    };
+  }
+
+  if (!ctx || typeof ctx.waitUntil !== 'function') {
+    return { error: 'Async execution context not available' };
+  }
+
+  const run = await env.DB.prepare(
+    `INSERT INTO mcp_workflow_runs
+       (workflow_id, session_id, tenant_id, status, triggered_by, started_at)
+     VALUES (?, ?, ?, 'running', ?, unixepoch())
+     RETURNING *`
+  ).bind(workflow_id, sid, MCP_WF_TENANT, trig).first();
+
+  await env.DB.prepare(
+    `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
+     updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+  ).bind(workflow_id, MCP_WF_TENANT).run();
+
+  ctx.waitUntil(executeWorkflowSteps(env, wf, run.id, sid));
+  return { run_id: run.id, status: 'running' };
+}
+
 async function handleMcpApi(req, u, e, ctx) {
   const pathLower = u.pathname.replace(/\/$/, '').toLowerCase();
   const method = (req.method || 'GET').toUpperCase();
@@ -6430,6 +7460,42 @@ async function handleMcpApi(req, u, e, ctx) {
               return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
             }
           }
+          const INTERNAL_CLOUDCONVERT_TOOLS = ['cloudconvert_create_job', 'cloudconvert_get_job'];
+          const INTERNAL_MESHY_APPROVAL_TOOLS = ['meshyai_text_to_3d', 'meshyai_image_to_3d'];
+          const INTERNAL_MESHY_GET_TASK = ['meshyai_get_task'];
+          if (INTERNAL_MESHY_APPROVAL_TOOLS.includes(tool_name)) {
+            return jsonResponse({ status: 'pending_approval', tool_name, params }, 202);
+          }
+          if (INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) || INTERNAL_MESHY_GET_TASK.includes(tool_name)) {
+            try {
+              const out = INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name)
+                ? await runCloudConvertBuiltinTool(e, tool_name, params)
+                : await runMeshyBuiltinTool(e, tool_name, params);
+              const failed = out && out.error;
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) ? 'file_conversion' : 'ai_3d_generation',
+                toolInput: params,
+                result: failed ? null : out,
+                error: failed ? String(out.error) : null,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: out }, failed ? 400 : 200);
+            } catch (err) {
+              const errMsg = String(err?.message || err);
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) ? 'file_conversion' : 'ai_3d_generation',
+                toolInput: params,
+                result: null,
+                error: errMsg,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
+            }
+          }
           const toolRow = await e.DB.prepare(
             'SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1'
           ).bind(tool_name).first();
@@ -6587,30 +7653,21 @@ async function handleMcpApi(req, u, e, ctx) {
         }
         const wfRunMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)\/run$/);
         if (wfRunMatch && method === 'POST') {
-          if (!ctx || typeof ctx.waitUntil !== 'function') {
-            return jsonResponse({ error: 'Async execution context not available' }, 500);
-          }
           const workflow_id = wfRunMatch[1];
           let body = {};
           try { body = await req.json(); } catch (_) {}
           const session_id = body.session_id != null ? String(body.session_id) : null;
           const triggered_by = body.triggered_by != null ? String(body.triggered_by) : 'manual';
-          const wf = await e.DB.prepare(
-            `SELECT * FROM mcp_workflows WHERE id = ? AND status = 'active' AND tenant_id = ?`
-          ).bind(workflow_id, MCP_WF_TENANT).first();
-          if (!wf) return jsonResponse({ error: 'Workflow not found or not active' }, 404);
-          const run = await e.DB.prepare(
-            `INSERT INTO mcp_workflow_runs
-               (workflow_id, session_id, tenant_id, status, triggered_by, started_at)
-             VALUES (?, ?, ?, 'running', ?, unixepoch())
-             RETURNING *`
-          ).bind(workflow_id, session_id, MCP_WF_TENANT, triggered_by).first();
-          await e.DB.prepare(
-            `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
-             updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
-          ).bind(workflow_id, MCP_WF_TENANT).run();
-          ctx.waitUntil(executeWorkflowSteps(e, wf, run.id, session_id));
-          return jsonResponse({ run_id: run.id, status: 'running' }, 202);
+          const dry_run = body.dry_run === true;
+          const data = await triggerWorkflowRun(e, ctx, workflow_id, session_id, triggered_by, dry_run);
+          if (data.error) {
+            const msg = data.error;
+            const status =
+              msg === 'Workflow not found or not active' ? 404 : 500;
+            return jsonResponse({ error: msg }, status);
+          }
+          if (dry_run) return jsonResponse(data, 200);
+          return jsonResponse({ run_id: data.run_id, status: data.status }, 202);
         }
         const wfRunsListMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)\/runs$/);
         if (wfRunsListMatch && method === 'GET') {
@@ -6831,7 +7888,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     }
   }
   if (tool_name === 'd1_write' && env.DB) {
-    const sql = (params.sql ?? params.query ?? '').trim();
+    const sql = ensureAgentMemoryIndexInsertDefaults((params.sql ?? params.query ?? '').trim());
     const bindParams = Array.isArray(params.params) ? params.params : [];
     const blocked = /\bdrop\s+table\b|\btruncate\b/i;
     if (blocked.test(sql)) {
@@ -6908,6 +7965,68 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     } catch (e) {
       const errMsg = String(e?.message || e);
       await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'meshyai_text_to_3d' || tool_name === 'meshyai_image_to_3d') {
+    if (!opts.skipApprovalCheck) {
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'ai_3d_generation',
+        toolInput: params,
+        result: null,
+        error: 'Tool requires approval',
+        serviceName: 'builtin',
+      });
+      return { error: 'Tool requires approval' };
+    }
+  }
+  if (
+    tool_name === 'cloudconvert_create_job' ||
+    tool_name === 'cloudconvert_get_job' ||
+    tool_name === 'meshyai_text_to_3d' ||
+    tool_name === 'meshyai_image_to_3d' ||
+    tool_name === 'meshyai_get_task'
+  ) {
+    const category = tool_name.startsWith('cloudconvert_') ? 'file_conversion' : 'ai_3d_generation';
+    try {
+      const out = tool_name.startsWith('cloudconvert_')
+        ? await runCloudConvertBuiltinTool(env, tool_name, params || {})
+        : await runMeshyBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: category,
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: category,
+        toolInput: params,
+        result: out,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: category,
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
       return { error: errMsg };
     }
   }
@@ -7168,6 +8287,152 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     return { result: resultText };
   }
 
+  if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
+    if (!env.ANTHROPIC_API_KEY) {
+      const errMsg = 'ANTHROPIC_API_KEY not configured';
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+    const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
+    const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
+    const today = new Date().toISOString().slice(0, 10);
+    const emptyRows = { results: [] };
+    const safeAll = async (p) => {
+      try {
+        return await p;
+      } catch (e) {
+        console.warn('[generate_daily_summary_email] query', e?.message ?? e);
+        return emptyRows;
+      }
+    };
+    const [deploys, spend, tools, minions, clients, sprint] = await Promise.all([
+      safeAll(
+        env.DB.prepare(
+          `SELECT version, description, status, timestamp, deployed_by FROM deployments
+           WHERE date(timestamp) >= date(?) ORDER BY timestamp DESC LIMIT 10`
+        ).bind(today).all()
+      ),
+      safeAll(
+        env.DB.prepare(
+          `SELECT provider, model_used, COUNT(*) as calls, ROUND(SUM(computed_cost_usd), 4) as cost_usd
+           FROM agent_telemetry WHERE created_at >= unixepoch(?) GROUP BY provider, model_used ORDER BY cost_usd DESC`
+        ).bind(`${today} 00:00:00`).all()
+      ),
+      safeAll(
+        env.DB.prepare(
+          `SELECT tool_name, COUNT(*) as calls, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as success
+           FROM mcp_tool_calls WHERE datetime(created_at) > datetime('now', '-1 day') GROUP BY tool_name ORDER BY calls DESC LIMIT 8`
+        ).all()
+      ),
+      safeAll(
+        env.DB.prepare(
+          `SELECT w.name, r.status, datetime(r.started_at, 'unixepoch') as started
+           FROM mcp_workflow_runs r JOIN mcp_workflows w ON r.workflow_id = w.id
+           WHERE r.started_at >= unixepoch(?) ORDER BY r.started_at DESC`
+        ).bind(`${today} 00:00:00`).all()
+      ),
+      safeAll(
+        env.DB.prepare(
+          `SELECT workflow_name, client_name, implementation_status, priority FROM cidi
+           WHERE implementation_status IN ('in_progress', 'pending', 'blocked') ORDER BY priority DESC`
+        ).all()
+      ),
+      safeAll(
+        env.DB.prepare(
+          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_sprint1_agent_sam_2026' ORDER BY order_index`
+        ).all()
+      ),
+    ]);
+    const totalCost = (spend.results || []).reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+    const totalDeploys = (deploys.results || []).length;
+    const totalCalls = (tools.results || []).reduce((s, r) => s + (Number(r.calls) || 0), 0);
+    const minionRuns = (minions.results || []).length;
+    const doneStatuses = new Set(['complete', 'completed', 'done']);
+    const completedSteps = (sprint.results || []).filter((r) => doneStatuses.has(String(r.status || '').toLowerCase())).length;
+    const totalSteps = (sprint.results || []).length;
+    const stepResultsLine =
+      params.step_results != null
+        ? `\nWorkflow step_results (context): ${typeof params.step_results === 'string' ? params.step_results : JSON.stringify(params.step_results).slice(0, 8000)}`
+        : '';
+    const prompt = `You are Agent Sam writing a daily work summary email for Sam Primeaux, solo founder of Inner Animal Media.
+
+Today: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+
+DATA:
+Deployments today (${totalDeploys}): ${JSON.stringify(deploys.results || [])}
+AI spend today: $${totalCost.toFixed(4)} across ${totalCalls} tool calls
+Models used: ${JSON.stringify(spend.results || [])}
+Top tools: ${JSON.stringify(tools.results || [])}
+Minion runs: ${minionRuns} runs today — ${JSON.stringify(minions.results || [])}
+Active client work: ${JSON.stringify(clients.results || [])}
+Sprint progress: ${completedSteps}/${totalSteps} steps complete — ${JSON.stringify(sprint.results || [])}${stepResultsLine}
+
+Write a clean, informative HTML email. Style: dark background #0a0a0a, text #e0e0e0, accent #4ade80 (green). No fluff. Be direct and specific. Include:
+1. HEADLINE STATS (deployments, cost, tool calls, minion runs)
+2. WHAT SHIPPED TODAY (list each deploy with description)
+3. CLIENT WORK STATUS (any in_progress/blocked items)
+4. SPRINT SCORECARD (X/Y complete, what's left)
+5. NEXT SESSION FOCUS (top 3 priorities based on data)
+6. SIGN OFF as Agent Sam
+
+Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — readable in 60 seconds.`;
+    let emailHtml = '';
+    try {
+      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      const aiData = await aiResp.json().catch(() => ({}));
+      if (!aiResp.ok) {
+        emailHtml = `<p>Error from Claude API: ${String(aiData?.error?.message || JSON.stringify(aiData)).slice(0, 500)}</p>`;
+      } else {
+        emailHtml = aiData.content?.[0]?.text || '';
+      }
+    } catch (e) {
+      emailHtml = '<p>Error generating AI summary</p>';
+    }
+    if (!emailHtml || !String(emailHtml).trim()) {
+      emailHtml = '<p>(No AI body generated)</p>';
+    }
+    try {
+      const resendResp = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        },
+        body: JSON.stringify({
+          from,
+          to: [to],
+          subject: `Agent Sam Daily Summary — ${today} | ${totalDeploys} deploys · $${totalCost.toFixed(4)} · ${minionRuns} minions`,
+          html: `<!DOCTYPE html><html><body style="background:#0a0a0a;color:#e0e0e0;font-family:system-ui,sans-serif;padding:24px;max-width:600px;margin:0 auto">${emailHtml}</body></html>`,
+        }),
+      });
+      const resendData = await resendResp.json().catch(() => ({}));
+      if (!resendResp.ok) {
+        const errStr = `Resend error: ${JSON.stringify(resendData)}`;
+        await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errStr, serviceName: 'builtin' });
+        return { error: errStr };
+      }
+      const okText = `Daily summary sent to ${to}. Email ID: ${resendData.id}. Stats: ${totalDeploys} deploys, $${totalCost.toFixed(4)} AI spend, ${minionRuns} minion runs.`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: okText, error: null, serviceName: 'builtin' });
+      return { result: okText };
+    } catch (e) {
+      const errStr = String(e?.message || e);
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errStr, serviceName: 'builtin' });
+      return { error: errStr };
+    }
+  }
+
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();
   if (!toolRow) {
     await rec( { conversationId, toolName: tool_name, toolCategory: 'mcp', toolInput: params, result: null, error: 'Tool not found', serviceName: null });
@@ -7275,13 +8540,15 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
     const startMs = Date.now();
 
     for (const step of steps) {
-      const tool_name = step.tool_name;
+      const tool_name = step.tool_name || step.tool;
       if (!tool_name) {
         failed = true;
         lastError = 'step missing tool_name';
         break;
       }
-      const input_template = step.input_template && typeof step.input_template === 'object' ? step.input_template : {};
+      const input_template =
+        (step.input_template && typeof step.input_template === 'object' ? step.input_template : null) ||
+        (step.params && typeof step.params === 'object' ? step.params : {});
       const retry_max = Math.max(1, Number(step.retry_max) || 1);
       let attempt = 0;
       let stepStatus = 'failed';
@@ -7293,7 +8560,12 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
         attempt++;
         try {
           dispatchResult = await dispatchMcpTool(env, tool_name, input_template, session_id);
-          output = typeof dispatchResult === 'string' ? dispatchResult : JSON.stringify(dispatchResult ?? {});
+          output = typeof dispatchResult === 'string'
+            ? dispatchResult
+            : JSON.stringify(dispatchResult ?? {});
+          if (!output || output === 'null' || output === '{}') {
+            output = '(no output)';
+          }
           stepStatus = 'completed';
           break;
         } catch (err) {
@@ -7491,11 +8763,195 @@ async function runImgxBuiltinTool(env, toolName, params) {
   return { error: `Unsupported IMGX tool: ${toolName}` };
 }
 
+function cloudconvertCollectTasksFromJob(data) {
+  const tasks = data?.tasks;
+  if (Array.isArray(tasks)) return tasks;
+  if (tasks && typeof tasks === 'object') return Object.values(tasks);
+  return [];
+}
+
+function cloudconvertExtractExportFromJob(data) {
+  for (const t of cloudconvertCollectTasksFromJob(data)) {
+    if (String(t?.operation) !== 'export/url') continue;
+    if (t.status && t.status !== 'finished') continue;
+    const files = t.result?.files || t.result?.form?.files;
+    const arr = Array.isArray(files) ? files : [];
+    const first = arr[0];
+    if (first?.url) return { url: first.url, filename: first.filename ?? null };
+  }
+  return { url: null, filename: null };
+}
+
+async function runCloudConvertBuiltinTool(env, toolName, params) {
+  const apiKey = env.CLOUDCONVERT_API_KEY;
+  if (!apiKey) return { error: 'CLOUDCONVERT_API_KEY not configured' };
+
+  if (toolName === 'cloudconvert_get_job') {
+    const jobId = String(params.job_id ?? params.id ?? '').trim();
+    if (!jobId) return { error: 'job_id required' };
+    const res = await fetch(`https://api.cloudconvert.com/v2/jobs/${encodeURIComponent(jobId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { error: body?.message || body?.errors?.[0]?.message || `CloudConvert ${res.status}` };
+    }
+    const data = body.data ?? body;
+    const { url: output_url, filename: output_filename } = cloudconvertExtractExportFromJob(data);
+    return {
+      status: data.status,
+      output_url,
+      output_filename,
+      finished_at: data.finished_at ?? data.ended_at ?? null,
+    };
+  }
+
+  if (toolName !== 'cloudconvert_create_job') return { error: `Unknown CloudConvert tool: ${toolName}` };
+
+  const input_url = String(params.input_url ?? '').trim();
+  const input_format = String(params.input_format ?? '').trim();
+  const output_format = String(params.output_format ?? '').trim();
+  if (!input_url || !input_format || !output_format) {
+    return { error: 'input_url, input_format, and output_format are required' };
+  }
+  const tasks = {
+    import: { operation: 'import/url', url: input_url },
+    convert: { operation: 'convert', input: 'import', input_format, output_format },
+    export: { operation: 'export/url', input: 'convert' },
+  };
+  const createRes = await fetch('https://api.cloudconvert.com/v2/jobs', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tasks }),
+  });
+  const createBody = await createRes.json().catch(() => ({}));
+  if (!createRes.ok) {
+    return { error: createBody?.message || createBody?.errors?.[0]?.message || `CloudConvert create ${createRes.status}` };
+  }
+  const data = createBody.data ?? createBody;
+  const job_id = data.id;
+  const status = data.status;
+  const created_at = data.created_at ?? data.inserted_at ?? null;
+
+  const output_r2_key = params.output_r2_key != null ? String(params.output_r2_key).trim() : '';
+  if (!output_r2_key) {
+    return { job_id, status, created_at };
+  }
+  if (!env.DASHBOARD) {
+    return { job_id, status, created_at, r2_error: 'DASHBOARD bucket not configured' };
+  }
+
+  const maxWaitSec = Math.min(300, Math.max(30, Number(params.poll_timeout_sec) || 120));
+  const deadline = Date.now() + maxWaitSec * 1000;
+  let last = data;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const pollRes = await fetch(`https://api.cloudconvert.com/v2/jobs/${encodeURIComponent(job_id)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const pollBody = await pollRes.json().catch(() => ({}));
+    last = pollBody.data ?? pollBody;
+    const st = last.status;
+    if (st === 'finished' || st === 'error' || st === 'failed') break;
+  }
+  const { url: outUrl } = cloudconvertExtractExportFromJob(last);
+  if (!outUrl) {
+    return { job_id, status: last.status, created_at, r2_upload: 'skipped', reason: 'export URL not ready' };
+  }
+  const fileRes = await fetch(outUrl);
+  if (!fileRes.ok) return { error: `Failed to download export (${fileRes.status})` };
+  const buf = await fileRes.arrayBuffer();
+  const ct = fileRes.headers.get('content-type') || 'application/octet-stream';
+  await env.DASHBOARD.put(output_r2_key, buf, { httpMetadata: { contentType: ct } });
+  return { job_id, status: last.status, created_at, output_r2_key };
+}
+
+async function runMeshyBuiltinTool(env, toolName, params) {
+  const apiKey = env.MESHYAI_API_KEY;
+  if (!apiKey) return { error: 'MESHYAI_API_KEY not configured' };
+
+  if (toolName === 'meshyai_text_to_3d') {
+    const prompt = String(params.prompt ?? '').trim();
+    if (!prompt) return { error: 'prompt required' };
+    const res = await fetch('https://api.meshy.ai/v2/text-to-3d', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'preview',
+        prompt,
+        art_style: params.art_style || 'realistic',
+        negative_prompt: params.negative_prompt || '',
+        topology: 'quad',
+        target_polycount: 30000,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.message || body?.error || JSON.stringify(body).slice(0, 200) || `Meshy ${res.status}` };
+    const task_id = body.result ?? body.task_id ?? body.id ?? body.data?.task_id ?? body.data?.id;
+    return { task_id };
+  }
+
+  if (toolName === 'meshyai_image_to_3d') {
+    const image_url = String(params.image_url ?? '').trim();
+    if (!image_url) return { error: 'image_url required' };
+    const res = await fetch('https://api.meshy.ai/v2/image-to-3d', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_url,
+        output_format: params.output_format || 'glb',
+        topology: params.topology || 'quad',
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.message || body?.error || JSON.stringify(body).slice(0, 200) || `Meshy ${res.status}` };
+    const task_id = body.result ?? body.task_id ?? body.id ?? body.data?.task_id ?? body.data?.id;
+    return { task_id };
+  }
+
+  if (toolName === 'meshyai_get_task') {
+    const task_id = String(params.task_id ?? params.id ?? '').trim();
+    if (!task_id) return { error: 'task_id required' };
+    let res = await fetch(`https://api.meshy.ai/v2/text-to-3d/${encodeURIComponent(task_id)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (res.status === 404) {
+      res = await fetch(`https://api.meshy.ai/v2/image-to-3d/${encodeURIComponent(task_id)}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.message || body?.error || `Meshy get ${res.status}` };
+    const d = body.result && typeof body.result === 'object' ? body.result : body;
+    const status = d.status ?? d.task_status ?? body.status;
+    const progress = d.progress ?? d.progress_percent ?? body.progress;
+    const model_urls = d.model_urls ?? d.modelUrls ?? {};
+    const out = { status, progress, model_urls };
+    const r2_key = params.r2_key != null ? String(params.r2_key).trim() : '';
+    const stNorm = String(status || '').toUpperCase();
+    if (stNorm === 'SUCCEEDED' && r2_key && env.CAD_ASSETS) {
+      const glbUrl = model_urls && typeof model_urls === 'object' ? (model_urls.glb || model_urls.GLB) : null;
+      if (glbUrl) {
+        const f = await fetch(glbUrl);
+        if (f.ok) {
+          const buf = await f.arrayBuffer();
+          await env.CAD_ASSETS.put(r2_key, buf, { httpMetadata: { contentType: 'model/gltf-binary' } });
+          out.r2_key = r2_key;
+        }
+      }
+    }
+    return out;
+  }
+
+  return { error: `Unknown Meshy tool: ${toolName}` };
+}
+
 const MCP_CHAT_TOOL_LOOP_MAX = 10;
 
 const ACTION_TOOLS = [
   'd1_write', 'r2_write', 'r2_delete', 'terminal_execute', 'worker_deploy',
   'playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content',
+  'meshyai_text_to_3d', 'meshyai_image_to_3d',
 ];
 const READ_ONLY_TOOLS = [
   'knowledge_search', 'd1_query', 'r2_read', 'r2_list', 'web_search', 'telemetry_query',
@@ -7802,6 +9258,51 @@ async function processQueues(env) {
   }
 }
 
+async function runWebhookEventsMaintenanceCron(env) {
+  if (!env.DB) return;
+  try {
+    const del = await env.DB.prepare(
+      `DELETE FROM webhook_events
+       WHERE received_at < datetime('now', '-30 days')
+       AND status IN ('processed','ignored','duplicate')`
+    ).run();
+    console.log('[cron] webhook_events cleanup changes:', del.meta?.changes ?? del.changes ?? 0);
+  } catch (e) {
+    console.warn('[cron] webhook_events DELETE cleanup', e?.message ?? e);
+  }
+  try {
+    const upd = await env.DB.prepare(
+      `UPDATE webhook_events
+       SET payload_json = NULL, headers_json = NULL
+       WHERE received_at < datetime('now', '-7 days')
+       AND status = 'processed'
+       AND payload_json IS NOT NULL`
+    ).run();
+    console.log('[cron] webhook_events payload compression changes:', upd.meta?.changes ?? upd.changes ?? 0);
+  } catch (e) {
+    console.warn('[cron] webhook_events payload compress', e?.message ?? e);
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO webhook_event_stats
+        (date, source, event_type, total, succeeded, failed)
+       SELECT
+        date(received_at) as date,
+        source,
+        event_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN status='processed' THEN 1 ELSE 0 END) as succeeded,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed
+       FROM webhook_events
+       WHERE date(received_at) = date('now', '-1 day')
+       GROUP BY date, source, event_type`
+    ).run();
+    console.log('[cron] webhook_event_stats rollup completed');
+  } catch (e) {
+    console.warn('[cron] webhook_event_stats rollup', e?.message ?? e);
+  }
+}
+
 worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '*/30 * * * *') {
     ctx.waitUntil(processQueues(env));
@@ -7836,6 +9337,7 @@ worker.scheduled = async function scheduled(event, env, ctx) {
         })
         .catch((e) => console.error('[cron] RAG sync failed:', e?.message || e))
     );
+    ctx.waitUntil(runWebhookEventsMaintenanceCron(env));
   }
   if (event.cron === '30 13 * * *') {
     ctx.waitUntil(sendDailyPlanEmail(env));
@@ -8187,7 +9689,8 @@ function vaultRegistry() {
     { name: 'GOOGLE_CLIENT_ID', type: 'plaintext', description: 'Google OAuth' },
     { name: 'GOOGLE_CLIENT_SECRET', type: 'secret', description: 'Google OAuth' },
     { name: 'GOOGLE_OAUTH_CLIENT_SECRET', type: 'secret', description: 'Google OAuth (alternate)' },
-    { name: 'INTERNAL_API_SECRET', type: 'secret', description: 'Internal APIs' },
+    { name: 'INTERNAL_API_SECRET', type: 'secret', description: 'Internal APIs (post-deploy, X-Internal-Secret, admin routes)' },
+    { name: 'INTERNAL_WEBHOOK_SECRET', type: 'secret', description: '/api/webhooks/internal X-IAM-Signature HMAC' },
     { name: 'MCP_AUTH_TOKEN', type: 'secret', description: 'MCP server auth' },
     { name: 'OPENAI_API_KEY', type: 'secret', description: 'OpenAI API' },
     { name: 'PTY_AUTH_TOKEN', type: 'secret', description: 'PTY / terminal' },

@@ -5109,3 +5109,24 @@ Add Composer 2 / IAM workflow rows to `agent_tools`, `agent_telemetry`, `agent_r
 ### Deploy status
 - Worker deployed: no.
 - D1: four INSERTs + view DROP/CREATE.
+
+---
+
+## [2026-03-22] D1 client_51838412025944c5 — project_memory, ai_routing_rules, ai_projects, ai_tasks
+
+### What was asked
+Wire Inner Animal App client `client_51838412025944c5` into related AI tables; use/update `ai_project_memory_context`, `ai_routing_rules`, `ai_tasks`.
+
+### What was done
+- **`projects`:** `proj_iam_agentsam_composer2_20260322` now has **`client_id=client_51838412025944c5`** (Inner Animal App); `metadata_json` updated via `json_set`.
+- **`project_memory`:** two rows (`workflow` / `goal_context`) so **`ai_project_memory_context` VIEW** returns them for that `project_id`.
+- **`ai_routing_rules`:** `route_composer2_iam_client_51838412025944c5`, priority 7, target **`composer2-agentsam`** / **cursor**, reason cites client id.
+- **`ai_projects`:** row id **`proj_iam_agentsam_composer2_20260322`** (matches `projects.id`) for **`ai_tasks` FK**; `ai_provider` **claude** (schema CHECK); metadata holds **client_id** + **ide_lane** cursor_composer2.
+- **`ai_tasks`:** three tasks (terminal in_progress, settings + polish todo) with **client_id** in each `metadata`.
+
+### Files changed
+- `migrations/_oneoff_client_composer2_memory_routing_tasks_2026-03-22.sql`
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- D1: UPDATE + 2 INSERT project_memory + 1 routing + 1 ai_projects + 3 ai_tasks.

@@ -5253,3 +5253,17 @@ Align repo `wrangler.jsonc` with Cloudflare Workers Git-connected build; sandbox
 
 ### Deploy status
 - D1: user-applied UPDATE (agent verified SELECT); no extra remote execute from agent for this note.
+
+---
+
+## [2026-03-22] CIDI id=4 `external_references` — URL delimiter
+
+### What was asked
+Separate Git + sandbox URLs with a delimiter for parsers/UI.
+
+### What was done
+- D1: `external_references` now uses ` | ` between GitHub tree URL and `inneranimal-dashboard.meauxbility.workers.dev`.
+- Repo: `migrations/_oneoff_cidi_id4_external_refs_delimiter_2026-03-22.sql`; aligned `_oneoff_cidi_id4_external_refs_sandbox_*.sql` and `_oneoff_cidi_iam_platform_ui_*.sql`.
+
+### Deploy status
+- D1: wrangler `--file` UPDATE applied.

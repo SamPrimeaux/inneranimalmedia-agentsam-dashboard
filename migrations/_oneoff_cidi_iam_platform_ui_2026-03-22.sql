@@ -41,6 +41,6 @@ INSERT INTO cidi (
   'cursor_agent',
   'cursor_agent',
   'inneranimalmedia,agent-sam,dashboard,platform-ui,terminal,settings,d1,wrangler',
-  'https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard/tree/cursor/platform-ui-stability-1eca https://inneranimal-dashboard.meauxbility.workers.dev/',
+  'https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard/tree/cursor/platform-ui-stability-1eca | https://inneranimal-dashboard.meauxbility.workers.dev/',
   'Row created from Cursor Cloud Agent for build tracking and CIDI / daily plan visibility.'
 );

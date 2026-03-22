@@ -5238,3 +5238,18 @@ Align repo `wrangler.jsonc` with Cloudflare Workers Git-connected build; sandbox
 
 ### Known issues / next steps
 - Cloudflare may open a PR for Wrangler 3.109+ schema parity (dashboard copy); local `wrangler deploy --dry-run -c wrangler.jsonc` needs `npm install` so `@cloudflare/playwright` resolves (same as prod bundle expectations).
+
+---
+
+## [2026-03-22] CIDI id=4 `external_references` — Git branch + sandbox worker
+
+### What was done (D1, Sam)
+`UPDATE cidi SET external_references = '…github…/tree/cursor/platform-ui-stability-1eca …inneranimal-dashboard.meauxbility.workers.dev/' WHERE id = 4` — verified on production.
+
+### Files changed
+- `migrations/_oneoff_cidi_id4_external_refs_sandbox_2026-03-22.sql` (audit UPDATE)
+- `migrations/_oneoff_cidi_iam_platform_ui_2026-03-22.sql` (INSERT template `external_references` aligned)
+- `docs/cursor-session-log.md`
+
+### Deploy status
+- D1: user-applied UPDATE (agent verified SELECT); no extra remote execute from agent for this note.

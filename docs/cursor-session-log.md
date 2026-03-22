@@ -5069,3 +5069,20 @@ Set `user_agent` to `composer2_agentsam` for the Cursor Composer 2 row.
 
 ### Deploy status
 - D1 write: yes — one UPDATE.
+
+---
+
+## [2026-03-22] D1 `ai_models` — Composer 2 Agent Sam
+
+### What was asked
+Add a row in `ai_models` for Cursor Composer 2 / Agent Sam.
+
+### What was done
+- Inserted `id` / `model_key` **composer2-agentsam**, `provider` **cursor**, `display_name` **Cursor Composer 2 (Agent Sam)**, `is_active=1`, **`show_in_picker=0`** (not offered in chat model picker; no API routing), `pricing_source` **cursor_composer**, `metadata_json` includes **user_agent_label** `composer2_agentsam`.
+- File: `migrations/_oneoff_ai_models_composer2_agentsam_2026-03-22.sql` applied to production via wrangler.
+
+### Files changed
+- `migrations/_oneoff_ai_models_composer2_agentsam_2026-03-22.sql`, `docs/cursor-session-log.md`.
+
+### Deploy status
+- D1 write: yes — one INSERT into `ai_models`.

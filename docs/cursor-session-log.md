@@ -5659,7 +5659,7 @@ Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel
 - Built: yes — `npm run build` in `agent-dashboard` before commit
 - R2 uploaded: no until Sam approves and runs the three `wrangler r2 object put` commands below from repo root
 - Worker deployed: no
-- Git push: recorded after push (see commit on `main`)
+- Git push: yes — **ad55319** https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main`
 
 ### R2 (run only after you approve — repo root)
 ```bash

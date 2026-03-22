@@ -6148,3 +6148,20 @@ Properly backfill `cidi_activity_log`, `cidi_recent_completions`, and `cicd_runs
 ### Re-run
 Safe to re-run; guards use `metadata_json LIKE '%bf_…%'` and `NOT EXISTS` on `cicd_runs.run_id`.
 
+---
+
+## [2026-03-23] `context_index` keyword search + `context_search_log` in `/api/agent/chat`
+
+### What was asked
+Wire `fetchContextIndex` into worker chat context assembly; log searches to `context_search_log`; inline vs R2 summaries per design notes.
+
+### Files changed
+- `worker.js`: `PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS`; helpers `r2GetContextIndexObject`, `contextIndexShouldFetchFullR2`, `fetchContextIndex`, `logContextSearchToD1`; after Vectorize RAG block, merge context-index blurb into **`mergedRagContext`** passed to `buildModeContext`; debug mode appends context index when non-empty; telemetry + audit include `context_index` chars/tokens. `ctx.waitUntil(logContextSearchToD1(...))` on each qualifying chat (user text length > 3).
+
+### Deploy status
+- Worker deployed: no (Sam: **deploy approved** for production).
+
+### Notes
+- Scope: request body **`context_scope`** (optional); default **`global`**.
+- R2 full fetch only when `storage_type` is r2 and title/slug/keywords match user message (heuristic).
+

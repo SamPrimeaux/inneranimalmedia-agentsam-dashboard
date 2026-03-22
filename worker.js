@@ -3126,6 +3126,7 @@ const PROMPT_CAPS = {
   SCHEMA_BLURB_MAX_CHARS: 4000,
   MCP_BLURB_MAX_CHARS: 800,
   RAG_CONTEXT_MAX_CHARS: 3000,
+  CONTEXT_INDEX_MAX_CHARS: 2500,
   TRUNCATION_MARKER: '\n\n[... truncated]',
   SESSION_SUMMARY_MAX_CHARS: 1500,
   LAST_N_VERBATIM_TURNS: 6,
@@ -3134,6 +3135,123 @@ const PROMPT_CAPS = {
 function capWithMarker(text, maxChars) {
   if (!text || text.length <= maxChars) return text;
   return text.slice(0, maxChars) + PROMPT_CAPS.TRUNCATION_MARKER;
+}
+
+/** Fetch R2 object for context_index row; prefers DASHBOARD when bucket looks like agent-sam. */
+async function r2GetContextIndexObject(env, bucketName, key) {
+  const k = (key || '').trim();
+  if (!k) return null;
+  const bn = (bucketName || '').toLowerCase();
+  try {
+    if ((bn === '' || bn.includes('agent-sam')) && env.DASHBOARD) {
+      const o = await env.DASHBOARD.get(k);
+      if (o) return o;
+    }
+    if (env.ASSETS) {
+      const o = await env.ASSETS.get(k);
+      if (o) return o;
+    }
+    if (env.DASHBOARD) return await env.DASHBOARD.get(k);
+  } catch (_) {}
+  return null;
+}
+
+/** Heuristic: user message is clearly about this doc — OK to pull full R2 body (capped). */
+function contextIndexShouldFetchFullR2(userLower, row) {
+  const title = (row.title || '').toLowerCase().trim();
+  if (title.length >= 4 && userLower.includes(title)) return true;
+  const slug = (row.slug || '').toLowerCase().replace(/-/g, ' ');
+  if (slug.length >= 4 && userLower.includes(slug)) return true;
+  const parts = (row.keywords || '').toLowerCase().split(/[,\s|]+/).filter((w) => w.length > 4);
+  return parts.some((w) => userLower.includes(w));
+}
+
+/** Keyword search context_index (no vectors). Returns { blurb, meta } for prompt + logging. */
+async function fetchContextIndex(env, db, queryText, scope) {
+  const meta = { count: 0, ids: [], bytes: 0 };
+  if (!db || !queryText || typeof queryText !== 'string') return { blurb: '', meta };
+  const terms = queryText
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 3)
+    .slice(0, 3);
+  if (terms.length === 0) return { blurb: '', meta };
+  const term = terms.join(' ');
+  const like = `%${term}%`;
+  const scopeParam = scope && typeof scope === 'string' && scope.trim() ? scope.trim() : 'global';
+  let rows = [];
+  try {
+    const res = await db
+      .prepare(
+        `SELECT id, title, slug, doc_type, storage_type, r2_bucket, r2_key, inline_content, summary, keywords, tags
+         FROM context_index
+         WHERE is_active = 1 AND (is_stale = 0 OR is_stale IS NULL)
+           AND (keywords LIKE ? OR tags LIKE ? OR title LIKE ?)
+           AND (scope = 'global' OR scope = ?)
+         ORDER BY importance_score DESC
+         LIMIT 5`
+      )
+      .bind(like, like, like, scopeParam)
+      .all();
+    rows = res?.results ?? [];
+  } catch (e) {
+    console.error('[fetchContextIndex]', e?.message ?? e);
+    return { blurb: '', meta };
+  }
+  meta.count = rows.length;
+  if (!rows.length) return { blurb: '', meta };
+  const userLower = queryText.toLowerCase();
+  const parts = [];
+  for (const r of rows) {
+    meta.ids.push(r.id);
+    let block = `### ${r.title || r.id} (${r.doc_type || 'doc'})\n`;
+    if (r.summary) block += `Summary: ${r.summary}\n`;
+    const inline = r.inline_content;
+    if (inline != null && String(inline).length > 0) {
+      const capped = capWithMarker(String(inline), 1800);
+      block += `${capped}\n`;
+      meta.bytes += capped.length;
+    } else if (String(r.storage_type || '').toLowerCase() === 'r2' && r.r2_key && contextIndexShouldFetchFullR2(userLower, r)) {
+      try {
+        const obj = await r2GetContextIndexObject(env, r.r2_bucket, r.r2_key);
+        if (obj) {
+          const text = await obj.text();
+          const capped = capWithMarker(text, 2000);
+          block += `[Full doc: ${r.r2_key}]\n${capped}\n`;
+          meta.bytes += capped.length;
+        }
+      } catch (_) {}
+    } else if (r.r2_key) {
+      block += `[R2 reference: ${r.r2_bucket || 'default'} / ${r.r2_key} — use r2_read if you need full text]\n`;
+    }
+    parts.push(block);
+  }
+  const blurb = '[Context index — curated platform docs]\n' + parts.join('\n');
+  return { blurb: capWithMarker(blurb, PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS), meta };
+}
+
+async function logContextSearchToD1(env, row) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO context_search_log (id, tenant_id, session_id, query, query_type, results_count, context_ids_used, total_bytes_fetched, was_helpful, feedback, searched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, datetime('now'))`
+    )
+      .bind(
+        `csl_${crypto.randomUUID()}`,
+        row.tenant_id || 'tenant_sam_primeaux',
+        row.session_id || null,
+        (row.query || '').slice(0, 4000),
+        row.query_type || 'keyword',
+        Number(row.results_count) || 0,
+        row.context_ids_used || '[]',
+        Number(row.total_bytes) || 0
+      )
+      .run();
+  } catch (e) {
+    console.error('[context_search_log]', e?.message ?? e);
+  }
 }
 
 /** Approximate token count from character length (for prompt telemetry). */
@@ -3148,6 +3266,7 @@ function logPromptTelemetry(env, payload) {
   const coreTokens = charsToTokens(t.coreSystemChars);
   const compiledTokens = charsToTokens(t.compiledContextChars);
   const ragTokens = charsToTokens(t.ragContextChars);
+  const contextIndexTok = charsToTokens(t.contextIndexChars || 0);
   const fileTokens = charsToTokens(t.fileContextChars);
   const historyTokens = charsToTokens(t.historyChars);
   const toolDefTokens = charsToTokens(t.toolDefChars);
@@ -3165,6 +3284,8 @@ function logPromptTelemetry(env, payload) {
       compiled_context_tokens: compiledTokens,
       rag_context_chars: t.ragContextChars,
       rag_context_tokens: ragTokens,
+      context_index_chars: t.contextIndexChars || 0,
+      context_index_tokens: contextIndexTok,
       file_context_chars: t.fileContextChars,
       file_context_tokens: fileTokens,
       conversation_history_chars: t.historyChars,
@@ -5833,6 +5954,36 @@ async function handleAgentApi(request, url, env, ctx) {
         }
       }
 
+      let contextIndexBlurb = '';
+      let contextIndexMeta = { count: 0, ids: [], bytes: 0 };
+      if (env.DB && lastUserContent && String(lastUserContent).trim().length > 3) {
+        try {
+          const idxScope = body.context_scope != null && String(body.context_scope).trim() !== '' ? String(body.context_scope).trim() : 'global';
+          const idxRes = await fetchContextIndex(env, env.DB, lastUserContent, idxScope);
+          contextIndexBlurb = idxRes.blurb || '';
+          contextIndexMeta = idxRes.meta || contextIndexMeta;
+          if (ctx && typeof ctx.waitUntil === 'function') {
+            ctx.waitUntil(
+              logContextSearchToD1(env, {
+                tenant_id: body.tenant_id || 'tenant_sam_primeaux',
+                session_id: body.session_id || null,
+                query: lastUserContent,
+                query_type: 'keyword',
+                results_count: contextIndexMeta.count,
+                context_ids_used: JSON.stringify(contextIndexMeta.ids),
+                total_bytes: contextIndexMeta.bytes,
+              })
+            );
+          }
+        } catch (e) {
+          console.error('[agent/chat] fetchContextIndex failed:', e?.message ?? e);
+        }
+      }
+      let mergedRagContext = ragContext;
+      if (contextIndexBlurb) {
+        mergedRagContext = mergedRagContext ? `${contextIndexBlurb}\n\n${mergedRagContext}` : contextIndexBlurb;
+      }
+
       let compiledContext = null;
       let builtSections = null;
       if (bodyCompiledContextTrim) {
@@ -6006,7 +6157,10 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 \`\`\`
 `;
       }
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, resolvedSections, compiledContext, ragContext, fileBlock, model);
+      let systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, resolvedSections, compiledContext, mergedRagContext, fileBlock, model);
+      if (chatMode === 'debug' && contextIndexBlurb) {
+        systemWithBlurb += '\n\n[Context index]\n' + capWithMarker(contextIndexBlurb, PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS);
+      }
       let finalSystem = systemWithBlurb;
 
       if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS && env.R2) {
@@ -6091,7 +6245,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         messageCount: apiMessages.length,
         coreSystemChars: coreSystemPrefix.length,
         compiledContextChars: systemWithBlurb.length - coreSystemPrefix.length,
-        ragContextChars: ragContext.length,
+        ragContextChars: mergedRagContext.length,
+        contextIndexChars: (contextIndexBlurb || '').length,
         fileContextChars,
         historyChars,
         toolDefChars,
@@ -6105,6 +6260,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             core_system: charsToTokens(telemetryPayload.coreSystemChars),
             compiled_context: charsToTokens(telemetryPayload.compiledContextChars),
             rag_context: charsToTokens(telemetryPayload.ragContextChars),
+            context_index: charsToTokens(telemetryPayload.contextIndexChars || 0),
             file_context: charsToTokens(telemetryPayload.fileContextChars),
             conversation_history: charsToTokens(telemetryPayload.historyChars),
             tool_definitions: charsToTokens(telemetryPayload.toolDefChars),

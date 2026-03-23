@@ -7295,3 +7295,28 @@ Bump `agent.html` cache bust v131 to v132; R2 upload `agent.html` only; build ag
 ### Known issues / next steps
 - None.
 
+## 2026-03-24 deploy: shell nav fixes, embedded pages, URL bar suppression (v133)
+
+### What was asked
+Full deploy: `agent-dashboard` build, `wrangler deploy`, R2 (`agent.html`, agent JS/CSS), D1 `dashboard_versions` + `deployments`, session log, git. Worker `respondWithDashboardHtml` for `/dashboard/pages/*.html`; shell HTML + React `shellNavActive`.
+
+### Files / actions
+- `agent-dashboard/`: `npm run build`; R2 `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`
+- `dashboard/agent.html`: cache bust **v132 to v133**; Draw fragment href; gear header; interceptor; collapsed gear CSS
+- `worker.js`: `dashboardPagesMatch` uses `respondWithDashboardHtml`
+- `post-deploy-record.sh`: `TRIGGERED_BY=shell-nav-fixes-url-bar-suppression`
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (`agent.html`, `agent-dashboard.js`, `agent-dashboard.css`)
+- Worker deployed: yes
+- **Current Version ID:** `141fd76c-f8df-447f-9e89-f91dee3770aa`
+- **Cache bust / dashboard_versions:** **v133** (agent-js, agent-css, agent-html)
+- **D1 `deployments.id`:** `141fd76c-f8df-447f-9e89-f91dee3770aa` (`triggered_by=shell-nav-fixes-url-bar-suppression`, `deploy_time_seconds=0`)
+
+### What is live now
+- Production worker injects embedded HTML for `/dashboard/pages/*` and main `/dashboard/*` with `?embedded=1`; R2 serves agent shell at **v133** with updated sidenav and bundle.
+
+### Known issues / next steps
+- None for this drop.
+

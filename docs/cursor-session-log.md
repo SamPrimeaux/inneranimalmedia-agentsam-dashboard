@@ -7270,3 +7270,28 @@ Production deploy: build agent-dashboard, `wrangler deploy` with `wrangler.produ
 ### Known issues / next steps
 - None for this drop.
 
+## 2026-03-24 asset-only: sidenav shell v132 (no worker)
+
+### What was asked
+Bump `agent.html` cache bust v131 to v132; R2 upload `agent.html` only; build agent-dashboard and upload js/css only if dist hash differs from v131; D1 `deployments` + `post-deploy-record.sh`; session log; git push. No `wrangler deploy`.
+
+### Actions
+- `dashboard/agent.html`: `?v=132` (JS + CSS links)
+- `agent-dashboard/`: `npm run build` — MD5 matched v131 (`agent` / `agent-css` in `dashboard_versions`); **no** R2 upload for bundle
+- R2: `agent-sam/static/dashboard/agent.html`
+- D1 `dashboard_versions`: one row **agent-html v132**
+- `post-deploy-record.sh`: `TRIGGERED_BY=sidenav-shell-restructure`, `deploy_time_seconds=0`
+
+### Deploy status
+- Built: yes (verify only)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html` only
+- Worker deployed: no
+- **Cache bust / version:** **v132**
+- **D1 `deployments.id`:** `A3DB5A8A-BE3B-424C-9B58-3EE5629BFF89`
+
+### What is live now
+- Production agent shell HTML from R2 at **v132**; agent JS/CSS objects unchanged (same content as v131).
+
+### Known issues / next steps
+- None.
+

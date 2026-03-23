@@ -6281,3 +6281,22 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 ### What is live now
 - `/api/agentsam/*` routes to `handleAgentsamApi` (no longer shadowed by `startsWith('/api/agent')`).
 
+## 2026-03-23 wrangler.jsonc — inneranimal-dashboard sandbox bindings only
+
+### What was asked
+- After panic about production: expand sandbox `wrangler.jsonc` without touching `wrangler.production.toml` or production deploy path.
+
+### Files changed
+- `wrangler.jsonc` only: `name` = `inneranimal-dashboard`; `ASSETS` + `DASHBOARD` R2 = `agent-sam-sandbox-cidi`; `CAD_ASSETS`, `R2`, D1, KV, SESSION_CACHE, DO+migrations, hyperdrive, vectorize, browser, AI, WAE, crons, vars, observability, tail consumer — copied from `wrangler.production.toml` except **no `routes`** (no zone attach) and **no `queues`** (avoid moving MY_QUEUE consumer off production). Removed `ai_search`/`esbuild` keys that Wrangler 4 flagged as unexpected. Validated with `wrangler deploy --dry-run -c wrangler.jsonc`.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: untouched (production inneranimalmedia).
+
+### Deploy status
+- Sandbox: commit/push + Cloudflare build to apply. Production: still `npm run deploy` / `-c wrangler.production.toml` only.
+
+## 2026-03-23 Push wrangler.jsonc (abe028c)
+
+### Files changed
+- `wrangler.jsonc` only — committed and pushed to `origin/main` (`inneranimalmedia-agentsam-dashboard`).
+

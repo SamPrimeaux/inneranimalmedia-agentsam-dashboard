@@ -1,14 +1,139 @@
+// Sandbox Worker only: inneranimal-dashboard (Workers Builds / wrangler.jsonc).
+// Production Worker (inneranimalmedia): ALWAYS deploy with -c wrangler.production.toml — never replace that file from here.
+// R2: ASSETS + DASHBOARD use agent-sam-sandbox-cidi; other bindings mirror production IDs for compatibility.
+// Queues omitted: same queue consumer cannot bind to two Workers; production inneranimalmedia keeps MY_QUEUE consumer.
+
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "inneranimalmedia",
-  "compatibility_date": "2025-09-27",
+  "name": "inneranimal-dashboard",
+  "main": "worker.js",
+  "compatibility_date": "2026-01-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "no_bundle": false,
+  "build": {
+    "command": ""
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "browser": {
+    "binding": "MYBROWSER"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "inneranimalmedia-business",
+      "database_id": "cf87b717-d4e2-4cf8-bab0-a81268e32d49"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "agent-sam-sandbox-cidi"
+    },
+    {
+      "binding": "CAD_ASSETS",
+      "bucket_name": "splineicons"
+    },
+    {
+      "binding": "DASHBOARD",
+      "bucket_name": "agent-sam-sandbox-cidi"
+    },
+    {
+      "binding": "R2",
+      "bucket_name": "iam-platform"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "08183bb9d2914e87ac8395d7e4ecff60"
+    }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "ai-search-inneranimalmedia-aisearch"
+    },
+    {
+      "binding": "VECTORIZE_INDEX",
+      "index_name": "ai-search-iam-autorag"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "09438d5e4f664bf78467a15af7743c44"
+    },
+    {
+      "binding": "SESSION_CACHE",
+      "id": "dc87920b0a9247979a213c09df9a0234"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "IAM_COLLAB",
+        "class_name": "IAMCollaborationSession"
+      },
+      {
+        "name": "CHESS_SESSION",
+        "class_name": "ChessRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["IAMCollaborationSession"]
+    },
+    {
+      "tag": "v2",
+      "new_classes": ["ChessRoom"]
+    }
+  ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "WAE",
+      "dataset": "inneranimalmedia"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 6 * * *",
+      "30 13 * * *",
+      "0 9 * * *",
+      "*/30 * * * *",
+      "0 0 * * *"
+    ]
+  },
+  "vars": {
+    "CLOUDFLARE_ACCOUNT_ID": "ede6590ac0d2fb7daf155b35653457b2",
+    "CLOUDFLARE_IMAGES_ACCOUNT_HASH": "g7wf09fCONpnidkRnR_5vw",
+    "GITHUB_CLIENT_ID": "Ov23li6BZYxjVtGUWibX",
+    "GOOGLE_CLIENT_ID": "427617292678-gf3u47lpf876q7miq31hel2ms6tcr2f8.apps.googleusercontent.com",
+    "TENANT_ID": "tenant_sam_primeaux"
+  },
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
   },
-  "assets": {
-    "directory": "overview-dashboard"
-  },
-  "compatibility_flags": [
-    "nodejs_compat"
+  "tail_consumers": [
+    {
+      "service": "inneranimalmedia-tail"
+    }
   ]
 }

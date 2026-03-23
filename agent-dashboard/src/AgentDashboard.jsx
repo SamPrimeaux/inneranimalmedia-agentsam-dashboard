@@ -79,6 +79,80 @@ const MODEL_LABELS = {
   "gpt-4o": "GPT-4o",
 };
 
+function langToExt(lang) {
+  const l = String(lang || "")
+    .toLowerCase()
+    .trim();
+  if (["javascript", "js", "jsx"].includes(l)) return "js";
+  if (["typescript", "ts", "tsx"].includes(l)) return "ts";
+  if (l === "sql") return "sql";
+  if (l === "html") return "html";
+  if (l === "css") return "css";
+  if (l === "json") return "json";
+  if (["bash", "sh"].includes(l)) return "sh";
+  if (["python", "py"].includes(l)) return "py";
+  return "txt";
+}
+
+function extractLargestCodeBlock(text) {
+  const fenceRe = /```(\w*)\n([\s\S]*?)```/g;
+  let largest = null;
+  let match;
+  while ((match = fenceRe.exec(text)) !== null) {
+    const lang = match[1] || "plaintext";
+    const code = match[2];
+    if (!largest || code.length > largest.code.length) {
+      largest = { lang, code };
+    }
+  }
+  return largest;
+}
+
+function parseFencedParts(text) {
+  const s = String(text ?? "");
+  const re = /```(\w*)\n([\s\S]*?)```/g;
+  const parts = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > lastIndex) {
+      parts.push({ type: "text", text: s.slice(lastIndex, m.index) });
+    }
+    parts.push({ type: "code", lang: m[1] || "plaintext", code: m[2] });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < s.length) {
+    parts.push({ type: "text", text: s.slice(lastIndex) });
+  }
+  if (parts.length === 0) {
+    parts.push({ type: "text", text: s });
+  }
+  return parts;
+}
+
+/** Split plain text into alternating text and image URL segments for inline chat rendering. */
+function splitTextWithImageUrls(text) {
+  const s = String(text ?? "");
+  const segments = [];
+  const re = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|webp|gif))/gi;
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > lastIndex) {
+      segments.push({ type: "text", text: s.slice(lastIndex, m.index) });
+    }
+    segments.push({ type: "image", url: m[1] });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < s.length) {
+    segments.push({ type: "text", text: s.slice(lastIndex) });
+  }
+  if (segments.length === 0) {
+    segments.push({ type: "text", text: s });
+  }
+  return segments;
+}
+
 const AGENT_STATES = {
   IDLE: "IDLE",
   THINKING: "THINKING",
@@ -604,21 +678,213 @@ function ViewerPanelStripIcon({ tab, size }) {
   if (tab === "code") return <svg {...a}><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>;
   if (tab === "view") return <svg {...a}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /></svg>;
   if (tab === "git") return <svg {...a}><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>;
+  if (tab === "draw") return <svg {...a}><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><path d="M2 2l7.586 7.586" /><circle cx="11" cy="11" r="2" /></svg>;
   if (tab === "settings") return <svg {...a}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>;
   return null;
 }
 
-const VIEWER_STRIP_TAB_ORDER = ["terminal", "browser", "files", "code", "view", "git", "settings"];
+const VIEWER_STRIP_TAB_ORDER = ["terminal", "browser", "draw", "files", "code", "view", "git", "settings"];
 
 const VIEWER_STRIP_TITLES = {
   terminal: "Terminal",
   browser: "Browser",
+  draw: "Draw",
   files: "Files",
   code: "Code",
   view: "View",
   git: "Git",
   settings: "Settings",
 };
+
+function AssistantFencedContent({
+  content,
+  setCodeContent,
+  setCodeFilename,
+  setActiveTab,
+  setPreviewOpen,
+  setLightboxImage,
+  openImageInDrawPanel,
+}) {
+  const parts = useMemo(() => parseFencedParts(content || ""), [content]);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.type === "text" ? (
+          <div key={i}>
+            {splitTextWithImageUrls(part.text).map((seg, j) =>
+              seg.type === "text" ? (
+                <div
+                  key={`${i}-${j}-t`}
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontSize: "13px",
+                    lineHeight: 1.65,
+                    color: "var(--color-text)",
+                  }}
+                >
+                  {seg.text}
+                </div>
+              ) : (
+                <div
+                  key={`${i}-${j}-img`}
+                  style={{
+                    marginTop: "var(--spacing-sm)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "var(--radius-md)",
+                    overflow: "hidden",
+                    background: "var(--bg-elevated)",
+                  }}
+                >
+                  <div
+                    style={{ cursor: "zoom-in", position: "relative" }}
+                    onClick={() => setLightboxImage(seg.url)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setLightboxImage(seg.url);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Open image fullscreen"
+                  >
+                    <img
+                      src={seg.url}
+                      alt="Generated image"
+                      style={{
+                        width: "100%",
+                        maxHeight: "280px",
+                        objectFit: "contain",
+                        display: "block",
+                        background: "var(--bg-canvas)",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "var(--spacing-xs)",
+                      padding: "6px 10px",
+                      borderTop: "1px solid var(--color-border)",
+                      background: "var(--bg-elevated)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setLightboxImage(seg.url)}
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        border: "1px solid var(--color-border)",
+                        background: "transparent",
+                        color: "var(--color-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Fullscreen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const a = document.createElement("a");
+                        a.href = seg.url;
+                        a.download = seg.url.split("/").pop() || "image.png";
+                        a.target = "_blank";
+                        a.rel = "noopener noreferrer";
+                        a.click();
+                      }}
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        border: "1px solid var(--color-border)",
+                        background: "transparent",
+                        color: "var(--color-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Download
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openImageInDrawPanel(seg.url)}
+                      style={{
+                        fontSize: "11px",
+                        padding: "3px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        border: "1px solid var(--color-border)",
+                        background: "transparent",
+                        color: "var(--color-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Open in Draw
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        ) : (
+          <div key={i} style={{ marginBottom: "8px" }}>
+            <pre
+              style={{
+                fontSize: 13,
+                fontFamily: "monospace",
+                overflowX: "auto",
+                overflowY: "auto",
+                maxWidth: "100%",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                background: "var(--bg-elevated)",
+                padding: 12,
+                borderRadius: 6,
+                margin: 0,
+                color: "var(--color-text)",
+              }}
+            >
+              <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{part.code}</code>
+            </pre>
+            <div
+              style={{
+                display: "flex",
+                gap: "var(--spacing-xs)",
+                marginTop: "4px",
+                alignItems: "center",
+              }}
+            >
+              <span style={{ fontSize: "11px", color: "var(--color-muted)" }}>
+                {(part.lang || "plaintext")} · {part.code.split("\n").length} lines
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setCodeContent(part.code);
+                  setCodeFilename((prev) => prev || `agent-output.${langToExt(part.lang)}`);
+                  setActiveTab("code");
+                  setPreviewOpen(true);
+                }}
+                style={{
+                  fontSize: "11px",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-border)",
+                  background: "transparent",
+                  color: "var(--color-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                Open in editor
+              </button>
+            </div>
+          </div>
+        )
+      )}
+    </>
+  );
+}
 
 export default function AgentDashboard() {
   // ── Core chat state ───────────────────────────────────────────────────────
@@ -660,6 +926,7 @@ export default function AgentDashboard() {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const agentPickerRef = useRef(null);
   const modelPickerRef = useRef(null);
+  const sendMessageRef = useRef(null);
 
   // ── Attachments ───────────────────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState([]);
@@ -745,8 +1012,13 @@ export default function AgentDashboard() {
 
   // ── File context (for agent) ──────────────────────────────────────────────
   const [codeContent, setCodeContent] = useState("");
+  const [codeFilename, setCodeFilename] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
   const [browserUrl, setBrowserUrl] = useState("");
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [pendingDrawImage, setPendingDrawImage] = useState(null);
+  const pendingDrawImageRef = useRef(null);
+  const streamAutoPreviewImgRef = useRef(false);
   const [connectedIntegrations, setConnectedIntegrations] = useState({});
   const [proposedFileChange, setProposedFileChange] = useState(null);
   const [openFileKeyForPanel, setOpenFileKeyForPanel] = useState(null);
@@ -839,6 +1111,66 @@ export default function AgentDashboard() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // ── Draw iframe (pages/draw) -> chat: structured prompts for Agent Sam ──
+  useEffect(() => {
+    const postLoadImageToDrawFrame = (url, attempt) => {
+      const n = attempt === undefined ? 0 : attempt;
+      const frame = document.querySelector('iframe[title="Draw"]');
+      if (frame?.contentWindow && url) {
+        try {
+          frame.contentWindow.postMessage(
+            { type: "load_image_background", url },
+            window.location.origin
+          );
+        } catch (_) {}
+        pendingDrawImageRef.current = null;
+        setPendingDrawImage(null);
+        return;
+      }
+      if (n < 40 && url) {
+        setTimeout(() => postLoadImageToDrawFrame(url, n + 1), 50);
+      }
+    };
+    const onIamDrawMessage = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (!event.data) return;
+      if (event.data.type === "draw_ready") {
+        const url = pendingDrawImageRef.current;
+        if (url) postLoadImageToDrawFrame(url, 0);
+        return;
+      }
+      if (event.data.type !== "iam_draw_request") return;
+      const kind = event.data.kind;
+      const prompts = {
+        from_chat:
+          "[Draw] From Chat: generate from the current conversation and render on the draw canvas.",
+        uml: "[Draw] Generate a UML diagram for the current conversation context and render it in the draw canvas.",
+        mockup: "[Draw] Generate a UI mockup for the current conversation context and render it in the draw canvas.",
+        wireframe:
+          "[Draw] Generate a wireframe for the current conversation context and render it in the draw canvas.",
+      };
+      const promptText = prompts[kind];
+      if (!promptText) return;
+      setPreviewOpen(true);
+      setActiveTab("draw");
+      const fn = sendMessageRef.current;
+      if (typeof fn === "function") void fn(promptText);
+    };
+    window.addEventListener("message", onIamDrawMessage);
+    const handleShellNav = (e) => {
+      const url = e?.detail?.url;
+      if (!url) return;
+      setBrowserUrl(url);
+      setActiveTab("browser");
+      setPreviewOpen(true);
+    };
+    window.addEventListener("iam_shell_nav", handleShellNav);
+    return () => {
+      window.removeEventListener("message", onIamDrawMessage);
+      window.removeEventListener("iam_shell_nav", handleShellNav);
+    };
   }, []);
 
   // ── Load session messages ─────────────────────────────────────────────────
@@ -1087,6 +1419,10 @@ export default function AgentDashboard() {
         textareaRef.current?.focus();
       }
       if (e.key === "Escape") {
+        if (lightboxImage) {
+          setLightboxImage(null);
+          return;
+        }
         setPreviewOpen(false);
         setMobileIconsOpen(false);
         setConnectorPopupOpen(false);
@@ -1096,7 +1432,7 @@ export default function AgentDashboard() {
     }
     window.addEventListener("keydown", handleKeyboardShortcut);
     return () => window.removeEventListener("keydown", handleKeyboardShortcut);
-  }, []);
+  }, [lightboxImage]);
 
   // ── Load commands (for Settings tab) ──────────────────────────────────────
   useEffect(() => {
@@ -1458,6 +1794,7 @@ export default function AgentDashboard() {
         const decoder = new TextDecoder();
         const reader = response.body.getReader();
         let fullContent = "";
+        streamAutoPreviewImgRef.current = false;
         let inputTok = 0;
         let outputTok = 0;
         let costUsd = 0;
@@ -1517,6 +1854,18 @@ export default function AgentDashboard() {
                       m.id === assistantId ? { ...m, content: displayContent } : m
                     )
                   );
+                  const imgMatch = fullContent.match(/https?:\/\/[^\s]+\.(?:png|jpg|jpeg|webp|gif)/i);
+                  if (imgMatch && !streamAutoPreviewImgRef.current) {
+                    const u = imgMatch[0];
+                    const hint =
+                      /\b(generated|here is|created)\b/i.test(fullContent) ||
+                      /imgx|\/generated\//i.test(u) ||
+                      /imagedelivery\.net|cf[-_]images/i.test(u);
+                    if (hint) {
+                      streamAutoPreviewImgRef.current = true;
+                      handleOpenInBrowser(u);
+                    }
+                  }
                 } else if (data.type === "tool_approval_request" && data.tool) {
                   setPendingToolApproval(data.tool);
                 } else if (data.type === "done") {
@@ -1536,6 +1885,14 @@ export default function AgentDashboard() {
                 }
               } catch (_) { /* ignore parse errors */ }
             }
+          }
+          const finalForFence = fullContent
+            .replace(/\n?OPEN_IN_PREVIEW:\s*https?:\/\/[^\s\n]+/g, "")
+            .trim();
+          const largestFence = extractLargestCodeBlock(finalForFence);
+          if (largestFence && largestFence.code.split("\n").length >= 15) {
+            setCodeContent(largestFence.code);
+            setCodeFilename((prev) => prev || `agent-output.${langToExt(largestFence.lang)}`);
           }
         } finally {
           reader.releaseLock();
@@ -1599,6 +1956,14 @@ export default function AgentDashboard() {
         data.content?.[0]?.text ??
         data.choices?.[0]?.message?.content ??
         (typeof data.message === "string" ? data.message : "No response");
+      const stripForFence = String(content)
+        .replace(/\n?OPEN_IN_PREVIEW:\s*https?:\/\/[^\s\n]+/g, "")
+        .trim();
+      const largestNonStreamFence = extractLargestCodeBlock(stripForFence);
+      if (largestNonStreamFence && largestNonStreamFence.code.split("\n").length >= 15) {
+        setCodeContent(largestNonStreamFence.code);
+        setCodeFilename((prev) => prev || `agent-output.${langToExt(largestNonStreamFence.lang)}`);
+      }
       const inputTok = data.usage?.input_tokens ?? data.usage?.prompt_tokens ?? 0;
       const outputTok = data.usage?.output_tokens ?? data.usage?.completion_tokens ?? 0;
       setTelemetry((prev) => ({
@@ -1641,6 +2006,8 @@ export default function AgentDashboard() {
       setAgentStateContext({});
     }
   };
+
+  sendMessageRef.current = sendMessage;
 
   const applySlashCommandSelection = (cmd) => {
     const slugRaw = String(cmd.slug || cmd.name || "").trim();
@@ -1858,6 +2225,15 @@ export default function AgentDashboard() {
     setActiveTab("browser");
     setPreviewOpen(true);
   }, [setBrowserUrl, setActiveTab, setPreviewOpen]);
+
+  const openImageInDrawPanel = useCallback((url) => {
+    if (!url || typeof url !== "string") return;
+    const u = url.trim();
+    pendingDrawImageRef.current = u;
+    setPendingDrawImage(u);
+    setActiveTab("draw");
+    setPreviewOpen(true);
+  }, [setActiveTab, setPreviewOpen]);
 
   // ── File attach (text vs binary) ───────────────────────────────────────────
   const IMAGE_SIZE_LIMIT = 10 * 1024 * 1024;
@@ -2619,7 +2995,19 @@ export default function AgentDashboard() {
                             wordBreak: "break-word",
                           }}
                         >
-                          {msg.content}
+                          {msg.role === "assistant" ? (
+                            <AssistantFencedContent
+                              content={msg.content}
+                              setCodeContent={setCodeContent}
+                              setCodeFilename={setCodeFilename}
+                              setActiveTab={setActiveTab}
+                              setPreviewOpen={setPreviewOpen}
+                              setLightboxImage={setLightboxImage}
+                              openImageInDrawPanel={openImageInDrawPanel}
+                            />
+                          ) : (
+                            msg.content
+                          )}
                         </div>
                       )}
                       {msg.generatedCode && (msg.language === "bash" || msg.language === "sh" || msg.language === "shell") && (
@@ -2687,6 +3075,40 @@ export default function AgentDashboard() {
                               )}
                             </code>
                           </pre>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "var(--spacing-xs)",
+                              marginTop: "4px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ fontSize: "11px", color: "var(--color-muted)" }}>
+                              {(msg.language || "shell")} · {msg.generatedCode.split("\n").length} lines
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCodeContent(msg.generatedCode);
+                                setCodeFilename((prev) =>
+                                  prev || `agent-output.${langToExt(msg.language)}`
+                                );
+                                setActiveTab("code");
+                                setPreviewOpen(true);
+                              }}
+                              style={{
+                                fontSize: "11px",
+                                padding: "2px 8px",
+                                borderRadius: "var(--radius-sm)",
+                                border: "1px solid var(--color-border)",
+                                background: "transparent",
+                                color: "var(--color-muted)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Open in editor
+                            </button>
+                          </div>
                           <div
                             style={{
                               display: "flex",
@@ -2807,22 +3229,6 @@ export default function AgentDashboard() {
                               {msg.commandRun && (
                                 <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Sent to terminal</span>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => openInMonaco(msg)}
-                                style={{
-                                  padding: "8px 16px",
-                                  background: "var(--mode-code)",
-                                  color: "var(--color-on-mode)",
-                                  border: "none",
-                                  borderRadius: 6,
-                                  cursor: "pointer",
-                                  fontSize: 13,
-                                  fontWeight: 500,
-                                }}
-                              >
-                                Open in Monaco -&gt;
-                              </button>
                             </div>
                           </div>
                         </div>
@@ -3977,6 +4383,8 @@ export default function AgentDashboard() {
                   onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
                   codeContent={codeContent}
                   onCodeContentChange={setCodeContent}
+                  codeFilename={codeFilename}
+                  onCodeFilenameChange={setCodeFilename}
                   onFileContextChange={handleFileContextChange}
                   isDarkTheme={true}
                   activeThemeSlug={activeThemeSlug}
@@ -4179,6 +4587,8 @@ export default function AgentDashboard() {
                   onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
                   codeContent={codeContent}
                   onCodeContentChange={setCodeContent}
+                  codeFilename={codeFilename}
+                  onCodeFilenameChange={setCodeFilename}
                   onFileContextChange={handleFileContextChange}
                   isDarkTheme={true}
                   activeThemeSlug={activeThemeSlug}
@@ -4200,6 +4610,109 @@ export default function AgentDashboard() {
           </div>
         )}
       </div>
+
+      {lightboxImage && (
+        <div
+          role="presentation"
+          onClick={() => setLightboxImage(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.92)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: "95vw",
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "var(--spacing-sm)",
+            }}
+          >
+            <img
+              src={lightboxImage}
+              alt="Preview"
+              style={{
+                maxWidth: "95vw",
+                maxHeight: "80vh",
+                objectFit: "contain",
+                borderRadius: "var(--radius-md)",
+                boxShadow: "0 8px 64px rgba(0,0,0,0.8)",
+              }}
+            />
+            <div style={{ display: "flex", gap: "var(--spacing-sm)" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = lightboxImage;
+                  a.download = lightboxImage.split("/").pop() || "image.png";
+                  a.target = "_blank";
+                  a.rel = "noopener noreferrer";
+                  a.click();
+                }}
+                style={{
+                  padding: "6px 18px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-border)",
+                  background: "var(--bg-elevated)",
+                  color: "var(--color-text)",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                }}
+              >
+                Download
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  openImageInDrawPanel(lightboxImage);
+                  setLightboxImage(null);
+                }}
+                style={{
+                  padding: "6px 18px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-border)",
+                  background: "var(--bg-elevated)",
+                  color: "var(--color-text)",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                }}
+              >
+                Open in Draw
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                style={{
+                  padding: "6px 18px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-border)",
+                  background: "transparent",
+                  color: "var(--color-muted)",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <span style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.3)" }}>
+              Click outside or press Esc to close
+            </span>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes agentPulse {

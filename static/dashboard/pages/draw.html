@@ -8,6 +8,8 @@
      FIX 3: padding-right so library panel doesn't overlap shell chrome;
              padding-bottom so AI toolbar sits above shell footer.
      FIX 4: Explicit height chain so Excalidraw gets a real pixel height.
+     FIX 5: excalidrawAPI public alias on window (automation parity with Excalidraw docs).
+     FIX 6: postMessage to parent when embedded (e.g. Agent dashboard draw tab).
      ============================================================ */
 
   .draw-page-wrap.draw-excal-wrap {
@@ -667,7 +669,13 @@
       function onApiReady(api) {
         excalApi = api;
         window.__excalidrawApi = api;
+        window.excalidrawAPI = api;
 
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'draw_ready' }, window.location.origin);
+          }
+        } catch (_) {}
 
         // Push libraries into the running instance
         if (libraryItems.length) {
@@ -742,6 +750,16 @@
 <script nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
 (function () {
   function getApi() { return window.__excalidrawApi || null; }
+
+  function postDrawRequestToParent(kind) {
+    if (window.parent === window) return false;
+    try {
+      window.parent.postMessage({ type: 'iam_draw_request', kind: kind }, window.location.origin);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
 
   function setDisabled(on) {
@@ -851,6 +869,7 @@
 
 
   function generateFromConvo() {
+    if (postDrawRequestToParent('from_chat')) return;
     setDisabled(true);
     getCurrentConversation().then(function (conv) {
       if (!conv) {
@@ -884,13 +903,91 @@
 
   document.getElementById('btnGenerateFromConvo').addEventListener('click', generateFromConvo);
   document.getElementById('btnCreateUml').addEventListener('click', function () {
+    if (postDrawRequestToParent('uml')) return;
     callGenerateEndpoint('/api/draw/generate-uml');
   });
   document.getElementById('btnCreateMockup').addEventListener('click', function () {
+    if (postDrawRequestToParent('mockup')) return;
     callGenerateEndpoint('/api/draw/generate-mockup');
   });
   document.getElementById('btnCreateWireframe').addEventListener('click', function () {
+    if (postDrawRequestToParent('wireframe')) return;
     callGenerateEndpoint('/api/draw/generate-wireframe');
+  });
+
+  window.addEventListener('message', function (e) {
+    if (e.origin !== window.location.origin) return;
+    if (!e.data || e.data.type !== 'load_image_background' || !e.data.url) return;
+    var url = String(e.data.url).trim();
+    if (!url) return;
+
+    function tryInject(attempt) {
+      var api = window.__excalidrawApi;
+      if (!api) {
+        if (attempt < 40) setTimeout(function () { tryInject(attempt + 1); }, 50);
+        return;
+      }
+      fetch(url, { mode: 'cors', credentials: 'omit' })
+        .then(function (r) { return r.ok ? r.blob() : null; })
+        .then(function (blob) {
+          if (!blob) return;
+          var reader = new FileReader();
+          reader.onload = function () {
+            var dataUrl = reader.result;
+            var mime = blob.type || 'image/png';
+            var fileId = 'img_' + Date.now();
+            var elId = 'bg_img_' + Date.now();
+            var img = new Image();
+            img.onload = function () {
+              var w = Math.min(880, img.naturalWidth || 900);
+              var h = img.naturalWidth
+                ? Math.min(620, (img.naturalHeight / img.naturalWidth) * w)
+                : 600;
+              var addPayload = [{ id: fileId, dataURL: dataUrl, mimeType: mime }];
+              if (typeof api.addFiles === 'function') {
+                api.addFiles(addPayload);
+              }
+              var el = {
+                id: elId,
+                type: 'image',
+                x: 50,
+                y: 50,
+                width: w,
+                height: h,
+                angle: 0,
+                strokeColor: 'transparent',
+                backgroundColor: 'transparent',
+                fillStyle: 'solid',
+                strokeWidth: 1,
+                strokeStyle: 'solid',
+                roughness: 0,
+                opacity: 100,
+                groupIds: [],
+                frameId: null,
+                roundness: null,
+                boundElements: null,
+                seed: Math.floor(Math.random() * 1e9),
+                version: 1,
+                versionNonce: Math.floor(Math.random() * 1e9),
+                isDeleted: false,
+                fileId: fileId,
+                status: 'saved',
+                scale: [1, 1],
+              };
+              var existing = api.getSceneElements();
+              api.updateScene({ elements: existing.concat([el]) });
+              if (typeof api.scrollToContent === 'function') {
+                api.scrollToContent(api.getSceneElements());
+              }
+            };
+            img.onerror = function () {};
+            img.src = dataUrl;
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch(function () {});
+    }
+    tryInject(0);
   });
 })();
 </script>

@@ -100,6 +100,48 @@ function defaultAgentsamUserPolicy(userKey, workspaceId) {
   };
 }
 
+/** Lowercase hostnames always permitted for Agent Sam fetch URL validation (e.g. https://claude.ai/api/mcp/auth_callback). */
+const AGENTSAM_BUILTIN_FETCH_HOSTS = new Set(['claude.ai']);
+
+function normalizeAgentsamFetchHostInput(h) {
+  let s = String(h || '').trim();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//i, '');
+  const slash = s.indexOf('/');
+  if (slash >= 0) s = s.slice(0, slash);
+  return s.trim().toLowerCase();
+}
+
+function isAgentsamBuiltinFetchHostNormalized(hostNorm) {
+  return !!(hostNorm && AGENTSAM_BUILTIN_FETCH_HOSTS.has(hostNorm));
+}
+
+/**
+ * True if host is platform-built-in allowed or listed in agentsam_fetch_domain_allowlist for user/workspace.
+ * Use before server-side fetch to user-supplied URLs when enforcing the allowlist.
+ */
+async function agentsamIsFetchHostAllowed(env, userKey, workspaceId, urlOrHost) {
+  const hostLc = normalizeAgentsamFetchHostInput(urlOrHost);
+  if (!hostLc) return false;
+  if (isAgentsamBuiltinFetchHostNormalized(hostLc)) return true;
+  if (!env.DB) return false;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT 1 AS ok FROM agentsam_fetch_domain_allowlist
+       WHERE user_id = ?
+         AND LOWER(TRIM(host)) = ?
+         AND (
+           TRIM(COALESCE(workspace_id, '')) = ''
+           OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+         )
+       LIMIT 1`
+    ).bind(userKey, hostLc, workspaceId, workspaceId).first();
+    return !!row;
+  } catch (_) {
+    return false;
+  }
+}
+
 /** Call after any write to agent_memory_index or ai_knowledge_base so agent_sam context cache is invalidated. */
 function invalidateCompiledContextCache(env) {
   if (env.DB) env.DB.prepare(`DELETE FROM ai_compiled_context_cache WHERE context_hash LIKE '%system%'`).run().catch(() => {});
@@ -339,14 +381,306 @@ async function handleDeploymentsRecent(request, env) {
   if (!env.DB) return jsonResponse({ deployments: [] });
   const limit = Math.min(parseInt(request.url && new URL(request.url).searchParams.get('limit'), 10) || 20, 50);
   try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, timestamp, version, git_hash, changed_files, description, status, deployed_by, environment, deploy_duration_ms, notes, created_at FROM deployments ORDER BY timestamp DESC LIMIT ?`
-    ).bind(limit).all();
+    const { results } = await env.DB.prepare(`SELECT * FROM deployments ORDER BY datetime(timestamp) DESC LIMIT ?`).bind(limit).all();
     return jsonResponse({ deployments: results || [] });
   } catch (e) {
     console.error('[deployments/recent]', e?.message ?? e);
-    return jsonResponse({ deployments: [] });
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT id, timestamp, version, git_hash, description, status, deployed_by, environment, duration_seconds, created_at FROM deployments ORDER BY datetime(timestamp) DESC LIMIT ?`
+      ).bind(limit).all();
+      return jsonResponse({ deployments: results || [] });
+    } catch (e2) {
+      console.error('[deployments/recent] fallback', e2?.message ?? e2);
+      return jsonResponse({ deployments: [] });
+    }
   }
+}
+
+function normalizeUnifiedSpendTs(val) {
+  if (val == null || val === '') return Math.floor(Date.now() / 1000);
+  const n = Number(val);
+  if (Number.isFinite(n)) {
+    if (n > 1e12) return Math.floor(n / 1000);
+    return Math.floor(n);
+  }
+  const ms = Date.parse(String(val));
+  if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  return Math.floor(Date.now() / 1000);
+}
+
+function unifiedSpendDayUTC(tsSec) {
+  const t = Number(tsSec);
+  if (!Number.isFinite(t)) return '1970-01-01';
+  return new Date(t * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Unified spend: parallel reads from five tables, merge rows, group by provider | model | day.
+ * periodDays 0 = all time (no time filter).
+ */
+async function fetchUnifiedSpendGrouped(env, periodDays, groupKey) {
+  const merged = [];
+  const sinceUnix = periodDays > 0 ? Math.floor(Date.now() / 1000) - periodDays * 86400 : null;
+
+  const tasks = [
+    (async () => {
+      try {
+        let sql = `SELECT provider, model_key AS model, amount_usd AS cost_usd,
+          occurred_at AS ts FROM spend_ledger WHERE tenant_id IS NOT NULL`;
+        const stmt = sinceUnix != null
+          ? env.DB.prepare(`${sql} AND occurred_at >= ?`).bind(sinceUnix)
+          : env.DB.prepare(sql);
+        const { results } = await stmt.all();
+        for (const r of results || []) {
+          merged.push({
+            provider: r.provider,
+            model: r.model,
+            cost_usd: r.cost_usd,
+            tokens_in: 0,
+            tokens_out: 0,
+            ts: normalizeUnifiedSpendTs(r.ts),
+          });
+        }
+      } catch (_) {
+        try {
+          let sql = `SELECT provider, model_key AS model, amount_usd AS cost_usd,
+            occurred_at AS ts FROM spend_ledger WHERE 1=1`;
+          const stmt = sinceUnix != null
+            ? env.DB.prepare(`${sql} AND occurred_at >= ?`).bind(sinceUnix)
+            : env.DB.prepare(sql);
+          const { results } = await stmt.all();
+          for (const r of results || []) {
+            merged.push({
+              provider: r.provider,
+              model: r.model,
+              cost_usd: r.cost_usd,
+              tokens_in: 0,
+              tokens_out: 0,
+              ts: normalizeUnifiedSpendTs(r.ts),
+            });
+          }
+        } catch (__) {}
+      }
+    })(),
+    (async () => {
+      try {
+        let sql = `SELECT provider, model_used AS model, computed_cost_usd AS cost_usd,
+          input_tokens AS tokens_in, output_tokens AS tokens_out, created_at AS ts
+          FROM agent_telemetry WHERE computed_cost_usd > 0`;
+        const stmt = sinceUnix != null
+          ? env.DB.prepare(`${sql} AND created_at >= ?`).bind(sinceUnix)
+          : env.DB.prepare(sql);
+        const { results } = await stmt.all();
+        for (const r of results || []) {
+          merged.push({
+            provider: r.provider,
+            model: r.model,
+            cost_usd: r.cost_usd,
+            tokens_in: r.tokens_in,
+            tokens_out: r.tokens_out,
+            ts: normalizeUnifiedSpendTs(r.ts),
+          });
+        }
+      } catch (_) {}
+    })(),
+    (async () => {
+      try {
+        let sql = `SELECT NULL AS provider, model_used AS model, cost_usd,
+          tokens_in, tokens_out, strftime('%s', created_at) AS ts FROM agent_costs WHERE 1=1`;
+        if (periodDays > 0) {
+          sql += ` AND created_at >= datetime('now', '-' || ? || ' days')`;
+          const { results } = await env.DB.prepare(sql).bind(String(periodDays)).all();
+          for (const r of results || []) {
+            merged.push({
+              provider: r.provider,
+              model: r.model,
+              cost_usd: r.cost_usd,
+              tokens_in: r.tokens_in,
+              tokens_out: r.tokens_out,
+              ts: normalizeUnifiedSpendTs(r.ts),
+            });
+          }
+        } else {
+          const { results } = await env.DB.prepare(sql).all();
+          for (const r of results || []) {
+            merged.push({
+              provider: r.provider,
+              model: r.model,
+              cost_usd: r.cost_usd,
+              tokens_in: r.tokens_in,
+              tokens_out: r.tokens_out,
+              ts: normalizeUnifiedSpendTs(r.ts),
+            });
+          }
+        }
+      } catch (_) {}
+    })(),
+    (async () => {
+      let results = [];
+      try {
+        let sql = `SELECT provider, model, cost_estimate AS cost_usd,
+          tokens_input AS tokens_in, tokens_output AS tokens_out, created_at AS ts FROM ai_usage_log WHERE 1=1`;
+        const stmt = sinceUnix != null
+          ? env.DB.prepare(`${sql} AND created_at >= ?`).bind(sinceUnix)
+          : env.DB.prepare(sql);
+        const r1 = await stmt.all();
+        results = r1.results || [];
+      } catch (_) {
+        try {
+          const sql2 = `SELECT provider, model, cost_estimate AS cost_usd,
+            tokens_input AS tokens_in, tokens_output AS tokens_out, date AS ts FROM ai_usage_log WHERE 1=1`;
+          const stmt2 = sinceUnix != null
+            ? env.DB.prepare(`${sql2} AND unixepoch(date) >= ?`).bind(sinceUnix)
+            : env.DB.prepare(sql2);
+          const r2 = await stmt2.all();
+          results = r2.results || [];
+        } catch (__) {}
+      }
+      for (const r of results) {
+        merged.push({
+          provider: r.provider,
+          model: r.model,
+          cost_usd: r.cost_usd,
+          tokens_in: r.tokens_in,
+          tokens_out: r.tokens_out,
+          ts: normalizeUnifiedSpendTs(r.ts),
+        });
+      }
+    })(),
+    (async () => {
+      let results = [];
+      try {
+        let sql = `SELECT 'cursor' AS provider, model, estimated_cost_usd AS cost_usd,
+          tokens AS tokens_in, 0 AS tokens_out, created_at AS ts FROM cursor_usage_log WHERE 1=1`;
+        const stmt = sinceUnix != null
+          ? env.DB.prepare(`${sql} AND created_at >= ?`).bind(sinceUnix)
+          : env.DB.prepare(sql);
+        const r1 = await stmt.all();
+        results = r1.results || [];
+      } catch (_) {
+        try {
+          const sql2 = `SELECT 'cursor' AS provider, model, estimated_cost_usd AS cost_usd,
+            tokens AS tokens_in, 0 AS tokens_out, date AS ts FROM cursor_usage_log WHERE 1=1`;
+          const stmt2 = sinceUnix != null
+            ? env.DB.prepare(`${sql2} AND unixepoch(date) >= ?`).bind(sinceUnix)
+            : env.DB.prepare(sql2);
+          const r2 = await stmt2.all();
+          results = r2.results || [];
+        } catch (__) {}
+      }
+      for (const r of results) {
+        merged.push({
+          provider: r.provider,
+          model: r.model,
+          cost_usd: r.cost_usd,
+          tokens_in: r.tokens_in,
+          tokens_out: r.tokens_out,
+          ts: normalizeUnifiedSpendTs(r.ts),
+        });
+      }
+    })(),
+  ];
+  await Promise.all(tasks);
+
+  for (const row of merged) {
+    if (row.provider == null || row.provider === '') row.provider = 'unknown';
+    else row.provider = String(row.provider);
+    if (row.model == null || row.model === '') row.model = 'unknown';
+    else row.model = String(row.model);
+    row.cost_usd = Number(row.cost_usd) || 0;
+    row.tokens_in = Number(row.tokens_in) || 0;
+    row.tokens_out = Number(row.tokens_out) || 0;
+  }
+
+  const total_cost_usd = merged.reduce((s, r) => s + r.cost_usd, 0);
+  const g = (groupKey || 'provider').toLowerCase();
+  let rows = [];
+
+  if (g === 'provider') {
+    const map = new Map();
+    for (const r of merged) {
+      const k = r.provider;
+      const cur = map.get(k) || {
+        provider: k,
+        total_cost_usd: 0,
+        total_tokens_in: 0,
+        total_tokens_out: 0,
+        row_count: 0,
+      };
+      cur.total_cost_usd += r.cost_usd;
+      cur.total_tokens_in += r.tokens_in;
+      cur.total_tokens_out += r.tokens_out;
+      cur.row_count += 1;
+      map.set(k, cur);
+    }
+    rows = Array.from(map.values()).sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  } else if (g === 'model') {
+    const map = new Map();
+    for (const r of merged) {
+      const k = r.model;
+      const cur = map.get(k) || {
+        model: k,
+        provider: r.provider,
+        total_cost_usd: 0,
+        total_tokens_in: 0,
+        total_tokens_out: 0,
+        row_count: 0,
+        _provSpend: {},
+      };
+      cur.total_cost_usd += r.cost_usd;
+      cur.total_tokens_in += r.tokens_in;
+      cur.total_tokens_out += r.tokens_out;
+      cur.row_count += 1;
+      cur._provSpend[r.provider] = (cur._provSpend[r.provider] || 0) + r.cost_usd;
+      map.set(k, cur);
+    }
+    rows = Array.from(map.values())
+      .map((cur) => {
+        let bestP = 'unknown';
+        let bestC = -1;
+        for (const [p, c] of Object.entries(cur._provSpend || {})) {
+          if (c > bestC) {
+            bestC = c;
+            bestP = p;
+          }
+        }
+        delete cur._provSpend;
+        cur.provider = bestP;
+        return cur;
+      })
+      .sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  } else if (g === 'day') {
+    const map = new Map();
+    for (const r of merged) {
+      const day = unifiedSpendDayUTC(r.ts);
+      const cur = map.get(day) || { date: day, total_cost_usd: 0, row_count: 0 };
+      cur.total_cost_usd += r.cost_usd;
+      cur.row_count += 1;
+      map.set(day, cur);
+    }
+    rows = Array.from(map.values()).sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  } else {
+    const map = new Map();
+    for (const r of merged) {
+      const k = r.provider;
+      const cur = map.get(k) || {
+        provider: k,
+        total_cost_usd: 0,
+        total_tokens_in: 0,
+        total_tokens_out: 0,
+        row_count: 0,
+      };
+      cur.total_cost_usd += r.cost_usd;
+      cur.total_tokens_in += r.tokens_in;
+      cur.total_tokens_out += r.tokens_out;
+      cur.row_count += 1;
+      map.set(k, cur);
+    }
+    rows = Array.from(map.values()).sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  }
+
+  return { rows, total_cost_usd, period_days: periodDays, group: g };
 }
 
 // ── Vault secret loader ───────────────────────────────────────
@@ -499,9 +833,16 @@ async function verifySvixResendSignature(secret, rawBody, svixId, svixTimestamp,
   return false;
 }
 
+/**
+ * Supabase / Edge Function webhooks: header `x-supabase-signature: sha256=<hex>` (lowercase hex).
+ * Must match HMAC-SHA256 of the raw request body using secret as UTF-8 key (aligns with pgcrypto HMAC on same bytes).
+ * Secret: wrangler `SUPABASE_WEBHOOK_SECRET` (or vault); see verifyWebhookSignature case `supabase`.
+ */
 async function verifySupabaseWebhookSignature(secret, rawBody, sigHeader) {
   if (!secret || !sigHeader) return false;
-  const got = sigHeader.replace(/^sha256=/i, '').trim().toLowerCase();
+  const trimmed = String(sigHeader).trim();
+  const got = trimmed.replace(/^sha256=/i, '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(got)) return false;
   const expectedHex = (await hmacSha256HexFromUtf8Key(secret, rawBody)).toLowerCase();
   return timingSafeEqualUtf8(expectedHex, got);
 }
@@ -518,6 +859,7 @@ const WEBHOOK_ENDPOINT_PATH_ALIASES = {
   '/api/hooks/cursor': '/api/webhooks/cursor',
   '/api/hooks/stripe': '/api/webhooks/stripe',
   '/api/hooks/internal': '/api/webhooks/internal',
+  '/api/hooks/supabase': '/api/webhooks/supabase',
 };
 
 function webhookCaptureHeaders(request) {
@@ -1291,6 +1633,550 @@ async function handleInboundWebhook(env, request, resolveSecret, opts, execution
   });
 }
 
+/** Phase 1 SettingsPanel D1 routes (auth). Returns Response if handled, else null. */
+async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
+  const method = (request.method || 'GET').toUpperCase();
+  const isPhase1 =
+    (pathLower === '/api/settings' && method === 'GET' && (url.searchParams.get('category') || '').trim()) ||
+    (pathLower === '/api/settings/appearance' && method === 'PATCH') ||
+    (pathLower === '/api/ai/guardrails' && method === 'GET') ||
+    (pathLower === '/api/ai/models' && method === 'GET') ||
+    (/^\/api\/ai\/models\/[^/]+$/.test(pathLower) && method === 'PATCH') ||
+    (pathLower === '/api/ai/routing-rules' && (method === 'GET' || method === 'POST')) ||
+    (/^\/api\/ai\/routing-rules\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+    (pathLower === '/api/ai/integrations' && method === 'GET') ||
+    (pathLower === '/api/agent/rules' && method === 'GET') ||
+    (pathLower === '/api/commands/custom' && method === 'GET') ||
+    (pathLower === '/api/hooks/subscriptions' && (method === 'GET' || method === 'POST')) ||
+    (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') ||
+    (/^\/api\/hooks\/subscriptions\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+    (pathLower === '/api/settings/deploy-context' && method === 'GET') ||
+    (pathLower === '/api/settings/docs-providers' && method === 'GET') ||
+    (pathLower === '/api/settings/agent-config' && method === 'PATCH') ||
+    (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') ||
+    (pathLower === '/api/hooks/executions' && method === 'GET') ||
+    (pathLower === '/api/knowledge' && method === 'GET') ||
+    (pathLower === '/api/knowledge/crawl' && method === 'POST') ||
+    (pathLower === '/api/app-icons' && method === 'GET') ||
+    (pathLower === '/api/spend' && method === 'GET') ||
+    (pathLower === '/api/spend/summary' && method === 'GET') ||
+    (pathLower === '/api/spend/unified' && method === 'GET') ||
+    (pathLower === '/api/billing' && method === 'GET') ||
+    (pathLower === '/api/cidi/current' && method === 'GET') ||
+    (pathLower === '/api/deploy/rollback' && method === 'POST');
+  if (!isPhase1) return null;
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  try {
+    if (pathLower === '/api/settings' && method === 'GET') {
+      const cat = (url.searchParams.get('category') || '').trim();
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM settings WHERE category = ? ORDER BY display_order ASC, setting_key ASC`
+      ).bind(cat).all();
+      return jsonResponse({ settings: results || [] });
+    }
+    if (pathLower === '/api/settings/appearance' && method === 'PATCH') {
+      const body = await request.json().catch(() => ({}));
+      const theme = body.theme != null ? String(body.theme).trim() : '';
+      if (!theme) return jsonResponse({ error: 'theme required' }, 400);
+      const tenantId = 'tenant_sam_primeaux';
+      const ex = await env.DB.prepare(
+        `SELECT id FROM settings WHERE tenant_id = ? AND setting_key = 'appearance.theme' LIMIT 1`
+      ).bind(tenantId).first();
+      if (ex?.id) {
+        await env.DB.prepare(`UPDATE settings SET setting_value = ?, updated_at = datetime('now') WHERE id = ?`).bind(theme, ex.id).run();
+      } else {
+        await env.DB.prepare(
+          `INSERT INTO settings (tenant_id, setting_key, setting_value, category, value_type)
+           VALUES (?, 'appearance.theme', ?, 'appearance', 'string')`
+        ).bind(tenantId, theme).run();
+      }
+      return jsonResponse({ ok: true, theme });
+    }
+    if (pathLower === '/api/settings/deploy-context' && method === 'GET') {
+      return jsonResponse({
+        worker_name: 'inneranimalmedia',
+        wrangler_config: 'wrangler.production.toml',
+        deploy_script: './scripts/deploy-with-record.sh',
+        env_wrapper: './scripts/with-cloudflare-env.sh',
+        r2_bucket: 'agent-sam',
+        note: 'All deploys require Sam approval. Never run bare wrangler deploy at repo root.',
+      });
+    }
+    if (pathLower === '/api/settings/docs-providers' && method === 'GET') {
+      return jsonResponse({
+        providers: [
+          {
+            id: 'anthropic',
+            label: 'Anthropic',
+            docs_url: 'https://docs.anthropic.com/',
+            api_url: 'https://console.anthropic.com/',
+            vault_key: 'ANTHROPIC_API_KEY',
+            blurb: 'Claude models, prompt caching, tool use, and batch APIs.',
+          },
+          {
+            id: 'openai',
+            label: 'OpenAI',
+            docs_url: 'https://platform.openai.com/docs/',
+            api_url: 'https://platform.openai.com/api-keys',
+            vault_key: 'OPENAI_API_KEY',
+            blurb: 'GPT models, vision, assistants, and DALL-E image generation.',
+          },
+          {
+            id: 'google',
+            label: 'Google AI',
+            docs_url: 'https://ai.google.dev/docs',
+            api_url: 'https://aistudio.google.com/app/apikey',
+            vault_key: 'GEMINI_API_KEY',
+            blurb: 'Gemini models including 2.5 Flash and Pro with multimodal support.',
+          },
+          {
+            id: 'cloudflare',
+            label: 'Cloudflare',
+            docs_url: 'https://developers.cloudflare.com/workers-ai/',
+            api_url: 'https://dash.cloudflare.com/',
+            vault_key: null,
+            blurb: 'Workers AI, D1, R2, Vectorize, AutoRAG — all bound via wrangler.production.toml.',
+          },
+          {
+            id: 'cursor',
+            label: 'Cursor',
+            docs_url: 'https://docs.cursor.com/',
+            api_url: 'https://cursor.com/settings',
+            vault_key: null,
+            blurb: 'IDE rules, skills, and MCP. Link accounts under Integrations.',
+          },
+        ],
+      });
+    }
+    if (pathLower === '/api/ai/guardrails' && method === 'GET') {
+      const { results } = await env.DB.prepare('SELECT * FROM ai_guardrails ORDER BY name ASC').all();
+      return jsonResponse({ guardrails: results || [] });
+    }
+    if (pathLower === '/api/ai/models' && method === 'GET') {
+      const { results } = await env.DB.prepare('SELECT * FROM ai_models ORDER BY provider ASC, display_name ASC').all();
+      return jsonResponse({ models: results || [] });
+    }
+    const modelPatch = pathLower.match(/^\/api\/ai\/models\/([^/]+)$/);
+    if (modelPatch && method === 'PATCH') {
+      const id = modelPatch[1];
+      const body = await request.json().catch(() => ({}));
+      const hasPicker = Object.prototype.hasOwnProperty.call(body, 'show_in_picker');
+      const hasActive = Object.prototype.hasOwnProperty.call(body, 'is_active');
+      if (!hasPicker && !hasActive) return jsonResponse({ error: 'show_in_picker and/or is_active required' }, 400);
+      const setParts = [];
+      const vals = [];
+      if (hasPicker) {
+        setParts.push('show_in_picker = ?');
+        vals.push(body.show_in_picker === true || body.show_in_picker === 1 || body.show_in_picker === '1' ? 1 : 0);
+      }
+      if (hasActive) {
+        setParts.push('is_active = ?');
+        vals.push(body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1);
+      }
+      setParts.push('updated_at = unixepoch()');
+      vals.push(id);
+      const r = await env.DB.prepare(`UPDATE ai_models SET ${setParts.join(', ')} WHERE id = ?`).bind(...vals).run();
+      if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+      const row = await env.DB.prepare('SELECT * FROM ai_models WHERE id = ?').bind(id).first();
+      return jsonResponse({ model: row });
+    }
+    if (pathLower === '/api/ai/routing-rules' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM ai_routing_rules ORDER BY priority DESC, id ASC'
+      ).all();
+      return jsonResponse({ rules: results || [] });
+    }
+    if (pathLower === '/api/ai/routing-rules' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const rule_name = body.rule_name != null ? String(body.rule_name).trim() : '';
+      const match_type = body.match_type != null ? String(body.match_type).trim() : '';
+      const match_value = body.match_value != null ? String(body.match_value).trim() : '';
+      const target_model_key = body.target_model_key != null ? String(body.target_model_key).trim() : '';
+      const target_provider = body.target_provider != null ? String(body.target_provider).trim() : '';
+      const validMt = new Set(['intent', 'mode', 'keyword', 'tag', 'model']);
+      if (!rule_name || !match_type || !validMt.has(match_type) || !match_value || !target_model_key || !target_provider) {
+        return jsonResponse({ error: 'rule_name, match_type, match_value, target_model_key, target_provider required; match_type must be intent|mode|keyword|tag|model' }, 400);
+      }
+      const prRaw = parseInt(body.priority, 10);
+      const priority = Number.isFinite(prRaw) ? Math.min(9999, Math.max(0, prRaw)) : 50;
+      const reason = body.reason != null ? String(body.reason) : null;
+      const is_active = body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1;
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO ai_routing_rules (id, rule_name, priority, match_type, match_value, target_model_key, target_provider, reason, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, rule_name, priority, match_type, match_value, target_model_key, target_provider, reason, is_active).run();
+      const row = await env.DB.prepare('SELECT * FROM ai_routing_rules WHERE id = ?').bind(id).first();
+      return jsonResponse({ rule: row }, 201);
+    }
+    {
+      const rr = pathLower.match(/^\/api\/ai\/routing-rules\/([^/]+)$/);
+      if (rr && method === 'PATCH') {
+        const id = rr[1];
+        const body = await request.json().catch(() => ({}));
+        const fields = ['rule_name', 'priority', 'match_type', 'match_value', 'target_model_key', 'target_provider', 'reason', 'is_active'];
+        const validMt = new Set(['intent', 'mode', 'keyword', 'tag', 'model']);
+        const setParts = [];
+        const vals = [];
+        for (const f of fields) {
+          if (!Object.prototype.hasOwnProperty.call(body, f)) continue;
+          if (f === 'priority') {
+            setParts.push('priority = ?');
+            const pr = parseInt(body.priority, 10);
+            vals.push(Number.isFinite(pr) ? Math.min(9999, Math.max(0, pr)) : 0);
+            continue;
+          }
+          if (f === 'is_active') {
+            setParts.push('is_active = ?');
+            vals.push(body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1);
+            continue;
+          }
+          if (f === 'match_type') {
+            const mt = String(body.match_type || '').trim();
+            if (!validMt.has(mt)) return jsonResponse({ error: 'invalid match_type' }, 400);
+            setParts.push('match_type = ?');
+            vals.push(mt);
+            continue;
+          }
+          setParts.push(`${f} = ?`);
+          vals.push(body[f] != null ? String(body[f]) : '');
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No valid fields' }, 400);
+        setParts.push("updated_at = datetime('now')");
+        vals.push(id);
+        const sql = `UPDATE ai_routing_rules SET ${setParts.join(', ')} WHERE id = ?`;
+        const r = await env.DB.prepare(sql).bind(...vals).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        const row = await env.DB.prepare('SELECT * FROM ai_routing_rules WHERE id = ?').bind(id).first();
+        return jsonResponse({ rule: row });
+      }
+      if (rr && method === 'DELETE') {
+        const r = await env.DB.prepare('DELETE FROM ai_routing_rules WHERE id = ?').bind(rr[1]).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true });
+      }
+    }
+    if (pathLower === '/api/ai/integrations' && method === 'GET') {
+      const { results } = await env.DB.prepare('SELECT * FROM ai_integrations ORDER BY name ASC').all();
+      return jsonResponse({ integrations: results || [] });
+    }
+    if (pathLower === '/api/settings/agent-config' && method === 'PATCH') {
+      const body = await request.json().catch(() => ({}));
+      if (!Object.prototype.hasOwnProperty.call(body, 'default_model_id')) {
+        return jsonResponse({ error: 'default_model_id required (use null to clear)' }, 400);
+      }
+      let default_model_id = null;
+      if (body.default_model_id != null && String(body.default_model_id).trim() !== '') {
+        default_model_id = String(body.default_model_id).trim();
+        const cnt = await env.DB.prepare(
+          `SELECT COUNT(*) AS c FROM ai_models WHERE id = ? OR model_key = ?`
+        ).bind(default_model_id, default_model_id).first();
+        if (!cnt || Number(cnt.c) === 0) return jsonResponse({ error: 'Unknown model' }, 400);
+      }
+      const r = await env.DB.prepare(
+        `UPDATE agent_configs SET default_model_id = ?, updated_at = unixepoch() WHERE id = 'agent-sam-primary'`
+      ).bind(default_model_id).run();
+      if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+      return jsonResponse({ ok: true, default_model_id });
+    }
+    if (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') {
+      const session = await getSession(env, request);
+      const oauthUserId = session && (session._session_user_id || session.email || session.user_id);
+      const connected = new Set();
+      if (oauthUserId) {
+        try {
+          const tok = await env.DB.prepare(`SELECT provider FROM user_oauth_tokens WHERE user_id = ?`).bind(oauthUserId).all();
+          for (const row of tok.results || []) {
+            if (row.provider) connected.add(String(row.provider));
+          }
+          if (connected.has('google_drive')) connected.add('google');
+        } catch (_) {}
+      }
+      let rows = [];
+      try {
+        const r = await env.DB.prepare(
+          `SELECT id, name, provider, integration_key, integration_type, supports_chat, supports_embeddings, supports_rag, supports_workflows, active
+           FROM ai_integrations ORDER BY provider, name`
+        ).all();
+        rows = r.results || [];
+      } catch (_) {
+        const r = await env.DB.prepare(`SELECT * FROM ai_integrations ORDER BY name ASC`).all();
+        rows = r.results || [];
+      }
+      const items = (rows || []).map((row) => ({
+        ...row,
+        connected: row.provider != null && connected.has(String(row.provider)),
+      }));
+      return jsonResponse({ items });
+    }
+    if (pathLower === '/api/agent/rules' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM agent_rules ORDER BY COALESCE(updated_at, created_at) DESC'
+      ).all();
+      return jsonResponse({ rules: results || [] });
+    }
+    if (pathLower === '/api/commands/custom' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM custom_commands WHERE COALESCE(is_active, 1) = 1 ORDER BY command_name ASC'
+      ).all();
+      return jsonResponse({ commands: results || [] });
+    }
+    if (pathLower === '/api/hooks/subscriptions' && method === 'GET') {
+      const userKey = resolveAgentsamUserKey(authUser);
+      if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const ws = url.searchParams.get('workspace_id') != null ? String(url.searchParams.get('workspace_id')) : '';
+      let results = [];
+      try {
+        const r = await env.DB.prepare(
+          `SELECT h.id, h.trigger, h.command, h.is_active, h.created_at,
+            (SELECT COUNT(*) FROM agentsam_hook_execution e WHERE e.hook_id = h.id) AS execution_count,
+            (SELECT MAX(e.ran_at) FROM agentsam_hook_execution e WHERE e.hook_id = h.id) AS last_ran_at
+           FROM agentsam_hook h
+           WHERE h.user_id = ?
+             AND (
+               TRIM(COALESCE(h.workspace_id, '')) = ''
+               OR (LENGTH(TRIM(?)) > 0 AND h.workspace_id = ?)
+             )
+           ORDER BY h.created_at ASC`
+        ).bind(userKey, ws, ws).all();
+        results = r.results || [];
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('agentsam_hook_execution') || msg.includes('no such table')) {
+          const r = await env.DB.prepare(
+            `SELECT id, trigger, command, is_active, created_at, 0 AS execution_count, NULL AS last_ran_at
+             FROM agentsam_hook
+             WHERE user_id = ?
+               AND (
+                 TRIM(COALESCE(workspace_id, '')) = ''
+                 OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+               )
+             ORDER BY created_at ASC`
+          ).bind(userKey, ws, ws).all();
+          results = r.results || [];
+        } else {
+          throw e;
+        }
+      }
+      return jsonResponse(results);
+    }
+    if (pathLower === '/api/hooks/subscriptions' && method === 'POST') {
+      const userKey = resolveAgentsamUserKey(authUser);
+      if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const body = await request.json().catch(() => ({}));
+      const trigger = body.trigger != null ? String(body.trigger).trim() : '';
+      const command = body.command != null ? String(body.command).trim() : '';
+      const validT = new Set(['start', 'stop', 'pre_deploy', 'post_deploy', 'pre_commit', 'error']);
+      if (!trigger || !validT.has(trigger) || !command) {
+        return jsonResponse({ error: 'trigger and command required; trigger must be start|stop|pre_deploy|post_deploy|pre_commit|error' }, 400);
+      }
+      const is_active = body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1;
+      const workspace_id = body.workspace_id != null ? String(body.workspace_id) : '';
+      const id = crypto.randomUUID();
+      try {
+        await env.DB.prepare(
+          `INSERT INTO agentsam_hook (id, user_id, workspace_id, trigger, command, is_active)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(id, userKey, workspace_id, trigger, command, is_active).run();
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('CHECK') || msg.includes('constraint')) {
+          return jsonResponse({ error: 'Invalid trigger or data' }, 400);
+        }
+        throw e;
+      }
+      const row = await env.DB.prepare(
+        'SELECT id, trigger, command, is_active, created_at FROM agentsam_hook WHERE id = ? AND user_id = ?'
+      ).bind(id, userKey).first();
+      return jsonResponse(row || { ok: true, id });
+    }
+    if (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') {
+      const body = await request.json().catch(() => ({}));
+      const ids = body && Array.isArray(body.ids) ? body.ids : null;
+      if (!ids || !ids.length) return jsonResponse({ error: 'ids array required' }, 400);
+      const stmts = ids.map((rid, i) =>
+        env.DB.prepare(`UPDATE hook_subscriptions SET run_order = ? WHERE id = ?`).bind(i, String(rid))
+      );
+      await env.DB.batch(stmts);
+      return jsonResponse({ ok: true });
+    }
+    {
+      const hm = pathLower.match(/^\/api\/hooks\/subscriptions\/([^/]+)$/);
+      if (hm && method === 'PATCH') {
+        const body = await request.json().catch(() => ({}));
+        const id = hm[1];
+        const setParts = [];
+        const vals = [];
+        if (Object.prototype.hasOwnProperty.call(body, 'is_active')) {
+          setParts.push('is_active = ?');
+          vals.push(body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1);
+        }
+        if (body.run_order != null) {
+          const ro = parseInt(body.run_order, 10);
+          if (!Number.isFinite(ro)) return jsonResponse({ error: 'invalid run_order' }, 400);
+          setParts.push('run_order = ?');
+          vals.push(ro);
+        }
+        if (!setParts.length) return jsonResponse({ error: 'is_active and/or run_order required' }, 400);
+        vals.push(id);
+        const sql = `UPDATE hook_subscriptions SET ${setParts.join(', ')} WHERE id = ?`;
+        const r = await env.DB.prepare(sql).bind(...vals).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        const row = await env.DB.prepare('SELECT * FROM hook_subscriptions WHERE id = ?').bind(id).first();
+        return jsonResponse(row || { ok: true });
+      }
+      if (hm && method === 'DELETE') {
+        const userKey = resolveAgentsamUserKey(authUser);
+        if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const r = await env.DB.prepare('DELETE FROM agentsam_hook WHERE id = ? AND user_id = ?').bind(hm[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true });
+      }
+    }
+    if (pathLower === '/api/hooks/executions' && method === 'GET') {
+      const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM hook_executions ORDER BY started_at DESC LIMIT ?'
+      ).bind(limit).all();
+      return jsonResponse({ executions: results || [] });
+    }
+    if (pathLower === '/api/knowledge' && method === 'GET') {
+      const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get('limit') || '200', 10) || 200));
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM ai_knowledge_base WHERE COALESCE(is_active, 1) = 1 ORDER BY updated_at DESC LIMIT ?'
+      ).bind(limit).all();
+      return jsonResponse({ knowledge: results || [] });
+    }
+    if (pathLower === '/api/knowledge/crawl' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const title = body.title != null ? String(body.title).trim() : '';
+      const content = body.content != null ? String(body.content) : '';
+      if (!title || !content) return jsonResponse({ error: 'title and content required' }, 400);
+      const tenantId = body.tenant_id != null ? String(body.tenant_id).trim() : 'tenant_sam_primeaux';
+      const id = body.id != null ? String(body.id).trim() : `kb_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const category = body.category != null ? String(body.category) : null;
+      const sourceUrl = body.source_url != null ? String(body.source_url) : null;
+      const contentType = body.content_type != null ? String(body.content_type) : 'document';
+      await env.DB.prepare(
+        `INSERT INTO ai_knowledge_base (id, tenant_id, title, content, content_type, category, source_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())`
+      ).bind(id, tenantId, title, content, contentType, category, sourceUrl).run();
+      const row = await env.DB.prepare('SELECT * FROM ai_knowledge_base WHERE id = ?').bind(id).first();
+      return jsonResponse({ ok: true, row });
+    }
+    if (pathLower === '/api/app-icons' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM app_icons WHERE COALESCE(is_public, 0) = 1 ORDER BY icon_name ASC'
+      ).all();
+      return jsonResponse({ icons: results || [] });
+    }
+    if (pathLower === '/api/spend' && method === 'GET') {
+      const days = Math.min(366, Math.max(1, parseInt(url.searchParams.get('days') || '30', 10) || 30));
+      const since = Math.floor(Date.now() / 1000) - days * 86400;
+      const group = (url.searchParams.get('group') || '').trim().toLowerCase();
+      if (group === 'provider') {
+        const { results } = await env.DB.prepare(
+          `SELECT provider, COUNT(*) AS entry_count, SUM(amount_usd) AS total_usd FROM spend_ledger WHERE occurred_at >= ? GROUP BY provider ORDER BY total_usd DESC`
+        ).bind(since).all();
+        return jsonResponse({ days, group: 'provider', rows: results || [] });
+      }
+      if (group === 'model' || group === 'model_key') {
+        const { results } = await env.DB.prepare(
+          `SELECT model_key, COUNT(*) AS entry_count, SUM(amount_usd) AS total_usd FROM spend_ledger WHERE occurred_at >= ? GROUP BY model_key ORDER BY total_usd DESC`
+        ).bind(since).all();
+        return jsonResponse({ days, group: 'model_key', rows: results || [] });
+      }
+      if (group === 'day') {
+        const { results } = await env.DB.prepare(
+          `SELECT date(occurred_at, 'unixepoch') AS day, COUNT(*) AS entry_count, SUM(amount_usd) AS total_usd FROM spend_ledger WHERE occurred_at >= ? GROUP BY day ORDER BY day DESC`
+        ).bind(since).all();
+        return jsonResponse({ days, group: 'day', rows: results || [] });
+      }
+      if (group === 'tenant') {
+        const { results } = await env.DB.prepare(
+          `SELECT tenant_id, COUNT(*) AS entry_count, SUM(amount_usd) AS total_usd FROM spend_ledger WHERE occurred_at >= ? GROUP BY tenant_id ORDER BY total_usd DESC`
+        ).bind(since).all();
+        return jsonResponse({ days, group: 'tenant', rows: results || [] });
+      }
+      const lim = Math.min(1000, Math.max(1, parseInt(url.searchParams.get('limit') || '500', 10) || 500));
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM spend_ledger WHERE occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?`
+      ).bind(since, lim).all();
+      return jsonResponse({ days, rows: results || [] });
+    }
+    if (pathLower === '/api/spend/summary' && method === 'GET') {
+      const today = await env.DB.prepare(
+        `SELECT COALESCE(SUM(amount_usd), 0) AS total_usd, COUNT(*) AS entry_count FROM spend_ledger WHERE date(occurred_at, 'unixepoch') = date('now')`
+      ).first();
+      const wtd = await env.DB.prepare(
+        `SELECT COALESCE(SUM(amount_usd), 0) AS total_usd, COUNT(*) AS entry_count FROM spend_ledger WHERE occurred_at >= CAST(strftime('%s', date('now', 'weekday 0')) AS INTEGER)`
+      ).first();
+      const mtd = await env.DB.prepare(
+        `SELECT COALESCE(SUM(amount_usd), 0) AS total_usd, COUNT(*) AS entry_count FROM spend_ledger WHERE date(occurred_at, 'unixepoch') >= date('now', 'start of month')`
+      ).first();
+      return jsonResponse({
+        today: { total_usd: today?.total_usd ?? 0, entry_count: today?.entry_count ?? 0 },
+        wtd: { total_usd: wtd?.total_usd ?? 0, entry_count: wtd?.entry_count ?? 0 },
+        mtd: { total_usd: mtd?.total_usd ?? 0, entry_count: mtd?.entry_count ?? 0 },
+      });
+    }
+    if (pathLower === '/api/spend/unified' && method === 'GET') {
+      const daysRaw = url.searchParams.get('days');
+      let periodDays = 30;
+      if (daysRaw != null && daysRaw !== '') {
+        const d = parseInt(daysRaw, 10);
+        if (Number.isFinite(d) && d === 0) periodDays = 0;
+        else if (Number.isFinite(d) && d > 0) periodDays = Math.min(366 * 5, Math.max(1, d));
+      }
+      const group = (url.searchParams.get('group') || 'provider').toLowerCase();
+      const grouped = await fetchUnifiedSpendGrouped(env, periodDays, group);
+      return jsonResponse(grouped);
+    }
+    if (pathLower === '/api/billing' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT bs.*, bp.name AS plan_display_name, bp.monthly_token_limit, bp.features_json,
+          ba.account_email, ba.billing_name, ba.account_status
+         FROM billing_subscriptions bs
+         LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
+         LEFT JOIN billing_accounts ba ON ba.tenant_id = bs.tenant_id
+         ORDER BY bs.updated_at DESC LIMIT 100`
+      ).all();
+      return jsonResponse({ subscriptions: results || [] });
+    }
+    if (pathLower === '/api/cidi/current' && method === 'GET') {
+      const wf = 'CIDI-IAM-AGENTSAM-20260322';
+      const row = await env.DB.prepare('SELECT * FROM cidi WHERE workflow_id = ? LIMIT 1').bind(wf).first();
+      return jsonResponse({ workflow_id: wf, cidi: row || null });
+    }
+    if (pathLower === '/api/deploy/rollback' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const fromId = body.from_deployment_id != null ? String(body.from_deployment_id).trim() : '';
+      const toId = body.to_deployment_id != null ? String(body.to_deployment_id).trim() : '';
+      if (!fromId || !toId) return jsonResponse({ error: 'from_deployment_id and to_deployment_id required' }, 400);
+      const reason = body.reason != null ? String(body.reason).trim() : 'rollback requested';
+      const who = authUser.email || authUser.id || 'unknown';
+      await env.DB.prepare(
+        `INSERT INTO deployment_rollbacks (from_deployment_id, to_deployment_id, worker_name, project_name, reason, triggered_by, rollback_type, status, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'started', datetime('now'))`
+      ).bind(
+        fromId,
+        toId,
+        body.worker_name != null ? String(body.worker_name) : null,
+        body.project_name != null ? String(body.project_name) : null,
+        reason,
+        who,
+        body.rollback_type != null ? String(body.rollback_type) : 'manual'
+      ).run();
+      return jsonResponse({ ok: true });
+    }
+  } catch (e) {
+    return jsonResponse({ error: String(e?.message || e) }, 500);
+  }
+  return null;
+}
+
 const worker = {
   async fetch(request, env, ctx) {
     try {
@@ -1373,6 +2259,9 @@ const worker = {
         }
         if (pathLower === '/api/hooks/internal') {
           return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/hooks/internal' }, ctx);
+        }
+        if (pathLower === '/api/hooks/supabase') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/hooks/supabase' }, ctx);
         }
       }
 
@@ -2042,6 +2931,11 @@ const worker = {
         return handleAgentsamApi(request, url, env);
       }
 
+      // ----- API: Draw canvas — project_draws + DASHBOARD R2 (before /api/agent) -----
+      if (pathLower.startsWith('/api/draw')) {
+        return handleDrawApi(request, url, env);
+      }
+
       // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
       if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots')) {
         return handleAgentApi(request, url, env, ctx);
@@ -2079,19 +2973,38 @@ const worker = {
         try {
           const tenantId = 'tenant_sam_primeaux'; // TODO: Get from session/auth
 
-          const result = await env.DB.prepare(`
+          let result;
+          try {
+            result = await env.DB.prepare(`
             SELECT
               slug,
               name,
               description,
               category,
+              status,
+              COALESCE(usage_count, 0) AS usage_count,
               command_text,
               parameters_json
             FROM agent_commands
             WHERE tenant_id = ?
-              AND status = 'active'
             ORDER BY category, name
           `).bind(tenantId).all();
+          } catch (e1) {
+            result = await env.DB.prepare(`
+            SELECT
+              slug,
+              name,
+              description,
+              category,
+              'active' AS status,
+              0 AS usage_count,
+              command_text,
+              parameters_json
+            FROM agent_commands
+            WHERE tenant_id = ?
+            ORDER BY category, name
+          `).bind(tenantId).all();
+          }
 
           return new Response(JSON.stringify({
             success: true,
@@ -2122,7 +3035,8 @@ const worker = {
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
           const { results } = await env.DB.prepare(
-            "SELECT id, name, slug, config FROM cms_themes ORDER BY is_system DESC, name ASC"
+            `SELECT id, name, slug, config, theme_family, sort_order, css_url, tenant_id, wcag_scores, contrast_flags, is_system
+             FROM cms_themes ORDER BY is_system DESC, theme_family ASC, sort_order ASC, name ASC`
           ).all();
           return jsonResponse({ themes: results || [] });
         } catch (e) {
@@ -2130,24 +3044,51 @@ const worker = {
         }
       }
 
-      // ----- API: Active theme (name + is_dark for Monaco etc.) -----
+      // ----- API: Active theme (cms_themes + settings.appearance.theme; legacy cookie fallback) -----
       if (pathLower === '/api/themes/active' && request.method === 'GET') {
-        if (!env.DB) return jsonResponse({ name: 'dark', is_dark: true });
+        if (!env.DB) return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
         try {
+          const rowPlatform = await env.DB.prepare(
+            `SELECT ct.name, ct.slug, ct.theme_family, ct.config
+             FROM settings s
+             JOIN cms_themes ct ON ct.slug = s.setting_value
+             WHERE s.setting_key = 'appearance.theme' AND s.tenant_id = 'tenant_sam_primeaux'
+             LIMIT 1`
+          ).first();
+          if (rowPlatform?.slug) {
+            const fam = (rowPlatform.theme_family || '').toLowerCase();
+            const isDark = fam === 'dark' || (fam !== 'light' && fam !== 'high_contrast_light' && !fam);
+            return jsonResponse({
+              name: rowPlatform.name || rowPlatform.slug,
+              slug: rowPlatform.slug,
+              is_dark: isDark,
+            });
+          }
           const cookieHeader = request.headers.get('Cookie') || '';
-          let themeId = null;
+          let slugFallback = null;
           for (const part of cookieHeader.split(';')) {
             const [k, v] = part.trim().split('=');
-            if (k === 'iam_theme' && v) { themeId = decodeURIComponent(v.trim()); break; }
+            if (k === 'iam_theme' && v) { slugFallback = decodeURIComponent(v.trim()); break; }
           }
-          if (!themeId) themeId = request.headers.get('X-IAM-Theme')?.trim() || null;
-          if (!themeId) return jsonResponse({ name: 'dark', is_dark: true });
-          const row = await env.DB.prepare("SELECT name, is_dark FROM themes WHERE name = ? LIMIT 1").bind(themeId).first();
-          if (row) return jsonResponse({ name: row.name || 'dark', is_dark: row.is_dark != null ? !!row.is_dark : true });
-          return jsonResponse({ name: 'dark', is_dark: true });
+          if (!slugFallback) slugFallback = request.headers.get('X-IAM-Theme')?.trim() || null;
+          if (!slugFallback) return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
+          const rowCms = await env.DB.prepare(
+            'SELECT name, slug, theme_family FROM cms_themes WHERE slug = ? OR name = ? LIMIT 1'
+          ).bind(slugFallback, slugFallback).first();
+          if (rowCms?.slug) {
+            const fam = (rowCms.theme_family || '').toLowerCase();
+            const isDark = fam === 'dark' || (fam !== 'light' && fam !== 'high_contrast_light' && !fam);
+            return jsonResponse({ name: rowCms.name || rowCms.slug, slug: rowCms.slug, is_dark: isDark });
+          }
+          return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
         } catch (e) {
-          return jsonResponse({ name: 'dark', is_dark: true });
+          return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
         }
+      }
+
+      {
+        const phase1Res = await handlePhase1PlatformD1Routes(request, url, env, pathLower);
+        if (phase1Res) return phase1Res;
       }
 
       // ----- API: Vault (secrets + audit; auth required) -----
@@ -2691,7 +3632,7 @@ const worker = {
         { id: 'ws_meauxbility', name: 'Meauxbility', category: 'entity' },
         { id: 'ws_innerautodidact', name: 'InnerAutodidact', category: 'entity' },
       ];
-      if (pathLower === '/api/settings/workspaces') {
+      if (pathLower === '/api/settings/workspaces' || pathLower === '/api/workspaces') {
         const method = (request.method || 'GET').toUpperCase();
         if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         if (method === 'GET') {
@@ -2887,6 +3828,10 @@ const worker = {
       if (path === '/' || path === '/index.html') {
         const obj = await env.ASSETS.get('index-v3.html') ?? await env.ASSETS.get('index-v2.html') ?? await env.ASSETS.get('index.html');
         if (obj) return respondWithR2Object(obj, 'text/html');
+        if (env.DASHBOARD) {
+          const signin = await env.DASHBOARD.get('static/auth-signin.html');
+          if (signin) return respondWithR2Object(signin, 'text/html', { noCache: true });
+        }
         return notFound(path);
       }
 
@@ -4158,21 +5103,52 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = `R2 error: ${e.message}`;
         }
-      } else if (toolName === 'knowledge_search' && env.AI) {
-        const query = params.query ?? '';
+      } else if (toolName === 'knowledge_search') {
+        const query = String(params.query ?? '').trim();
         const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
-        try {
-          const searchResult = await vectorizeRagSearch(env, query, { topK: max_results });
-          resultText = JSON.stringify({
-            query,
-            results: (searchResult?.results ?? searchResult?.data ?? []).map(item => ({
-              content: item.content ?? item.text,
-              source: item.source ?? item.metadata?.source ?? 'unknown',
-              score: item.score,
-            })),
-          });
-        } catch (e) {
-          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        if (!query) {
+          resultText = JSON.stringify({ error: 'query required' });
+        } else {
+          try {
+            const { merged, answer, query: q } = await runKnowledgeSearchMerged(env, query, max_results);
+            resultText = JSON.stringify({
+              query: q,
+              answer,
+              results: merged.map(item => ({
+                content: item.content,
+                source: item.sourceTag ?? item.source ?? 'unknown',
+                score: item.score,
+                title: item.title,
+              })),
+            });
+          } catch (e) {
+            resultText = JSON.stringify({ error: e?.message ?? String(e) });
+          }
+        }
+      } else if (toolName === 'rag_search') {
+        const query = String(params.query ?? '').trim();
+        const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
+        if (!query) {
+          resultText = JSON.stringify({ error: 'query required' });
+        } else {
+          try {
+            const configured = aiSearchIsConfigured(env);
+            const hits = await autoragAiSearchQuery(env, query, max_results);
+            const payload = { results: [] };
+            if (!hits.length && !configured) payload.warning = 'AI Search not configured';
+            else {
+              payload.results = hits.map(h => ({
+                file_id: h.file_id ?? null,
+                filename: h.filename ?? null,
+                score: h.score ?? null,
+                content: h.content ?? '',
+                source: h.sourceTag ?? h.source ?? 'ai_search',
+              }));
+            }
+            resultText = JSON.stringify(payload);
+          } catch (e) {
+            resultText = JSON.stringify({ error: e?.message ?? String(e) });
+          }
         }
       } else if (toolName === 'generate_execution_plan' && env.DB) {
         const summary = typeof params.summary === 'string' ? params.summary.trim() : '';
@@ -4395,7 +5371,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
       if (!BUILTIN_TOOLS.has(toolName) && env.DB) {
         try {
           const toolRow = await env.DB.prepare('SELECT tool_category FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(toolName).first();
@@ -5628,6 +6604,82 @@ FROM r2_bucket_summary`
   }
 }
 
+function parseDataUrlToBytes(dataUrl) {
+  const s = String(dataUrl || '');
+  const m = s.match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return null;
+  try {
+    const binary = atob(m[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return { contentType: m[1], bytes };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function handleDrawApi(request, url, env) {
+  const pathLower = url.pathname.replace(/\/$/, '').toLowerCase();
+  const method = (request.method || 'GET').toUpperCase();
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  if (!env.DASHBOARD) return jsonResponse({ error: 'DASHBOARD bucket not configured' }, 503);
+
+  try {
+    if (pathLower === '/api/draw/save' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const projectId = String(body.projectId || body.project_id || 'default').trim() || 'default';
+      const canvasData = body.canvasData;
+      const generationType = body.generation_type != null ? String(body.generation_type).slice(0, 64) : null;
+      if (!canvasData || typeof canvasData !== 'string') {
+        return jsonResponse({ error: 'canvasData required' }, 400);
+      }
+      const parsed = parseDataUrlToBytes(canvasData);
+      if (!parsed) return jsonResponse({ error: 'canvasData must be a data URL' }, 400);
+      const fileKey = crypto.randomUUID();
+      const safeProj = projectId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) || 'default';
+      const r2Key = `draw/exports/${safeProj}/${fileKey}.png`;
+      await env.DASHBOARD.put(r2Key, parsed.bytes, {
+        httpMetadata: { contentType: parsed.contentType || 'image/png' },
+      });
+      try {
+        const ins = await env.DB.prepare(
+          `INSERT INTO project_draws (project_id, r2_key, generation_type, created_at) VALUES (?, ?, ?, datetime('now'))`
+        ).bind(projectId, r2Key, generationType).run();
+        const newId = ins?.meta?.last_row_id;
+        return jsonResponse({ ok: true, id: newId, project_id: projectId, r2_key: r2Key, generation_type: generationType });
+      } catch (e) {
+        console.error('[draw/save] D1 insert failed', e?.message);
+        return jsonResponse({ error: 'Failed to record draw', detail: e?.message }, 500);
+      }
+    }
+
+    if (pathLower === '/api/draw/list' && method === 'GET') {
+      const projectId = (url.searchParams.get('project_id') || url.searchParams.get('projectId') || '').trim() || 'default';
+      const rows = await env.DB.prepare(
+        `SELECT id, project_id, r2_key, generation_type, created_at FROM project_draws WHERE project_id = ? ORDER BY created_at DESC LIMIT 100`
+      ).bind(projectId).all();
+      return jsonResponse({ draws: rows?.results ?? [] });
+    }
+
+    const oneMatch = pathLower.match(/^\/api\/draw\/(\d+)$/);
+    if (oneMatch && method === 'GET') {
+      const drawId = parseInt(oneMatch[1], 10);
+      if (Number.isNaN(drawId)) return jsonResponse({ error: 'Invalid id' }, 400);
+      const row = await env.DB.prepare(
+        `SELECT id, project_id, r2_key, generation_type, created_at FROM project_draws WHERE id = ? LIMIT 1`
+      ).bind(drawId).first();
+      if (!row) return jsonResponse({ error: 'Not found' }, 404);
+      return jsonResponse(row);
+    }
+
+    return jsonResponse({ error: 'Not found' }, 404);
+  } catch (e) {
+    return jsonResponse({ error: String(e?.message || e) }, 500);
+  }
+}
+
 async function handleAgentApi(request, url, env, ctx) {
   const pathLower = url.pathname.replace(/\/$/, '').toLowerCase();
   const method = (request.method || 'GET').toUpperCase();
@@ -5801,6 +6853,17 @@ async function handleAgentApi(request, url, env, ctx) {
       const sep = wssUrl.includes('?') ? '&' : '?';
       const url = `${wssUrl}${sep}token=${encodeURIComponent(secret)}`;
       return jsonResponse({ url });
+    }
+
+    if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
+      const session = await getSession(env, request);
+      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
+      const secret = (env.TERMINAL_SECRET || '').trim();
+      return jsonResponse({
+        terminal_configured: !!(httpsUrl && secret),
+        direct_wss_available: !!(httpsUrl && secret),
+      });
     }
 
     if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
@@ -6519,6 +7582,22 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           }
         } catch (_) {}
       }
+
+      finalSystem +=
+        '\n\nCODE DELIVERY RULES (non-negotiable):\n' +
+        '- When writing code >15 lines that the user will deploy: use tool_r2_write ' +
+        'to save it to agent-sam/drafts/{filename} BEFORE mentioning it in chat.\n' +
+        '- Never say \'I\'ve written the file\' or \'here is the updated worker.js\' without ' +
+        'having actually called tool_r2_write or d1_write.\n' +
+        '- Never fabricate tool call results. If a tool fails, report the error.\n' +
+        '- For worker.js edits: read the current file first via tool_r2_read from ' +
+        'agent-sam/source/worker.js, make surgical changes, write back.\n' +
+        '- For D1 operations: use d1_query for reads, d1_write for mutations. ' +
+        'Never invent query results.\n' +
+        '- The Monaco editor is available in the code panel. Populate it via ' +
+        'data.type=\'code\' SSE events with fields: code, filename, language.\n' +
+        '- Terminal commands must use terminal_execute tool. Never tell the user to ' +
+        'run commands manually when terminal_execute is available.';
 
       const gatewayModel = getGatewayModel(model.provider, model.model_key);
       const useGateway = bodyUseGateway !== false && !!env.AI_GATEWAY_BASE_URL;
@@ -7653,6 +8732,42 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
     }
 
+    if (pathLower === '/api/agent/r2-save' && method === 'POST') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.R2) return jsonResponse({ error: 'R2 not configured' }, 503);
+      let body;
+      try {
+        body = await request.json();
+      } catch (_) {
+        return jsonResponse({ error: 'Invalid JSON' }, 400);
+      }
+      const key = body?.key != null ? String(body.key) : '';
+      const content = body?.content;
+      if (!key) return jsonResponse({ error: 'key required' }, 400);
+      if (typeof content !== 'string') {
+        return jsonResponse({ error: 'content must be a string' }, 400);
+      }
+      if (!key.startsWith('agent-sam/')) {
+        return jsonResponse({ error: 'Invalid key prefix' }, 403);
+      }
+      if (key.includes('..')) {
+        return jsonResponse({ error: 'Invalid key' }, 403);
+      }
+      const contentType = (() => {
+        if (key.endsWith('.js') || key.endsWith('.jsx') || key.endsWith('.mjs')) return 'application/javascript';
+        if (key.endsWith('.ts') || key.endsWith('.tsx')) return 'application/typescript';
+        if (key.endsWith('.html')) return 'text/html';
+        if (key.endsWith('.css')) return 'text/css';
+        if (key.endsWith('.json')) return 'application/json';
+        if (key.endsWith('.md')) return 'text/markdown';
+        if (key.endsWith('.sql')) return 'text/plain';
+        return 'text/plain';
+      })();
+      await env.R2.put(key, content, { httpMetadata: { contentType } });
+      return jsonResponse({ ok: true, key, size: content.length });
+    }
+
     return jsonResponse({ error: 'Not found' }, 404);
   } catch (err) {
     return jsonResponse({ error: String(err?.message || err) }, 500);
@@ -7736,6 +8851,37 @@ async function handleAgentsamApi(request, url, env) {
     }
   };
 
+  const normalizeFetchHost = (h) => {
+    let s = String(h || '').trim();
+    if (!s) return '';
+    s = s.replace(/^https?:\/\//i, '');
+    const slash = s.indexOf('/');
+    if (slash >= 0) s = s.slice(0, slash);
+    return s.trim();
+  };
+
+  const mergeFetchDomainAllowlistWithBuiltin = (dbResults) => {
+    const rows = dbResults || [];
+    const haveNorm = new Set(
+      rows.map((r) => normalizeAgentsamFetchHostInput(r && r.host)).filter(Boolean)
+    );
+    const merged = rows.map((r) => ({ ...r, builtin: isAgentsamBuiltinFetchHostNormalized(normalizeAgentsamFetchHostInput(r.host)) }));
+    for (const bh of AGENTSAM_BUILTIN_FETCH_HOSTS) {
+      if (!haveNorm.has(bh)) {
+        merged.push({
+          id: `builtin:${bh}`,
+          user_id: '_builtin',
+          workspace_id: '',
+          host: bh,
+          created_at: null,
+          builtin: true,
+        });
+      }
+    }
+    merged.sort((a, b) => String(a.host || '').localeCompare(String(b.host || '')));
+    return merged;
+  };
+
   try {
     if (pathLower === '/api/agentsam/user-policy' && method === 'GET') {
       const row = await env.DB.prepare(
@@ -7768,48 +8914,174 @@ async function handleAgentsamApi(request, url, env) {
       return jsonResponse(row || defaultAgentsamUserPolicy(userKey, workspaceId));
     }
 
-    if (pathLower === '/api/agentsam/command-allowlist' && method === 'GET') {
+    const agentsamHookTriggers = new Set(['start', 'stop', 'pre_deploy', 'post_deploy', 'pre_commit', 'error']);
+    if (pathLower === '/api/agentsam/hooks' && method === 'GET') {
+      const ws = url.searchParams.get('workspace_id') != null ? String(url.searchParams.get('workspace_id')) : '';
+      let results = [];
+      try {
+        const r = await env.DB.prepare(
+          `SELECT h.id, h.user_id, h.workspace_id, h.trigger, h.command, h.is_active, h.created_at,
+            COUNT(e.id) AS execution_count, MAX(e.ran_at) AS last_ran_at
+           FROM agentsam_hook h
+           LEFT JOIN agentsam_hook_execution e ON e.hook_id = h.id
+           WHERE h.user_id = ?
+             AND (
+               TRIM(COALESCE(h.workspace_id, '')) = ''
+               OR (LENGTH(TRIM(?)) > 0 AND h.workspace_id = ?)
+             )
+           GROUP BY h.id
+           ORDER BY h.created_at DESC`
+        ).bind(userKey, ws, ws).all();
+        results = r.results || [];
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('agentsam_hook_execution') || msg.includes('no such table')) {
+          const r = await env.DB.prepare(
+            `SELECT id, user_id, workspace_id, trigger, command, is_active, created_at, 0 AS execution_count, NULL AS last_ran_at
+             FROM agentsam_hook
+             WHERE user_id = ?
+               AND (
+                 TRIM(COALESCE(workspace_id, '')) = ''
+                 OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+               )
+             ORDER BY created_at DESC`
+          ).bind(userKey, ws, ws).all();
+          results = r.results || [];
+        } else {
+          throw e;
+        }
+      }
+      return jsonResponse(results);
+    }
+    if (pathLower === '/api/agentsam/hooks' && method === 'POST') {
+      const body = await readBody();
+      const trigger = body && body.trigger != null ? String(body.trigger).trim() : '';
+      const command = body && body.command != null ? String(body.command).trim() : '';
+      if (!trigger || !agentsamHookTriggers.has(trigger) || !command) {
+        return jsonResponse({ error: 'trigger and command required; trigger must be start|stop|pre_deploy|post_deploy|pre_commit|error' }, 400);
+      }
+      const is_active = body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1;
+      const wsIns = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const dup = await env.DB.prepare(
+        `SELECT id FROM agentsam_hook
+         WHERE user_id = ? AND COALESCE(workspace_id, '') = COALESCE(?, '') AND trigger = ? LIMIT 1`
+      ).bind(userKey, wsIns, trigger).first();
+      if (dup) return jsonResponse({ error: 'A hook for this trigger already exists' }, 409);
+      const id = `hook_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      try {
+        await env.DB.prepare(
+          `INSERT INTO agentsam_hook (id, user_id, workspace_id, trigger, command, is_active)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).bind(id, userKey, wsIns, trigger, command, is_active).run();
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('UNIQUE') || msg.includes('unique')) {
+          return jsonResponse({ error: 'A hook for this trigger already exists' }, 409);
+        }
+        throw e;
+      }
+      const row = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, trigger, command, is_active, created_at FROM agentsam_hook WHERE id = ? AND user_id = ?`
+      ).bind(id, userKey).first();
+      return jsonResponse(row || { ok: true, id }, 201);
+    }
+    {
+      const hm = pathLower.match(/^\/api\/agentsam\/hooks\/([^/]+)$/);
+      if (hm && method === 'PATCH') {
+        const body = await readBody();
+        const id = hm[1];
+        const setParts = [];
+        const vals = [];
+        if (body && body.trigger != null) {
+          const t = String(body.trigger).trim();
+          if (!agentsamHookTriggers.has(t)) return jsonResponse({ error: 'invalid trigger' }, 400);
+          setParts.push('trigger = ?');
+          vals.push(t);
+        }
+        if (body && body.command != null) {
+          setParts.push('command = ?');
+          vals.push(String(body.command).trim());
+        }
+        if (body && Object.prototype.hasOwnProperty.call(body, 'is_active')) {
+          setParts.push('is_active = ?');
+          vals.push(body.is_active === false || body.is_active === 0 || body.is_active === '0' ? 0 : 1);
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No fields to update' }, 400);
+        vals.push(id, userKey);
+        const sql = `UPDATE agentsam_hook SET ${setParts.join(', ')} WHERE id = ? AND user_id = ?`;
+        const r = await env.DB.prepare(sql).bind(...vals).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        const row = await env.DB.prepare(
+          `SELECT id, user_id, workspace_id, trigger, command, is_active, created_at FROM agentsam_hook WHERE id = ? AND user_id = ?`
+        ).bind(id, userKey).first();
+        return jsonResponse(row || { ok: true });
+      }
+      if (hm && method === 'DELETE') {
+        const r = await env.DB.prepare(`DELETE FROM agentsam_hook WHERE id = ? AND user_id = ?`).bind(hm[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'GET') {
       const { results } = await env.DB.prepare(
-        `SELECT id, command, workspace_id, created_at
+        `SELECT id, user_id, workspace_id, command, created_at
          FROM agentsam_command_allowlist
-         WHERE user_id = ? AND workspace_id = ?
+         WHERE user_id = ?
+           AND (
+             TRIM(COALESCE(workspace_id, '')) = ''
+             OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+           )
          ORDER BY command ASC`
-      ).bind(userKey, workspaceId).all();
+      ).bind(userKey, workspaceId, workspaceId).all();
       return jsonResponse(results || []);
     }
 
-    if (pathLower === '/api/agentsam/command-allowlist' && method === 'POST') {
+    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'POST') {
       const body = await readBody();
       const command = (body && body.command != null) ? String(body.command).trim() : '';
       if (!command) return jsonResponse({ error: 'command required' }, 400);
-      const id = crypto.randomUUID();
+      const wsIns = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const dup = await env.DB.prepare(
+        `SELECT id FROM agentsam_command_allowlist
+         WHERE user_id = ? AND workspace_id = ? AND command = ? LIMIT 1`
+      ).bind(userKey, wsIns, command).first();
+      if (dup) return jsonResponse({ error: 'Command already in allowlist' }, 409);
+      const id = `cal_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
       await env.DB.prepare(
         `INSERT INTO agentsam_command_allowlist
           (id, user_id, workspace_id, command)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, workspace_id, command) DO NOTHING`
-      ).bind(id, userKey, workspaceId, command).run();
-      return jsonResponse({ ok: true, id });
+         VALUES (?, ?, ?, ?)`
+      ).bind(id, userKey, wsIns, command).run();
+      const row = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, command, created_at FROM agentsam_command_allowlist WHERE id = ?`
+      ).bind(id).first();
+      return jsonResponse(row || { ok: true, id }, 201);
     }
 
     {
-      const m = pathLower.match(/^\/api\/agentsam\/command-allowlist\/([^/]+)$/);
+      const m = pathLower.match(/^\/api\/agentsam\/(?:command-allowlist|cmd-allowlist)\/([^/]+)$/);
       if (m && method === 'DELETE') {
-        await env.DB.prepare(
+        const r = await env.DB.prepare(
           `DELETE FROM agentsam_command_allowlist
            WHERE id = ? AND user_id = ?`
         ).bind(m[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
         return jsonResponse({ ok: true });
       }
     }
 
     if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'GET') {
       const { results } = await env.DB.prepare(
-        `SELECT id, tool_key, workspace_id, created_at
+        `SELECT id, user_id, workspace_id, tool_key, created_at
          FROM agentsam_mcp_allowlist
-         WHERE user_id = ? AND workspace_id = ?
+         WHERE user_id = ?
+           AND (
+             TRIM(COALESCE(workspace_id, '')) = ''
+             OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+           )
          ORDER BY tool_key ASC`
-      ).bind(userKey, workspaceId).all();
+      ).bind(userKey, workspaceId, workspaceId).all();
       return jsonResponse(results || []);
     }
 
@@ -7817,54 +9089,147 @@ async function handleAgentsamApi(request, url, env) {
       const body = await readBody();
       const tool_key = (body && body.tool_key != null) ? String(body.tool_key).trim() : '';
       if (!tool_key) return jsonResponse({ error: 'tool_key required' }, 400);
-      const id = crypto.randomUUID();
+      const wsIns = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const dup = await env.DB.prepare(
+        `SELECT id FROM agentsam_mcp_allowlist
+         WHERE user_id = ? AND workspace_id = ? AND tool_key = ? LIMIT 1`
+      ).bind(userKey, wsIns, tool_key).first();
+      if (dup) return jsonResponse({ error: 'Tool already in allowlist' }, 409);
+      const id = `mal_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
       await env.DB.prepare(
         `INSERT INTO agentsam_mcp_allowlist (id, user_id, workspace_id, tool_key)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, workspace_id, tool_key) DO NOTHING`
-      ).bind(id, userKey, workspaceId, tool_key).run();
-      return jsonResponse({ ok: true, id });
+         VALUES (?, ?, ?, ?)`
+      ).bind(id, userKey, wsIns, tool_key).run();
+      const row = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, tool_key, created_at FROM agentsam_mcp_allowlist WHERE id = ?`
+      ).bind(id).first();
+      return jsonResponse(row || { ok: true, id }, 201);
+    }
+
+    if (pathLower === '/api/agentsam/tools-registry' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, tool_name, tool_category, description, enabled
+         FROM mcp_registered_tools
+         ORDER BY tool_category, tool_name`
+      ).all();
+      return jsonResponse(results || []);
     }
 
     {
       const m = pathLower.match(/^\/api\/agentsam\/mcp-allowlist\/([^/]+)$/);
       if (m && method === 'DELETE') {
-        await env.DB.prepare(
+        const r = await env.DB.prepare(
           `DELETE FROM agentsam_mcp_allowlist WHERE id = ? AND user_id = ?`
         ).bind(m[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
         return jsonResponse({ ok: true });
       }
     }
 
     if (pathLower === '/api/agentsam/fetch-domains' && method === 'GET') {
       const { results } = await env.DB.prepare(
-        `SELECT id, host, workspace_id, created_at
+        `SELECT id, user_id, workspace_id, host, created_at
          FROM agentsam_fetch_domain_allowlist
-         WHERE user_id = ? AND workspace_id = ?
+         WHERE user_id = ?
+           AND (
+             TRIM(COALESCE(workspace_id, '')) = ''
+             OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+           )
          ORDER BY host ASC`
-      ).bind(userKey, workspaceId).all();
-      return jsonResponse(results || []);
+      ).bind(userKey, workspaceId, workspaceId).all();
+      return jsonResponse(mergeFetchDomainAllowlistWithBuiltin(results || []));
     }
 
     if (pathLower === '/api/agentsam/fetch-domains' && method === 'POST') {
       const body = await readBody();
-      const host = (body && body.host != null) ? String(body.host).trim() : '';
+      const hostRaw = (body && body.host != null) ? String(body.host).trim() : '';
+      const hostNormBuiltin = normalizeAgentsamFetchHostInput(hostRaw);
+      if (isAgentsamBuiltinFetchHostNormalized(hostNormBuiltin)) {
+        return jsonResponse({ error: 'Host is built-in and already allowed', builtin: true }, 409);
+      }
+      const host = normalizeFetchHost(hostRaw);
       if (!host) return jsonResponse({ error: 'host required' }, 400);
-      const id = crypto.randomUUID();
+      const wsIns = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const dup = await env.DB.prepare(
+        `SELECT id FROM agentsam_fetch_domain_allowlist
+         WHERE user_id = ? AND workspace_id = ? AND host = ? LIMIT 1`
+      ).bind(userKey, wsIns, host).first();
+      if (dup) return jsonResponse({ error: 'Host already in allowlist' }, 409);
+      const id = `fal_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
       await env.DB.prepare(
         `INSERT INTO agentsam_fetch_domain_allowlist (id, user_id, workspace_id, host)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, workspace_id, host) DO NOTHING`
-      ).bind(id, userKey, workspaceId, host).run();
-      return jsonResponse({ ok: true, id });
+         VALUES (?, ?, ?, ?)`
+      ).bind(id, userKey, wsIns, host).run();
+      const row = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, host, created_at FROM agentsam_fetch_domain_allowlist WHERE id = ?`
+      ).bind(id).first();
+      return jsonResponse(row || { ok: true, id }, 201);
     }
 
     {
       const m = pathLower.match(/^\/api\/agentsam\/fetch-domains\/([^/]+)$/);
       if (m && method === 'DELETE') {
-        await env.DB.prepare(
+        if (String(m[1] || '').startsWith('builtin:')) {
+          return jsonResponse({ error: 'Built-in fetch hosts cannot be removed' }, 400);
+        }
+        const r = await env.DB.prepare(
           `DELETE FROM agentsam_fetch_domain_allowlist WHERE id = ? AND user_id = ?`
         ).bind(m[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, host, created_at
+         FROM agentsam_fetch_domain_allowlist
+         WHERE user_id = ?
+           AND (
+             TRIM(COALESCE(workspace_id, '')) = ''
+             OR (LENGTH(TRIM(?)) > 0 AND workspace_id = ?)
+           )
+         ORDER BY host ASC`
+      ).bind(userKey, workspaceId, workspaceId).all();
+      return jsonResponse(mergeFetchDomainAllowlistWithBuiltin(results || []));
+    }
+
+    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'POST') {
+      const body = await readBody();
+      const hostRaw = (body && body.host != null) ? String(body.host).trim() : '';
+      const hostNormBuiltin = normalizeAgentsamFetchHostInput(hostRaw);
+      if (isAgentsamBuiltinFetchHostNormalized(hostNormBuiltin)) {
+        return jsonResponse({ error: 'Host is built-in and already allowed', builtin: true }, 409);
+      }
+      const host = normalizeFetchHost(hostRaw);
+      if (!host) return jsonResponse({ error: 'host required' }, 400);
+      const wsIns = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const dup = await env.DB.prepare(
+        `SELECT id FROM agentsam_fetch_domain_allowlist
+         WHERE user_id = ? AND workspace_id = ? AND host = ? LIMIT 1`
+      ).bind(userKey, wsIns, host).first();
+      if (dup) return jsonResponse({ error: 'Host already in allowlist' }, 409);
+      const id = `fal_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      await env.DB.prepare(
+        `INSERT INTO agentsam_fetch_domain_allowlist (id, user_id, workspace_id, host)
+         VALUES (?, ?, ?, ?)`
+      ).bind(id, userKey, wsIns, host).run();
+      const row = await env.DB.prepare(
+        `SELECT id, user_id, workspace_id, host, created_at FROM agentsam_fetch_domain_allowlist WHERE id = ?`
+      ).bind(id).first();
+      return jsonResponse(row || { ok: true, id }, 201);
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/fetch-allowlist\/([^/]+)$/);
+      if (m && method === 'DELETE') {
+        if (String(m[1] || '').startsWith('builtin:')) {
+          return jsonResponse({ error: 'Built-in fetch hosts cannot be removed' }, 400);
+        }
+        const r = await env.DB.prepare(
+          `DELETE FROM agentsam_fetch_domain_allowlist WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
         return jsonResponse({ ok: true });
       }
     }
@@ -8081,11 +9446,181 @@ async function handleAgentsamApi(request, url, env) {
       }
     }
 
+    if (pathLower === '/api/agentsam/skills' && method === 'GET') {
+      const includeInactive = url.searchParams.get('include_inactive') === '1';
+      const ws = workspaceId;
+      let sql = `SELECT * FROM agentsam_skill WHERE user_id = ? AND (
+        workspace_id IS NULL OR TRIM(COALESCE(workspace_id, '')) = '' OR workspace_id = ?
+      )`;
+      if (!includeInactive) sql += ' AND is_active = 1';
+      sql += ' ORDER BY name COLLATE NOCASE';
+      const { results } = await env.DB.prepare(sql).bind(userKey, ws).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/skills' && method === 'POST') {
+      const body = await readBody();
+      if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
+      const name = String(body.name || '').trim();
+      if (!name) return jsonResponse({ error: 'name required' }, 400);
+      const description = body.description != null ? String(body.description) : '';
+      const content_markdown = body.content_markdown != null ? String(body.content_markdown) : '';
+      const metadata_json = body.metadata_json != null ? String(body.metadata_json) : '{}';
+      const scopeRaw = body.scope != null ? String(body.scope).trim() : 'user';
+      const scope = ['user', 'workspace', 'global'].includes(scopeRaw) ? scopeRaw : 'user';
+      let workspaceIdSkill = null;
+      if (scope === 'workspace') {
+        workspaceIdSkill = body.workspace_id != null && String(body.workspace_id).trim() !== ''
+          ? String(body.workspace_id).trim()
+          : 'tenant_sam_primeaux';
+      }
+      const safeSlug = name.replace(/[^a-zA-Z0-9_-]+/g, '_') || 'skill';
+      const filePath = body.file_path != null && String(body.file_path).trim() !== ''
+        ? String(body.file_path).trim()
+        : `/mnt/skills/user/${safeSlug}.md`;
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO agentsam_skill
+          (id, user_id, name, description, file_path, scope, workspace_id, content_markdown, metadata_json, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+      ).bind(id, userKey, name, description, filePath, scope, workspaceIdSkill, content_markdown, metadata_json).run();
+      const row = await env.DB.prepare(
+        `SELECT * FROM agentsam_skill WHERE id = ? AND user_id = ?`
+      ).bind(id, userKey).first();
+      return jsonResponse(row || { ok: true, id });
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/skills\/([^/]+)$/);
+      if (m && method === 'PATCH') {
+        const sid = m[1];
+        const body = await readBody();
+        if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
+        const fields = ['name', 'description', 'content_markdown', 'metadata_json', 'file_path', 'scope', 'workspace_id', 'is_active'];
+        const setParts = [];
+        const vals = [];
+        for (const f of fields) {
+          if (Object.prototype.hasOwnProperty.call(body, f)) {
+            setParts.push(`${f} = ?`);
+            let v = body[f];
+            if (f === 'is_active') v = v ? 1 : 0;
+            vals.push(v);
+          }
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No fields to update' }, 400);
+        vals.push(sid, userKey);
+        const sql = `UPDATE agentsam_skill SET ${setParts.join(', ')}, updated_at = datetime('now') WHERE id = ? AND user_id = ?`;
+        await env.DB.prepare(sql).bind(...vals).run();
+        const row = await env.DB.prepare(
+          `SELECT * FROM agentsam_skill WHERE id = ? AND user_id = ?`
+        ).bind(sid, userKey).first();
+        return jsonResponse(row || { ok: true });
+      }
+      if (m && method === 'DELETE') {
+        await env.DB.prepare(
+          `DELETE FROM agentsam_skill WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/ignore-patterns/reorder' && method === 'PATCH') {
+      const body = await readBody();
+      const ids = body && Array.isArray(body.ids) ? body.ids : null;
+      if (!ids || !ids.length) return jsonResponse({ error: 'ids array required' }, 400);
+      const stmts = ids.map((rid, i) => {
+        const idStr = rid != null ? String(rid) : '';
+        return env.DB.prepare(
+          `UPDATE agentsam_ignore_pattern
+           SET order_index = ?, updated_at = datetime('now')
+           WHERE id = ? AND user_id = ?`
+        ).bind(i, idStr, userKey);
+      });
+      await env.DB.batch(stmts);
+      return jsonResponse({ ok: true, count: ids.length });
+    }
+
+    {
+      const ignOne = pathLower.match(/^\/api\/agentsam\/ignore-patterns\/([^/]+)$/);
+      if (ignOne && ignOne[1] !== 'reorder' && method === 'DELETE') {
+        const rid = ignOne[1];
+        const row = await env.DB.prepare(
+          `SELECT source FROM agentsam_ignore_pattern
+           WHERE id = ? AND user_id = ? AND COALESCE(workspace_id, '') = ?`
+        ).bind(rid, userKey, workspaceId).first();
+        if (!row) return jsonResponse({ error: 'Not found' }, 404);
+        if (String(row.source || '') === 'file') {
+          return jsonResponse({ error: 'Cannot delete file-sourced pattern' }, 403);
+        }
+        const del = await env.DB.prepare(
+          `DELETE FROM agentsam_ignore_pattern WHERE id = ? AND user_id = ? AND source = 'db'`
+        ).bind(rid, userKey).run();
+        if (!del.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true });
+      }
+      if (ignOne && ignOne[1] !== 'reorder' && method === 'PATCH') {
+        const rid = ignOne[1];
+        const body = await readBody();
+        const row = await env.DB.prepare(
+          `SELECT source FROM agentsam_ignore_pattern
+           WHERE id = ? AND user_id = ? AND COALESCE(workspace_id, '') = ?`
+        ).bind(rid, userKey, workspaceId).first();
+        if (!row) return jsonResponse({ error: 'Not found' }, 404);
+        if (String(row.source || '') === 'file') {
+          return jsonResponse({ error: 'Cannot edit file-sourced pattern' }, 403);
+        }
+        const setParts = [];
+        const vals = [];
+        if (Object.prototype.hasOwnProperty.call(body, 'is_negation')) {
+          setParts.push('is_negation = ?');
+          vals.push(body.is_negation ? 1 : 0);
+        }
+        if (body.pattern != null) {
+          const p = String(body.pattern).trim();
+          if (!p) return jsonResponse({ error: 'pattern cannot be empty' }, 400);
+          setParts.push('pattern = ?');
+          vals.push(p);
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No valid fields' }, 400);
+        setParts.push("updated_at = datetime('now')");
+        vals.push(rid, userKey);
+        const sql = `UPDATE agentsam_ignore_pattern SET ${setParts.join(', ')} WHERE id = ? AND user_id = ?`;
+        await env.DB.prepare(sql).bind(...vals).run();
+        const out = await env.DB.prepare(
+          `SELECT id, pattern, is_negation, order_index, source FROM agentsam_ignore_pattern WHERE id = ?`
+        ).bind(rid).first();
+        return jsonResponse(out || { ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'POST') {
+      const body = await readBody();
+      const pat = body && body.pattern != null ? String(body.pattern).trim() : '';
+      if (!pat) return jsonResponse({ error: 'pattern required' }, 400);
+      const isNeg = body && body.is_negation ? 1 : 0;
+      const ws = body && body.workspace_id != null ? String(body.workspace_id) : workspaceId;
+      const maxRow = await env.DB.prepare(
+        `SELECT MAX(order_index) AS m FROM agentsam_ignore_pattern
+         WHERE user_id = ? AND COALESCE(workspace_id, '') = ?`
+      ).bind(userKey, ws).first();
+      const nextIdx = (maxRow?.m != null ? Number(maxRow.m) : -1) + 1;
+      const pid = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO agentsam_ignore_pattern
+          (id, user_id, workspace_id, pattern, is_negation, order_index, source)
+         VALUES (?, ?, ?, ?, ?, ?, 'db')`
+      ).bind(pid, userKey, ws, pat, isNeg, nextIdx).run();
+      const row = await env.DB.prepare(
+        `SELECT id, pattern, is_negation, order_index, source FROM agentsam_ignore_pattern WHERE id = ?`
+      ).bind(pid).first();
+      return jsonResponse(row || { ok: true });
+    }
+
     if (pathLower === '/api/agentsam/ignore-patterns' && method === 'GET') {
       const { results } = await env.DB.prepare(
         `SELECT id, pattern, is_negation, order_index, source
          FROM agentsam_ignore_pattern
-         WHERE user_id = ? AND workspace_id = ?
+         WHERE user_id = ? AND COALESCE(workspace_id, '') = ?
          ORDER BY order_index ASC`
       ).bind(userKey, workspaceId).all();
       return jsonResponse(results || []);
@@ -8141,6 +9676,46 @@ async function handleAgentsamApi(request, url, env) {
       return jsonResponse(row);
     }
 
+    if (pathLower === '/api/agentsam/indexing-summary' && method === 'GET') {
+      const ws = workspaceId;
+      const [jobRow, kbRow] = await Promise.all([
+        env.DB.prepare(
+          `SELECT status, file_count, progress_percent, last_sync_at, last_error, vector_backend
+           FROM agentsam_code_index_job
+           WHERE user_id = ? AND workspace_id = ?
+           LIMIT 1`
+        ).bind(userKey, ws).first(),
+        env.DB.prepare(`SELECT COUNT(*) AS c FROM ai_knowledge_base WHERE is_active = 1`).first(),
+      ]);
+      const code_index = jobRow
+        ? {
+            status: jobRow.status || 'idle',
+            file_count: jobRow.file_count ?? 0,
+            progress_percent: jobRow.progress_percent ?? 0,
+            last_sync_at: jobRow.last_sync_at ?? null,
+            last_error: jobRow.last_error ?? null,
+            vector_backend: jobRow.vector_backend ?? null,
+          }
+        : {
+            status: 'idle',
+            file_count: 0,
+            progress_percent: 0,
+            last_sync_at: null,
+            last_error: null,
+            vector_backend: null,
+          };
+      const active_documents = kbRow && kbRow.c != null ? Number(kbRow.c) : 0;
+      return jsonResponse({
+        code_index,
+        knowledge: { active_documents },
+        bindings: {
+          vectorize: !!env.VECTORIZE,
+          r2: !!(env.R2 || env.ASSETS),
+          workers_ai: !!env.AI,
+        },
+      });
+    }
+
     if (pathLower === '/api/agentsam/runs' && method === 'GET') {
       const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
       const { results } = await env.DB.prepare(
@@ -8155,17 +9730,42 @@ async function handleAgentsamApi(request, url, env) {
     }
 
     if (pathLower === '/api/agentsam/ai' && method === 'GET') {
-      const { results } = await env.DB.prepare(
-        `SELECT id, name, role_name, mode, safety_level, status,
-          model_policy_json, requires_human_approval, mcp_services_json,
-          tool_permissions_json, rate_limits_json, budgets_json,
-          telemetry_enabled, total_runs, total_cost_usd, success_rate,
-          last_run_at, last_error, config_version
-         FROM agentsam_ai
-         WHERE tenant_id = 'tenant_sam_primeaux'
-         ORDER BY total_runs DESC`
-      ).all();
-      return jsonResponse(results || []);
+      let results = [];
+      try {
+        const r = await env.DB.prepare(
+          `SELECT a.id, a.name, a.role_name, a.mode, a.safety_level, a.status,
+            a.model_policy_json, a.requires_human_approval, a.mcp_services_json,
+            a.tool_permissions_json, a.rate_limits_json, a.budgets_json,
+            a.telemetry_enabled, a.total_runs, a.total_cost_usd, a.success_rate,
+            a.last_run_at, a.last_error, a.config_version,
+            COALESCE(s.session_count, 0) AS session_count
+           FROM agentsam_ai a
+           LEFT JOIN (
+             SELECT agent_id, COUNT(*) AS session_count FROM mcp_agent_sessions GROUP BY agent_id
+           ) s ON s.agent_id = a.id
+           WHERE a.tenant_id = 'tenant_sam_primeaux'
+           ORDER BY a.total_runs DESC`
+        ).all();
+        results = r.results || [];
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('mcp_agent_sessions') || msg.includes('no such table')) {
+          const r = await env.DB.prepare(
+            `SELECT id, name, role_name, mode, safety_level, status,
+              model_policy_json, requires_human_approval, mcp_services_json,
+              tool_permissions_json, rate_limits_json, budgets_json,
+              telemetry_enabled, total_runs, total_cost_usd, success_rate,
+              last_run_at, last_error, config_version, 0 AS session_count
+             FROM agentsam_ai
+             WHERE tenant_id = 'tenant_sam_primeaux'
+             ORDER BY total_runs DESC`
+          ).all();
+          results = r.results || [];
+        } else {
+          throw e;
+        }
+      }
+      return jsonResponse(results);
     }
 
     return jsonResponse({ error: 'Not found' }, 404);
@@ -8180,6 +9780,40 @@ async function handleMcpApi(req, u, e, ctx) {
   const MCP_WF_TENANT = 'tenant_sam_primeaux';
   if (!e.DB) return jsonResponse({ error: 'DB not configured' }, 503);
   try {
+    if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
+      const au = await getAuthUser(req, e);
+      if (!au) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const { results } = await e.DB.prepare(
+        'SELECT * FROM mcp_server_allowlist ORDER BY server_name ASC LIMIT 500'
+      ).all();
+      return jsonResponse({ allowlist: results || [] });
+    }
+    if (pathLower === '/api/mcp/credentials' && method === 'GET') {
+      const au = await getAuthUser(req, e);
+      if (!au) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const { results } = await e.DB.prepare(
+        'SELECT * FROM mcp_service_credentials ORDER BY service_name ASC LIMIT 200'
+      ).all();
+      return jsonResponse({ credentials: results || [] });
+    }
+    if (pathLower === '/api/mcp/audit' && method === 'GET') {
+      const au = await getAuthUser(req, e);
+      if (!au) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const lim = Math.min(500, Math.max(1, parseInt(u.searchParams.get('limit') || '200', 10) || 200));
+      const { results } = await e.DB.prepare(
+        'SELECT * FROM mcp_audit_log ORDER BY created_at DESC LIMIT ?'
+      ).bind(lim).all();
+      return jsonResponse({ audit: results || [] });
+    }
+    if (pathLower === '/api/mcp/stats' && method === 'GET') {
+      const au = await getAuthUser(req, e);
+      if (!au) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const lim = Math.min(500, Math.max(1, parseInt(u.searchParams.get('limit') || '200', 10) || 200));
+      const { results } = await e.DB.prepare(
+        'SELECT * FROM mcp_tool_call_stats ORDER BY date DESC, call_count DESC LIMIT ?'
+      ).bind(lim).all();
+      return jsonResponse({ stats: results || [] });
+    }
     if (pathLower === '/api/mcp/status' && method === 'GET') {
       return jsonResponse({ ok: true, service: 'mcp', status: 'connected' }, 200);
     }
@@ -8868,45 +10502,17 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
-  if (tool_name === 'knowledge_search' && env.AI) {
+  if (tool_name === 'knowledge_search') {
     const query = (params.query ?? params.search_query ?? '').trim();
     if (!query) {
       await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: 'query required', serviceName: 'builtin' });
       return { error: 'query required' };
     }
+    const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
     try {
-      console.log('[knowledge_search] Using Vectorize RAG', { query });
-      const aiSearchResponse = await vectorizeRagSearch(env, query, { topK: 5 });
-      let results = aiSearchResponse?.results ?? aiSearchResponse?.data ?? [];
-      let answer = results.map(r => (r.content ?? r.text ?? '')).filter(Boolean).join('\n\n').slice(0, 10000) || '';
-      if (results.length === 0 && env.VECTORIZE && env.R2 && env.AI) {
-        console.log('[knowledge_search] AI Search returned 0 results, trying direct Vectorize query');
-        try {
-          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [query] });
-          const data = modelResp?.data ?? modelResp;
-          const vector = (Array.isArray(data) ? data : data?.data)?.[0];
-          if (vector && Array.isArray(vector)) {
-            const vectorMatches = await env.VECTORIZE.query(vector, { topK: 5, returnMetadata: 'all' });
-            const matches = vectorMatches?.matches ?? vectorMatches ?? [];
-            const seen = new Set();
-            for (const m of matches) {
-              const source = m?.metadata?.source;
-              if (!source || seen.has(source)) continue;
-              seen.add(source);
-              const obj = await env.R2.get(source);
-              if (obj) {
-                const text = await obj.text();
-                const content = text.slice(0, 8000);
-                results.push({ content, text: content, source, metadata: { source }, score: m.score ?? 0 });
-              }
-            }
-            if (results.length > 0) answer = results.map(r => r.content ?? r.text ?? '').filter(Boolean).join('\n\n').slice(0, 10000);
-          }
-        } catch (fallbackErr) {
-          console.warn('[knowledge_search] Vectorize fallback error', fallbackErr?.message ?? fallbackErr);
-        }
-      }
-      console.log('[knowledge_search] AI Search results', { count: results.length });
+      console.log('[knowledge_search] D1 ai_knowledge_base + AI Search (parallel)', { query, max_results });
+      const { merged, answer, query: q } = await runKnowledgeSearchMerged(env, query, max_results);
+      const results = merged;
       if (env.DB) {
         try {
           await env.DB.prepare(
@@ -8914,22 +10520,27 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
           ).bind(
             crypto.randomUUID(),
             'tenant_sam_primeaux',
-            query,
-            JSON.stringify(results.map(r => r.id ?? r.source ?? '')),
+            q,
+            JSON.stringify(results.map(r => r.file_id ?? r.title ?? r.sourceTag ?? '')),
             answer,
             Math.floor(Date.now() / 1000)
           ).run();
         } catch (dbErr) {
           await env.DB.prepare(
             `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, context_used, created_at) VALUES (?, ?, ?, ?, unixepoch())`
-          ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', query, answer).run().catch(() => {});
+          ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', q, answer).run().catch(() => {});
         }
       }
       const resultPayload = {
-        query,
+        query: q,
         answer,
-        results: results.map(r => ({ content: r.content ?? r.text, source: r.source ?? r.metadata?.source ?? 'unknown', score: r.score })),
-        sources: results.map(r => r.source ?? r.metadata?.source ?? ''),
+        results: results.map(r => ({
+          content: r.content,
+          source: r.sourceTag ?? r.source ?? 'unknown',
+          score: r.score,
+          title: r.title,
+        })),
+        sources: results.map(r => r.sourceTag ?? r.source ?? ''),
       };
       const resultText = JSON.stringify(resultPayload);
       const out = { result: resultText };
@@ -8937,7 +10548,40 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return out;
     } catch (e) {
       const errMsg = e?.message ?? String(e);
-      console.error('[knowledge_search] AI Search error:', errMsg);
+      console.error('[knowledge_search] error:', errMsg);
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'rag_search') {
+    await ensureRagSearchToolRegistered(env);
+    const query = (params.query ?? params.search_query ?? '').trim();
+    if (!query) {
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: 'query required', serviceName: 'builtin' });
+      return { error: 'query required' };
+    }
+    const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
+    try {
+      const configured = aiSearchIsConfigured(env);
+      const hits = await autoragAiSearchQuery(env, query, max_results);
+      const payload = { results: [] };
+      if (!hits.length && !configured) {
+        payload.warning = 'AI Search not configured';
+      } else {
+        payload.results = hits.map(h => ({
+          file_id: h.file_id ?? null,
+          filename: h.filename ?? null,
+          score: h.score ?? null,
+          content: h.content ?? '',
+          source: h.sourceTag ?? h.source ?? 'ai_search',
+        }));
+      }
+      const resultText = JSON.stringify(payload);
+      const out = { result: resultText };
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      return out;
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
       await rec( { conversationId, toolName: tool_name, toolCategory: 'knowledge', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
@@ -10853,6 +12497,169 @@ async function getIntegrationToken(DB, userId, provider, accountId) {
     `SELECT access_token, refresh_token, expires_at FROM user_oauth_tokens WHERE user_id = ? AND provider = ? AND account_identifier = ?`
   ).bind(userId, provider, aid).first();
   return row || null;
+}
+
+let _ragSearchToolEnsured = false;
+
+function aiSearchIsConfigured(env) {
+  if (env.AI_SEARCH && typeof env.AI_SEARCH.search === 'function') return true;
+  return !!(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN);
+}
+
+function normKbTitle(t) {
+  return String(t || '').toLowerCase().trim();
+}
+
+function d1KbRowToHit(row) {
+  return {
+    title: row.title || row.id || 'untitled',
+    content: String(row.content || '').slice(0, 12000),
+    score: null,
+    source: 'd1',
+    sourceTag: 'd1',
+    file_id: row.id ?? null,
+    filename: null,
+  };
+}
+
+function parseAutoragHits(raw) {
+  const items = [];
+  const push = (x) => {
+    if (!x || typeof x !== 'object') return;
+    const content = x.content ?? x.text ?? x.chunk ?? x.body ?? '';
+    const score = x.score ?? x.similarity ?? x.relevance ?? null;
+    const file_id = x.file_id ?? x.id ?? x.document_id ?? null;
+    const filename = x.filename ?? x.file_name ?? x.path ?? x.metadata?.filename ?? null;
+    let title = x.title;
+    if (!title && filename) title = String(filename).split('/').pop() || '';
+    if (!title && content) title = String(content).slice(0, 120);
+    if (!title) title = 'untitled';
+    items.push({
+      title,
+      content: String(content).slice(0, 12000),
+      score,
+      source: 'ai_search',
+      sourceTag: 'ai_search',
+      file_id,
+      filename,
+    });
+  };
+  if (Array.isArray(raw)) {
+    raw.forEach(push);
+    return items;
+  }
+  const nested = raw?.result ?? raw?.data ?? raw?.results ?? raw?.response;
+  if (Array.isArray(nested)) {
+    nested.forEach(push);
+    return items;
+  }
+  if (nested && typeof nested === 'object') {
+    const inner = nested.chunks ?? nested.matches ?? nested.data ?? nested.documents;
+    if (Array.isArray(inner)) inner.forEach(push);
+  }
+  if (raw?.response?.chunks && Array.isArray(raw.response.chunks)) raw.response.chunks.forEach(push);
+  return items;
+}
+
+async function autoragAiSearchQuery(env, queryStr, maxResults) {
+  const n = Math.min(Math.max(1, maxResults || 5), 20);
+  if (env.AI_SEARCH && typeof env.AI_SEARCH.search === 'function') {
+    try {
+      const raw = await env.AI_SEARCH.search({ query: queryStr, max_results: n });
+      return parseAutoragHits(raw);
+    } catch (e) {
+      console.warn('[autoragAiSearchQuery] AI_SEARCH binding', e?.message ?? e);
+    }
+  }
+  const account = env.CLOUDFLARE_ACCOUNT_ID;
+  const token = env.CLOUDFLARE_API_TOKEN;
+  if (!account || !token) return [];
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai-search/indexes/autorag/search`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: queryStr, max_results: n }),
+      }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) return [];
+    return parseAutoragHits(data.result ?? data.data ?? data);
+  } catch (e) {
+    console.warn('[autoragAiSearchQuery] REST', e?.message ?? e);
+    return [];
+  }
+}
+
+function mergeD1AndAiKbHits(d1Rows, aiHits, maxR) {
+  const cap = Math.min(maxR * 2, 40);
+  const d1Items = (d1Rows || []).map(d1KbRowToHit);
+  const aiItems = aiHits || [];
+  const aiByTitle = new Map();
+  for (const a of aiItems) {
+    const k = normKbTitle(a.title);
+    if (!k) continue;
+    aiByTitle.set(k, a);
+  }
+  const d1Keys = new Set(d1Items.map((d) => normKbTitle(d.title)).filter(Boolean));
+  const out = [];
+  for (const d of d1Items) {
+    const k = normKbTitle(d.title);
+    if (!k) continue;
+    out.push(aiByTitle.has(k) ? aiByTitle.get(k) : d);
+  }
+  const seenInOut = new Set(out.map((x) => normKbTitle(x.title)).filter(Boolean));
+  for (const a of aiItems) {
+    const k = normKbTitle(a.title);
+    if (!k || d1Keys.has(k) || seenInOut.has(k)) continue;
+    out.push(a);
+    seenInOut.add(k);
+  }
+  return out.slice(0, cap);
+}
+
+async function runKnowledgeSearchMerged(env, query, max_results) {
+  const maxR = Math.min(Math.max(1, Number(max_results) || 5), 10);
+  const d1Promise = env.DB
+    ? env.DB.prepare(
+        'SELECT * FROM ai_knowledge_base WHERE COALESCE(is_active, 1) = 1 ORDER BY updated_at DESC LIMIT ?'
+      )
+        .bind(maxR)
+        .all()
+        .then((r) => r.results ?? [])
+    : Promise.resolve([]);
+  const aiPromise = autoragAiSearchQuery(env, query, maxR);
+  const [d1Rows, aiHits] = await Promise.all([d1Promise, aiPromise]);
+  const merged = mergeD1AndAiKbHits(d1Rows, aiHits, maxR);
+  const answer = merged.map((m) => m.content).filter(Boolean).join('\n\n').slice(0, 10000) || '';
+  return { query, merged, answer };
+}
+
+async function ensureRagSearchToolRegistered(env) {
+  if (_ragSearchToolEnsured || !env.DB) return;
+  try {
+    const exists = await env.DB.prepare('SELECT id FROM mcp_registered_tools WHERE id = ?').bind('tool_rag_search').first();
+    if (exists) {
+      _ragSearchToolEnsured = true;
+      return;
+    }
+    await env.DB.prepare(
+      `INSERT INTO mcp_registered_tools (id, tool_name, tool_category, mcp_service_url, description, input_schema, requires_approval, enabled, created_at, updated_at)
+       VALUES ('tool_rag_search', 'rag_search', 'query', 'builtin', ?, ?, 0, 1, unixepoch(), unixepoch())`
+    )
+      .bind(
+        'Search the AutoRAG / AI Search index for skill documentation, architecture references, and technical guides stored in R2. Use for deep skill content when knowledge_search returns insufficient context.',
+        '{"type":"object","properties":{"query":{"type":"string","description":"Search query"},"max_results":{"type":"number","description":"Max results 1-10","default":5}},"required":["query"]}'
+      )
+      .run();
+  } catch (e) {
+    console.warn('[ensureRagSearchToolRegistered]', e?.message ?? e);
+  }
+  _ragSearchToolEnsured = true;
 }
 
 const RAG_MEMORY_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
@@ -12856,46 +14663,115 @@ async function hashPassword(password) {
   return { saltHex, hashHex };
 }
 
-/** POST /api/auth/login -- body: { email, password }. Creates session and redirects to /dashboard/overview. */
+/** POST /api/auth/login -- body: { email, password, next? }. JSON clients get { ok, redirect } + Set-Cookie; others 302. */
 async function handleEmailPasswordLogin(request, url, env) {
+  const accept = request.headers.get('Accept') || '';
+  const contentType = request.headers.get('Content-Type') || '';
+  const wantsJson = accept.includes('application/json') || contentType.includes('application/json');
+
+  function loginJson(ok, data, status) {
+    const h = new Headers({ 'Content-Type': 'application/json' });
+    if (data && data._setCookie) {
+      h.append('Set-Cookie', data._setCookie);
+      delete data._setCookie;
+    }
+    return new Response(JSON.stringify(ok ? { ok: true, ...data } : { ok: false, ...data }), {
+      status: status ?? (ok ? 200 : 401),
+      headers: h,
+    });
+  }
+
+  async function finishLogin(userId, redirectPath) {
+    const sessionId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const ip = request.headers.get('cf-connecting-ip') || '';
+    const ua = request.headers.get('user-agent') || '';
+    await env.DB.prepare(
+      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
+    ).bind(sessionId, userId, expiresAt, ip, ua).run();
+    const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+    const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
+    const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
+      ? String(redirectPath)
+      : '/dashboard/overview';
+    if (wantsJson) {
+      return loginJson(true, { redirect: next, _setCookie: cookie }, 200);
+    }
+    const headers = new Headers({ Location: `${origin(url)}${next}` });
+    headers.append('Set-Cookie', cookie);
+    return new Response(null, { status: 302, headers });
+  }
+
   if (!env.DB) {
+    if (wantsJson) return loginJson(false, { error: 'Service unavailable' }, 503);
     return Response.redirect(`${origin(url)}/auth/signin?error=unavailable`, 302);
   }
   let body;
   try {
     body = await request.json();
   } catch (_) {
+    if (wantsJson) return loginJson(false, { error: 'Invalid JSON' }, 400);
     return Response.redirect(`${origin(url)}/auth/signin?error=invalid_body`, 302);
   }
   const email = (body.email || '').toString().toLowerCase().trim();
   const password = (body.password || '').toString();
   if (!email || !password) {
+    if (wantsJson) return loginJson(false, { error: 'Email and password required' }, 400);
     return Response.redirect(`${origin(url)}/auth/signin?error=missing`, 302);
   }
+
+  const host = url.hostname || '';
+  const isWorkersDev = host.endsWith('.workers.dev');
+  if (isWorkersDev) {
+    let sandboxGateOk = false;
+    const pHash = env.SANDBOX_DASHBOARD_PBKDF2_HASH;
+    const pSalt = env.SANDBOX_DASHBOARD_PBKDF2_SALT;
+    if (pHash && pSalt) {
+      try {
+        sandboxGateOk = await verifyPassword(password, String(pSalt), String(pHash));
+      } catch (_) {
+        sandboxGateOk = false;
+      }
+    } else if (env.SANDBOX_DASHBOARD_PASSWORD) {
+      const exp = String(env.SANDBOX_DASHBOARD_PASSWORD);
+      sandboxGateOk = exp.length === password.length && timingSafeEqualUtf8(exp, password);
+    }
+    if (sandboxGateOk) {
+      const imp = (env.SANDBOX_DASHBOARD_IMPERSONATE_USER || email).toString().toLowerCase().trim();
+      const row = await env.DB.prepare(
+        `SELECT id FROM auth_users WHERE LOWER(id) = ? OR LOWER(email) = ? LIMIT 1`
+      ).bind(imp, imp).first();
+      if (!row) {
+        if (wantsJson) {
+          return loginJson(
+            false,
+            { error: 'Sandbox login: no auth_users row for that account. Set SANDBOX_DASHBOARD_IMPERSONATE_USER or use an existing email.' },
+            401
+          );
+        }
+        return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
+      }
+      return finishLogin(row.id, body.next);
+    }
+  }
+
   const user = await env.DB.prepare(
-    `SELECT id, email, name, password_hash, salt FROM auth_users WHERE id = ?`
-  ).bind(email).first();
+    `SELECT id, email, name, password_hash, salt FROM auth_users WHERE LOWER(id) = ? OR LOWER(email) = ? LIMIT 1`
+  ).bind(email, email).first();
   if (!user || !user.password_hash || !user.salt) {
+    if (wantsJson) return loginJson(false, { error: 'Invalid email or password' }, 401);
     return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
   }
   if (user.password_hash === 'oauth' || user.salt === 'oauth') {
+    if (wantsJson) return loginJson(false, { error: 'This account uses Google or GitHub sign-in.' }, 400);
     return Response.redirect(`${origin(url)}/auth/signin?error=use_oauth`, 302);
   }
   const ok = await verifyPassword(password, user.salt, user.password_hash);
   if (!ok) {
+    if (wantsJson) return loginJson(false, { error: 'Invalid email or password' }, 401);
     return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
   }
-  const sessionId = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  const ip = request.headers.get('cf-connecting-ip') || '';
-  const ua = request.headers.get('user-agent') || '';
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, user.id, expiresAt, ip, ua).run();
-  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
-  const headers = new Headers({ Location: `${origin(url)}/dashboard/overview` });
-  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
-  return new Response(null, { status: 302, headers });
+  return finishLogin(user.id, body.next);
 }
 
 /** POST /api/auth/backup-code -- body: { email, code }. Verifies one-time backup code, marks it used, creates session. Returns 200 + Set-Cookie + { ok, redirect }. */

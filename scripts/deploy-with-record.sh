@@ -14,18 +14,23 @@
 #
 # Flags:
 #   --skip-docs     Skip uploading docs/*.md to R2 (faster). Does not update .deploy-docs-baseline.
+#   --worker-only   Skip agent.html ?v= bump, dashboard JS/CSS/HTML R2 uploads, and dashboard_versions D1 rows.
+#                   Use when deploying worker-only (no frontend/dashboard changes).
 # By default, only markdown under docs/ that differs since the last successful deploy is uploaded
 # (git: commit in .deploy-docs-baseline vs current working tree). Delete that file to force a full doc sync.
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKIP_DOCS=0
+WORKER_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --skip-docs) SKIP_DOCS=1 ;;
+    --worker-only) WORKER_ONLY=1 ;;
     -h|--help)
-      echo "Usage: ./scripts/deploy-with-record.sh [--skip-docs]"
-      echo "  --skip-docs   Skip docs R2 uploads. Baseline is not updated for docs."
+      echo "Usage: ./scripts/deploy-with-record.sh [--skip-docs] [--worker-only]"
+      echo "  --skip-docs     Skip docs R2 uploads. Baseline is not updated for docs."
+      echo "  --worker-only   Worker deploy only: no agent.html cache bust, no dashboard R2/D1."
       echo "  Default: incremental docs via .deploy-docs-baseline (git diff vs working tree)."
       exit 0
       ;;
@@ -50,28 +55,32 @@ export TRIGGERED_BY
 export DEPLOYMENT_NOTES
 export DEPLOY_VERSION
 
-# Auto-increment ?v= in agent.html before R2 upload
-CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html | head -1 | grep -o '[0-9]*')
-NEXT_V=$((CURRENT_V + 1))
-sed -i '' "s/?v=${CURRENT_V}/?v=${NEXT_V}/g" dashboard/agent.html
-echo "Cache bust: v${CURRENT_V} -> v${NEXT_V}"
+if [[ "$WORKER_ONLY" -eq 1 ]]; then
+  echo "Worker-only deploy: skipping agent.html cache bust, dashboard R2 uploads, and dashboard_versions D1"
+else
+  # Auto-increment ?v= in agent.html before R2 upload
+  CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html | head -1 | grep -o '[0-9]*')
+  NEXT_V=$((CURRENT_V + 1))
+  sed -i '' "s/?v=${CURRENT_V}/?v=${NEXT_V}/g" dashboard/agent.html
+  echo "Cache bust: v${CURRENT_V} -> v${NEXT_V}"
 
-# Upload agent-dashboard assets to R2 (agent-sam)
-./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file agent-dashboard/dist/agent-dashboard.js --content-type "application/javascript" --config wrangler.production.toml --remote
-./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file agent-dashboard/dist/agent-dashboard.css --content-type "text/css" --config wrangler.production.toml --remote
-./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file dashboard/agent.html --content-type "text/html" --config wrangler.production.toml --remote
+  # Upload agent-dashboard assets to R2 (agent-sam)
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file agent-dashboard/dist/agent-dashboard.js --content-type "application/javascript" --config wrangler.production.toml --remote
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file agent-dashboard/dist/agent-dashboard.css --content-type "text/css" --config wrangler.production.toml --remote
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent.html --file dashboard/agent.html --content-type "text/html" --config wrangler.production.toml --remote
 
-# Log agent dashboard R2 uploads to dashboard_versions (D1)
-JS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.js 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.js | awk '{print $1}')
-CSS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.css 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.css | awk '{print $1}')
-HTML_HASH=$(md5 -q dashboard/agent.html 2>/dev/null || md5sum dashboard/agent.html | awk '{print $1}')
-JS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.js | tr -d ' ')
-CSS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.css | tr -d ' ')
-HTML_SIZE=$(wc -c < dashboard/agent.html | tr -d ' ')
-DEPLOY_TS=$(date +%s)
-D1_DASH_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ('agent-js-v${NEXT_V}-${DEPLOY_TS}', 'agent', 'v${NEXT_V}', '${JS_HASH}', ${JS_SIZE}, 'static/dashboard/agent/agent-dashboard.js', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-css-v${NEXT_V}-${DEPLOY_TS}', 'agent-css', 'v${NEXT_V}', '${CSS_HASH}', ${CSS_SIZE}, 'static/dashboard/agent/agent-dashboard.css', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-html-v${NEXT_V}-${DEPLOY_TS}', 'agent-html', 'v${NEXT_V}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch())"
-./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote --config "$CONFIG" --command "$D1_DASH_SQL"
-echo "Logged dashboard_versions for agent v${NEXT_V} (js/css/html)"
+  # Log agent dashboard R2 uploads to dashboard_versions (D1)
+  JS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.js 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.js | awk '{print $1}')
+  CSS_HASH=$(md5 -q agent-dashboard/dist/agent-dashboard.css 2>/dev/null || md5sum agent-dashboard/dist/agent-dashboard.css | awk '{print $1}')
+  HTML_HASH=$(md5 -q dashboard/agent.html 2>/dev/null || md5sum dashboard/agent.html | awk '{print $1}')
+  JS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.js | tr -d ' ')
+  CSS_SIZE=$(wc -c < agent-dashboard/dist/agent-dashboard.css | tr -d ' ')
+  HTML_SIZE=$(wc -c < dashboard/agent.html | tr -d ' ')
+  DEPLOY_TS=$(date +%s)
+  D1_DASH_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ('agent-js-v${NEXT_V}-${DEPLOY_TS}', 'agent', 'v${NEXT_V}', '${JS_HASH}', ${JS_SIZE}, 'static/dashboard/agent/agent-dashboard.js', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-css-v${NEXT_V}-${DEPLOY_TS}', 'agent-css', 'v${NEXT_V}', '${CSS_HASH}', ${CSS_SIZE}, 'static/dashboard/agent/agent-dashboard.css', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch()), ('agent-html-v${NEXT_V}-${DEPLOY_TS}', 'agent-html', 'v${NEXT_V}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Auto-logged by deploy-with-record.sh', 1, 1, unixepoch())"
+  ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote --config "$CONFIG" --command "$D1_DASH_SQL"
+  echo "Logged dashboard_versions for agent v${NEXT_V} (js/css/html)"
+fi
 
 # Upload source files for AI indexing (Vectorize codebase search)
 echo "Uploading source files for AI indexing..."

@@ -6300,3 +6300,922 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 ### Files changed
 - `wrangler.jsonc` only — committed and pushed to `origin/main` (`inneranimalmedia-agentsam-dashboard`).
 
+## 2026-03-23 Sandbox root `/` — DASHBOARD auth-signin fallback
+
+### What was asked
+- Sandbox `inneranimal-dashboard` returns JSON 404 on `/` when ASSETS has no `index-v3`/`index-v2`/`index.html`; wire existing `static/auth-signin.html` from DASHBOARD (same as `/auth/signin`) so root is usable without new assets.
+
+### Files changed
+- `worker.js` (Public ASSETS block, `path === '/' || path === '/index.html'`): after ASSETS miss, if `env.DASHBOARD`, `get('static/auth-signin.html')` and `respondWithR2Object(..., 'text/html', { noCache: true })`; else `notFound(path)`. OAuth handlers untouched.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`: not in scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no — sandbox: push/sync so **inneranimal-dashboard** build picks up `worker.js` (or upload `source/worker.js` to sandbox R2 if that is your source of truth)
+- Deploy approved by Sam: n/a for this edit (production not deployed)
+
+### What is live now
+- Until sandbox worker is redeployed, behavior unchanged. After deploy, `/` on sandbox serves sign-in HTML when marketing index objects are absent.
+
+### Known issues / next steps
+- If production should keep marketing homepage only, confirm only sandbox uses this worker revision or that production ASSETS always has index files so fallback never triggers there.
+
+## 2026-03-23 Cursor project commands — iam, subagent, skills, rules
+
+### What was asked
+- Replace outdated IAM-oriented Cursor command with current monorepo reality; add slash commands for subagent discipline, skills discovery, and rules/deployment-tracking map.
+
+### Files changed
+- `.cursor/commands/iam.md`: new — three workers (inneranimalmedia, inneranimal-dashboard, inneranimalmedia-mcp-server), R2 map prod vs sandbox, deploy/secret gates, locks, session-log + D1 pickup pointers.
+- `.cursor/commands/subagent.md`: new — when to use Task subagents, readonly audits, no deploy from subagent without parent + deploy approved, production scope lock.
+- `.cursor/commands/skills.md`: new — paths for company/OpenAI skills, Cloudflare plugin skills discovery, rules vs skills.
+- `.cursor/commands/rules.md`: new — table of `.cursor/rules/*.mdc` + `.cursorrules` layering + deployment tracking expectations.
+- `README.md` (Key docs table): one row linking `.cursor/commands/`.
+
+### Files NOT changed (and why)
+- `.cursorrules`: not edited (iam command documents third worker `inneranimal-dashboard`; if FORBIDDEN list in `.cursorrules` still omits sandbox worker, Sam can align wording later).
+
+### Deploy status
+- Built: no. R2 uploaded: no. Worker deployed: no. Deploy approved by Sam: n/a.
+
+### What is live now
+- Local/Cursor only: `/iam`, `/subagent`, `/skills`, `/rules` available as project commands when this repo is open.
+
+### Known issues / next steps
+- Optional: reconcile `.cursorrules` “FORBIDDEN deploy” bullet with intentional **inneranimal-dashboard** sandbox deploys (`-c wrangler.jsonc`).
+
+## 2026-03-23 Cursor command /iampty
+
+### What was asked
+- Add project slash command for iam-pty / terminal stack context.
+
+### Files changed
+- `.cursor/commands/iampty.md`: new — production vs repo `server/`, token matrix, pointer to `docs/TERMINAL_KEYS_RESET.md`, lockdown list from `terminal-pty-lockdown.mdc`, safe ops vs do-not-touch.
+- `README.md`: Key docs row for `.cursor/commands/` now includes `/iampty`.
+
+### Deploy status
+- Built: no. R2 / Worker: no.
+
+### What is live now
+- Cursor project command **`/iampty`** when this repo is open.
+
+## 2026-03-23 AGENT_SAM_UNIVERSAL_SYNC_LAW + D1 namespace audit doc
+
+### What was asked
+- Audit D1 table families (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cidi*`, views) and propose bulletproof universal rules so dashboard, Cursor, and LLM providers stay in sync.
+
+### Files changed
+- `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md`: new — repo-derived audit (migrations + worker.js), clarification `cidi_active_workflows` vs nonexistent `cidi_active_log`, `cidi_recent_completions` as VIEW, hot vs legacy `agent_*` tables, **10 Universal Sync Laws** + merge checklist.
+- `README.md`: Key docs table row pointing to that doc.
+
+### Files NOT changed (and why)
+- No `migrations/` or `worker.js` — documentation and governance only; live D1 verification left to Sam/Studio.
+
+### Deploy status
+- Built: no. R2 / Worker: no.
+
+### What is live now
+- Canonical governance text in repo only until R2 memory upload if Sam wants Agent Sam bootstrap to cite it.
+
+## 2026-03-23 D1 seed — agentsam_subagent_profile + agentsam_rules_document
+
+### What was asked
+- Populate `agentsam_subagent_profile` and `agentsam_rules_document` for Agent Sam dashboard `/api/agentsam/*`.
+
+### Files changed
+- `scripts/d1-seed-agentsam-profiles-rules.sql`: new — `user_id` = `sam_primeaux`, `workspace_id` = `''`; one rules doc `feedfacecafe0001` (IAM safety + sync law summary); five subagent profiles `explore`, `shell`, `code-reviewer`, `d1-audit`, `cidi-lane` with UPSERT on `(user_id, workspace_id, slug)`; rules UPSERT on `id` bumps `version`.
+
+### Deploy status
+- D1 remote `inneranimalmedia-business`: executed seed script; **6 statements**, **23 rows written** (wrangler output).
+
+### What is live now
+- Dashboard GET `/api/agentsam/rules` and `/api/agentsam/subagents` (as Sam) returns seeded rows. Re-run same file to refresh subagent text; rules doc body/title refresh and version increments on conflict.
+
+### Known issues / next steps
+- `allowed_tool_globs` uses JSON string hints for UI; not enforced by Worker. Add `agentsam_rules_revision` rows only if you want version history beyond `version` integer.
+
+## [2026-03-22] Phase 1 worker routes for SettingsPanel (D1 reads + theme fixes)
+
+### What was asked
+- Implement approved Phase 1 API list in `worker.js` first; no SettingsPanel UI until routes return real D1 data. Option A: worker routes before UI. Update `/api/themes` and `/api/themes/active` to `cms_themes` + `settings.appearance.theme`. Add `GET /api/workspaces` as alias for workspaces endpoint. MCP allowlist/credentials/audit/stats routes with auth.
+
+### Files changed
+- `worker.js` (before `const worker`): new `handlePhase1PlatformD1Routes` — `GET /api/settings?category=`, `PATCH /api/settings/appearance`, `GET /api/ai/guardrails`, `GET /api/ai/models`, `PATCH /api/ai/models/:id`, `GET /api/ai/routing-rules`, `GET /api/ai/integrations`, `GET /api/agent/rules`, `GET /api/commands/custom`, `GET /api/hooks/subscriptions`, `GET /api/hooks/executions`, `GET /api/knowledge`, `POST /api/knowledge/crawl`, `GET /api/app-icons`, `GET /api/spend` (days/group), `GET /api/spend/summary`, `GET /api/billing`, `GET /api/cidi/current`, `POST /api/deploy/rollback`; all require session auth except none (all auth). Invocation after `/api/themes/active`.
+- `worker.js`: `GET /api/themes` — extended `SELECT` (`theme_family`, `sort_order`, `css_url`, `tenant_id`, `wcag_scores`, `contrast_flags`, `is_system`) and ordering.
+- `worker.js`: `GET /api/themes/active` — `settings` + `cms_themes` for `appearance.theme`; cookie `iam_theme` / header fallback to `cms_themes` by slug; removed legacy `themes` table read.
+- `worker.js`: `GET /api/workspaces` OR `GET /api/settings/workspaces` — same handler.
+- `worker.js` `handleMcpApi`: `GET /api/mcp/server-allowlist`, `/api/mcp/credentials`, `/api/mcp/audit`, `/api/mcp/stats` (auth).
+
+### Files NOT changed (and why)
+- `SettingsPanel.jsx`, `AgentDashboard.jsx`: deferred until worker verified (per Sam).
+- OAuth callbacks and locked auth paths: not touched.
+- **`PATCH /api/agentsam/rules/:id` and `GET /api/agentsam/rules/:id/revisions`**: already implemented in `handleAgentsamApi`; no duplicate routes added.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Repo-only until sandbox/production deploy; production unchanged.
+
+### Known issues / next steps
+- Wire SettingsPanel to these endpoints after deploy; smoke-test authenticated `curl` against sandbox. `GET /api/spend/summary` week-to-date uses SQLite `date('now','weekday 0')` (Sunday boundary, UTC).
+
+## [2026-03-22] Sandbox deploy — inneranimal-dashboard (Phase 1 verify)
+
+### What was asked
+- `deploy approved` sandbox only: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.jsonc`; then verification curls with session cookie; paste results.
+
+### Files changed
+- None (deploy only).
+
+### Deploy status
+- Built: no (worker bundle from repo `worker.js`)
+- R2 uploaded: no
+- Worker deployed: yes — **inneranimal-dashboard** sandbox, version ID `e64428f9-a25a-4198-8c14-c991ca0292f3`, URL `https://inneranimal-dashboard.meauxbility.workers.dev`
+- Deploy approved by Sam: yes (sandbox only)
+
+### Verification (Cursor runner had no `TOKEN`; unauthenticated except `/api/themes/active`)
+- Phase 1 routes return `{"error":"Unauthorized"}` without session; `jq 'length'` on that object is **1** (key count), not array length — use e.g. `jq '.guardrails | length'` when authed.
+- `GET /api/themes/active` unauthenticated: slug `mil-desert`, name `Desert Ops` (real D1).
+
+### What is live now
+- Sandbox worker serves Phase 1 routes + updated themes; production **inneranimalmedia** unchanged.
+
+### Known issues / next steps
+- Sam: export `TOKEN=<session id>` and re-run curls; confirm `.guardrails`, `.models`, `.icons`, `.subscriptions`, `.cidi` payloads.
+
+## [2026-03-22] Sandbox sign-in: JSON /api/auth/login + SANDBOX_DASHBOARD_* gate
+
+### What was asked
+- Wire sandbox dashboard password (e.g. dev password via `wrangler secret put SANDBOX_DASHBOARD_PASSWORD -c wrangler.jsonc`) or PBKDF2 env vars; fix misleading "Invalid Identity or Access Key" when the API returned redirects instead of JSON.
+
+### Files changed
+- `worker.js` `handleEmailPasswordLogin`: JSON responses when `Accept` or `Content-Type` includes `application/json` (`{ ok, redirect }` + `Set-Cookie` on success); supports `body.next` for redirect; on `*.workers.dev` optional sandbox gate — if `SANDBOX_DASHBOARD_PBKDF2_SALT`+`SANDBOX_DASHBOARD_PBKDF2_HASH` (hex) set, verify PBKDF2; else if `SANDBOX_DASHBOARD_PASSWORD` set, timing-safe compare; then session as `SANDBOX_DASHBOARD_IMPERSONATE_USER` or form email (must exist in `auth_users`). Normal D1 PBKDF2 path unchanged; user lookup `LOWER(id)` / `LOWER(email)`.
+- `wrangler.jsonc`: comment block documenting optional sandbox secrets (not committed values).
+
+### Deploy status
+- Worker deployed: no (Sam: sandbox deploy after `secret put` if desired)
+- Secrets: not run by agent (Sam runs `wrangler secret put` locally; do not paste passwords into repo)
+
+### What is live now
+- Until next `inneranimal-dashboard` deploy, sandbox behavior unchanged.
+
+### Known issues / next steps
+- Generate PBKDF2 hex with same params as `hashPassword` in worker (100k SHA-256) if avoiding plaintext secret.
+
+## [2026-03-22] Sandbox deploy — JSON login + Phase 1 routes live on inneranimal-dashboard
+
+### What was asked
+- Deploy sandbox worker so sign-in and settings UI can be verified; do not expose secrets in chat or docs.
+
+### Files changed
+- None (deploy only).
+
+### Deploy status
+- Worker deployed: yes — **inneranimal-dashboard**, version ID `57982ec8-df44-4f5c-afd0-e6d6570c26bf`, `https://inneranimal-dashboard.meauxbility.workers.dev`
+
+### What is live now
+- Includes `handleEmailPasswordLogin` JSON responses and optional `*.workers.dev` sandbox gate when corresponding Worker secrets are set (secrets not listed here).
+
+## [2026-03-22] Supabase webhook verify — docs + hooks alias
+
+### What was asked
+- Confirm IAM worker verifies `x-supabase-signature: sha256=<hex>` with `SUPABASE_WEBHOOK_SECRET` (wrangler secret already set by Sam).
+
+### Files changed
+- `worker.js`: JSDoc on `verifySupabaseWebhookSignature`; trim header; require 64-char hex after `sha256=`; `WEBHOOK_ENDPOINT_PATH_ALIASES` `/api/hooks/supabase` to `/api/webhooks/supabase`; POST `/api/hooks/supabase` -> `handleInboundWebhook` same as `/api/webhooks/supabase`. Existing `verifyWebhookSignature` `supabase` case unchanged (HMAC-SHA256 body, `resolveSecret('SUPABASE_WEBHOOK_SECRET')`).
+
+### Deploy status
+- Worker deployed: no (Sam: production deploy when ready)
+
+### What is live now
+- Until deploy: production unchanged. Logic was already present; alias + stricter sig parsing are repo-only until deploy.
+
+## [2026-03-22] Production deploy — inneranimalmedia (Supabase webhook + prior worker changes)
+
+### What was asked
+- `deploy approved` — deploy main worker after Supabase webhook wiring.
+
+### Files changed
+- Deploy bundle from repo `worker.js` (includes Phase 1 settings routes, JSON login / sandbox gate, Supabase `verifySupabaseWebhookSignature` + `/api/hooks/supabase` + alias).
+
+### Deploy status
+- Built: no (Wrangler bundle from `worker.js`)
+- R2 uploaded: no
+- Worker deployed: yes — **inneranimalmedia**, version ID `1926ddc0-6f56-4c34-a500-ce721f374d32`; `TRIGGERED_BY=agent`, `DEPLOYMENT_NOTES` set for deploy record
+- Deploy approved by Sam: yes
+
+### What is live now
+- Production routes at `inneranimalmedia.com` / `www.inneranimalmedia.com` / `webhooks.inneranimalmedia.com` run this revision; Supabase can POST to `/api/webhooks/supabase` or `/api/hooks/supabase` with `x-supabase-signature` when `SUPABASE_WEBHOOK_SECRET` matches.
+
+### Known issues / next steps
+- Ensure `webhook_endpoints` has active row for `source=supabase` and desired path; D1 `cloudflare_deployments` attribution if using deploy-with-record elsewhere.
+
+### Correction (DB record)
+- Initial deploy command set `TRIGGERED_BY` / `DEPLOYMENT_NOTES` in the shell only; **wrangler does not write D1**. Row was **backfilled** afterward via `./scripts/post-deploy-record.sh` with `CLOUDFLARE_VERSION_ID=1926ddc0-6f56-4c34-a500-ce721f374d32`, `triggered_by=agent`, `notes` as above — `INSERT INTO deployments` on **inneranimalmedia-business** remote.
+
+## [2026-03-23] D1 `today_todo` — finish UI + agent functionality (tomorrow)
+
+### What was asked
+- Add tomorrow priority: finish UI + agent functionality (per Agent chat / execution plan UX).
+
+### Files changed
+- `scripts/d1-update-today-todo-20260324.sql` — `UPDATE agent_memory_index WHERE tenant_id='system' AND key='today_todo'`; prepended item **0)** for 2026-03-24; executed remote **inneranimalmedia-business**.
+
+### Deploy status
+- D1: executed (1 row written)
+
+### What is live now
+- `system` / `today_todo` includes tomorrow priority at the top for Agent Sam digest and session-start reads.
+
+## [2026-03-23] Cursor command `tomorrow-ui-agent` — Task subagent brief
+
+### What was asked
+- Add a subagent helper for tomorrow (UI + Agent work).
+
+### Files changed
+- `.cursor/commands/tomorrow-ui-agent.md` — slash command: mission, D1 `today_todo` query, plan file pointers, IAM guardrails, return contract for Task subagent.
+- `.cursor/commands/subagent.md` — links to `/tomorrow-ui-agent`.
+
+### Deploy status
+- N/A
+
+### What is live now
+- In Cursor: type **`/tomorrow-ui-agent`** (optional hint after) to load the brief; paste into **Task** or hand to the main agent to delegate with `subagent_type` explore/generalPurpose.
+
+## [2026-03-23] AutoRAG bucket structure doc + populate script
+
+### What was asked
+- Codify the optimized `autorag/` R2 tree for Agent Sam (knowledge, plans, context), size rules, migration notes, AI Search steps, and a runnable populate script.
+
+### Files changed
+- `docs/AUTORAG_BUCKET_STRUCTURE.md` — canonical layout, file rules, migration from `iam-platform`, AI Search dashboard notes, maintenance cadence.
+- `scripts/populate-autorag-bucket.sh` — executable uploads full tree (architecture, features, workflows, decisions, plan templates, sample executed plans, context) via `wrangler r2 object put` to bucket `autorag`; references `docs/AUTORAG_BUCKET_STRUCTURE.md` and optional `populate-autorag.sh` for skills.
+
+### Files NOT changed (and why)
+- `scripts/populate-autorag.sh` — left as-is; still uploads skills from `docs/knowledge/skills/` when present; new script is the primary curated tree.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no — run `./scripts/populate-autorag-bucket.sh` when ready (requires Cloudflare credentials)
+- Worker deployed: no
+- Deploy approved by Sam: yes/no (N/A)
+
+### What is live now
+- Repo contains the spec and script; production `autorag` bucket is unchanged until the script is run and AI Search syncs.
+
+### Known issues / next steps
+- Run populate script after approval; confirm AI Search data source uses bucket `autorag` and include globs `knowledge/**`, `plans/**`, `context/**`.
+- Refresh `context/active-priorities.md` body from D1 when priorities change.
+
+## [2026-03-23] AutoRAG bucket metadata note
+
+### What was asked
+- Confirm the ideal `autorag/` tree is the ongoing documentation target; capture R2 bucket metadata (created, WNAM, S3 API URL) for operators.
+
+### Files changed
+- `docs/AUTORAG_BUCKET_STRUCTURE.md` — table: created 2026-03-18, location WNAM, S3-compatible endpoint URL for bucket `autorag`.
+
+### Deploy status
+- N/A
+
+### What is live now
+- Doc records bucket facts alongside the directory layout and populate script.
+
+## [2026-03-23] R2 upload: autorag full tree
+
+### What was asked
+- Upload updated `autorag/` structure to R2 (context was only `active-priorities.md`).
+
+### Files changed
+- None in git. Ran `./scripts/populate-autorag-bucket.sh` (remote): 24 objects to bucket `autorag` (`knowledge/**`, `plans/**`, `context/**` including `technical-debt.md`, `cost-tracking.md`, refreshed `active-priorities.md`).
+
+### Deploy status
+- R2 uploaded: yes — bucket `autorag` (wrangler `--remote` via `with-cloudflare-env.sh`)
+- Worker deployed: no
+
+### What is live now
+- `context/` has three files; full curated tree matches `docs/AUTORAG_BUCKET_STRUCTURE.md`.
+
+### Next steps
+- AI Search: trigger sync for data source on bucket `autorag` if not automatic.
+
+## [2026-03-23] D1 time entry — AutoRAG / docs session
+
+### What was asked
+- Log today’s work in project time tables (`project_time_entries`).
+
+### Files changed
+- `scripts/d1-time-entry-2026-03-23-autorag.sql` — INSERT closed entry `pte-2026-03-23-autorag-session`, `sam_primeaux`, `inneranimalmedia`, 2026-03-23 17:00–19:00 (7200 s), description AutoRAG docs + R2 upload + session log.
+- Executed remote: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-time-entry-2026-03-23-autorag.sql`
+
+### Deploy status
+- D1: yes (1 row in `project_time_entries`)
+
+### Note
+- Duration set to **2 hours** as a reasonable block; say if you want different times or hours and we can UPDATE.
+
+### Correction
+- **2026-03-23:** Sam requested **8am** start — `project_time_entries` row `pte-2026-03-23-autorag-session` updated to `2026-03-23 08:00:00`–`10:00:00` (7200 s unchanged). `scripts/d1-time-entry-2026-03-23-autorag.sql` times aligned for replay.
+
+## [2026-03-23] Settings: Rules, Skills & Subagents tab (Phase T6)
+
+### What was asked
+- Replace static Guardrails tab with a functional Rules / Subagents UI using existing `/api/agentsam/*` routes, Monaco editors, rename `CURSOR_SETTINGS_TABS` to `AGENT_SETTINGS_TABS`, production-ready single-tab change.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx` — Added `RulesSkillsSubagentsTab` with filters (All / User / workspace), rules CRUD via GET/POST/PATCH agentsam rules, subagents CRUD via GET/POST/PATCH/DELETE agentsam subagents, revision history GET, `WideModal` + `@monaco-editor/react` for markdown; preserved workspace enforcement as read-only list; renamed `AGENT_SETTINGS_TABS`, label `Rules, Skills & Subagents`; Skills section stub for later phase; import Editor from `@monaco-editor/react`.
+
+### Files NOT changed (and why)
+- `worker.js`: not touched (APIs already exist).
+- `FloatingPreviewPanel.jsx`: not touched per scope.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css` (2026-03-23)
+- Worker deployed: no (dashboard-only)
+- Deploy approved by Sam: yes
+
+### What is live now
+- Production R2 serves updated agent-dashboard bundle; hard-refresh `/dashboard/agent` (or bump `?v=` in `agent.html` if cached).
+
+### Known issues / next steps
+- Rules DELETE not exposed (no route in worker). R2 upload + production verification when you type **deploy approved**.
+
+## [2026-03-23] Settings Rules tab — production readiness pass
+
+### What was asked
+- Harden `RulesSkillsSubagentsTab`: error/success feedback, loading spinner, empty states, validation, ESC to close modals, dismiss banners, API parsing, no emojis, CSS vars only.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx` — Initial full-page loader with `rssSpin` keyframes; dismissible error and success banners; empty states with dashed box iconography (no emoji); `openNewRuleDraft` / `openNewSubagentDraft`; revised Skills copy; subagent PATCH sends `is_active` as 0/1; modals moved outside scroll container; `Escape` closes topmost modal; `console.error` / `console.info` on save/load; note that rule delete is not in API; `loadRules`/`loadSubagents` JSON parse guards.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css` (2026-03-23, deploy approved)
+- Worker deployed: no (dashboard-only change)
+- Deploy approved by Sam: yes
+
+## [2026-03-23] Settings Tab panel — Cursor-style rows (no Python beta)
+
+### What was asked
+- Replace placeholder Tab settings with a Cursor-like list (title, description, toggles), omit Python auto-import, and explain TypeScript Imports vs Python auto-import.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx` — Added `ControlledSwitch`, `readTabComposerPrefs` / `writeTabComposerPrefs` (`iam_tab_composer_prefs`), `TabSettingsTab` with GET/PATCH `agent_autocomplete` via `/api/agentsam/user-policy`, localStorage for partial accepts, suggestions in comments, whitespace-only, TS imports; replaced `tab` placeholder with `<TabSettingsTab />`.
+
+### Files NOT changed (and why)
+- `worker.js`: not touched (user-policy API already supports `agent_autocomplete`).
+- `FloatingPreviewPanel.jsx`: not touched per scope.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: no — run `with-cloudflare-env.sh` put for `agent-dashboard.js` / `.css` when ready
+- Worker deployed: no (dashboard-only)
+- Deploy approved by Sam: no (pending if you want this live)
+
+### What is live now
+- Until R2 upload, production still serves the prior bundle; local `dist/` reflects the new Tab panel.
+
+### Known issues / next steps
+- Composer must read `iam_tab_composer_prefs` and enforce non-policy toggles; policy-only field wired today is `agent_autocomplete`.
+
+## [2026-03-23] Phase 2 — Skills CRUD API + Settings UI
+
+### What was asked
+- Add GET/POST/PATCH/DELETE for `agentsam_skill` in `worker.js`, wire `RulesSkillsSubagentsTab` to list/edit/create/delete/toggle skills (replace placeholder).
+
+### Files changed
+- `worker.js` — In `handleAgentsamApi`, after subagents routes: `/api/agentsam/skills` GET (with `include_inactive`, scoped by `user_id` + workspace visibility), POST, PATCH/DELETE `/api/agentsam/skills/:id`; uses `env.DB`, binds `user_id` for ownership.
+- `migrations/164_agentsam_skill.sql` — `CREATE TABLE IF NOT EXISTS agentsam_skill` with `user_id`, indexes (run on D1 if table missing or new env).
+- `agent-dashboard/src/SettingsPanel.jsx` — `skillMatchesFilter`, `SkillCardRow`, `skills` state, `loadSkills`, CRUD + modal (Monaco), ESC closes skill modal; Skills section replaces stub.
+- `docs/cursor-session-log.md` — this entry.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: not touched per scope.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: yes — see deploy entry below (agent bundle + agent.html + source + incremental docs)
+- Worker deployed: yes — version ID in deploy entry below
+- Deploy approved by Sam: yes (2026-03-23)
+
+### What is live now
+- Production: Skills API + Settings Skills UI + Tab settings UI; `dashboard/agent.html` cache-bust `?v=124`.
+
+### Known issues / next steps
+- If production `agentsam_skill` exists **without** `user_id`, apply an ALTER/backfill before routes work; re-seed rows with `user_id = 'sam_primeaux'` as needed.
+
+## [2026-03-23] Production deploy — migration 164 + full deploy-with-record
+
+### What was asked
+- Deploy approved: run full deployment, R2 uploads, and documentation (session log).
+
+### Actions run
+1. `npm run build` in `agent-dashboard/` (fresh dist).
+2. Remote D1: `wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=migrations/164_agentsam_skill.sql` (applied `agentsam_skill` table + indexes).
+3. `./scripts/deploy-with-record.sh` with `TRIGGERED_BY=agent` and `DEPLOYMENT_NOTES='Skills CRUD API (agentsam_skill), Settings Tab + Skills UI, migration 164'`.
+
+### Artifacts
+- Cache bust: `dashboard/agent.html` `?v=123` to `?v=124` (sed by script).
+- R2 **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`; `source/worker.js`; `source/agent-dashboard/src/*`; `source/inneranimalmedia-mcp-server/src/index.js`; incremental `docs/*.md` to `agent-sam/source/docs/...` (12 files this run).
+- D1: `dashboard_versions` rows for agent js/css/html v124; `cloudflare_deployments` / post-deploy record via `post-deploy-record.sh`.
+
+### Worker
+- Name: `inneranimalmedia`
+- Version ID: `1f0bd46e-369b-4825-aabe-c2360fbb9652`
+- Deploy time (script): ~21s
+
+### Files changed (repo) this session
+- `dashboard/agent.html` — `?v=` bump (by deploy script)
+- `docs/cursor-session-log.md` — this entry
+
+### What is live now
+- Production worker serves Skills routes; agent dashboard loads bundle v124 from R2; D1 has `agentsam_skill` schema from migration 164.
+
+## [2026-03-24] Cursor command — settings full audit prompt
+
+### What was asked
+- Save the full-audit / backend-first / single-deploy Settings prompt in-repo at `.cursor/commands/settings-full-audit.md`.
+
+### Files changed
+- `.cursor/commands/settings-full-audit.md` — new file: audit-first workflow, approval gate, scope list, rejection criteria, repo reminders.
+
+### Deploy status
+- Built: no
+- R2 / Worker deployed: no
+
+## [2026-03-24] Settings tabs 3A–3E (Hooks, Cmd Allowlist, MCP Tools, Routing Rules, Ignore)
+
+### What was asked
+- Implement five Settings tabs per Cursor prompts 3A–3E: real UI (no placeholders), worker routes for hooks (`agentsam_hook`), cmd-allowlist aliases + 409, tools-registry GET, MCP allowlist id on conflict, AI routing rules CRUD, ignore patterns POST/DELETE/PATCH id/reorder.
+
+### Files changed
+- `migrations/165_agentsam_hook_ai_routing.sql` — new `agentsam_hook` + `ai_routing_rules` (IF NOT EXISTS).
+- `worker.js` — phase1 `isPhase1` extended for hooks POST/PATCH/DELETE and routing rules POST/PATCH/DELETE; `handlePhase1PlatformD1Routes` hooks + routing CRUD; `handleAgentsamApi` cmd-allowlist aliases, POST 409, tools-registry, mcp POST returns id, ignore reorder/single POST/PATCH/DELETE; GET ignore uses `COALESCE(workspace_id,'')`.
+- `agent-dashboard/src/SettingsPanel.jsx` — `HooksTab`, `CmdAllowlistTab`, `McpToolsTab`, `RoutingRulesTab`, `IgnorePatternsTab`; nav entries `cmd_allowlist`, `mcp_tools`, `routing_rules`, `ignore_patterns`; constants `HOOK_TRIGGERS`, `ROUTING_MATCH_TYPES`, `agentsamWorkspaceQueryString()`.
+
+### Deploy status
+- Built: no (user said R2 asset only unless worker routes missing; worker changed — deploy needed for hooks/routing/ignore API)
+- R2 uploaded: no
+- Worker deployed: no
+- Apply D1 migration 165 on production before relying on hooks/routing tables.
+
+### What is live now
+- Repo-only until worker deploy + migration 165 + dashboard build/R2 upload.
+
+## [2026-03-24] Backend-only SettingsPanel capability pass (worker.js)
+
+### What was asked
+- Step 1 audit of auth/phase1/agentsam/terminal/hooks/ai/settings routes; Step 2 add only missing backend routes (groups A–E); no JSX, no build, no deploy; no migration; append session log.
+
+### Files changed
+- `worker.js` — `isPhase1` extended for `/api/hooks/subscriptions/reorder`, `/api/settings/deploy-context`, `docs-providers`, `agent-config` PATCH, `marketplace-catalog`; static deploy/docs responses; `agent-config` PATCH + `marketplace-catalog` GET; `PATCH /api/hooks/subscriptions/:id` now updates `hook_subscriptions` (`is_active`, `run_order`) + `PATCH .../reorder`; `GET/POST/PATCH/DELETE /api/agentsam/hooks` for `agentsam_hook`; `fetch-allowlist` mirror of fetch-domains; `GET /api/agentsam/indexing-summary`; cmd/mcp/fetch GET workspace read scope OR-pattern; cmd/mcp POST ids `cal_`/`mal_`/`fal_`, 201 + row, DELETE 404; fetch host normalization + 409 duplicate host; ignore reorder `batch` + `{ count }`, DELETE requires `source='db'`; `POST /api/ai/routing-rules` returns 201; `GET /api/agent/terminal/config-status` (200, binding booleans, no auth).
+
+### Files NOT changed
+- No JSX, `wrangler.production.toml`, or OAuth handlers.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Repo-only until approved deploy. **UI note:** automation hooks should use `/api/agentsam/hooks` for PATCH/DELETE; `PATCH /api/hooks/subscriptions/:id` is for `hook_subscriptions` (webhook runner), not `agentsam_hook`.
+
+### Known issues / next steps
+- `ai_integrations` marketplace SELECT uses explicit columns with fallback to `SELECT *` if schema differs.
+- Confirm production `ai_knowledge_base.is_active` semantics vs strict `is_active = 1` in indexing-summary count.
+
+## [2026-03-24] Unified spend API, deploys table UI, hooks execution stats, agents session counts
+
+### What was asked
+- `GET /api/spend/unified` (5 tables, grouped totals); Development tab recent deploys from `deployments`; hooks list with execution_count/last_ran_at; Agents tab loads `/api/agentsam/ai` + `/api/agentsam/runs` with session_count on AI rows.
+
+### Files changed
+- `migrations/166_agentsam_hook_execution.sql` — new `agentsam_hook_execution` table (apply on D1 before hook stats appear).
+- `worker.js` — `fetchUnifiedSpendEvents`, phase1 `GET /api/spend/unified`; `handleDeploymentsRecent` uses `SELECT *` + fallback columns, `ORDER BY datetime(timestamp)`; GET `agentsam_hook` and phase1 hooks list include execution subqueries with fallback if table missing; `GET /api/agentsam/ai` adds `session_count` via `mcp_agent_sessions` aggregate (fallback if table missing).
+- `agent-dashboard/src/SettingsPanel.jsx` — SpendTab uses unified spend; WranglerTab Recent Deploys table; HooksTab uses `/api/agentsam/hooks` CRUD + run line; AgentsTab loads agents + runs; helpers `formatLastRanUnix`.
+
+### Deploy status
+- Built: yes (agent-dashboard `npm run build`)
+- Worker deployed: no
+- D1 migration 166: pending remote apply
+
+### Note
+- Session counts are **`mcp_agent_sessions` per `agent_id` → `agentsam_ai.id`**, not `agent_sessions.agent_config_id` (that link does not exist in current schema).
+
+## [2026-03-24] Deploy: Full SettingsPanel UI pass (deploy approved)
+
+### What was asked
+- Deploy approved: run `agent-dashboard` build, then `./scripts/deploy-with-record.sh` with `TRIGGERED_BY=agent` and deployment notes; report version ID, agent.html cache bust, R2 uploads, D1 deploy row, deploy seconds; append this session log.
+
+### worker.js (this pass — line ranges)
+- **358–642**: `normalizeUnifiedSpendTs`, `unifiedSpendDayUTC`, `fetchUnifiedSpendGrouped` — parallel reads from `spend_ledger`, `agent_telemetry`, `agent_costs`, `ai_usage_log`, `cursor_usage_log`; merge; group by `provider` | `model` | `day`; response `{ rows, total_cost_usd, period_days, group }`.
+- **2083–2094**: Phase1 `GET /api/spend/unified` — `days` (0 = all time), `group` query params; calls `fetchUnifiedSpendGrouped`.
+- **1719–1742**: `PATCH /api/ai/models/:id` — accepts `show_in_picker` and/or `is_active` (at least one required).
+- **8690–8726**: `GET /api/agentsam/hooks` — `LEFT JOIN agentsam_hook_execution`, `GROUP BY h.id`, `COUNT(e.id)`, `MAX(e.ran_at)`, `ORDER BY h.created_at DESC` (fallback if execution table missing).
+- **2923–2984**: `GET /api/commands` — includes `status`, `usage_count` with schema fallback; lists all tenant rows (no `status = 'active'` filter).
+
+### agent-dashboard/src/SettingsPanel.jsx (line ranges + new components)
+- **~115–136**: `AGENT_SETTINGS_TABS` — Plugins→Integrations, Beta→Development, Docs→Repositories; added `provider_docs` (label Docs).
+- **~254–272**: `relativeTime`.
+- **598–~850** (approx): `WranglerTab` — `GET /api/settings/deploy-context`, `GET /api/deployments/recent`, recent deploys table, quick commands without hardcoded repo paths.
+- **1166–1243**: `IntegrationsTab` — marketplace catalog for connection hints; OAuth/MCP as `<a href>`.
+- **1245–1436**: `formatUsd2` / `formatTokensK` / `formatDayLabel`, `SpendTab` — `GET /api/spend/unified`.
+- **1438–1676**: `ProvidersTab` — picker models from `GET /api/ai/models`, catalog from marketplace API.
+- **1679+**: `HooksTab` — execution stats line with `relativeTime`, muted “Never run”.
+- **3820–3838**: `GeneralWithEnvironment` — single vertical scroll + `EnvironmentTab`.
+- **3842–4002**: `ToolsMcpTab` — `GET /api/commands`.
+- **4004–4226**: `GeneralTab` — models, policy, boot, `PATCH` agent-config and user-policy.
+- **4229–4384**: `AgentsTab` — `GET /api/agentsam/ai` only, read-only cards.
+- **New components**: `ModelsSettingsTab` (~4387), `CloudAgentsSettingsTab` (~4577), `IndexingDocsTab` (~4654), `NetworkSettingsTab` (~4768), `MarketplaceSettingsTab` (~4852), `ProviderDocsTab` (~4961).
+- **~5200–5267**: `SettingsPanel` root — `tabContent` maps all tabs; `pickTab('general')` for vault links.
+
+### New / modified API behavior (summary)
+- **GET /api/spend/unified** — replaced prior merged shape; returns grouped `rows` + `total_cost_usd` + `period_days` + `group`.
+- **GET /api/agentsam/hooks** — execution stats via join + aggregate.
+- **PATCH /api/ai/models/:id** — optional `is_active` alongside `show_in_picker`.
+- **GET /api/commands** — `status`, `usage_count`, all statuses for tenant.
+
+### Tab renames (nav labels; ids unchanged unless noted)
+- Plugins → **Integrations** (`plugins`)
+- Beta → **Development** (`beta`)
+- Docs → **Repositories** (`docs`)
+- New **Docs** tab → `provider_docs`
+
+### Migration note
+- **No new D1 migrations** in this pass (uses existing `agentsam_hook_execution` when present).
+
+### Files NOT changed
+- OAuth handlers, `wrangler.production.toml`, `AgentDashboard.jsx`, `FloatingPreviewPanel.jsx` (not edited this deploy).
+
+### Deploy status
+- Built: yes — `agent-dashboard` `npm run build` (clean Vite output)
+- R2 uploaded: yes — see list below
+- Worker deployed: yes — `./scripts/deploy-with-record.sh` with `TRIGGERED_BY=agent`
+- Deploy approved by Sam: yes
+
+### Deploy artifacts (2026-03-24 run)
+- **Worker Version ID:** `eaea4cbb-7af2-4efe-9679-f2afb7874c0b`
+- **agent.html cache bust:** v124 → **v125** (`dashboard/agent.html` updated by deploy script)
+- **Deploy time:** **19** seconds (worker upload window measured by script)
+- **D1 `deployments` row:** `id` = **`eaea4cbb-7af2-4efe-9679-f2afb7874c0b`** (same as Worker version ID per `post-deploy-record.sh`); execute meta `last_row_id` **60**
+- **D1 `dashboard_versions`:** 3 rows logged for agent v125 (js / css / html); meta `last_row_id` **35** on that execute
+
+### R2 objects uploaded (agent-sam, this run)
+- `static/dashboard/agent/agent-dashboard.js`
+- `static/dashboard/agent/agent-dashboard.css`
+- `static/dashboard/agent.html`
+- `source/worker.js`
+- `source/agent-dashboard/src/AnimatedStatusText.jsx`
+- `source/agent-dashboard/src/SettingsPanel.jsx`
+- `source/agent-dashboard/src/AgentDashboard.jsx`
+- `source/agent-dashboard/src/FloatingPreviewPanel.jsx`
+- `source/agent-dashboard/src/main.jsx`
+- `source/agent-dashboard/src/ExecutionPlanCard.jsx`
+- `source/agent-dashboard/src/QueueIndicator.jsx`
+- `source/inneranimalmedia-mcp-server/src/index.js`
+- `source/docs/cursor-session-log.md` (incremental docs)
+
+### What is live now
+- Production worker **inneranimalmedia** at version **eaea4cbb-7af2-4efe-9679-f2afb7874c0b**; agent dashboard **v125** on R2; SettingsPanel tabs wired to real APIs per prior implementation pass.
+
+### Known issues / next steps
+- Wrangler emitted config warnings (`esbuild`, `ai_search` unexpected fields) during deploy; non-fatal.
+- Hard refresh `/dashboard/agent` after deploy to pick up **?v=125**.
+
+## 2026-03-24 Claude.ai built-in fetch allowlist + mcp_server_allowlist D1 read
+
+### What was asked
+Add `claude.ai` (MCP OAuth callback host) to fetch allowlist behavior for outbound/inbound URL validation; run read-only D1 (or API) on `mcp_server_allowlist` and report URL vs name fields.
+
+### Files changed
+- `worker.js` after `defaultAgentsamUserPolicy` (~103-145): `AGENTSAM_BUILTIN_FETCH_HOSTS`, `normalizeAgentsamFetchHostInput`, `isAgentsamBuiltinFetchHostNormalized`, `agentsamIsFetchHostAllowed` (built-in plus D1 allowlist check for future callers).
+- `worker.js` inside `handleAgentsamApi`: `mergeFetchDomainAllowlistWithBuiltin`; `GET/POST/DELETE` for `/api/agentsam/fetch-domains` and `/api/agentsam/fetch-allowlist` merge built-in hosts, reject POST duplicate built-ins with 409, reject DELETE `builtin:*` with 400.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`, OAuth handlers: not in scope.
+- No deploy run this turn.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Unchanged until worker deploy; local `worker.js` adds platform built-in `claude.ai` in fetch-allowlist API responses and helper for enforcement.
+
+### Known issues / next steps
+- Wire `agentsamIsFetchHostAllowed` into any server-side fetch paths that should enforce the allowlist (not done in this pass).
+- Remote D1 `mcp_server_allowlist`: one row, `server_name` = human label, `server_endpoint` = full MCP URL (`https://mcp.inneranimalmedia.com/mcp`); no `claude.ai` row (Claude is a client, not an allowlisted MCP server row).
+
+## 2026-03-24 Production deploy – main worker (Claude.ai fetch allowlist live)
+
+### What was asked
+Deploy the main worker so the built-in `claude.ai` fetch allowlist and related API behavior are live.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry only)
+
+### Files NOT changed (and why)
+- No R2 dashboard uploads; worker-only change.
+
+### Deploy status
+- Built: no (worker bundle only)
+- R2 uploaded: no
+- Worker deployed: yes — **Current Version ID: `864ab257-3f10-4e1d-b3f8-29dbc689aa25`**
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='...' npm run deploy` (~25s)
+- Deploy approved by Sam: yes (explicit request to deploy)
+
+### What is live now
+- Production **inneranimalmedia** serves `worker.js` with built-in `claude.ai` on `GET /api/agentsam/fetch-domains` and `GET /api/agentsam/fetch-allowlist`, POST/DELETE rules for built-ins, and `agentsamIsFetchHostAllowed` for future enforcement.
+
+### Known issues / next steps
+- Optional: record deployment in D1 `cloudflare_deployments` if the deploy script does not pick up env vars from ad-hoc `npm run deploy` (verify in dashboard if needed).
+
+## 2026-03-24 Draw panel + /api/draw (FIX 5–6 on draw pages, Agent strip, worker)
+
+### What was asked
+Expose `window.excalidrawAPI`, wire draw toolbar buttons via `postMessage` to Agent chat, add Draw tab to the right panel loading `/dashboard/pages/draw.html`, implement `/api/draw/save`, `/api/draw/list`, `/api/draw/:id` in the worker.
+
+### Files changed
+- `static/dashboard/pages/draw.html`: FIX 5–6 comment lines; `window.excalidrawAPI` in `onApiReady`; `postDrawRequestToParent` + early exit on four buttons when embedded.
+- `static/dashboard/draw.html`: same as above for full-nav draw page.
+- `agent-sam/static/dashboard/pages/draw.html`: same as `static/dashboard/pages/draw.html`
+- `agent-dashboard/src/AgentDashboard.jsx`: `draw` tab in strip + pencil icon; `sendMessageRef`; `iam_draw_request` `message` listener calling `sendMessage` with structured prompts.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `drawPageSrc` prop; Draw tab iframe.
+- `worker.js`: `parseDataUrlToBytes`, `handleDrawApi` (POST save, GET list, GET by UUID), routed before `/api/agent`.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: only surgical additions for Draw tab (per rules).
+- No `dashboard/pages/draw.html` at repo root; canonical source is `static/dashboard/pages/draw.html`.
+
+### Deploy status
+- Built: no (rebuild agent-dashboard bundle before deploy if shipping JS)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Local/repo only until worker deploy + R2 upload of changed HTML + rebuilt `agent-dashboard.js` if applicable.
+
+### Known issues / next steps
+- Deploy worker; upload `static/dashboard/pages/draw.html` (and full `draw.html` if used) to R2; bump `agent-dashboard` ?v=; run build for `agent-dashboard` when shipping React changes.
+- `/api/draw/generate-*` and analyze endpoints remain unimplemented (buttons fall back when not in iframe).
+
+## 2026-03-24 Deploy — Draw integration (agent panel + worker + R2 draw pages)
+
+### What was asked
+Run `npm run build` in `agent-dashboard/`, `./scripts/deploy-with-record.sh` with agent deployment notes, upload `static/dashboard/pages/draw.html` and `static/dashboard/draw.html` to R2, report version ID / cache bust / R2 / D1.
+
+### Files changed
+- `agent-dashboard/dist/*` (rebuilt via Vite; not hand-edited)
+- `dashboard/agent.html` lines 722-723: cache bust `?v=125` to `?v=126` (by `deploy-with-record.sh`)
+- R2 `agent-sam`: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `agent.html`, `static/dashboard/pages/draw.html`, `static/dashboard/draw.html`, plus script-uploaded sources/docs
+
+### Files NOT changed (and why)
+- No additional repo file edits beyond what the deploy script modified (`dashboard/agent.html` cache bust).
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`, `static/dashboard/pages/draw.html`, `static/dashboard/draw.html`, and other objects from `deploy-with-record.sh`
+- Worker deployed: yes — **Current Version ID: `038c3f3b-4a5d-4919-8b78-d7c89e53c287`**
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Draw integration: ...' ./scripts/deploy-with-record.sh`
+- Deploy approved by Sam: yes
+
+### What is live now
+- Production worker **inneranimalmedia** includes `handleDrawApi` (`/api/draw/save`, `/api/draw/list`, `/api/draw/<integer id>`) with INTEGER auto-increment `project_draws` inserts.
+- Agent dashboard loads with **v126** (`/static/dashboard/agent/agent-dashboard.{js,css}?v=126`).
+- Draw pages served from R2 match repo `static/dashboard/pages/draw.html` and `static/dashboard/draw.html` (Draw tab + postMessage + `window.excalidrawAPI`).
+
+### D1 `deployments` row (this deploy)
+- `id`: `038c3f3b-4a5d-4919-8b78-d7c89e53c287`
+- `timestamp`: `2026-03-23 20:45:49`
+- `version` / `git_hash`: `2a13f77`
+- `deploy_time_seconds`: 35
+- `triggered_by`: `agent`
+- `description` / `notes`: Draw integration: Draw tab in agent panel, postMessage buttons, window.__excalidrawApi exposed, /api/draw/save+list+id routes, project_draws INTEGER id fix
+
+### Known issues / next steps
+- `/api/draw/generate-*` and analyze endpoints still unimplemented for standalone draw page (non-iframe).
+
+## 2026-03-24 Deploy — Monaco code routing + r2-save + system prompt (A–E)
+
+### What was asked
+`npm run build` in `agent-dashboard/`, `./scripts/deploy-with-record.sh` with agent deployment notes for Changes A–E (fence parse, Open in editor, Save to R2, `/api/agent/r2-save`, CODE DELIVERY RULES in system prompt).
+
+### Files changed (pre-deploy)
+- `agent-dashboard/src/AgentDashboard.jsx`: `langToExt`, `extractLargestCodeBlock`, `parseFencedParts`, stream-end fence extraction, `AssistantFencedContent`, shell “Open in editor” row, removed shell-only Open in Monaco; `codeFilename` state + props to `FloatingPreviewPanel`.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: controlled `codeFilename`, `saveState`, `handleSaveDraftToR2` POST `/api/agent/r2-save`, toolbar buttons.
+- `worker.js`: `POST /api/agent/r2-save` in `handleAgentApi` (before 404); `finalSystem` append for CODE DELIVERY RULES after session summary block.
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build`)
+- R2 uploaded: yes — `deploy-with-record.sh`: `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html` (cache bust **v126 to v127**), `source/worker.js`, agent-dashboard sources, MCP server source, incremental `docs/cursor-session-log.md`
+- Worker deployed: yes — **Current Version ID: `f83810ea-63b9-4a81-87da-2c3f2eb1ae10`**
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Monaco code routing: auto-fence parse, Open in editor buttons on all code blocks, Save to R2 from Monaco toolbar, /api/agent/r2-save worker route, system prompt code delivery enforcement' ./scripts/deploy-with-record.sh`
+- Deploy approved by Sam: yes
+
+### What is live now
+- Agent dashboard cache bust **v127** on `agent.html` script tags; bundled JS/CSS and HTML uploaded to R2.
+- Worker includes authenticated `POST /api/agent/r2-save` and extended system prompt for code delivery rules.
+
+### D1 `deployments` row (this deploy)
+- `id`: `f83810ea-63b9-4a81-87da-2c3f2eb1ae10` (matches Wrangler Current Version ID)
+- `deploy_time_seconds`: from script log (~43s total script elapsed)
+- `triggered_by`: `agent`
+- `notes`: Monaco code routing (full string from `DEPLOYMENT_NOTES` above)
+
+### Known issues / next steps
+- RAG / `knowledge_search` follow-up (worker-only) pending Sam review before separate deploy.
+
+## 2026-03-24 Worker — knowledge_search + rag_search (not deployed)
+
+### What was asked
+Parallel D1 `ai_knowledge_base` (exact SQL as GET `/api/knowledge`) + AI Search (binding or REST `autorag`); merge/dedupe; `rag_search` tool registration in `mcp_registered_tools`; `rag_search` builtin handler (AI Search only); session log append. No deploy.
+
+### Files changed
+- `worker.js` (line numbers approximate after edits):
+  - **~12461–12620**: Helpers `aiSearchIsConfigured`, `normKbTitle`, `d1KbRowToHit`, `parseAutoragHits`, `autoragAiSearchQuery`, `mergeD1AndAiKbHits`, `runKnowledgeSearchMerged`, `ensureRagSearchToolRegistered`.
+  - **`invokeMcpToolFromChat` ~10474–10590**: Replaced Vectorize-only `knowledge_search` with `runKnowledgeSearchMerged` (parallel D1 + AI Search); added `rag_search` handler (Source B only, optional warning).
+  - **`runToolLoop` ~5106–5165**: Same `knowledge_search` / `rag_search` behavior for agent tool loop; `BUILTIN_TOOLS` includes `rag_search`.
+
+### Deploy status
+- Worker deployed: no (Sam deploys separately)
+- Deploy approved by Sam: n/a (this sub-task)
+
+### What is live now
+- Unchanged until the next worker deploy; production still runs pre-RAG worker revision `f83810ea-63b9-4a81-87da-2c3f2eb1ae10` until a new deploy.
+
+### Known issues / next steps
+- Deploy worker after review; verify `env.AI_SEARCH.search` response shape in production and adjust `parseAutoragHits` if needed.
+
+## 2026-03-24 Deploy — RAG worker only (`--worker-only`)
+
+### What was asked
+Deploy approved: worker only, no `npm run build`, no `agent.html` cache bust. `TRIGGERED_BY=agent` with RAG deployment notes.
+
+### Files changed
+- `scripts/deploy-with-record.sh`: added `--worker-only` flag (skip agent.html `?v=` bump, dashboard JS/CSS/HTML R2 uploads, `dashboard_versions` D1 rows).
+
+### Deploy status
+- Built: no (not requested)
+- RAG/dashboard R2: skipped (`--worker-only`); `worker.js` + source indexing uploads still ran per script
+- Worker deployed: yes — **Current Version ID: `6ecb28f3-5b95-4362-8260-00269e7e1c43`**
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='RAG: knowledge_search merged D1+AI Search, rag_search tool added, ensureRagSearchToolRegistered' ./scripts/deploy-with-record.sh --worker-only`
+- Deploy approved by Sam: yes
+
+### What is live now
+- Production worker **inneranimalmedia** revision `6ecb28f3-5b95-4362-8260-00269e7e1c43` includes merged `knowledge_search`, `rag_search`, and `ensureRagSearchToolRegistered`.
+
+### D1 `deployments` row
+- `id`: `6ecb28f3-5b95-4362-8260-00269e7e1c43` (matches Wrangler Current Version ID)
+- `triggered_by`: `agent`
+- `notes`: `RAG: knowledge_search merged D1+AI Search, rag_search tool added, ensureRagSearchToolRegistered`
+
+## 2026-03-23 Autorag R2 — six Agent Sam SKILL.md uploads
+
+### What was asked
+Upload six SKILL.md documents to the autorag R2 bucket at exact paths (`skills/.../SKILL.md`); user message referenced follow-up D1 `ai_knowledge_base` inserts but was truncated.
+
+### Files changed
+- None in repo. Staging files written under `/tmp/autorag-skills-upload/` for upload only (not committed).
+
+### R2 uploaded (remote)
+- Bucket `autorag`, content-type `text/markdown`:
+  - `skills/skill-creator/SKILL.md`
+  - `skills/cf-agent-builder/SKILL.md`
+  - `skills/web-perf/SKILL.md`
+  - `skills/canvas-design/SKILL.md`
+  - `skills/excalidraw-scene/SKILL.md`
+  - `skills/monaco-code/SKILL.md`
+
+### Deploy status
+- Built: no
+- Worker deployed: no
+- D1 `ai_knowledge_base` rows: not executed (awaiting user completion of "two INSERTs" instruction + explicit D1 approval per workflow)
+
+### What is live now
+- Autorag corpus on R2 includes the six skill documents at the keys above; AI Search re-index on crawl as usual.
+
+### Known issues / next steps
+- Run `ai_knowledge_base` INSERT OR REPLACE for six rows (or clarify if only two rows / `agentsam_skill` sync intended).
+
+## 2026-03-24 Chat image thumbnail, lightbox, Draw inject
+
+### What was asked
+Fitted thumbnail + action bar for generated image URLs in assistant messages, fullscreen lightbox with Esc, auto-open browser on streamed image URLs with heuristics, `draw_ready` + `load_image_background` to place image on Excalidraw; only `AgentDashboard.jsx` and `static/dashboard/pages/draw.html`; no deploy.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: `splitTextWithImageUrls`, expanded `AssistantFencedContent` with thumbnail/actions, `lightboxImage` + refs + `openImageInDrawPanel`, stream auto-preview for image URLs, `draw_ready` handler with iframe `postMessage`, Escape closes lightbox, root lightbox JSX.
+- `static/dashboard/pages/draw.html`: parent `draw_ready` postMessage after API ready; `load_image_background` listener to `addFiles` + image element.
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build` OK)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Repo/build only until Sam deploys and uploads dashboard assets per usual workflow.
+
+### Known issues / next steps
+- Mirror `draw.html` to `agent-sam`/R2 when deploying dashboard; cross-origin image fetch for Draw inject may need credential/CORS tweaks for some URLs.
+
+## 2026-03-24 Deploy approved — agent v128 + draw.html R2
+
+### What was asked
+`deploy approved`: run `npm run build` in `agent-dashboard/`, `./scripts/deploy-with-record.sh` with agent notes, upload `static/dashboard/pages/draw.html` to R2, report version/cache bust/R2/D1, append session log.
+
+### Commands run
+1. `cd agent-dashboard && npm run build` — clean (Vite OK).
+2. `TRIGGERED_BY=agent DEPLOYMENT_NOTES='Image lightbox + thumbnail action bar + Open in Draw annotation, draw_ready postMessage inject, load_image_background in draw.html, Esc closes lightbox, pendingDrawImage flow' ./scripts/deploy-with-record.sh`
+3. `./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/pages/draw.html --file=static/dashboard/pages/draw.html --content-type=text/html --remote -c wrangler.production.toml`
+
+### Deploy report
+- **Worker version ID:** `a4c4314f-c29d-4732-9f74-81a1da9be89a`
+- **Cache bust:** `dashboard/agent.html` `?v=` **v127 → v128** (sed in deploy script)
+- **R2 (agent-sam) uploaded by deploy script:** `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`, `static/dashboard/agent.html`; source indexing: `source/worker.js`, `source/agent-dashboard/src/*.jsx` (listed files), `source/inneranimalmedia-mcp-server/src/index.js`, incremental `source/docs/cursor-session-log.md`
+- **R2 (manual after deploy):** `static/dashboard/pages/draw.html` ← `static/dashboard/pages/draw.html`
+- **D1 `dashboard_versions`:** logged rows for agent **v128** (js / agent-css / agent-html)
+- **D1 `deployments`:** `post-deploy-record.sh` recorded `id` = worker version ID above, `triggered_by=agent`, `deploy_time_seconds=42`, notes as in `DEPLOYMENT_NOTES`
+
+### FloatingPreviewPanel note
+- Draw iframe remains `title="Draw"` only; `AgentDashboard` targets `iframe[title="Draw"]` — no change.
+
+### What is live now
+- Production worker **inneranimalmedia** at version `a4c4314f-c29d-4732-9f74-81a1da9be89a`; agent bundle and `agent.html` at **v128** on R2; `pages/draw.html` updated on R2 for draw inject + `draw_ready`.
+
+## 2026-03-23 iam_shell_nav — asset-only R2 + D1 (no worker deploy)
+
+### What was asked
+Build `agent-dashboard`, deploy dashboard assets (shell nav in `dashboard/agent.html` + `iam_shell_nav` listener in `AgentDashboard.jsx`). Record in D1. Do not deploy `worker.js` (asset-only).
+
+### Files changed (local before pipeline)
+- `dashboard/agent.html`: shell nav intercept (lines 879-891) + cache bust after run
+- `agent-dashboard/src/AgentDashboard.jsx`: `iam_shell_nav` listener (lines 1161-1173)
+- `docs/cursor-session-log.md`: this entry
+
+### Deploy procedure note
+- `./scripts/deploy-with-record.sh` always runs `wrangler deploy`; per Sam request **worker deploy was skipped**.
+- Equivalent steps run: `npm run build` in `agent-dashboard/`; `?v=` bump **v128 to v129**; R2 puts for agent JS/CSS/HTML; D1 `dashboard_versions`; source indexing R2 uploads (worker.js source mirror, `agent-dashboard/src/*`, MCP `index.js`, incremental `docs/`); `post-deploy-record.sh`.
+
+### Deploy status
+- Built: yes (Vite clean)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`, `agent-sam/static/dashboard/agent.html`; plus `agent-sam/source/*` as in deploy script
+- Worker deployed: **no** (production worker version unchanged: `a4c4314f-c29d-4732-9f74-81a1da9be89a` unless a separate deploy occurred)
+- Deploy approved by Sam: yes (explicit build-and-deploy request)
+
+### Report
+- **Cache bust / version:** **v129** (`dashboard/agent.html` `?v=129`)
+- **D1 `deployments.id`:** `363C9B3D-337A-4748-B460-CF588701E652` (`triggered_by=iam_shell_nav`, `deploy_time_seconds=0`, notes: shell nav + React listener)
+- **D1 `dashboard_versions`:** three rows for **v129** (agent-js / agent-css / agent-html)
+
+### What is live now
+- Production serves agent dashboard from R2 at **v129** with shell nav intercept and `iam_shell_nav` handling; worker code on the edge unchanged.
+
+### Known issues / next steps
+- Next full `./scripts/deploy-with-record.sh` run will deploy worker again unless a `--asset-only` flag is added later.
+
+## 2026-03-23 topbar trim + sidenav footer — asset-only (no worker)
+
+### What was asked
+Full asset deploy: `npm run build`, bump `?v=`, R2 `agent.html` + agent bundle, D1 `dashboard_versions` + `deployments`, session log. No `wrangler deploy`. Avatar uses Cloudflare Images CDN (no R2 avatar object).
+
+### Files in scope
+- `dashboard/agent.html` (topbar clock/?/profile removed; sidenav footer + Image Delivery avatar; hidden logout removed earlier)
+- `docs/cursor-session-log.md` (this entry)
+
+### Deploy procedure
+- `agent-dashboard`: `npm run build` (Vite clean)
+- Cache bust **v129 to v130** in `dashboard/agent.html`
+- R2: `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`, `agent-sam/static/dashboard/agent.html`
+- D1 `dashboard_versions`: three rows for **v130**
+- `./scripts/post-deploy-record.sh` (`DEPLOY_SECONDS=0`, no worker version ID)
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (paths above)
+- Worker deployed: no
+- Deploy approved by Sam: yes (explicit proceed after avatar CDN confirmation)
+
+### Report
+- **Cache bust / version:** **v130**
+- **D1 `deployments.id`:** `2CF28841-9231-4B8A-AE57-9915EC394116` (`triggered_by=topbar-trim-sidenav-footer`, `deploy_time_seconds=0`)
+- **Notes:** clock/drawer/profile removed from topbar; sidenav footer with Cloudflare Images avatar + logout
+
+### What is live now
+- Production agent shell loads from R2 at **v130** with trimmed topbar and sidenav profile/footer; worker unchanged.
+
+### Known issues / next steps
+- None for this drop.
+

@@ -2,6 +2,11 @@
 // Production Worker (inneranimalmedia): ALWAYS deploy with -c wrangler.production.toml — never replace that file from here.
 // R2: ASSETS + DASHBOARD use agent-sam-sandbox-cidi; other bindings mirror production IDs for compatibility.
 // Queues omitted: same queue consumer cannot bind to two Workers; production inneranimalmedia keeps MY_QUEUE consumer.
+//
+// Optional secrets (wrangler secret put -c wrangler.jsonc) for *.workers.dev email/password form:
+//   SANDBOX_DASHBOARD_PASSWORD — shared dev gate (plaintext; compared with timingSafeEqualUtf8).
+//   OR SANDBOX_DASHBOARD_PBKDF2_SALT + SANDBOX_DASHBOARD_PBKDF2_HASH (hex, same PBKDF2-SHA256 100k as auth_users).
+//   Optional SANDBOX_DASHBOARD_IMPERSONATE_USER — auth_users id/email to session as when gate matches (default: email from form).
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",

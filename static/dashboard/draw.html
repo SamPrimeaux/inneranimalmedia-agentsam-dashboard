@@ -873,6 +873,8 @@
      FIX 3: padding-right so library panel doesn't overlap shell chrome;
              padding-bottom so AI toolbar sits above shell footer.
      FIX 4: Explicit height chain so Excalidraw gets a real pixel height.
+     FIX 5: excalidrawAPI public alias on window (automation parity with Excalidraw docs).
+     FIX 6: postMessage to parent when embedded (e.g. Agent dashboard draw tab).
      ============================================================ */
 
   .draw-page-wrap.draw-excal-wrap {
@@ -1534,6 +1536,7 @@
       function onApiReady(api) {
         excalApi = api;
         window.__excalidrawApi = api;
+        window.excalidrawAPI = api;
 
 
         // Push libraries into the running instance
@@ -1609,6 +1612,16 @@
 <script nonce="MzY2NjEzNTM0Myw3NTI5NTA5MzM=">
 (function () {
   function getApi() { return window.__excalidrawApi || null; }
+
+  function postDrawRequestToParent(kind) {
+    if (window.parent === window) return false;
+    try {
+      window.parent.postMessage({ type: 'iam_draw_request', kind: kind }, window.location.origin);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
 
   function setDisabled(on) {
@@ -1718,6 +1731,7 @@
 
 
   function generateFromConvo() {
+    if (postDrawRequestToParent('from_chat')) return;
     setDisabled(true);
     getCurrentConversation().then(function (conv) {
       if (!conv) {
@@ -1751,12 +1765,15 @@
 
   document.getElementById('btnGenerateFromConvo').addEventListener('click', generateFromConvo);
   document.getElementById('btnCreateUml').addEventListener('click', function () {
+    if (postDrawRequestToParent('uml')) return;
     callGenerateEndpoint('/api/draw/generate-uml');
   });
   document.getElementById('btnCreateMockup').addEventListener('click', function () {
+    if (postDrawRequestToParent('mockup')) return;
     callGenerateEndpoint('/api/draw/generate-mockup');
   });
   document.getElementById('btnCreateWireframe').addEventListener('click', function () {
+    if (postDrawRequestToParent('wireframe')) return;
     callGenerateEndpoint('/api/draw/generate-wireframe');
   });
 })();

@@ -302,6 +302,8 @@ export default function FloatingPreviewPanel({
   onBrowserScreenshotUrl,
   codeContent = "",
   onCodeContentChange,
+  codeFilename: codeFilenameProp,
+  onCodeFilenameChange,
   onFileContextChange,
   isDarkTheme = true,
   activeThemeSlug = "",
@@ -317,6 +319,7 @@ export default function FloatingPreviewPanel({
   onOpenInBrowser,
   onDeployStart,
   onDeployComplete,
+  drawPageSrc = "/dashboard/pages/draw.html",
 }) {
   const [previewEdit, setPreviewEdit] = useState(false);
   const [browserInputUrl, setBrowserInputUrl] = useState("");
@@ -356,7 +359,21 @@ export default function FloatingPreviewPanel({
   const [filesFlatList, setFilesFlatList] = useState([]);
   const [hoveredFileKey, setHoveredFileKey] = useState(null);
   const [refreshListTrigger, setRefreshListTrigger] = useState(0);
-  const [codeFilename, setCodeFilename] = useState("");
+  const [localCodeFilename, setLocalCodeFilename] = useState("");
+  const filenameControlled = typeof onCodeFilenameChange === "function";
+  const codeFilename = filenameControlled ? (codeFilenameProp ?? "") : localCodeFilename;
+  const setCodeFilename = useCallback(
+    (v) => {
+      if (filenameControlled) {
+        if (typeof v === "function") onCodeFilenameChange(v(codeFilenameProp ?? ""));
+        else onCodeFilenameChange(v);
+      } else {
+        setLocalCodeFilename(v);
+      }
+    },
+    [filenameControlled, onCodeFilenameChange, codeFilenameProp]
+  );
+  const [saveState, setSaveState] = useState("idle");
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -671,6 +688,37 @@ export default function FloatingPreviewPanel({
       setSaving(false);
     }
   }, [codeFilename, filesBucket, codeContent, onCodeContentChange]);
+
+  const handleSaveDraftToR2 = useCallback(async () => {
+    let fn = (codeFilename || "").trim();
+    if (!fn) {
+      fn = "agent-output.txt";
+      setCodeFilename(fn);
+    }
+    const bodyContent = monacoEditorRef.current?.getValue() ?? codeContent ?? "";
+    setSaveState("saving");
+    try {
+      const res = await fetch("/api/agent/r2-save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          key: `agent-sam/drafts/${fn}`,
+          content: bodyContent,
+        }),
+      });
+      if (res.ok) {
+        setSaveState("saved");
+        setTimeout(() => setSaveState("idle"), 2000);
+      } else {
+        setSaveState("error");
+        setTimeout(() => setSaveState("idle"), 2000);
+      }
+    } catch (_) {
+      setSaveState("error");
+      setTimeout(() => setSaveState("idle"), 2000);
+    }
+  }, [codeFilename, codeContent, setCodeFilename]);
 
   const acceptProposedChange = useCallback(async () => {
     if (proposedContent == null || !codeFilename || !filesBucket) return;
@@ -1197,6 +1245,23 @@ export default function FloatingPreviewPanel({
           </div>
         )}
 
+        {/* DRAW TAB -- shell-less Excalidraw page in iframe */}
+        {activeTab === "draw" && (
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
+            {drawPageSrc?.trim() ? (
+              <iframe
+                key={drawPageSrc}
+                src={drawPageSrc.trim().startsWith("/") || drawPageSrc.trim().startsWith("http") ? drawPageSrc.trim() : `https://${drawPageSrc.trim()}`}
+                title="Draw"
+                style={{ width: "100%", flex: 1, minHeight: 200, border: "none", display: "block", background: "var(--bg-canvas)" }}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              />
+            ) : (
+              <div style={{ padding: "20px", color: "var(--text-secondary)", fontSize: "12px" }}>Draw page URL not configured.</div>
+            )}
+          </div>
+        )}
+
         {/* FILES TAB -- R2 file viewer */}
         {activeTab === "files" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
@@ -1437,6 +1502,24 @@ export default function FloatingPreviewPanel({
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
                   <button
                     type="button"
+                    onClick={handleSaveDraftToR2}
+                    disabled={saveState === "saving"}
+                    style={{
+                      padding: "5px 14px",
+                      background: "transparent",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 6,
+                      fontSize: 12,
+                      cursor: saveState === "saving" ? "wait" : "pointer",
+                      color: "var(--color-text)",
+                      fontWeight: 500,
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    {saveState === "saving" ? "Saving..." : saveState === "saved" ? "Saved" : saveState === "error" ? "Error" : "Save to R2"}
+                  </button>
+                  <button
+                    type="button"
                     onClick={saveFileToR2}
                     disabled={!hasChanges || saving}
                     style={{
@@ -1474,7 +1557,40 @@ export default function FloatingPreviewPanel({
                 <button type="button" onClick={() => { if (onBrowserUrlChange) onBrowserUrlChange(buildR2Url(filesBucket, codeFilename)); if (onTabChange) onTabChange("browser"); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 12, fontFamily: "inherit", padding: "0 4px", whiteSpace: "nowrap" }}>Open in Browser tab {'->'}</button>
               </div>
             ) : (
-              <div style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", fontSize: "10px", color: "var(--text-muted)" }}>Code -- edit or paste; use Files tab to open from R2</div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "4px 8px",
+                  borderBottom: "1px solid var(--border)",
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                  Code -- edit or paste; use Files tab to open from R2
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSaveDraftToR2}
+                  disabled={saveState === "saving"}
+                  style={{
+                    padding: "4px 12px",
+                    background: "transparent",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    cursor: saveState === "saving" ? "wait" : "pointer",
+                    color: "var(--color-text)",
+                    fontFamily: "inherit",
+                    fontWeight: 500,
+                    flexShrink: 0,
+                  }}
+                >
+                  {saveState === "saving" ? "Saving..." : saveState === "saved" ? "Saved" : saveState === "error" ? "Error" : "Save to R2"}
+                </button>
+              </div>
             )}
             <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
               {(hasRealDiffFromChat || diffMode) && (

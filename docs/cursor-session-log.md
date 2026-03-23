@@ -7219,3 +7219,54 @@ Full asset deploy: `npm run build`, bump `?v=`, R2 `agent.html` + agent bundle, 
 ### Known issues / next steps
 - None for this drop.
 
+## 2026-03-23 embedded dashboard (?embedded=1) + shell chrome hide
+
+### What was asked
+Surgical worker change: when `/dashboard/*` HTML is requested with `?embedded=1`, inject a script that adds `embedded` to `document.body`; append matching rules to `shell.css`; agent shell nav dispatches `embedded=1` on iframe URLs. No deploy in this session.
+
+### Files changed
+- `worker.js`: new `respondWithDashboardHtml` before `respondWithR2Object`; `/dashboard/` block uses it instead of `respondWithR2Object` for the main segment HTML.
+- `static/dashboard/shell.css`: appended `body.embedded` rules to hide topbar/sidenav/footer chrome and relax layout.
+- `dashboard/agent.html`: `iam_shell_nav` dispatch builds `embedUrl` with `embedded=1`.
+
+### Files NOT changed (and why)
+- OAuth handlers, API routes, `respondWithR2Object` body: untouched per request.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Changes are repo-only until worker + R2 dashboard assets are deployed per project procedure.
+
+### Known issues / next steps
+- Upload `shell.css` / `agent.html` to R2 and deploy worker when approved; fragment route `/dashboard/pages/*` still uses `respondWithR2Object` (only main `/dashboard/<segment>` uses injection).
+
+## 2026-03-23 deploy: embedded nav + worker respondWithDashboardHtml (v131)
+
+### What was asked
+Production deploy: build agent-dashboard, `wrangler deploy` with `wrangler.production.toml`, R2 uploads (`shell.css`, `agent.html`, agent bundle), D1 `deployments` + `dashboard_versions`, `post-deploy-record.sh`, session log, git push. `TRIGGERED_BY` / notes per user (embedded nav suppression + `respondWithDashboardHtml`).
+
+### Files / actions
+- `agent-dashboard/`: `npm run build` (Vite) to `dist/agent-dashboard.js` and `dist/agent-dashboard.css`
+- `dashboard/agent.html`: cache bust **v130 to v131**
+- R2 `agent-sam`: `static/dashboard/shell.css`, `static/dashboard/agent.html`, `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`
+- Worker: `./scripts/with-cloudflare-env.sh npx wrangler deploy --config wrangler.production.toml`
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (paths above)
+- Worker deployed: yes
+- **Current Version ID:** `f96977ff-b3b0-412b-9011-eeb969345511`
+- **Cache bust / dashboard_versions:** **v131** (three rows: agent-js, agent-css, agent-html)
+- **D1 `deployments.id`:** `f96977ff-b3b0-412b-9011-eeb969345511` (`triggered_by=embedded-nav-suppression-worker-respondWithDashboardHtml`, `deploy_time_seconds=0`)
+- Deploy approved by Sam: yes
+
+### What is live now
+- Production worker serves `respondWithDashboardHtml` for `/dashboard/*` with `?embedded=1`; R2 serves agent shell at **v131** with embedded CSS and `iam_shell_nav` `embedded=1` URLs.
+
+### Known issues / next steps
+- None for this drop.
+

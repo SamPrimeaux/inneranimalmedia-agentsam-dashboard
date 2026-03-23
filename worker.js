@@ -3880,7 +3880,7 @@ const worker = {
         const key = `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
-        if (obj) return respondWithR2Object(obj, 'text/html', { noCache: true });
+        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true });
         return notFound(path);
       }
 
@@ -3959,6 +3959,24 @@ const worker = {
     }
   },
 };
+
+async function respondWithDashboardHtml(obj, url, options = {}) {
+    const isEmbedded = url.searchParams.get('embedded') === '1';
+    if (!isEmbedded) {
+        return respondWithR2Object(obj, 'text/html', options);
+    }
+    // Inject embedded class script after opening <body> tag
+    const original = await obj.text();
+    const injected = original.replace(
+        /<body([^>]*)>/i,
+        '<body$1><script>document.body.classList.add("embedded");<\/script>'
+    );
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html');
+    headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    headers.set('Pragma', 'no-cache');
+    return new Response(injected, { status: 200, headers });
+}
 
 function respondWithR2Object(obj, contentType, options = {}) {
   const headers = new Headers();

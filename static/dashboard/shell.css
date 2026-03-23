@@ -32,3 +32,19 @@
 #notifications-dropdown {
   z-index: 1100;
 }
+
+/* Embedded mode — suppress shell chrome when loaded in iframe */
+body.embedded .topbar,
+body.embedded .sidenav,
+body.embedded #overlay,
+body.embedded #agent-footer-chat,
+body.embedded .dashboard-mobile-footer {
+    display: none !important;
+}
+body.embedded .main-content {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+}
+body.embedded .app-container {
+    grid-template-columns: 1fr !important;
+}

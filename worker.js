@@ -3871,7 +3871,7 @@ const worker = {
         const pageName = dashboardPagesMatch[1];
         const fragmentKey = `static/dashboard/pages/${pageName}`;
         const obj = await env.DASHBOARD.get(fragmentKey);
-        if (obj) return respondWithR2Object(obj, 'text/html', { noCache: true });
+        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true });
       }
 
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite

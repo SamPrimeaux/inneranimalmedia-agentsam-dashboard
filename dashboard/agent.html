@@ -183,7 +183,7 @@
         .sidenav-header {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: flex-start;
             padding: 12px 12px 8px;
             flex-shrink: 0;
         }
@@ -221,6 +221,13 @@
         }
         .sidenav.collapsed .sidenav-toggle svg {
             transform: rotate(180deg);
+        }
+        .sidenav-header .sidenav-settings-btn {
+            margin-left: auto;
+            margin-right: 4px;
+        }
+        .sidenav.collapsed .sidenav-header .sidenav-settings-btn {
+            margin: 0 auto;
         }
 
         /* New chat button */
@@ -633,6 +640,16 @@
                     </svg>
                     <span class="sidenav-logo-text">IAM</span>
                 </a>
+                <a href="/dashboard/user-settings"
+                   class="sidenav-footer-icon sidenav-settings-btn"
+                   title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2"
+                         width="18" height="18">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </a>
                 <button type="button" id="sidenavToggle"
                         class="sidenav-toggle"
                         aria-label="Collapse sidebar">
@@ -819,7 +836,7 @@
                         </svg>
                         <span>Images</span>
                     </a>
-                    <a href="/dashboard/draw" class="nav-item">
+                    <a href="/dashboard/pages/draw.html" class="nav-item">
                         <svg class="nav-icon" viewBox="0 0 24 24"
                              fill="none" stroke="currentColor"
                              stroke-width="2">
@@ -834,7 +851,7 @@
 
             </nav>
 
-            <!-- Footer: bell top, avatar + gear bottom -->
+            <!-- Footer: bell top, avatar -->
             <div class="sidenav-footer">
                 <button type="button" class="sidenav-footer-icon"
                         id="sidenavBellBtn"
@@ -855,16 +872,6 @@
                     <button type="button" id="sidenavLogoutBtn"
                             class="sidenav-logout-btn">Sign out</button>
                 </div>
-                <a href="/dashboard/user-settings"
-                   class="sidenav-footer-icon sidenav-settings-btn"
-                   title="Settings">
-                    <svg viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2"
-                         width="18" height="18">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
-                </a>
             </div>
 
         </aside>
@@ -874,8 +881,8 @@
 <script>document.body.classList.add('agent-dashboard-page');</script>
 <div id="agent-dashboard-root" style="width:100%;height:100%;overflow:hidden;"></div>
 
-<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=132">
-    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=132"></script>
+<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=133">
+    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=133"></script>
         </main>
     </div>
 
@@ -1032,7 +1039,9 @@
         });
 
         // Shell nav intercept — load non-agent pages in React viewer
-        document.querySelectorAll('.sidenav-nav .nav-item').forEach(link => {
+        document.querySelectorAll(
+            '.sidenav-nav .nav-item, .sidenav-footer a[href], .sidenav-header a.sidenav-settings-btn'
+        ).forEach(link => {
             const href = link.getAttribute('href');
             if (!href || href === '/dashboard/agent') return;
             link.addEventListener('click', function(e) {

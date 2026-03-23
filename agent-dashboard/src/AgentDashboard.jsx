@@ -1015,6 +1015,7 @@ export default function AgentDashboard() {
   const [codeFilename, setCodeFilename] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
   const [browserUrl, setBrowserUrl] = useState("");
+  const [shellNavActive, setShellNavActive] = useState(false);
   const [lightboxImage, setLightboxImage] = useState(null);
   const [pendingDrawImage, setPendingDrawImage] = useState(null);
   const pendingDrawImageRef = useRef(null);
@@ -1165,6 +1166,7 @@ export default function AgentDashboard() {
       setBrowserUrl(url);
       setActiveTab("browser");
       setPreviewOpen(true);
+      setShellNavActive(true);
     };
     window.addEventListener("iam_shell_nav", handleShellNav);
     return () => {
@@ -2224,6 +2226,7 @@ export default function AgentDashboard() {
     setBrowserUrl(normalized);
     setActiveTab("browser");
     setPreviewOpen(true);
+    setShellNavActive(false);
   }, [setBrowserUrl, setActiveTab, setPreviewOpen]);
 
   const openImageInDrawPanel = useCallback((url) => {
@@ -3679,7 +3682,7 @@ export default function AgentDashboard() {
                         { label: "Google Drive", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2L2 19h20L12 2z"/></svg>, action: () => { window.open("/api/oauth/google/start?connect=drive&return_to=/dashboard/agent", "oauth_google", "width=500,height=600"); setConnectorPopupOpen(false); } },
                         { label: "GitHub", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>, action: () => { window.open("/api/oauth/github/start?return_to=/dashboard/agent", "oauth_github", "width=500,height=600"); setConnectorPopupOpen(false); } },
                         { label: "Cloudflare", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>, action: () => { setInput("@cloudflare list my workers and D1 databases"); setTimeout(() => textareaRef.current?.focus(), 50); setConnectorPopupOpen(false); } },
-                        { label: "Take Screenshot", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>, action: () => { setPreviewOpen(true); setActiveTab("browser"); setConnectorPopupOpen(false); } },
+                        { label: "Take Screenshot", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>, action: () => { setPreviewOpen(true); setActiveTab("browser"); setShellNavActive(false); setConnectorPopupOpen(false); } },
                         { label: "Search knowledge base", icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>, action: () => { setConnectorPopupOpen(false); setActiveTab("files"); setPreviewOpen(true); } },
                       ].map((item) => (
                         <button
@@ -4340,6 +4343,7 @@ export default function AgentDashboard() {
                         } else {
                           setPreviewOpen(true);
                           setActiveTab(tab);
+                          if (tab === "browser") setShellNavActive(false);
                         }
                       }}
                       style={{
@@ -4400,6 +4404,7 @@ export default function AgentDashboard() {
                   onOpenInBrowser={handleOpenInBrowser}
                   onDeployStart={handleDeployStart}
                   onDeployComplete={handleDeployComplete}
+                  shellNavActive={shellNavActive}
                 />
               </div>
             </div>
@@ -4466,6 +4471,7 @@ export default function AgentDashboard() {
                           setActiveTab(tab);
                           setPreviewOpen(true);
                           setMobileIconsOpen(false);
+                          if (tab === "browser") setShellNavActive(false);
                         }}
                         style={{
                           width: 36,
@@ -4537,6 +4543,7 @@ export default function AgentDashboard() {
                       } else {
                         setPreviewOpen(true);
                         setActiveTab(tab);
+                        if (tab === "browser") setShellNavActive(false);
                       }
                     }}
                     style={{
@@ -4604,6 +4611,7 @@ export default function AgentDashboard() {
                   onOpenInBrowser={handleOpenInBrowser}
                   onDeployStart={handleDeployStart}
                   onDeployComplete={handleDeployComplete}
+                  shellNavActive={shellNavActive}
                 />
               </div>
             )}

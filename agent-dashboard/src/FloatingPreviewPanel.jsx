@@ -320,6 +320,7 @@ export default function FloatingPreviewPanel({
   onDeployStart,
   onDeployComplete,
   drawPageSrc = "/dashboard/pages/draw.html",
+  shellNavActive = false,
 }) {
   const [previewEdit, setPreviewEdit] = useState(false);
   const [browserInputUrl, setBrowserInputUrl] = useState("");
@@ -1191,6 +1192,7 @@ export default function FloatingPreviewPanel({
         {/* BROWSER TAB -- live iframe + screenshot */}
         {activeTab === "browser" && (
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {!shellNavActive && (
             <div style={{ display: "flex", gap: "6px", padding: "6px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
               <input
                 type="text"
@@ -1215,6 +1217,7 @@ export default function FloatingPreviewPanel({
                 Screenshot
               </button>
             </div>
+            )}
             {(() => {
               const u = (browserInputUrl || browserUrl || "").trim();
               const liveUrl = u ? (u.startsWith("http") || u.startsWith("/") ? u : "https://" + u) : "";
@@ -1225,7 +1228,7 @@ export default function FloatingPreviewPanel({
                       key={liveUrl}
                       src={liveUrl}
                       title="Live browser"
-                      style={{ width: "100%", flex: 1, minHeight: 200, border: "none", display: "block", background: "#fff" }}
+                      style={{ width: "100%", flex: 1, minHeight: 200, border: "none", display: "block", background: "var(--bg-canvas)" }}
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                     />
                   ) : null}

@@ -32,6 +32,74 @@ function getSamContext(email) {
   };
 }
 
+/** auth_users.id for Sam accounts; agentsam_* rows use user_id = 'sam_primeaux'. */
+const AGENTSAM_SUPERADMIN_IDS = new Set([
+  'au_c2bfb387e6fac69b',
+  'au_e3b3457d8243e46e',
+  'au_c4bf765aff63b31f',
+]);
+
+function resolveAgentsamUserKey(authUser) {
+  if (!authUser?.id) return null;
+  if (authUser.id === 'sam_primeaux' || AGENTSAM_SUPERADMIN_IDS.has(authUser.id)) return 'sam_primeaux';
+  return authUser.id;
+}
+
+const AGENTSAM_ALLOWED_POLICY_COLS = new Set([
+  'auto_run_mode', 'browser_protection', 'mcp_tools_protection',
+  'file_deletion_protection', 'external_file_protection',
+  'default_agent_location', 'text_size', 'auto_clear_chat',
+  'submit_with_mod_enter', 'max_tab_count', 'queue_messages_mode',
+  'usage_summary_mode', 'agent_autocomplete', 'web_search_enabled',
+  'auto_accept_web_search', 'web_fetch_enabled', 'hierarchical_ignore',
+  'ignore_symlinks', 'inline_diffs', 'jump_next_diff_on_accept',
+  'auto_format_on_agent_finish', 'legacy_terminal_tool',
+  'toolbar_on_selection', 'auto_parse_links', 'themed_diff_backgrounds',
+  'terminal_hint', 'terminal_preview_box', 'collapse_auto_run_commands',
+  'voice_submit_keyword', 'commit_attribution', 'pr_attribution',
+  'settings_json',
+]);
+
+function defaultAgentsamUserPolicy(userKey, workspaceId) {
+  return {
+    user_id: userKey,
+    workspace_id: workspaceId,
+    auto_run_mode: 'allowlist',
+    browser_protection: 0,
+    mcp_tools_protection: 1,
+    file_deletion_protection: 1,
+    external_file_protection: 1,
+    default_agent_location: 'pane',
+    text_size: 'default',
+    auto_clear_chat: 0,
+    submit_with_mod_enter: 0,
+    max_tab_count: 5,
+    queue_messages_mode: 'after_current',
+    usage_summary_mode: 'auto',
+    agent_autocomplete: 1,
+    web_search_enabled: 1,
+    auto_accept_web_search: 0,
+    web_fetch_enabled: 1,
+    hierarchical_ignore: 0,
+    ignore_symlinks: 0,
+    inline_diffs: 1,
+    jump_next_diff_on_accept: 1,
+    auto_format_on_agent_finish: 0,
+    legacy_terminal_tool: 1,
+    toolbar_on_selection: 1,
+    auto_parse_links: 0,
+    themed_diff_backgrounds: 1,
+    terminal_hint: 1,
+    terminal_preview_box: 1,
+    collapse_auto_run_commands: 1,
+    voice_submit_keyword: 'submit',
+    commit_attribution: 1,
+    pr_attribution: 1,
+    settings_json: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
 /** Call after any write to agent_memory_index or ai_knowledge_base so agent_sam context cache is invalidated. */
 function invalidateCompiledContextCache(env) {
   if (env.DB) env.DB.prepare(`DELETE FROM ai_compiled_context_cache WHERE context_hash LIKE '%system%'`).run().catch(() => {});
@@ -669,6 +737,121 @@ const CIDI_WEBHOOK_PATCH_KEYS = new Set([
 
 const CIDI_MATCH_COLUMNS = new Set(['id', 'client_id', 'workflow_id']);
 
+/** Lowercase repo full_name -> cidi.workflow_id for CI success activity logging */
+const GITHUB_REPO_CIDI_WORKFLOW = {
+  'samprimeaux/inneranimalmedia-agentsam-dashboard': 'CIDI-IAM-AGENTSAM-20260322',
+};
+
+function githubActorFromWebhookPayload(rawBody) {
+  try {
+    const p = JSON.parse(rawBody || '{}');
+    return (
+      p.sender?.login ||
+      p.workflow_run?.triggering_actor?.login ||
+      p.workflow_run?.actor?.login ||
+      p.pusher?.name ||
+      'github'
+    );
+  } catch {
+    return 'github';
+  }
+}
+
+function githubCommitMessageFromWebhookPayload(rawBody) {
+  try {
+    const p = JSON.parse(rawBody || '{}');
+    return String(p.workflow_run?.head_commit?.message || p.head_commit?.message || '').slice(0, 4000);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * After a successful cicd_runs row insert: mirror to deployments + optional cidi_activity_log.
+ * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.
+ */
+async function recordGithubCicdFollowups(env, row, rawBody) {
+  if (!env?.DB || !row || typeof row !== 'object') return;
+  const status = String(row.status || '').toLowerCase();
+  const conclusion = String(row.conclusion || '').toLowerCase();
+  if (status !== 'success' && conclusion !== 'success') return;
+
+  const commitSha = row.commit_sha != null ? String(row.commit_sha) : '';
+  const repoFull = String(
+    row.repo_name != null ? row.repo_name : (row.repo_full_name != null ? row.repo_full_name : '')
+  ).trim();
+  const runId = row.run_id != null ? String(row.run_id) : '';
+  const wfName = row.workflow_name != null ? String(row.workflow_name) : '';
+  const branch = row.branch != null ? String(row.branch) : '';
+  const versionShort = commitSha.length >= 7 ? commitSha.slice(0, 7) : (commitSha || 'unknown');
+  const cdep = row.cloudflare_deployment_id != null ? String(row.cloudflare_deployment_id).trim() : '';
+  const deployId = cdep || (runId ? `cicd-${runId}` : `gh-${versionShort}-${Date.now()}`);
+
+  let workerName = '';
+  try {
+    if (repoFull) {
+      const gr = await env.DB.prepare(
+        `SELECT cloudflare_worker_name FROM github_repositories
+         WHERE lower(trim(repo_full_name)) = lower(trim(?)) LIMIT 1`
+      ).bind(repoFull).first();
+      if (gr?.cloudflare_worker_name) workerName = String(gr.cloudflare_worker_name);
+    }
+  } catch (_) {}
+  if (!workerName) {
+    if (repoFull.toLowerCase().includes('inneranimalmedia-agentsam-dashboard')) workerName = 'inneranimal-dashboard';
+    else workerName = 'inneranimalmedia';
+  }
+
+  const actor = githubActorFromWebhookPayload(rawBody);
+  const notesRaw = row.commit_message != null ? String(row.commit_message) : githubCommitMessageFromWebhookPayload(rawBody);
+  const notes = notesRaw.slice(0, 4000);
+  const desc = `GitHub CI: ${wfName || 'workflow'}${branch ? ` (${branch})` : ''}`;
+
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO deployments (
+        id, timestamp, version, git_hash, description, status, deployed_by,
+        environment, deploy_time_seconds, worker_name, triggered_by, notes
+      ) VALUES (?, datetime('now'), ?, ?, ?, 'success', ?, 'production', 0, ?, 'github_push', ?)`
+    ).bind(deployId, versionShort, commitSha || null, desc, actor, workerName, notes || null).run();
+  } catch (e) {
+    console.warn('[cicd] deployments INSERT', e?.message ?? e);
+  }
+
+  const repoKey = repoFull.toLowerCase().replace(/\s+/g, '');
+  const mappedWf = GITHUB_REPO_CIDI_WORKFLOW[repoKey];
+  if (!mappedWf) return;
+
+  try {
+    const cidiRow = await env.DB.prepare(
+      `SELECT id, workflow_id FROM cidi
+       WHERE workflow_id = ? AND implementation_status = 'in_progress'
+       LIMIT 1`
+    ).bind(mappedWf).first();
+    if (!cidiRow?.id || !cidiRow?.workflow_id) return;
+
+    const meta = JSON.stringify({
+      run_id: runId,
+      commit_sha: commitSha,
+      status: String(row.status || row.conclusion || ''),
+    });
+
+    await env.DB.prepare(
+      `INSERT INTO cidi_activity_log (
+        cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json
+      ) VALUES (?, ?, 'updated', 'deployment', ?, ?, 'github_webhook', ?)`
+    ).bind(
+      cidiRow.id,
+      cidiRow.workflow_id,
+      commitSha || runId || 'success',
+      `CI success: ${wfName || 'workflow_run'}`,
+      meta
+    ).run();
+  } catch (e) {
+    console.warn('[cicd] cidi_activity_log INSERT', e?.message ?? e);
+  }
+}
+
 async function runWriteD1MapInsert(env, cfg, ctx) {
   const table = cfg.table != null ? String(cfg.table) : '';
   if (!table || !/^[a-zA-Z0-9_]+$/.test(table)) return { ok: false, error: 'write_d1: invalid table' };
@@ -708,7 +891,16 @@ async function runWriteD1MapInsert(env, cfg, ctx) {
   try {
     const stmt = env.DB.prepare(sql);
     const result = await stmt.bind(...cols.map((c) => row[c])).run();
-    return { ok: true, result: { changes: result.meta?.changes ?? result.changes ?? 0 } };
+    const changes = result.meta?.changes ?? result.changes ?? 0;
+    if (table === 'cicd_runs' && changes > 0) {
+      const follow = recordGithubCicdFollowups(env, row, ctx.rawBody);
+      if (typeof ctx.waitUntil === 'function') {
+        ctx.waitUntil(follow.catch((e) => console.warn('[cicd] followup', e?.message ?? e)));
+      } else {
+        await follow.catch((e) => console.warn('[cicd] followup', e?.message ?? e));
+      }
+    }
+    return { ok: true, result: { changes } };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -954,7 +1146,7 @@ async function handleHooksHealth(env) {
  * opts: { verifyKind, source, endpointPath }
  * verifyKind: github | stripe | cursor | resend | supabase | cloudflare | internal | none
  */
-async function handleInboundWebhook(env, request, resolveSecret, opts) {
+async function handleInboundWebhook(env, request, resolveSecret, opts, executionCtx) {
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
   const verifyKind = opts.verifyKind;
   const source = opts.source;
@@ -1011,6 +1203,9 @@ async function handleInboundWebhook(env, request, resolveSecret, opts) {
     rawBody,
     eventType,
     source,
+    waitUntil: executionCtx && typeof executionCtx.waitUntil === 'function'
+      ? executionCtx.waitUntil.bind(executionCtx)
+      : null,
   };
 
   let subs = [];
@@ -1116,46 +1311,68 @@ const worker = {
         });
       }
 
+      if (path === '/health' || pathLower === '/health') {
+        return new Response(
+          JSON.stringify({
+            status: 'ok',
+            worker: 'inneranimalmedia',
+            version: env.CF_VERSION_METADATA?.id ?? 'unknown',
+            bindings: {
+              db: !!env.DB,
+              r2: !!env.R2,
+              browser: !!env.MYBROWSER,
+              queue: !!env.MY_QUEUE,
+              ai: !!env.AI,
+            },
+            timestamp: Date.now(),
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200,
+          }
+        );
+      }
+
       // ----- API: Webhooks (canonical /api/webhooks/* + /api/email/inbound; legacy /api/hooks/*) -----
       if ((pathLower === '/api/webhooks/health' || pathLower === '/api/hooks/health') && methodUpper === 'GET') {
         return handleHooksHealth(env);
       }
       if (methodUpper === 'POST') {
         if (pathLower === '/api/email/inbound') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend_inbound', source: 'resend', endpointPath: '/api/email/inbound' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend_inbound', source: 'resend', endpointPath: '/api/email/inbound' }, ctx);
         }
         if (pathLower === '/api/webhooks/resend') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend', source: 'resend', endpointPath: '/api/webhooks/resend' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend', source: 'resend', endpointPath: '/api/webhooks/resend' }, ctx);
         }
         if (pathLower === '/api/webhooks/stripe') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/webhooks/stripe' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/webhooks/stripe' }, ctx);
         }
         if (pathLower === '/api/webhooks/github') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/webhooks/github' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/webhooks/github' }, ctx);
         }
         if (pathLower === '/api/webhooks/cursor') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/webhooks/cursor' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/webhooks/cursor' }, ctx);
         }
         if (pathLower === '/api/webhooks/cloudflare') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'cloudflare', source: 'cloudflare', endpointPath: '/api/webhooks/cloudflare' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cloudflare', source: 'cloudflare', endpointPath: '/api/webhooks/cloudflare' }, ctx);
         }
         if (pathLower === '/api/webhooks/supabase') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/webhooks/supabase' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/webhooks/supabase' }, ctx);
         }
         if (pathLower === '/api/webhooks/internal') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/webhooks/internal' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/webhooks/internal' }, ctx);
         }
         if (pathLower === '/api/hooks/github') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/hooks/github' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/hooks/github' }, ctx);
         }
         if (pathLower === '/api/hooks/cursor') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/hooks/cursor' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/hooks/cursor' }, ctx);
         }
         if (pathLower === '/api/hooks/stripe') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/hooks/stripe' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/hooks/stripe' }, ctx);
         }
         if (pathLower === '/api/hooks/internal') {
-          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/hooks/internal' });
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/hooks/internal' }, ctx);
         }
       }
 
@@ -1818,6 +2035,11 @@ const worker = {
         } catch (e) {
           return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
         }
+      }
+
+      // ----- API: Agent Sam settings plane (/api/agentsam/*) — MUST be before /api/agent (agentsam starts with "agent") -----
+      if (pathLower.startsWith('/api/agentsam/') || pathLower === '/api/agentsam') {
+        return handleAgentsamApi(request, url, env);
       }
 
       // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
@@ -3063,7 +3285,7 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   if (agent_id) {
     try {
-      await env.DB.prepare("UPDATE agent_ai_sam SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
+      await env.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
     } catch (_) {}
   }
 }
@@ -3093,6 +3315,8 @@ const PROMPT_CAPS = {
   SCHEMA_BLURB_MAX_CHARS: 4000,
   MCP_BLURB_MAX_CHARS: 800,
   RAG_CONTEXT_MAX_CHARS: 3000,
+  CONTEXT_INDEX_MAX_CHARS: 4000,
+  CONTEXT_INDEX_R2_FULL_MAX_CHARS: 12000,
   TRUNCATION_MARKER: '\n\n[... truncated]',
   SESSION_SUMMARY_MAX_CHARS: 1500,
   LAST_N_VERBATIM_TURNS: 6,
@@ -3101,6 +3325,136 @@ const PROMPT_CAPS = {
 function capWithMarker(text, maxChars) {
   if (!text || text.length <= maxChars) return text;
   return text.slice(0, maxChars) + PROMPT_CAPS.TRUNCATION_MARKER;
+}
+
+/** Up to 3 terms (length > 3) joined for context_index LIKE search; empty if none. */
+function getContextIndexSearchTerm(query) {
+  if (typeof query !== 'string' || !query.trim()) return '';
+  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 3).slice(0, 3);
+  return terms.length ? terms.join(' ') : '';
+}
+
+/**
+ * Keyword search on context_index (no vectors). Returns [] if table missing or no terms.
+ * scope: tenant or bucket scope; rows match scope = 'global' OR scope = ?
+ */
+async function fetchContextIndex(db, query, scope) {
+  const term = getContextIndexSearchTerm(query);
+  if (!db || !term) return [];
+
+  const scopeParam = scope && String(scope).trim() ? String(scope).trim() : 'global';
+
+  try {
+    const { results } = await db.prepare(
+      `SELECT id, title, doc_type, storage_type,
+              r2_bucket, r2_key, inline_content, summary
+       FROM context_index
+       WHERE is_active = 1 AND is_stale = 0
+       AND (keywords LIKE ? OR title LIKE ? OR tags LIKE ?)
+       AND (scope = 'global' OR scope = ?)
+       ORDER BY importance_score DESC
+       LIMIT 5`
+    ).bind(`%${term}%`, `%${term}%`, `%${term}%`, scopeParam).all();
+
+    return (results || []).map((r) => ({
+      id: r.id,
+      title: r.title,
+      doc_type: r.doc_type,
+      storage_type: r.storage_type,
+      content: r.inline_content || null,
+      r2_key: r.r2_key || null,
+      r2_bucket: r.r2_bucket || null,
+      summary: r.summary,
+    }));
+  } catch (e) {
+    console.warn('[context_index] fetchContextIndex', e?.message ?? e);
+    return [];
+  }
+}
+
+/** When true, load full R2 body for this hit; otherwise summary-only (or short fallback). */
+function contextIndexWarrantsR2FullFetch(queryLower, row) {
+  const title = (row.title || '').toLowerCase();
+  const summary = (row.summary || '').toLowerCase();
+  const qWords = queryLower.split(/\s+/).filter((w) => w.length > 3).slice(0, 6);
+  if (qWords.length === 0) return false;
+  let overlap = 0;
+  for (const qw of qWords) {
+    if (title.includes(qw) || summary.includes(qw)) overlap++;
+  }
+  return overlap >= 2 || (qWords.length === 1 && (title.includes(qWords[0]) || summary.includes(qWords[0])));
+}
+
+/**
+ * Build prompt text from context_index rows: inline_content verbatim (capped); R2 = summary unless warrant full fetch.
+ * @returns {{ text: string, ids: string[] }}
+ */
+async function buildContextIndexPromptBlock(env, rows, queryLower) {
+  if (!rows || !rows.length) return { text: '', ids: [] };
+  const ids = [];
+  const parts = [];
+  const qLow = (queryLower || '').toLowerCase();
+
+  for (const row of rows) {
+    ids.push(row.id);
+    let body = '';
+    if (row.content) {
+      body = capWithMarker(String(row.content), PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS);
+    } else if (row.r2_key) {
+      const wantFull = contextIndexWarrantsR2FullFetch(qLow, row);
+      if (wantFull && env) {
+        const bucket = row.r2_bucket || 'iam-platform';
+        const binding = getR2Binding(env, bucket);
+        if (binding) {
+          try {
+            const obj = await binding.get(row.r2_key);
+            if (obj) {
+              const txt = await obj.text();
+              body = capWithMarker(txt, PROMPT_CAPS.CONTEXT_INDEX_R2_FULL_MAX_CHARS);
+            }
+          } catch (e) {
+            console.warn('[context_index] R2 get', row.r2_key, e?.message ?? e);
+          }
+        }
+      }
+      if (!body) {
+        body =
+          (row.summary && String(row.summary).trim()) ||
+          '(Indexed R2 document: no summary; narrow your question to load full text.)';
+      }
+    } else {
+      body = (row.summary && String(row.summary).trim()) || '';
+    }
+
+    const label = row.title || row.id;
+    const dtype = row.doc_type || 'doc';
+    parts.push(`### ${label} (${dtype})\n${body}`);
+  }
+
+  return { text: parts.join('\n\n'), ids };
+}
+
+/**
+ * Expects table context_search_log(id, searched_at, query_snippet, scope, search_term, context_ids_used, result_count, was_helpful).
+ * No-op if table missing.
+ */
+async function logContextSearch(db, { queryText, scope, searchTerm, contextIds }) {
+  if (!db) return;
+  try {
+    const id = `csl_${crypto.randomUUID()}`;
+    const snippet = (queryText || '').slice(0, 500);
+    const scopeParam = scope && String(scope).trim() ? String(scope).trim() : 'global';
+    const term = searchTerm || '';
+    const idsJson = JSON.stringify(contextIds || []);
+    const count = Array.isArray(contextIds) ? contextIds.length : 0;
+    await db.prepare(
+      `INSERT INTO context_search_log
+       (id, searched_at, query_snippet, scope, search_term, context_ids_used, result_count, was_helpful)
+       VALUES (?, unixepoch(), ?, ?, ?, ?, ?, NULL)`
+    ).bind(id, snippet, scopeParam, term, idsJson, count).run();
+  } catch (e) {
+    console.warn('[context_index] logContextSearch', e?.message ?? e);
+  }
 }
 
 /** Approximate token count from character length (for prompt telemetry). */
@@ -3147,50 +3501,57 @@ function logPromptTelemetry(env, payload) {
 }
 
 /** Mode-specific prompt builders. Sections: { core, memory, kb, mcp, schema, daily, full }. Each section is a string (may be empty). Do not share full payload by default. */
-function buildAskContext(sections, ragContext, fileContext, model) {
+function buildAskContext(sections, ragContext, fileContext, model, indexedContext) {
   let core = (sections && sections.core) || '';
   if (!core && sections && typeof sections.full === 'string') core = capWithMarker(sections.full, 2500);
   const memory = (sections && sections.memory) ? capWithMarker(sections.memory, 1500) : '';
   const fileBlock = fileContext ? capWithMarker(fileContext, 2000) : '';
   let out = core + memory;
+  if (indexedContext) out += '\n\n[Context index — matched docs]\n' + capWithMarker(indexedContext, 2500);
   if (ragContext) out += '\n\nRelevant platform context:\n' + capWithMarker(ragContext, 1500);
   out += (fileBlock ? '\n\n' + fileBlock : '');
   return out;
 }
 
-function buildPlanContext(sections, ragContext, fileContext, model) {
+function buildPlanContext(sections, ragContext, fileContext, model, indexedContext) {
   let core = (sections && sections.core) || '';
   if (!core && sections && typeof sections.full === 'string') core = capWithMarker(sections.full, 4000);
   const memory = (sections && sections.memory) || '';
   const daily = (sections && sections.daily) || '';
   const fileBlock = fileContext ? capWithMarker(fileContext, PROMPT_CAPS.FILE_CONTEXT_MAX_CHARS) : '';
   let out = core + memory + daily;
+  if (indexedContext) out += '\n\n[Context index — matched docs]\n' + capWithMarker(indexedContext, 3500);
   if (ragContext) out += '\n\nRelevant platform context:\n' + ragContext;
   out += (fileBlock ? '\n\n' + fileBlock : '');
   return out;
 }
 
-function buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob) {
+function buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob, indexedContext) {
   const full = (sections && typeof sections.full === 'string') ? sections.full : (compiledContextBlob && typeof compiledContextBlob === 'string') ? compiledContextBlob : (sections ? [sections.core, sections.memory, sections.kb, sections.mcp, sections.schema, sections.daily].filter(Boolean).join('') : '');
   let out = full;
-  if (ragContext) out = 'Relevant platform context:\n' + ragContext + '\n\n' + out;
+  const prefixParts = [];
+  if (indexedContext) prefixParts.push('[Context index — matched docs]\n' + capWithMarker(indexedContext, PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS));
+  if (ragContext) prefixParts.push('Relevant platform context:\n' + ragContext);
+  if (prefixParts.length) out = prefixParts.join('\n\n') + '\n\n' + out;
   out += (fileContext ? '\n\n' + fileContext : '');
   return out;
 }
 
-function buildDebugContext(sections, ragContext, fileContext, model) {
+function buildDebugContext(sections, ragContext, fileContext, model, indexedContext) {
   let core = (sections && sections.core) || '';
   if (!core && sections && typeof sections.full === 'string') core = capWithMarker(sections.full, 3000);
   const schema = (sections && sections.schema) || '';
   const fileBlock = fileContext || '';
-  return core + schema + (fileBlock ? '\n\n' + fileBlock : '');
+  let out = core + schema;
+  if (indexedContext) out += '\n\n[Context index — matched docs]\n' + capWithMarker(indexedContext, 2000);
+  return out + (fileBlock ? '\n\n' + fileBlock : '');
 }
 
-function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileContext, model) {
-  if (mode === 'ask') return buildAskContext(sections, ragContext, fileContext, model);
-  if (mode === 'plan') return buildPlanContext(sections, ragContext, fileContext, model);
-  if (mode === 'debug') return buildDebugContext(sections, ragContext, fileContext, model);
-  return buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob);
+function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileContext, model, indexedContext) {
+  if (mode === 'ask') return buildAskContext(sections, ragContext, fileContext, model, indexedContext);
+  if (mode === 'plan') return buildPlanContext(sections, ragContext, fileContext, model, indexedContext);
+  if (mode === 'debug') return buildDebugContext(sections, ragContext, fileContext, model, indexedContext);
+  return buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob, indexedContext);
 }
 
 /** Filter tools by mode: Plan mode has no tools; Ask and Agent get all (subject to panel policy); Debug gets only terminal/log/read tools. */
@@ -3248,7 +3609,7 @@ For "mixed", include a "tasks" array: [{ "type": "shell"|"sql"|"question", "cont
 Example: {"intent":"mixed","tasks":[{"type":"shell","content":"ls -la"},{"type":"sql","content":"SELECT * FROM users LIMIT 5"}]}
 
 Known schemas (use exact column names in SQL):
-- agent_ai_sam: id, name, status ('active'/'inactive'), model_policy_json
+- agentsam_ai: id, name, status ('active'/'inactive'), model_policy_json
 - mcp_registered_tools: tool_name, tool_category, enabled (0/1), input_schema
 - ai_models: id, provider, model_key, is_active (0/1), show_in_picker (0/1)
 Always use exact column names from these schemas.
@@ -4107,8 +4468,114 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
   return { content: [{ type: 'text', text: finalText }] };
 }
 
+/** Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8 (onData sends raw strings). */
+function aggregateTerminalRunOutput(parts) {
+  let out = '';
+  for (const p of parts) {
+    let s = p;
+    if (typeof ArrayBuffer !== 'undefined' && s instanceof ArrayBuffer) {
+      s = new TextDecoder().decode(s);
+    } else if (typeof Uint8Array !== 'undefined' && s instanceof Uint8Array) {
+      s = new TextDecoder().decode(s);
+    } else if (typeof s !== 'string') {
+      s = String(s);
+    }
+    const trimStart = s.trimStart();
+    if (trimStart.startsWith('{')) {
+      try {
+        const j = JSON.parse(s);
+        if (j && typeof j === 'object') {
+          if (j.type === 'session_id') continue;
+          if (j.type === 'output' && j.data != null) {
+            out += typeof j.data === 'string' ? j.data : String(j.data);
+            continue;
+          }
+          if (j.type === 'error' && j.data != null) {
+            out += typeof j.data === 'string' ? j.data : String(j.data);
+            continue;
+          }
+        }
+      } catch (_) {
+        /* not JSON; treat as PTY raw */
+      }
+    }
+    out += s;
+  }
+  return out.trim();
+}
+
+/** Same host as TERMINAL_WS_URL: POST /exec (iam-pty server.js). Workers often receive zero WS frames on outbound fetch() upgrades; HTTP is reliable. */
+function terminalExecHttpUrlFromEnv(env) {
+  const raw = (env.TERMINAL_WS_URL || '').trim().split('?')[0];
+  if (!raw) return '';
+  try {
+    let u = raw;
+    if (u.startsWith('wss://')) u = 'https://' + u.slice(6);
+    else if (u.startsWith('ws://')) u = 'http://' + u.slice(7);
+    else if (!/^https?:\/\//i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+    return new URL('/exec', new URL(u).origin).href;
+  } catch (_) {
+    return '';
+  }
+}
+
+/** Returns { ok: true, text } on 200 JSON from /exec; { ok: false } to fall back to WebSocket. */
+async function runTerminalCommandViaHttpExec(env, cmd) {
+  const execUrl = terminalExecHttpUrlFromEnv(env);
+  if (!execUrl) return { ok: false };
+  const tokens = [];
+  const pushTok = (t) => {
+    const s = String(t || '').trim();
+    if (s && !tokens.includes(s)) tokens.push(s);
+  };
+  pushTok(env.PTY_AUTH_TOKEN);
+  pushTok(env.TERMINAL_SECRET);
+  if (!tokens.length) return { ok: false };
+  try {
+    for (let i = 0; i < tokens.length; i++) {
+      const bearer = tokens[i];
+      const res = await fetch(execUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bearer },
+        body: JSON.stringify({ command: cmd }),
+      });
+      if (res.status === 401 && i < tokens.length - 1) {
+        console.log('[runTerminalCommand] http-exec 401, retry other bearer');
+        continue;
+      }
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        const preview = errBody.slice(0, 220).replace(/\s+/g, ' ').trim();
+        const singleBearer401 = res.status === 401 && tokens.length === 1;
+        console.log('[runTerminalCommand] http-exec skipped', {
+          status: res.status,
+          cfRay: res.headers.get('cf-ray') || undefined,
+          bodyPreview: preview || undefined,
+          bearerAttempts: tokens.length,
+          hint: singleBearer401
+            ? 'PTY_AUTH_TOKEN and TERMINAL_SECRET are the same in Worker (one attempt). iam-pty must export identical PTY_AUTH_TOKEN; restart PM2 after editing ecosystem.config.cjs.'
+            : undefined,
+        });
+        return { ok: false };
+      }
+      const data = await res.json().catch(() => null);
+      if (!data || typeof data !== 'object') return { ok: false };
+      const stdout = typeof data.stdout === 'string' ? data.stdout : '';
+      const stderr = typeof data.stderr === 'string' ? data.stderr : '';
+      const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
+      console.log('[runTerminalCommand] http-exec ok', { outLen: text.length, exit: data.exit_code });
+      return { ok: true, text };
+    }
+    return { ok: false };
+  } catch (e) {
+    console.warn('[runTerminalCommand] http-exec error', e?.message ?? e);
+    return { ok: false };
+  }
+}
+
 /**
- * Run a command on the PTY via WebSocket. Used by POST /api/agent/terminal/run and runToolLoop (terminal_execute).
+ * Run a command: prefer POST /exec on the terminal host (reliable from Workers), else PTY WebSocket run.
+ * Used by POST /api/agent/terminal/run and runToolLoop (terminal_execute).
  * Returns { output, command }. Throws on connect/error so callers can try/catch.
  */
 async function runTerminalCommand(env, request, command, sessionId = null) {
@@ -4116,40 +4583,61 @@ async function runTerminalCommand(env, request, command, sessionId = null) {
   const cmd = typeof command === 'string' ? command.trim() : '';
   const wsUrl = env.TERMINAL_WS_URL;
   if (!wsUrl) throw new Error('Terminal not configured');
-  const sep = wsUrl.includes('?') ? '&' : '?';
-  const wsUrlWithAuth = env.TERMINAL_SECRET
-    ? `${wsUrl}${sep}token=${encodeURIComponent(env.TERMINAL_SECRET)}`
-    : wsUrl;
-  const runKeyBytes = new Uint8Array(16);
-  crypto.getRandomValues(runKeyBytes);
-  const runWsKey = btoa(String.fromCharCode.apply(null, runKeyBytes));
-  const wsResp = await fetch(wsUrlWithAuth, {
-    headers: {
-      Upgrade: 'websocket',
-      Connection: 'Upgrade',
-      'Sec-WebSocket-Version': '13',
-      'Sec-WebSocket-Key': runWsKey,
-      'x-terminal-secret': env.TERMINAL_SECRET || '',
-    },
-  });
-  if (wsResp.status !== 101) throw new Error(`Terminal connect failed: ${wsResp.status}`);
-  const ws = wsResp.webSocket;
-  ws.accept();
-  const output = await new Promise((resolve) => {
-    const chunks = [];
-    const t = setTimeout(() => resolve(chunks.join('')), 10000);
-    ws.addEventListener('message', (e) => chunks.push(e.data));
-    ws.addEventListener('close', () => { clearTimeout(t); resolve(chunks.join('')); });
-    ws.send(JSON.stringify({ type: 'run', command: cmd }));
-  });
-  ws.close();
-  const cleanOutput = output
-    .split('\n')
-    .filter(line => {
-      try { const p = JSON.parse(line); return p.type !== 'session_id'; } catch (_) { return true; }
-    })
-    .join('\n')
-    .trim();
+
+  const httpTry = await runTerminalCommandViaHttpExec(env, cmd);
+  let cleanOutput = '';
+  if (httpTry.ok) {
+    cleanOutput = httpTry.text;
+    console.log('[runTerminalCommand] DONE', { via: 'http-exec', commandLen: cmd.length, outLen: cleanOutput.length });
+  } else {
+    const sep = wsUrl.includes('?') ? '&' : '?';
+    const wsUrlWithAuth = env.TERMINAL_SECRET
+      ? `${wsUrl}${sep}token=${encodeURIComponent(env.TERMINAL_SECRET)}`
+      : wsUrl;
+    const runKeyBytes = new Uint8Array(16);
+    crypto.getRandomValues(runKeyBytes);
+    const runWsKey = btoa(String.fromCharCode.apply(null, runKeyBytes));
+    const wsResp = await fetch(wsUrlWithAuth, {
+      headers: {
+        Upgrade: 'websocket',
+        Connection: 'Upgrade',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': runWsKey,
+        'x-terminal-secret': env.TERMINAL_SECRET || '',
+      },
+    });
+    if (wsResp.status !== 101) throw new Error(`Terminal connect failed: ${wsResp.status}`);
+    const ws = wsResp.webSocket;
+    ws.accept();
+    const CLOSE_FLUSH_MS = 450;
+    cleanOutput = await new Promise((resolve) => {
+      const chunks = [];
+      let settled = false;
+      let closeTimer = null;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (closeTimer != null) try { clearTimeout(closeTimer); } catch (_) {}
+        try { clearTimeout(t); } catch (_) {}
+        const agg = aggregateTerminalRunOutput(chunks);
+        console.log('[runTerminalCommand] DONE', { via: 'ws-run', commandLen: cmd.length, frames: chunks.length, outLen: agg.length });
+        resolve(agg);
+      };
+      const t = setTimeout(finish, 10000);
+      ws.addEventListener('message', (e) => {
+        chunks.push(e.data);
+      });
+      ws.addEventListener('close', () => {
+        try { clearTimeout(t); } catch (_) {}
+        closeTimer = setTimeout(finish, CLOSE_FLUSH_MS);
+      });
+      ws.send(JSON.stringify({ type: 'run', command: cmd }));
+    });
+    try {
+      ws.close();
+    } catch (_) {}
+  }
+
   const out = { output: cleanOutput, command: cmd };
   if (env.DB) {
     const now = Math.floor(Date.now() / 1000);
@@ -5151,7 +5639,7 @@ async function handleAgentApi(request, url, env, ctx) {
       let agents = [], mcp_services = [], models = [], sessions = [], prompts = [];
       try {
         const batch = await env.DB.batch([
-          env.DB.prepare("SELECT id, name, role_name, mode FROM agent_ai_sam WHERE status='active' ORDER BY name"),
+          env.DB.prepare("SELECT id, name, role_name, mode FROM agentsam_ai WHERE status='active' ORDER BY name"),
           env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
           env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'anthropic' THEN 1 WHEN 'google' THEN 2 WHEN 'openai' THEN 3 WHEN 'workers_ai' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
           env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
@@ -5183,7 +5671,29 @@ async function handleAgentApi(request, url, env, ctx) {
           if (integrations['google_drive']) integrations['google'] = true;
         }
       } catch (_) {}
+      let cssVars = null;
+      try {
+        const ff = await env.DB.prepare(
+          `SELECT enabled_globally FROM agentsam_feature_flag WHERE flag_key = 'worker_theme_injection' LIMIT 1`
+        ).first();
+        if (ff && Number(ff.enabled_globally) === 1) {
+          // Theme slug: settings.appearance.theme (tenant_sam_primeaux) joins cms_themes.slug; config.cssVars on boot.
+          const tr = await env.DB.prepare(
+            `SELECT ct.config
+             FROM cms_themes ct
+             JOIN settings s ON s.setting_value = ct.slug
+             WHERE s.setting_key = 'appearance.theme'
+             AND s.tenant_id = 'tenant_sam_primeaux'
+             LIMIT 1`
+          ).first();
+          if (tr?.config) {
+            const cfg = typeof tr.config === 'string' ? JSON.parse(tr.config) : tr.config;
+            if (cfg && cfg.cssVars != null && typeof cfg.cssVars === 'object') cssVars = cfg.cssVars;
+          }
+        }
+      } catch (_) {}
       const payload = { agents, mcp_services, models, sessions, prompts, cidi: [], integrations, default_model_id };
+      if (cssVars != null) payload.cssVars = cssVars;
       return jsonResponse(payload);
     }
 
@@ -5736,7 +6246,7 @@ async function handleAgentApi(request, url, env, ctx) {
       if (agent_id) {
         try {
           const agentRow = await env.DB.prepare(
-            'SELECT model_policy_json FROM agent_ai_sam WHERE id = ?'
+            'SELECT model_policy_json FROM agentsam_ai WHERE id = ?'
           ).bind(agent_id).first();
           if (agentRow?.model_policy_json) {
             const policy = typeof agentRow.model_policy_json === 'string'
@@ -5799,6 +6309,28 @@ async function handleAgentApi(request, url, env, ctx) {
           console.error('[agent/chat] AISEARCH failed:', e?.message ?? e);
         }
       }
+
+      let contextIndexBlurb = '';
+      const contextIndexScope =
+        body.tenant_id && body.tenant_id !== 'system' ? body.tenant_id : 'tenant_sam_primeaux';
+      const contextSearchTerm = getContextIndexSearchTerm(lastUserContent);
+      let contextIndexIdsForLog = [];
+      if (contextSearchTerm && env.DB) {
+        try {
+          const idxRows = await fetchContextIndex(env.DB, lastUserContent, contextIndexScope);
+          const built = await buildContextIndexPromptBlock(env, idxRows, lastUserContent);
+          contextIndexBlurb = built.text;
+          contextIndexIdsForLog = built.ids;
+        } catch (e) {
+          console.warn('[context_index] assemble', e?.message ?? e);
+        }
+      }
+      await logContextSearch(env.DB, {
+        queryText: lastUserContent,
+        scope: contextIndexScope,
+        searchTerm: contextSearchTerm || '',
+        contextIds: contextIndexIdsForLog,
+      });
 
       let compiledContext = null;
       let builtSections = null;
@@ -5973,7 +6505,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 \`\`\`
 `;
       }
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, resolvedSections, compiledContext, ragContext, fileBlock, model);
+      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, resolvedSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb);
       let finalSystem = systemWithBlurb;
 
       if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS && env.R2) {
@@ -6252,7 +6784,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                       }
                       if (agent_id) {
                         try {
-                          await envRef.DB.prepare("UPDATE agent_ai_sam SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
+                          await envRef.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
                         } catch (_) {}
                       }
                       emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
@@ -6494,7 +7026,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
       if (agent_id) {
         try {
-          await env.DB.prepare("UPDATE agent_ai_sam SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
+          await env.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
         } catch (_) {}
       }
       return jsonResponse({
@@ -7184,6 +7716,464 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
   return { run_id: run.id, status: 'running' };
 }
 
+async function handleAgentsamApi(request, url, env) {
+  const pathLower = url.pathname.replace(/\/$/, '').toLowerCase();
+  const method = (request.method || 'GET').toUpperCase();
+  const workspaceId = url.searchParams.get('workspace_id') || '';
+
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const userKey = resolveAgentsamUserKey(authUser);
+  if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+
+  const readBody = async () => {
+    try {
+      return await request.json();
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    if (pathLower === '/api/agentsam/user-policy' && method === 'GET') {
+      const row = await env.DB.prepare(
+        `SELECT * FROM agentsam_user_policy
+         WHERE user_id = ? AND workspace_id = ?
+         LIMIT 1`
+      ).bind(userKey, workspaceId).first();
+      if (!row) return jsonResponse(defaultAgentsamUserPolicy(userKey, workspaceId));
+      return jsonResponse(row);
+    }
+
+    if (pathLower === '/api/agentsam/user-policy' && method === 'PATCH') {
+      const body = await readBody();
+      if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
+      const keys = Object.keys(body).filter((k) => AGENTSAM_ALLOWED_POLICY_COLS.has(k));
+      if (!keys.length) return jsonResponse({ error: 'No valid policy fields' }, 400);
+      const placeholders = keys.map(() => '?').join(', ');
+      const insertCols = ['user_id', 'workspace_id', ...keys].join(', ');
+      const insertVals = [userKey, workspaceId, ...keys.map((k) => body[k])];
+      const updates = keys.map((k) => `${k} = excluded.${k}`).join(', ');
+      const sql = `INSERT INTO agentsam_user_policy (${insertCols})
+        VALUES (?, ?, ${placeholders})
+        ON CONFLICT(user_id, workspace_id) DO UPDATE SET
+          ${updates},
+          updated_at = datetime('now')`;
+      await env.DB.prepare(sql).bind(...insertVals).run();
+      const row = await env.DB.prepare(
+        `SELECT * FROM agentsam_user_policy WHERE user_id = ? AND workspace_id = ? LIMIT 1`
+      ).bind(userKey, workspaceId).first();
+      return jsonResponse(row || defaultAgentsamUserPolicy(userKey, workspaceId));
+    }
+
+    if (pathLower === '/api/agentsam/command-allowlist' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, command, workspace_id, created_at
+         FROM agentsam_command_allowlist
+         WHERE user_id = ? AND workspace_id = ?
+         ORDER BY command ASC`
+      ).bind(userKey, workspaceId).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/command-allowlist' && method === 'POST') {
+      const body = await readBody();
+      const command = (body && body.command != null) ? String(body.command).trim() : '';
+      if (!command) return jsonResponse({ error: 'command required' }, 400);
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO agentsam_command_allowlist
+          (id, user_id, workspace_id, command)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, workspace_id, command) DO NOTHING`
+      ).bind(id, userKey, workspaceId, command).run();
+      return jsonResponse({ ok: true, id });
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/command-allowlist\/([^/]+)$/);
+      if (m && method === 'DELETE') {
+        await env.DB.prepare(
+          `DELETE FROM agentsam_command_allowlist
+           WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, tool_key, workspace_id, created_at
+         FROM agentsam_mcp_allowlist
+         WHERE user_id = ? AND workspace_id = ?
+         ORDER BY tool_key ASC`
+      ).bind(userKey, workspaceId).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'POST') {
+      const body = await readBody();
+      const tool_key = (body && body.tool_key != null) ? String(body.tool_key).trim() : '';
+      if (!tool_key) return jsonResponse({ error: 'tool_key required' }, 400);
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO agentsam_mcp_allowlist (id, user_id, workspace_id, tool_key)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, workspace_id, tool_key) DO NOTHING`
+      ).bind(id, userKey, workspaceId, tool_key).run();
+      return jsonResponse({ ok: true, id });
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/mcp-allowlist\/([^/]+)$/);
+      if (m && method === 'DELETE') {
+        await env.DB.prepare(
+          `DELETE FROM agentsam_mcp_allowlist WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/fetch-domains' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, host, workspace_id, created_at
+         FROM agentsam_fetch_domain_allowlist
+         WHERE user_id = ? AND workspace_id = ?
+         ORDER BY host ASC`
+      ).bind(userKey, workspaceId).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/fetch-domains' && method === 'POST') {
+      const body = await readBody();
+      const host = (body && body.host != null) ? String(body.host).trim() : '';
+      if (!host) return jsonResponse({ error: 'host required' }, 400);
+      const id = crypto.randomUUID();
+      await env.DB.prepare(
+        `INSERT INTO agentsam_fetch_domain_allowlist (id, user_id, workspace_id, host)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, workspace_id, host) DO NOTHING`
+      ).bind(id, userKey, workspaceId, host).run();
+      return jsonResponse({ ok: true, id });
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/fetch-domains\/([^/]+)$/);
+      if (m && method === 'DELETE') {
+        await env.DB.prepare(
+          `DELETE FROM agentsam_fetch_domain_allowlist WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/trusted-origins' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT origin, cert_fingerprint_sha256, trust_scope, created_at
+         FROM agentsam_browser_trusted_origin
+         WHERE user_id = ?
+         ORDER BY origin ASC`
+      ).bind(userKey).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/trusted-origins' && method === 'POST') {
+      const body = await readBody();
+      const origin = (body && body.origin != null) ? String(body.origin).trim() : '';
+      if (!origin) return jsonResponse({ error: 'origin required' }, 400);
+      const trust_scope = (body && body.trust_scope != null) ? String(body.trust_scope) : 'persistent';
+      await env.DB.prepare(
+        `INSERT INTO agentsam_browser_trusted_origin
+          (user_id, origin, trust_scope)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id, origin) DO UPDATE SET
+          trust_scope = excluded.trust_scope,
+          updated_at = datetime('now')`
+      ).bind(userKey, origin, trust_scope).run();
+      return jsonResponse({ ok: true });
+    }
+
+    if (pathLower === '/api/agentsam/trusted-origins' && method === 'DELETE') {
+      const body = await readBody();
+      const origin = (body && body.origin != null) ? String(body.origin).trim() : '';
+      if (!origin) return jsonResponse({ error: 'origin required' }, 400);
+      await env.DB.prepare(
+        `DELETE FROM agentsam_browser_trusted_origin
+         WHERE user_id = ? AND origin = ?`
+      ).bind(userKey, origin).run();
+      return jsonResponse({ ok: true });
+    }
+
+    if (pathLower === '/api/agentsam/feature-flags' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT ff.flag_key, ff.description, ff.enabled_globally, ff.config_json,
+          ufo.enabled AS user_override
+         FROM agentsam_feature_flag ff
+         LEFT JOIN agentsam_user_feature_override ufo
+           ON ff.flag_key = ufo.flag_key AND ufo.user_id = ?`
+      ).bind(userKey).all();
+      return jsonResponse(results || []);
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/feature-flags\/(.+)$/);
+      if (m && method === 'PUT') {
+        const flagKey = m[1];
+        const body = await readBody();
+        const en = body && body.enabled;
+        if (en !== 0 && en !== 1 && en !== '0' && en !== '1') {
+          return jsonResponse({ error: 'enabled must be 0 or 1' }, 400);
+        }
+        const enabled = Number(en) === 1 ? 1 : 0;
+        await env.DB.prepare(
+          `INSERT INTO agentsam_user_feature_override (user_id, flag_key, enabled, updated_at)
+           VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(user_id, flag_key) DO UPDATE SET
+             enabled = excluded.enabled,
+             updated_at = excluded.updated_at`
+        ).bind(userKey, flagKey, enabled).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    {
+      const rulesRev = pathLower.match(/^\/api\/agentsam\/rules\/([^/]+)\/revisions$/);
+      if (rulesRev && method === 'GET') {
+        const docId = rulesRev[1];
+        const { results } = await env.DB.prepare(
+          `SELECT id, version, created_at, created_by
+           FROM agentsam_rules_revision
+           WHERE document_id = ?
+           ORDER BY version DESC`
+        ).bind(docId).all();
+        return jsonResponse(results || []);
+      }
+    }
+
+    {
+      const rulesOne = pathLower.match(/^\/api\/agentsam\/rules\/([^/]+)$/);
+      if (rulesOne && method === 'GET') {
+        const docId = rulesOne[1];
+        const row = await env.DB.prepare(
+          `SELECT * FROM agentsam_rules_document WHERE id = ? AND user_id = ?`
+        ).bind(docId, userKey).first();
+        if (!row) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse(row);
+      }
+      if (rulesOne && method === 'PATCH') {
+        const docId = rulesOne[1];
+        const body = await readBody();
+        const bodyMarkdown = body && body.body_markdown != null ? String(body.body_markdown) : null;
+        if (bodyMarkdown === null) return jsonResponse({ error: 'body_markdown required' }, 400);
+        const titleOpt = body && body.title != null ? String(body.title) : null;
+        await env.DB.prepare(
+          `INSERT INTO agentsam_rules_revision (id, document_id, body_markdown, version, created_by)
+           SELECT lower(hex(randomblob(8))), id, body_markdown, version, ?
+           FROM agentsam_rules_document WHERE id = ? AND user_id = ?`
+        ).bind(userKey, docId, userKey).run();
+        await env.DB.prepare(
+          `UPDATE agentsam_rules_document
+           SET body_markdown = ?,
+               title = COALESCE(?, title),
+               version = version + 1,
+               updated_at = datetime('now')
+           WHERE id = ? AND user_id = ?`
+        ).bind(bodyMarkdown, titleOpt, docId, userKey).run();
+        const row = await env.DB.prepare(
+          `SELECT * FROM agentsam_rules_document WHERE id = ? AND user_id = ? LIMIT 1`
+        ).bind(docId, userKey).first();
+        return jsonResponse(row || { ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/rules' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, title, body_markdown, version, is_active, created_at, updated_at
+         FROM agentsam_rules_document
+         WHERE user_id = ? AND is_active = 1
+         ORDER BY updated_at DESC`
+      ).bind(userKey).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/rules' && method === 'POST') {
+      const body = await readBody();
+      const title = (body && body.title != null) ? String(body.title).trim() : '';
+      const bodyMarkdown = (body && body.body_markdown != null) ? String(body.body_markdown) : '';
+      if (!title || !bodyMarkdown) return jsonResponse({ error: 'title and body_markdown required' }, 400);
+      const ws = (body && body.workspace_id != null) ? String(body.workspace_id) : null;
+      await env.DB.prepare(
+        `INSERT INTO agentsam_rules_document
+          (id, user_id, workspace_id, title, body_markdown)
+         VALUES (lower(hex(randomblob(8))), ?, ?, ?, ?)`
+      ).bind(userKey, ws, title, bodyMarkdown).run();
+      return jsonResponse({ ok: true });
+    }
+
+    if (pathLower === '/api/agentsam/subagents' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, slug, display_name, default_model_id, is_active,
+          allowed_tool_globs, instructions_markdown, created_at, updated_at
+         FROM agentsam_subagent_profile
+         WHERE user_id = ? AND workspace_id = ?
+         ORDER BY updated_at DESC`
+      ).bind(userKey, workspaceId).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/subagents' && method === 'POST') {
+      const body = await readBody();
+      const slug = (body && body.slug != null) ? String(body.slug).trim() : '';
+      const display_name = (body && body.display_name != null) ? String(body.display_name).trim() : '';
+      if (!slug || !display_name) return jsonResponse({ error: 'slug and display_name required' }, 400);
+      if (!/^[a-z0-9_-]+$/.test(slug)) return jsonResponse({ error: 'invalid slug' }, 400);
+      const default_model_id = body && body.default_model_id != null ? String(body.default_model_id) : null;
+      const allowed_tool_globs = body && body.allowed_tool_globs != null ? String(body.allowed_tool_globs) : null;
+      const instructions_markdown = body && body.instructions_markdown != null ? String(body.instructions_markdown) : null;
+      await env.DB.prepare(
+        `INSERT INTO agentsam_subagent_profile
+          (id, user_id, workspace_id, slug, display_name,
+           default_model_id, allowed_tool_globs, instructions_markdown)
+         VALUES (lower(hex(randomblob(8))), ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, workspace_id, slug) DO UPDATE SET
+          display_name = excluded.display_name,
+          default_model_id = excluded.default_model_id,
+          allowed_tool_globs = excluded.allowed_tool_globs,
+          instructions_markdown = excluded.instructions_markdown,
+          updated_at = datetime('now')`
+      ).bind(userKey, workspaceId, slug, display_name, default_model_id, allowed_tool_globs, instructions_markdown).run();
+      return jsonResponse({ ok: true });
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/subagents\/([^/]+)$/);
+      if (m && method === 'PATCH') {
+        const sid = m[1];
+        const body = await readBody();
+        if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
+        const fields = ['slug', 'display_name', 'default_model_id', 'allowed_tool_globs', 'instructions_markdown', 'is_active'];
+        const setParts = [];
+        const vals = [];
+        for (const f of fields) {
+          if (Object.prototype.hasOwnProperty.call(body, f)) {
+            setParts.push(`${f} = ?`);
+            let v = body[f];
+            if (f === 'is_active') v = v ? 1 : 0;
+            vals.push(v);
+          }
+        }
+        if (body.slug != null && !/^[a-z0-9_-]+$/.test(String(body.slug).trim())) {
+          return jsonResponse({ error: 'invalid slug' }, 400);
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No fields to update' }, 400);
+        vals.push(sid, userKey);
+        const sql = `UPDATE agentsam_subagent_profile SET ${setParts.join(', ')}, updated_at = datetime('now') WHERE id = ? AND user_id = ?`;
+        await env.DB.prepare(sql).bind(...vals).run();
+        return jsonResponse({ ok: true });
+      }
+      if (m && method === 'DELETE') {
+        await env.DB.prepare(
+          `DELETE FROM agentsam_subagent_profile WHERE id = ? AND user_id = ?`
+        ).bind(m[1], userKey).run();
+        return jsonResponse({ ok: true });
+      }
+    }
+
+    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, pattern, is_negation, order_index, source
+         FROM agentsam_ignore_pattern
+         WHERE user_id = ? AND workspace_id = ?
+         ORDER BY order_index ASC`
+      ).bind(userKey, workspaceId).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'PATCH') {
+      const body = await readBody();
+      const patterns = body && Array.isArray(body.patterns) ? body.patterns : null;
+      if (!patterns) return jsonResponse({ error: 'patterns array required' }, 400);
+      const stmts = [
+        env.DB.prepare(
+          `DELETE FROM agentsam_ignore_pattern WHERE user_id = ? AND workspace_id = ?`
+        ).bind(userKey, workspaceId),
+      ];
+      for (let i = 0; i < patterns.length; i++) {
+        const p = patterns[i] || {};
+        const pat = p.pattern != null ? String(p.pattern) : '';
+        if (!pat) continue;
+        const isNeg = p.is_negation ? 1 : 0;
+        const orderIdx = p.order_index != null ? Number(p.order_index) : i;
+        const src = p.source != null ? String(p.source) : 'db';
+        const pid = crypto.randomUUID();
+        stmts.push(
+          env.DB.prepare(
+            `INSERT INTO agentsam_ignore_pattern
+              (id, user_id, workspace_id, pattern, is_negation, order_index, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).bind(pid, userKey, workspaceId, pat, isNeg, orderIdx, src)
+        );
+      }
+      await env.DB.batch(stmts);
+      return jsonResponse({ ok: true });
+    }
+
+    if (pathLower === '/api/agentsam/index-status' && method === 'GET') {
+      const row = await env.DB.prepare(
+        `SELECT status, file_count, progress_percent, last_sync_at,
+          last_error, vector_backend
+         FROM agentsam_code_index_job
+         WHERE user_id = ? AND workspace_id = ?
+         LIMIT 1`
+      ).bind(userKey, workspaceId).first();
+      if (!row) {
+        return jsonResponse({
+          status: 'idle',
+          file_count: 0,
+          progress_percent: 0,
+          last_sync_at: null,
+          last_error: null,
+          vector_backend: null,
+        });
+      }
+      return jsonResponse(row);
+    }
+
+    if (pathLower === '/api/agentsam/runs' && method === 'GET') {
+      const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+      const { results } = await env.DB.prepare(
+        `SELECT id, status, trigger, model_id, input_tokens, output_tokens,
+          cost_usd, started_at, completed_at, error_message, created_at
+         FROM agentsam_agent_run
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`
+      ).bind(userKey, limit).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower === '/api/agentsam/ai' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        `SELECT id, name, role_name, mode, safety_level, status,
+          model_policy_json, requires_human_approval, mcp_services_json,
+          tool_permissions_json, rate_limits_json, budgets_json,
+          telemetry_enabled, total_runs, total_cost_usd, success_rate,
+          last_run_at, last_error, config_version
+         FROM agentsam_ai
+         WHERE tenant_id = 'tenant_sam_primeaux'
+         ORDER BY total_runs DESC`
+      ).all();
+      return jsonResponse(results || []);
+    }
+
+    return jsonResponse({ error: 'Not found' }, 404);
+  } catch (e) {
+    return jsonResponse({ error: String(e?.message || e) }, 500);
+  }
+}
+
 async function handleMcpApi(req, u, e, ctx) {
   const pathLower = u.pathname.replace(/\/$/, '').toLowerCase();
   const method = (req.method || 'GET').toUpperCase();
@@ -7199,7 +8189,7 @@ async function handleMcpApi(req, u, e, ctx) {
             const stmt = e.DB.prepare(
               `SELECT a.id, a.name, a.role_name, a.tool_permissions_json, a.model_policy_json,
                 s.status, s.current_task, s.progress_pct, s.stage, s.logs_json, s.active_tools_json, s.cost_usd
-               FROM agent_ai_sam a
+               FROM agentsam_ai a
                LEFT JOIN mcp_agent_sessions s ON s.agent_id = a.id AND s.id = (
                  SELECT id FROM mcp_agent_sessions WHERE agent_id = a.id ORDER BY created_at DESC LIMIT 1
                )
@@ -7210,7 +8200,7 @@ async function handleMcpApi(req, u, e, ctx) {
             rows = r.results || [];
           } catch (_) {
             const fallback = await e.DB.prepare(
-              "SELECT id, name, role_name, tool_permissions_json, model_policy_json FROM agent_ai_sam WHERE id IN ('mcp_agent_architect','mcp_agent_builder','mcp_agent_tester','mcp_agent_operator') ORDER BY CASE id WHEN 'mcp_agent_architect' THEN 1 WHEN 'mcp_agent_builder' THEN 2 WHEN 'mcp_agent_tester' THEN 3 WHEN 'mcp_agent_operator' THEN 4 END"
+              "SELECT id, name, role_name, tool_permissions_json, model_policy_json FROM agentsam_ai WHERE id IN ('mcp_agent_architect','mcp_agent_builder','mcp_agent_tester','mcp_agent_operator') ORDER BY CASE id WHEN 'mcp_agent_architect' THEN 1 WHEN 'mcp_agent_builder' THEN 2 WHEN 'mcp_agent_tester' THEN 3 WHEN 'mcp_agent_operator' THEN 4 END"
             ).all().catch(() => ({ results: [] }));
             rows = (fallback.results || []).map((a) => ({ ...a, status: 'idle', current_task: null, progress_pct: 0, stage: null, logs_json: '[]', active_tools_json: '[]', cost_usd: 0 }));
           }
@@ -7335,6 +8325,110 @@ async function handleMcpApi(req, u, e, ctx) {
             const out = await runImgxBuiltinTool(e, tool_name, params);
             if (out && out.error) return jsonResponse(out, 400);
             return jsonResponse({ tool_name, result: out }, 200);
+          }
+        }
+        if (pathLower === '/api/mcp/services/health' && method === 'GET') {
+          try {
+            const { results: services } = await e.DB.prepare(
+              `SELECT id, service_name, endpoint_url, health_status,
+               is_active, last_health_check
+               FROM mcp_services WHERE is_active = 1 ORDER BY service_name`
+            ).all();
+
+            const token = e.MCP_AUTH_TOKEN ? String(e.MCP_AUTH_TOKEN) : '';
+            const results = await Promise.allSettled(
+              (services || []).map(async (svc) => {
+                if (!svc.endpoint_url || !String(svc.endpoint_url).trim().startsWith('http')) {
+                  return { ...svc, live_status: 'skip', tool_count: 0 };
+                }
+                try {
+                  const resp = await fetch(String(svc.endpoint_url).trim(), {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Accept: 'application/json, text/event-stream',
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: JSON.stringify({
+                      jsonrpc: '2.0',
+                      id: 1,
+                      method: 'tools/list',
+                      params: {},
+                    }),
+                    signal: AbortSignal.timeout(3000),
+                  });
+
+                  if (!resp.ok) {
+                    await e.DB.prepare(
+                      `UPDATE mcp_services SET health_status='degraded',
+                       last_health_check=unixepoch(), updated_at=unixepoch() WHERE id=?`
+                    )
+                      .bind(svc.id)
+                      .run()
+                      .catch(() => {});
+                    return { ...svc, live_status: 'degraded', tool_count: 0 };
+                  }
+
+                  const text = await resp.text();
+                  let toolCount = 0;
+                  try {
+                    const line = text.split('\n').find((l) => {
+                      const t = l.trim();
+                      return t.startsWith('data:') || t.startsWith('{');
+                    });
+                    const raw = line
+                      ? line.trim().startsWith('data:')
+                        ? line.trim().slice(5).trim()
+                        : line.trim()
+                      : '{}';
+                    const json = JSON.parse(raw || '{}');
+                    toolCount = json?.result?.tools?.length ?? 0;
+                  } catch (_) {}
+
+                  await e.DB.prepare(
+                    `UPDATE mcp_services SET health_status='healthy',
+                     last_health_check=unixepoch(), updated_at=unixepoch() WHERE id=?`
+                  )
+                    .bind(svc.id)
+                    .run()
+                    .catch(() => {});
+
+                  return {
+                    ...svc,
+                    live_status: 'healthy',
+                    tool_count: toolCount,
+                  };
+                } catch (err) {
+                  await e.DB.prepare(
+                    `UPDATE mcp_services SET health_status='unreachable',
+                     last_health_check=unixepoch(), updated_at=unixepoch() WHERE id=?`
+                  )
+                    .bind(svc.id)
+                    .run()
+                    .catch(() => {});
+                  return {
+                    ...svc,
+                    live_status: 'unreachable',
+                    tool_count: 0,
+                    error: String(err?.message || err).slice(0, 100),
+                  };
+                }
+              })
+            );
+
+            return jsonResponse({
+              checked_at: new Date().toISOString(),
+              services: results.map((r) =>
+                r.status === 'fulfilled'
+                  ? r.value
+                  : {
+                      live_status: 'error',
+                      error: r.reason?.message,
+                    }
+              ),
+            });
+          } catch (err) {
+            return jsonResponse({ error: String(err?.message || err) }, 500);
           }
         }
         const mcpSvcPingMatch = pathLower.match(/^\/api\/mcp\/services\/([^/]+)\/ping$/);

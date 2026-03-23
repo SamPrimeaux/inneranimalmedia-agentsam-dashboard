@@ -12,6 +12,20 @@ const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'InnerAnimalMedia MCP';
 const SERVER_VERSION = '1.0.0';
 
+const IMPLEMENTED_TOOL_LIST = [
+  { name: 'r2_write', description: 'Write a file to R2 storage', inputSchema: { type: 'object', properties: { key: { type: 'string' }, body: { type: 'string' } }, required: ['key', 'body'] } },
+  { name: 'r2_read', description: 'Read an object from R2', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
+  { name: 'r2_list', description: 'List R2 objects with optional prefix', inputSchema: { type: 'object', properties: { prefix: { type: 'string' } } } },
+  { name: 'd1_query', description: 'Run a SELECT query on D1', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'd1_write', description: 'Run an INSERT/UPDATE/DELETE on D1', inputSchema: { type: 'object', properties: { sql: { type: 'string' }, params: { type: 'array' } }, required: ['sql'] } },
+  { name: 'terminal_execute', description: 'Execute a shell command', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
+  { name: 'list_clients', description: 'List clients from D1', inputSchema: { type: 'object' } },
+  { name: 'get_worker_services', description: 'List Worker services for a client', inputSchema: { type: 'object', properties: { client_slug: { type: 'string' }, client_id: { type: 'string' } } } },
+  { name: 'get_deploy_command', description: 'Get wrangler deploy command for a worker', inputSchema: { type: 'object', properties: { worker_name: { type: 'string' }, repo_path: { type: 'string' } }, required: ['worker_name'] } },
+];
+
+const IMPLEMENTED_TOOLS = IMPLEMENTED_TOOL_LIST.map((t) => t.name);
+
 function unauthorized(message) {
   return new Response(JSON.stringify({ error: 'Unauthorized', message }), {
     status: 401,
@@ -94,6 +108,25 @@ export default {
       );
     }
 
+    if (path === '/health' && request.method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          status: 'ok',
+          service: 'inneranimalmedia-mcp',
+          tools_implemented: IMPLEMENTED_TOOLS.length,
+          tool_names: IMPLEMENTED_TOOLS,
+          endpoint: 'https://mcp.inneranimalmedia.com/mcp',
+          timestamp: Date.now(),
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          },
+        }
+      );
+    }
+
     if (path !== MCP_ROUTE) {
       return new Response('Not Found', { status: 404 });
     }
@@ -140,22 +173,10 @@ export default {
     }
 
     if (method === 'tools/list') {
-      const tools = [
-        { name: 'r2_write', description: 'Write a file to R2 storage', inputSchema: { type: 'object', properties: { key: { type: 'string' }, body: { type: 'string' } }, required: ['key', 'body'] } },
-        { name: 'r2_read', description: 'Read an object from R2', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
-        { name: 'r2_list', description: 'List R2 objects with optional prefix', inputSchema: { type: 'object', properties: { prefix: { type: 'string' } } } },
-        { name: 'd1_query', description: 'Run a SELECT query on D1', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
-        { name: 'd1_write', description: 'Run an INSERT/UPDATE/DELETE on D1', inputSchema: { type: 'object', properties: { sql: { type: 'string' }, params: { type: 'array' } }, required: ['sql'] } },
-        { name: 'terminal_execute', description: 'Execute a shell command', inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
-        { name: 'knowledge_search', description: 'Search knowledge base / vectorize', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
-        { name: 'list_clients', description: 'List clients from D1', inputSchema: { type: 'object' } },
-        { name: 'get_worker_services', description: 'List Worker services for a client', inputSchema: { type: 'object', properties: { client_slug: { type: 'string' }, client_id: { type: 'string' } } } },
-        { name: 'get_deploy_command', description: 'Get wrangler deploy command for a worker', inputSchema: { type: 'object', properties: { worker_name: { type: 'string' }, repo_path: { type: 'string' } }, required: ['worker_name'] } },
-      ];
       return sseResponse({
         jsonrpc: '2.0',
         id,
-        result: { tools },
+        result: { tools: IMPLEMENTED_TOOL_LIST },
       });
     }
 

@@ -1,3 +1,174 @@
+## [2026-03-22] Worker production surface reference + Settings Cursor-bridge plan
+
+### What was asked
+Note live Worker routes/bindings/secrets/cron; how to improve Settings UI toward Cursor parity and real backend capabilities.
+
+### Files changed
+- `docs/specs/WORKER_PRODUCTION_SURFACE_REFERENCE.md` — routes, bindings, cron labels, secret **names** only (no values).
+- `docs/specs/AGENT_DASHBOARD_FULL_TECH_SPEC.md` — new §10 bridge table (existing GET APIs → Settings tabs), visual/token notes, Git/Builds pros/cons.
+
+### Files NOT changed
+- `worker.js`, `SettingsPanel.jsx` — planning only.
+
+### Deploy status
+- n/a
+
+### What is live now
+Unchanged production; documentation for next UI sprint.
+
+---
+
+## [2026-03-22] Settings 15-tab nav + Environment under General; Git tab terminal steal fix
+
+### What was asked
+Begin implementation: Cursor-order settings IA, vault under General, fix Git icon jumping to Terminal.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx`: Replaced grouped 12-item nav with `CURSOR_SETTINGS_TABS` (15); `GeneralWithEnvironment` stacks `GeneralTab` + `EnvironmentTab`; `PluginsCombinedTab` (Integrations + Providers); `ToolsMcpTab` (Commands + MCP link); `DeployBetaTab` (Wrangler + Workers + D1); `DocsTab` (GitHub slot + links); placeholders for unwired tabs; `iam-settings-tab` localStorage; nav width ~220px; copy fix Supabase → General Environment.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `runCommandInTerminal(cmd, opts)` — skip `onTabChange("terminal")` when `opts.focusTerminal === false`; GitPanel `run()` passes that flag.
+
+### Files NOT changed
+- `AgentDashboard.jsx`, `dashboard/agent.html`, `worker.js`.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Local bundle only until R2 + deploy.
+
+### Known issues / next steps
+- Placeholder tabs need real APIs per v2 plan; `onOpenInBrowser` still unused in SettingsPanel (pre-existing).
+
+---
+
+## [2026-03-22] Full agent dashboard tech spec (wireframe + API/DB + phased diffs)
+
+### What was asked
+Grep audit, proposed implementations, full tech doc with 2D wireframes, interaction/API/DB wiring, proposed diffs for rebuild.
+
+### Files changed
+- `docs/specs/AGENT_DASHBOARD_FULL_TECH_SPEC.md` — grep audit table, ASCII wireframes, viewer strip + settings layout, interaction catalog (strip, settings tabs, chat), Cursor 15-tab pointer, design proposals, phased diff outline, risks, Git bug reference.
+
+### Files NOT changed
+- Application code — spec only.
+
+### Deploy status
+- n/a
+
+### What is live now
+Planning artifact; production unchanged.
+
+---
+
+## [2026-03-22] Audit-only — agent dashboard grep/sed + wrangler note in spec
+
+### What was asked
+Add inneranimal-dashboard `wrangler.jsonc` parity to plan; run AUDIT commands (grep/sed/wc) on worker, AgentDashboard, FloatingPreviewPanel, SettingsPanel, hex scan; report line numbers — no code edits.
+
+### Files changed
+- `docs/specs/AGENT_SETTINGS_15_TABS_WIREFRAME.txt` — new §10 wrangler.jsonc parity (sandbox worker repo vs this repo), §11 audit snapshot pointer.
+
+### Files NOT changed
+- `AgentDashboard.jsx`, `FloatingPreviewPanel.jsx`, `SettingsPanel.jsx`, `worker.js`, `dashboard/agent.html` — audit only.
+
+### Deploy status
+- n/a
+
+### What is live now
+Unchanged; audit artifacts in chat + spec appendix.
+
+---
+
+## [2026-03-22] Tech spec — agent settings 15 tabs wireframe (TXT)
+
+### What was asked
+Low-fidelity wireframe / tech spec for /agent settings: replace 12 views with 15 Cursor-style tabs; preserve Environment vault; audit vs scratch.
+
+### Files changed
+- `docs/specs/AGENT_SETTINGS_15_TABS_WIREFRAME.txt` — ASCII layout, IA mapping table, Environment non-regression contract, component plan, rollout phases.
+
+### Files NOT changed
+- `SettingsPanel.jsx` / `agent.html` — not edited (spec only).
+
+### Deploy status
+- n/a
+
+### What is live now
+Planning artifact for UI refinement before ship.
+
+---
+
+## [2026-03-22] cms_themes.theme_family — all 78 rows light/dark via luminance
+
+### What was asked
+Organize 70+ themes so `theme_family` is concise (light/dark).
+
+### Files changed
+- `scripts/d1-normalize-theme-family-light-dark.sql` — applied to remote D1 (no BEGIN/COMMIT; D1 wrangler constraint).
+- `scripts/generate-theme-family-updates.mjs` — helper to regenerate from `config.bg`.
+
+### D1 / data
+- **inneranimalmedia-business** remote: 78 `UPDATE`s; result **54 dark**, **24 light**; `custom` eliminated.
+
+### Deploy status
+- Worker: no
+
+### What is live now
+DB-ready for two-section theme UI; API still needs column exposure.
+
+---
+
+## [2026-03-22] D1 audit inneranimalmedia-business — themes + agentsam_* verified
+
+### What was asked
+Audit remote D1 (`cf87b717-d4e2-4cf8-bab0-a81268e32d49`); insert/refine/design improvements; themes handled separately (Claude).
+
+### Files changed
+- `docs/d1-audit-inneranimalmedia-business-2026-03-22.md` — findings: v2 themes present, full `cms_themes` columns + index, all `agentsam_*` tables live, `/api/themes` API gap.
+- `scripts/d1-refinements-optional-post-audit.sql` — optional commented SQL.
+- `migrations/163_agentsam_cursor_parity.sql` — idempotent DDL copy for repo/staging (prod already had schema).
+
+### Files NOT changed
+- `worker.js` — no edit; audit recommends extending `GET /api/themes` (await approval).
+
+### Deploy status
+- Worker deployed: no
+- D1 data changed: no (read-only audit)
+
+### What is live now
+Production themes and agentsam schema are in good shape; picker grouping needs API fields.
+
+### Known issues / next steps
+- Implement `agentsam_agent_run` writes; deploy worker theme list expansion after Sam approves lines ~1902–1904.
+
+---
+
+## [2026-03-22] docs/agentsam-sessions-log.md — Agent Sam session capabilities
+
+### What was asked
+Create `agentsam-sessions-log.md` with capabilities (alongside `cursor-session-log.md`).
+
+### Files changed
+- `docs/agentsam-sessions-log.md` — capabilities table, newest-first convention, template, starter entry; links to D1 `agentsam_agent_run` / `agent_sessions` when used.
+- `docs/AGENTSAM_IGNORE_AND_RULES.md` — §9 pointer to Agent Sam session log.
+
+### Files NOT changed
+- `docs/cursor-session-log.md` — no change to format; this entry documents the new sibling file.
+
+### Deploy status
+- n/a
+
+### What is live now
+Agent Sam–scoped session notes live in `docs/agentsam-sessions-log.md`; Cursor-scoped notes stay in `docs/cursor-session-log.md`.
+
+### Known issues / next steps
+- Optional: worker appends stub lines on run completion (feature-flagged).
+
+---
+
 ## [2026-03-21] Playwright screenshot: Cloudflare Images instead of R2
 
 ### What was asked
@@ -5673,6 +5844,97 @@ Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel
 ### Known issues / next steps
 - Interactive PTY still needs stable WSS; fallback is line-at-a-time only. Reconnect still resets output when effect re-runs.
 
+## [2026-03-22] worker.js: runTerminalCommand — flush PTY frames before resolve
+
+### What was asked
+Terminal `/run` and `runTerminalCommand` logged success but D1/UI showed empty stdout; iam-pty sends **raw** PTY `onData` (not JSON-per-line). Stray `node` on 3099 fixed separately.
+
+### Root cause
+`close` resolved the WS read promise **immediately**, often **before** `term.onData` delivered bytes; only `session_id` JSON was in `chunks`; newline-split filter dropped it → **empty** `cleanOutput`.
+
+### Files changed
+- `worker.js` — `aggregateTerminalRunOutput()` per WS frame (skip `session_id`, unwrap `output`/`error` JSON, keep raw UTF-8 / ArrayBuffer / Uint8Array); `runTerminalCommand`: **450ms debounce after `close`** before resolve (still **10s** max wait); log `[runTerminalCommand] DONE` with `frames` / `outLen`.
+
+### Deploy status
+- Built: n/a (Worker JS only)
+- R2 uploaded: no (no dashboard/static changes this deploy)
+- Worker deployed: yes — version ID: `ca944da1-ccdc-40df-b1c9-08f683cdfe5c`
+- Deploy approved by Sam: yes (2026-03-22)
+- `node --check worker.js`: pass
+
+### What is live now
+Production `inneranimalmedia` Worker includes `runTerminalCommand` output aggregation + 450ms post-close flush so `/run` and API-run commands can persist non-empty PTY stdout to `terminal_history`.
+
+### Known issues / next steps
+- Verify in UI: `/run echo hello`; optional `wrangler tail` for `[runTerminalCommand] DONE` with `outLen > 0`.
+- Optional: `terminal_sessions.user_id` vs hardcoded register; WS Connected/Disconnected UI polish.
+
+## [2026-03-22] worker.js: runTerminalCommand — prefer HTTP POST /exec
+
+### What was asked
+Tail still showed `[runTerminalCommand] DONE { frames: 0, outLen: 0 }` after WS flush deploy; chat block still `(no output)`.
+
+### Root cause
+Worker-initiated **outbound WebSocket** (`fetch` + `Upgrade`) was not emitting **any** `message` events (`frames: 0`). Browser-terminal proxy uses the same upstream pattern but bridges a **pair**; the one-shot run path never saw PTY bytes. **iam-pty** already exposes **`POST /exec`** (Bearer), same as MCP `terminal_execute` (`docs/TERMINAL_KEYS_RESET.md`).
+
+### Files changed
+- `worker.js` — `terminalExecHttpUrlFromEnv`, `runTerminalCommandViaHttpExec`; `runTerminalCommand` calls **`POST {origin}/exec`** first with `Authorization: Bearer` from `TERMINAL_SECRET` or `PTY_AUTH_TOKEN`; on non-OK or error, falls back to existing WS `{ type: 'run' }`; DONE log uses `via: 'http-exec'` or `via: 'ws-run'`.
+
+### Deploy status
+- Built: n/a (Worker JS only)
+- R2 uploaded: no
+- Worker deployed: yes — version ID: `44ac66ca-3d76-45b4-9e4b-4f3a21bffcf5`
+- Deploy approved by Sam: yes (2026-03-22)
+- `node --check worker.js`: pass
+
+### What is live now
+Production `inneranimalmedia` runs `/run` and `POST /api/agent/terminal/run` via **POST /exec** first (Bearer `TERMINAL_SECRET` or `PTY_AUTH_TOKEN`), then WS fallback if /exec is unavailable.
+
+### Known issues / next steps
+- Confirm tail: `[runTerminalCommand] http-exec ok` and `DONE { via: 'http-exec', outLen: ... }` for `/run echo hello`.
+
+## [2026-03-22] worker.js: http-exec 401 — dual Bearer (PTY_AUTH_TOKEN + TERMINAL_SECRET)
+
+### What was asked
+Tail: `http-exec skipped { status: 401 }`, then `via: 'ws-run'` with `frames: 0`.
+
+### Root cause
+`/exec` validates **`Authorization: Bearer`** against iam-pty **`PTY_AUTH_TOKEN`**. Code tried **`TERMINAL_SECRET` first** only; if those Worker secrets differ from Mac PM2, Bearer fails with 401.
+
+### Files changed
+- `worker.js` — `runTerminalCommandViaHttpExec`: build unique bearer list (**`PTY_AUTH_TOKEN` first**, then **`TERMINAL_SECRET`**); on **401** retry the other token; then log `http-exec skipped` only if both fail.
+
+### Deploy status
+- Worker deployed: yes — version ID: `d53faa75-7db4-493b-874a-189af968f1f0` (2026-03-22, after secrets alignment)
+- Command: `TRIGGERED_BY=agent DEPLOYMENT_NOTES='http-exec dual Bearer + latest worker' npm run deploy`
+- R2 uploaded: no
+- Deploy approved by Sam: yes
+- `node --check worker.js`: pass
+
+### What is live now
+`runTerminalCommand` http-exec dual-Bearer retry + aligned Cloudflare `PTY_AUTH_TOKEN` / `TERMINAL_SECRET`; `/run` should hit `/exec` successfully if Mac iam-pty uses the same token.
+
+### Known issues / next steps
+- If 401 persists: verify PM2 `iam-pty` env matches Worker secrets.
+
+## [2026-03-22] PTY_AUTH_TOKEN: Wrangler secrets + shell profiles
+
+### What was asked
+Set Worker secrets and export `PTY_AUTH_TOKEN` in `~/.zshrc` and `~/.bash_profile` to match iam-pty.
+
+### Files / ops changed
+- `wrangler secret put` (via `with-cloudflare-env.sh`): **`PTY_AUTH_TOKEN`** on Worker **inneranimalmedia** (`wrangler.production.toml`); **`TERMINAL_SECRET`** on same worker (aligned with PTY per `TERMINAL_KEYS_RESET.md`); **`PTY_AUTH_TOKEN`** on **inneranimalmedia-mcp-server** (`inneranimalmedia-mcp-server/wrangler.toml`). Values not logged here.
+- `~/.zshrc` — updated existing `export PTY_AUTH_TOKEN=...` line.
+- `~/.bash_profile` — appended `export PTY_AUTH_TOKEN=...` (final line).
+
+### Deploy status
+- Worker code deploy: unchanged this step (secrets apply on next invocation; no redeploy required for secret-only updates).
+- MCP Worker: secret only, no `wrangler deploy`.
+
+### Known issues / next steps
+- Match **`~/iam-pty/ecosystem.config.cjs`** (or PM2 env) to the same token and **`pm2 restart iam-pty`** if the Mac value was different.
+- Token was pasted in chat; rotate if logs are a concern.
+
 ## [2026-03-22] .env.cloudflare.example + Cursor session rules + settings
 
 ### What was asked
@@ -5686,4 +5948,336 @@ Dashboard `/dashboard/agent` terminal: typing then Enter did nothing; mac/tunnel
 
 ### Deploy status
 - Git push: yes — **20f49bf** https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard `main`
+
+## [2026-03-22] worker.js: http-exec 401 diagnostics log
+
+### What was asked
+Still `http-exec skipped { status: 401 }` and WS `frames: 0` after aligning Wrangler; user unsure what is wrong.
+
+### Files changed
+- `worker.js` — on non-OK `/exec` response: log `cfRay`, `bodyPreview`, `bearerAttempts`, and hint when only one deduped bearer (PTY and TERMINAL_SECRET identical) pointing at PM2 `PTY_AUTH_TOKEN` + restart.
+
+### Deploy status
+- Worker deployed: no until **deploy approved** (logging only)
+
+## [2026-03-22] env.local + iam-pty ecosystem PTY sync (Sam request)
+
+### What was asked
+Stop fighting terminal setup: align `env.local`, `ecosystem.config.cjs`, and MCP header; roll Cloudflare later.
+
+### Files changed
+- `~/.inneranimalmedia-secrets/env.local` — consolidated `export` lines (PTY, TERMINAL_SECRET, Cloudflare, Resend, GitHub, MCP shell alias); `chmod 600`.
+- `~/iam-pty/ecosystem.config.cjs` — `PTY_AUTH_TOKEN` updated to match `env.local`.
+- `.cursor/mcp.json` — already matched MCP token; not edited.
+
+### Deploy / ops NOT run here
+- `wrangler secret put` for `PTY_AUTH_TOKEN`, `TERMINAL_SECRET`, `MCP_AUTH_TOKEN` — Sam runs locally when ready (`with-cloudflare-env.sh`).
+- `pm2 delete/start` + `pm2 save` — Sam runs after ecosystem change.
+
+### Note
+Values were pasted in chat; rotate when stable.
+
+## [2026-03-22] ~/.inneranimalmedia-secrets — local secret layout
+
+### What was asked
+Create `~/.inneranimalmedia-secrets/` and start better etiquette for API secret organization.
+
+### Files changed (home directory; not in repo)
+- `~/.inneranimalmedia-secrets/` — `chmod 700`; `README.md`, `env.example` (names/comments only), `.gitignore` (ignore all except template + README).
+- `~/.zshrc` — trailing block: source `env.local` if present (`set -a` / `set +a`) so migrated vars override earlier exports.
+- `~/.bash_profile` — same optional `env.local` source after existing exports.
+
+### Files NOT changed
+- No `env.local` created (user copies from `env.example`); no secrets written into templates.
+
+### Deploy status
+- n/a
+
+## [2026-03-22] Cursor UI screenshots — narrative audit (chat only)
+
+### What was asked
+Analyze and elaborate in extreme detail everything visible in a batch of Cursor IDE screenshots (Agents rail, Agent composer, Settings, editor, status bar).
+
+### Files changed
+- `docs/cursor-session-log.md` — this entry only.
+
+### Files NOT changed
+- No application code; no deploy.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+- Unchanged; documentation only.
+
+### Known issues / next steps
+- n/a
+
+## [2026-03-22] Settings UI replication plan — Cursor-style IA + Claude HTML pass
+
+### What was asked
+Vivid design/state documentation from Cursor screenshots; define 15 settings views; team narrative for frontend redesign; scaffold prompt for Claude to produce verification HTML.
+
+### Files changed
+- `docs/cursor-session-log.md` — this entry only.
+
+### Files NOT changed
+- No app source; no deploy.
+
+### Deploy status
+- n/a
+
+### What is live now
+- Unchanged.
+
+### Known issues / next steps
+- Implement `SidebarLayout` + 15 routes in app; optional `docs/plans/` companion spec if Sam wants it versioned outside chat.
+
+## [2026-03-22] plan_iam_dashboard_v2 — DB-first MPA, Solarized dual theme, no mocks
+
+### What was asked
+Add Solarized Dark + Light to the new UI; plan `plan_iam_dashboard_v2` with full functionality (no mock data), working controls, DB-first delivery, MPA scalable shell, live data adjustability.
+
+### Files changed
+- `docs/plans/plan_iam_dashboard_v2.md` — new plan: non-negotiables, theme contract, 15-view IA, UI state matrix, phases (schema/API then shell then wire), team brief, proposed SQL appendix (run only after approval).
+
+### Files NOT changed
+- No worker, migrations executed, or dashboard HTML (planning only).
+
+### Deploy status
+- n/a
+
+### What is live now
+- Plan doc in repo for team execution.
+
+### Known issues / next steps
+- Sam approves Appendix A SQL; insert `roadmap_steps` for v2; add `cms_themes` rows for `solarized-dark` / `solarized-light` with full `config` JSON.
+
+## [2026-03-22] Kimbie + Solarized themes — CSS presets + D1 proposal SQL
+
+### What was asked
+Explain Kimbie Dark and Cursor-style theme dropdown; add three themes with exact CSS; SQL aligned to `cms_themes`; optional table refinements for theme control.
+
+### Files changed
+- `docs/theme-presets/iam-v2-kimbie-solarized.css` — `[data-theme]` tokens for `kimbie-dark`, `solarized-dark`, `solarized-light` + popover/palette variables.
+- `scripts/d1-insert-themes-kimbie-solarized-proposal.sql` — `INSERT OR REPLACE` three rows matching existing `config` / `cssVars` pattern (proposal only).
+- `docs/plans/plan_iam_dashboard_v2.md` — pointers to the above files.
+
+### Deploy status
+- D1: not executed (proposal)
+- R2/worker: no
+
+### Known issues / next steps
+- Confirm `cms_themes` column list with `PRAGMA table_info` before running INSERT; add optional `theme_family` + `sort_order` migration if UI needs grouped picker.
+
+## [2026-03-22] plan_iam_dashboard_v2 — viewers, browser parity, trust origins
+
+### What was asked
+Monaco/plain/markup preview, browser rendering and MCP headless work, clean minimized UI with click-to-open edit/save/deploy, trust/certificate flow like Cursor; escape iframe limits for real site login.
+
+### Files changed
+- `docs/plans/plan_iam_dashboard_v2.md` — new **Section 7**: viewer matrix, minimized chrome, why iframes are limited vs Cursor BrowserView, hybrid strategy (embed + popup + optional proxy/MCP), D1 `user_browser_trusted_origins` proposal (Appendix A.4); non-negotiable #4 updated to three themes; Appendix C links FloatingPreviewPanel + overnight screenshot script.
+
+### Files NOT changed
+- No edits to `FloatingPreviewPanel.jsx` or `agent.html` (protected; surgical only with approval).
+
+### Deploy status
+- n/a
+
+### Known issues / next steps
+- Implement trust API + UI interstitial when pursuing popup/proxy path; desktop shell only if product commits to BrowserView-class embedding.
+
+## [2026-03-22] .agentsamignore / .agentsamrules design + DB table names
+
+### What was asked
+Design IAM equivalents to .cursorignore and .cursorrules; how to label D1 tables/structure.
+
+### Files changed
+- `docs/AGENTSAM_IGNORE_AND_RULES.md` — file semantics, merge order, tables `agentsam_ignore_pattern`, `agentsam_rules_document`, optional `agentsam_rules_revision`, prefix convention `agentsam_`.
+
+### Deploy status
+- n/a
+
+### Known issues / next steps
+- Approve migration `NNN_agentsam_ignore_rules.sql`; implement worker merge + optional file sync.
+
+## [2026-03-22] D1 Cursor-parity schema review bundle
+
+### What was asked
+SQL / D1 Studio–friendly script for DB tables/themes/implementations to compare to existing DB before approval.
+
+### Files changed
+- `scripts/d1-cursor-parity-schema-review.sql` — CREATE TABLE for `agentsam_*` (policy, allowlists, trust, flags, runs, index job, subagent, ignore/rules), optional cms_themes ALTER comments, commented theme INSERTs, seed flags, sanity SELECTs.
+- `docs/AGENTSAM_IGNORE_AND_RULES.md` — section 8 link to bundle.
+
+### Deploy status
+- Not executed (review only).
+
+### Known issues / next steps
+- Reconcile with `agent_configs` / `agent_request_queue` (avoid duplicate concepts in worker); enable PRAGMA foreign_keys if using FKs.
+
+## [2026-03-22] Sandbox R2: finance shell-only — upload Finance.js at static/dashboard/
+
+### What was asked
+Sandbox `inneranimal-dashboard.../dashboard/finance` showed shell only; mirror prod finance on bucket `agent-sam-sandbox-cidi`.
+
+### Root cause
+`dashboard/finance.html` loads `/static/dashboard/Finance.js`; `upload-repo-to-r2-sandbox.sh` only copied `overview-dashboard/dist/*` to `static/dashboard/overview/`, not to `static/dashboard/`.
+
+### Files changed
+- `scripts/upload-repo-to-r2-sandbox.sh` — section **4c**: also `put_file` `Finance.js` and `overview-dashboard-*.js` to `static/dashboard/` (same keys as prod).
+
+### Ops executed
+- `cd overview-dashboard && npm run build`
+- `./scripts/with-cloudflare-env.sh ./scripts/upload-repo-to-r2-sandbox.sh` (full sandbox mirror + new keys)
+
+### Deploy status
+- Production Worker/R2: unchanged
+- Sandbox R2: updated
+
+### Known issues / next steps
+- Hard-refresh `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/finance`. Data still depends on sandbox Worker + D1/API parity with prod.
+
+## [2026-03-22] context_index keyword search wired into /api/agent/chat
+
+### What was asked
+Audit `compiled_context` / context assembly in `worker.js`, add `fetchContextIndex`, wire into chat prompt assembly with inline vs R2 summary/full rules, and log searches to `context_search_log`.
+
+### Files changed
+- `worker.js` — `PROMPT_CAPS`: added `CONTEXT_INDEX_MAX_CHARS`, `CONTEXT_INDEX_R2_FULL_MAX_CHARS`. New helpers: `getContextIndexSearchTerm`, `fetchContextIndex`, `contextIndexWarrantsR2FullFetch`, `buildContextIndexPromptBlock`, `logContextSearch`. Extended `buildAskContext` / `buildPlanContext` / `buildAgentContext` / `buildDebugContext` / `buildModeContext` with `indexedContext`. In `/api/agent/chat`, after RAG block: resolve `contextIndexScope` (default `tenant_sam_primeaux` when `tenant_id` is absent or `system`), fetch index rows, build blurb, `logContextSearch`, pass blurb into `buildModeContext`.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`, migrations: no new migration file; D1 DDL must be applied separately so `context_index` / `context_search_log` exist.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until worker deploy; chat ignores missing tables (try/catch + warn).
+
+### Known issues / next steps
+- Apply D1 migration for `context_index` (columns used: `id`, `title`, `doc_type`, `storage_type`, `r2_bucket`, `r2_key`, `inline_content`, `summary`, `keywords`, `tags`, `scope`, `is_active`, `is_stale`, `importance_score`) and `context_search_log` (`id`, `searched_at`, `query_snippet`, `scope`, `search_term`, `context_ids_used`, `result_count`, `was_helpful`). Wire 6am purge for `context_search_log` separately. Default R2 bucket when `r2_bucket` null is `iam-platform` in `buildContextIndexPromptBlock`; override per row as needed.
+
+## [2026-03-22] Health endpoints, MCP services health API, Settings MCP panel
+
+### What was asked
+Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main worker `GET /health`; `GET /api/mcp/services/health` (tools/list probe, D1 updates); `McpServicesHealth` in Settings Integrations tab. Deploy main worker first, then MCP worker, then agent-dashboard build + R2 + `agent.html` cache bump. Log deploys in `deployments`.
+
+### Files changed
+- `worker.js` (after `/api/health` ~1117): added `GET /health` JSON (`status`, `worker`, `version` from `env.CF_VERSION_METADATA?.id`, bindings flags, `timestamp`).
+- `worker.js` (before `mcpSvcPingMatch` ~7628): added `GET /api/mcp/services/health` — loads active `mcp_services`, `POST` each `endpoint_url` with JSON-RPC `tools/list`, Bearer `MCP_AUTH_TOKEN` when set, 3s timeout; parses SSE or JSON for `tool_count`; updates `health_status` to `healthy` / `degraded` / `unreachable`; returns `{ checked_at, services }`.
+- `inneranimalmedia-mcp-server/src/index.js`: top-level `IMPLEMENTED_TOOL_LIST` (9 tools), `IMPLEMENTED_TOOLS` derived from names; `tools/list` returns `IMPLEMENTED_TOOL_LIST`; `GET /health` with `tools_implemented`, `tool_names`, CORS `Access-Control-Allow-Origin: *`. `knowledge_search` no longer advertised in `tools/list` but remains in `tools/call` proxy branch.
+- `agent-dashboard/src/SettingsPanel.jsx`: `McpServicesHealth` (poll `/api/mcp/services/health` every 30s, refresh link, status dots); rendered at top of `IntegrationsTab`.
+- `dashboard/agent.html`: `agent-dashboard.js?v=124`.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `wrangler.production.toml`, OAuth handlers: out of scope.
+
+### Deploy status
+- Built: yes (`agent-dashboard`: `npm run build`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`, `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`
+- Worker deployed: yes — **inneranimalmedia** version ID `9ebedd4c-cc71-416a-a5bb-61ec2ffc7f2e`; **inneranimalmedia-mcp-server** version ID `c0e1e37c-8d06-4a00-b837-eb8bd788e796`
+- Deploy approved by Sam: yes (prompt: APPROVED / deploy order)
+
+### D1
+- `deployments`: inserted rows `dep-health-mcp-ui-20260322-main` and `dep-health-mcp-ui-20260322-mcp` with version IDs and notes.
+
+### What is live now
+- `https://mcp.inneranimalmedia.com/health` returns MCP JSON (verified via curl).
+- Main site `GET /health` is routed on the worker; unauthenticated curl may hit Cloudflare challenge HTML on `inneranimalmedia.com` (browser/session should get JSON).
+- Settings Integrations tab shows MCP service rows after main worker + R2 bundle are live.
+
+### Known issues / next steps
+- Re-add `knowledge_search` to MCP `tools/list` if clients require it in the advertised list (still callable via `tools/call`).
+- Optional: third `deployments` row for frontend-only R2 drop if you want separate attribution.
+
+## 2026-03-22 agentsam DIFF A/B/C + boot theme injection
+
+### What was asked
+- Explain sandbox GitHub repo vs monorepo two-worker split and promotion path; implement approved DIFF A–C (`agentsam_ai` table fix, `/api/agentsam/` router, full `handleAgentsamApi`), plus boot `cssVars` when `worker_theme_injection` is on.
+
+### Files changed
+- `worker.js`: Replaced all `agent_ai_sam` SQL references with `agentsam_ai` (updates, boot batch, chat model policy, MCP agents list). Added `AGENTSAM_SUPERADMIN_IDS`, `resolveAgentsamUserKey`, `AGENTSAM_ALLOWED_POLICY_COLS`, `defaultAgentsamUserPolicy`. Mounted `pathLower.startsWith('/api/agentsam/')` → `handleAgentsamApi` after `/api/mcp/`. Implemented `handleAgentsamApi` with routes for user-policy, allowlists, trusted origins, feature flags, rules, subagents, ignore-patterns, index-status, runs, and GET `agentsam/ai`. Extended `/api/agent/boot` to optionally attach `cssVars` from `cms_themes` + `settings` when `worker_theme_injection` is globally enabled.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`, OAuth callback handlers: not touched per rules.
+- `SettingsPanel.jsx` Skills wiring to `tools` / `tool_capabilities`: spec notes UI wiring; not part of this worker-only patch.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Changes are local repo only until you deploy the main worker with approval.
+
+### Known issues / next steps
+- If `settings` table or `appearance.theme` row is absent in D1, boot `cssVars` injection is skipped silently (try/catch). Confirm schema in prod or adjust query to match `user_preferences` / `user_settings` if needed.
+- Optional seed for `agentsam_browser_trusted_origin` not run (separate approval step in spec).
+
+## 2026-03-22 Boot theme comment + CIDI cicd_runs follow-ups (deployments + activity log)
+
+### What was asked
+- Confirm deployments D1 query and live routes (agentsam); approve boot theme as `settings` + `cms_themes` (surgical); implement CIDI Step A (`cicd_runs` success -> `deployments`) and Step B (`cidi_activity_log` for Agent Sam dashboard repo); hold Step C SQL.
+
+### Files changed
+- `worker.js`: Comment on boot theme join (`appearance.theme` / `tenant_sam_primeaux`). Added `GITHUB_REPO_CIDI_WORKFLOW`, `githubActorFromWebhookPayload`, `githubCommitMessageFromWebhookPayload`, `recordGithubCicdFollowups` (INSERT OR IGNORE `deployments` with `triggered_by='github_push'`; INSERT `cidi_activity_log` when repo maps to `CIDI-IAM-AGENTSAM-20260322` and CIDI row is `in_progress`). `runWriteD1MapInsert` invokes follow-ups when `table === 'cicd_runs'` and changes > 0 (uses `ctx.waitUntil` when provided). `handleInboundWebhook` accepts `executionCtx`; all webhook routes pass Workers `ctx` for background follow-ups.
+
+### Files NOT changed (and why)
+- Step C `UPDATE cidi` statements: held per Sam.
+- `SettingsPanel.jsx`: deferred until after worker deploy.
+
+### Deploy status
+- Built: no (worker-only path)
+- R2 uploaded: no (skipped `deploy-with-record.sh` to avoid agent.html bump and bundle uploads)
+- Worker deployed: yes (see next log entry)
+- Deploy approved by Sam: yes (chat: deploy approved)
+
+### Verification
+- Remote D1: `SELECT id, worker_name, status, timestamp FROM deployments ORDER BY timestamp DESC LIMIT 3` returned recent rows (e.g. inneranimalmedia / MCP / dep-health rows). Authenticated GET `/api/agentsam/*` not run from this session.
+
+### Known issues / next steps
+- After deploy: trigger or wait for a successful GitHub `cicd_runs` insert; confirm new `deployments` row (`triggered_by='github_push'`) and `cidi_activity_log` rows for sandbox repo.
+- Extend `GITHUB_REPO_CIDI_WORKFLOW` when more repos should log to specific CIDI workflows.
+
+## 2026-03-23 Production deploy — inneranimalmedia (deploy approved)
+
+### What was asked
+- Sam typed **deploy approved**; deploy main worker only (no full `deploy-with-record.sh`).
+
+### Files changed
+- None in this step (deploy + D1 record only).
+
+### Deploy status
+- Worker deployed: yes — **inneranimalmedia** Current Version ID **`51355bdc-74ef-47a0-b4a5-9fd69426d09e`**
+- D1 `deployments`: row inserted via `post-deploy-record.sh` with `id` = version ID, `triggered_by=agent`, notes per `DEPLOYMENT_NOTES`
+- Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml` then `CLOUDFLARE_VERSION_ID=... ./scripts/post-deploy-record.sh`
+
+### What is live now
+- Production worker includes `/api/agentsam/*`, `agentsam_ai` SQL, boot `cssVars` when flag on, and CIDI follow-ups after `cicd_runs` webhook inserts.
+
+## 2026-03-23 /api/agentsam routing fix (startsWith /api/agent shadowing)
+
+### What was asked
+- Grep `agentsam` / `handleAgentsamApi` and context around `/api/mcp/`; explain `{"error":"Not found"}` on all `/api/agentsam/*`.
+
+### Root cause
+- `pathLower.startsWith('/api/agent')` matches `/api/agentsam/...` (first 10 chars are `/api/agent`), so requests hit `handleAgentApi` and never `handleAgentsamApi`.
+
+### Files changed
+- `worker.js` (main fetch router ~2040–2060): moved `/api/agentsam/` (and exact `/api/agentsam`) **above** the `/api/agent` branch; removed duplicate agentsam block from below MCP.
+
+### Deploy status
+- Worker deployed: yes — **inneranimalmedia** Current Version ID **`e38b2dd0-14a3-41c0-a7a8-a29c12bb6ed6`** (2026-03-23, deploy approved)
+- D1 `deployments`: `post-deploy-record.sh` with `triggered_by=agent`
+
+### What is live now
+- `/api/agentsam/*` routes to `handleAgentsamApi` (no longer shadowed by `startsWith('/api/agent')`).
 

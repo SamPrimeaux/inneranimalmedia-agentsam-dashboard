@@ -48,85 +48,42 @@ function ToggleSwitch({ defaultOn = false }) {
   );
 }
 
-const NAV_GROUPS = [
-  {
-    label: "WORKSPACE",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="1" y="3" width="14" height="11" rx="1" />
-        <path d="M5 3V2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" />
-        <line x1="1" y1="7" x2="15" y2="7" />
-      </svg>
-    ),
-    items: [
-      { id: "general", label: "General" },
-      { id: "spend", label: "Usage & Spend" },
-      { id: "agents", label: "Agents" },
-    ],
-  },
-  {
-    label: "TOOLS",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M13.5 2.5a2 2 0 0 0-2.83 0L9 4.17 11.83 7l1.67-1.67a2 2 0 0 0 0-2.83z" />
-        <path d="M9 4.17L3.5 9.67a2 2 0 0 0 0 2.83 2 2 0 0 0 2.83 0L11.83 7z" />
-        <line x1="2" y1="14" x2="5" y2="11" />
-      </svg>
-    ),
-    items: [
-      { id: "extensions", label: "Extensions" },
-      { id: "commands", label: "Commands" },
-    ],
-  },
-  {
-    label: "DEPLOY",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 1c0 0 4 2.5 4 7a4 4 0 0 1-8 0c0-4.5 4-7 4-7z" />
-        <circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" />
-        <line x1="8" y1="12" x2="8" y2="15" />
-        <line x1="5.5" y1="13.5" x2="3" y2="15" />
-        <line x1="10.5" y1="13.5" x2="13" y2="15" />
-      </svg>
-    ),
-    items: [
-      { id: "wrangler", label: "Wrangler" },
-      { id: "workers", label: "Workers" },
-      { id: "d1", label: "Data" },
-    ],
-  },
-  {
-    label: "SECURITY",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 1L2 4v4c0 3.5 2.5 6 6 7 3.5-1 6-3.5 6-7V4z" />
-      </svg>
-    ),
-    items: [
-      { id: "environment", label: "Environment" },
-      { id: "providers", label: "Providers" },
-      { id: "guardrails", label: "Guardrails" },
-    ],
-  },
-  {
-    label: "CONTEXT",
-    icon: (
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 1a5 5 0 0 1 2 9.5V12H6v-1.5A5 5 0 0 1 8 1z" />
-        <line x1="6" y1="13" x2="10" y2="13" />
-        <line x1="7" y1="15" x2="9" y2="15" />
-      </svg>
-    ),
-    items: [
-      { id: "github", label: "GitHub" },
-    ],
-  },
+const SETTINGS_TAB_STORAGE_KEY = "iam-settings-tab";
+
+/** Cursor-order primary nav (15). Environment vault lives under General only. */
+const CURSOR_SETTINGS_TABS = [
+  { id: "general", label: "General" },
+  { id: "plan_usage", label: "Plan & Usage" },
+  { id: "agents", label: "Agents" },
+  { id: "tab", label: "Tab" },
+  { id: "models", label: "Models" },
+  { id: "cloud_agents", label: "Cloud Agents" },
+  { id: "plugins", label: "Plugins", sectionBreak: true },
+  { id: "rules_skills", label: "Rules, Skills, Subagents" },
+  { id: "tools_mcp", label: "Tools & MCP" },
+  { id: "hooks", label: "Hooks", sectionBreak: true },
+  { id: "indexing_docs", label: "Indexing & Docs" },
+  { id: "network", label: "Network" },
+  { id: "beta", label: "Beta" },
+  { id: "marketplace", label: "Marketplace" },
+  { id: "docs", label: "Docs" },
 ];
+
+const SETTINGS_TAB_IDS = new Set(CURSOR_SETTINGS_TABS.map((t) => t.id));
+
+function readStoredSettingsTab() {
+  try {
+    const s = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+    if (s && SETTINGS_TAB_IDS.has(s)) return s;
+  } catch (_) {}
+  return "general";
+}
+
+function writeStoredSettingsTab(id) {
+  try {
+    localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, id);
+  } catch (_) {}
+}
 
 const PROVIDER_COLORS = {
   anthropic:  "#c48aff",
@@ -737,6 +694,148 @@ function D1Tab() {
 
 // ── Integrations Tab ─────────────────────────────────────────
 
+function McpServicesHealth() {
+  const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [lastChecked, setLastChecked] = useState(null);
+
+  const fetchHealth = useCallback(async () => {
+    try {
+      const r = await fetch("/api/mcp/services/health", {
+        credentials: "same-origin",
+      });
+      const d = await r.json();
+      setServices(d.services || []);
+      setLastChecked(new Date().toLocaleTimeString());
+    } catch (_) {
+      setServices([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHealth();
+    const id = setInterval(fetchHealth, 30000);
+    return () => clearInterval(id);
+  }, [fetchHealth]);
+
+  const dotColor = (status) => ({
+    healthy: "var(--mode-ask)",
+    degraded: "var(--mode-plan)",
+    unreachable: "var(--mode-debug)",
+    unverified: "var(--text-muted)",
+    not_implemented: "var(--text-disabled)",
+    external_site: "var(--text-muted)",
+    skip: "var(--text-disabled)",
+    error: "var(--mode-debug)",
+  }[status] || "var(--text-muted)");
+
+  if (loading) {
+    return (
+      <div style={{ padding: 16, color: "var(--text-muted)", fontSize: 12 }}>
+        Checking MCP services...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 16 }}>
+      <div style={{
+        display: "flex", justifyContent: "space-between",
+        alignItems: "center", padding: "8px 0", marginBottom: 4,
+      }}>
+        <span style={{
+          fontSize: 11, fontWeight: 600,
+          color: "var(--text-muted)", textTransform: "uppercase",
+          letterSpacing: "0.06em",
+        }}>
+          MCP Services
+        </span>
+        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+          {lastChecked ? `checked ${lastChecked}` : ""}
+          {lastChecked ? " · " : ""}
+          <span
+            style={{ cursor: "pointer", color: "var(--color-primary)" }}
+            onClick={fetchHealth}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" || ev.key === " ") {
+                ev.preventDefault();
+                fetchHealth();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            refresh
+          </span>
+        </span>
+      </div>
+      {services.filter((s) => s.is_active).map((svc) => (
+        <div
+          key={svc.id || svc.service_name}
+          style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "7px 10px",
+            borderRadius: "var(--radius-md, 8px)",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border-subtle, var(--border))",
+          }}
+        >
+          <div
+            style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: dotColor(svc.live_status || svc.health_status),
+              boxShadow: svc.live_status === "healthy"
+                ? "0 0 6px var(--mode-ask)"
+                : "none",
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 12, fontWeight: 500,
+              color: "var(--text-primary)",
+              overflow: "hidden", textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {svc.service_name}
+            </div>
+            <div style={{
+              fontSize: 10, color: "var(--text-muted)",
+              overflow: "hidden", textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {svc.endpoint_url}
+            </div>
+          </div>
+          {svc.tool_count > 0 && (
+            <div style={{
+              fontSize: 10, fontWeight: 600,
+              color: "var(--text-muted)",
+              background: "var(--bg-hover)",
+              padding: "2px 6px", borderRadius: 10,
+              flexShrink: 0,
+            }}>
+              {svc.tool_count} tools
+            </div>
+          )}
+          <div style={{
+            fontSize: 10, fontWeight: 600,
+            color: dotColor(svc.live_status || svc.health_status),
+            flexShrink: 0,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}>
+            {(svc.live_status || svc.health_status || "unknown")
+              .replace(/_/g, " ")}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function IntegrationsTab({ connectedIntegrations }) {
   const integrations = [
     { key: "google",     label: "Google Drive",   authUrl: "/api/oauth/google/start"  },
@@ -747,6 +846,7 @@ function IntegrationsTab({ connectedIntegrations }) {
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+      <McpServicesHealth />
       <SectionLabel>Connection Status</SectionLabel>
       {integrations.map(({ key, label, authUrl }) => {
         const connected = connectedIntegrations?.[key];
@@ -781,7 +881,7 @@ function IntegrationsTab({ connectedIntegrations }) {
         <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6,
           background: "var(--bg-canvas)", padding: 10, borderRadius: 4, border: "1px solid var(--border)" }}>
           Hyperdrive binding pending. Add to wrangler.production.toml once Supabase instance is ready.
-          Then add SUPABASE_URL and SUPABASE_KEY via the Environment tab.
+          Then add SUPABASE_URL and SUPABASE_KEY in General (Environment section).
         </div>
       </div>
     </div>
@@ -943,6 +1043,95 @@ function GuardrailsTab() {
   );
 }
 
+function SettingsPlaceholderTab({ title, body }) {
+  return (
+    <div style={{ padding: 16, flex: 1, overflowY: "auto" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.65 }}>{body}</div>
+    </div>
+  );
+}
+
+function GeneralWithEnvironment({ runCommandRunnerRef }) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ flexShrink: 0, overflowY: "auto", maxHeight: "42%" }}>
+        <GeneralTab />
+      </div>
+      <div style={{ flex: 1, minHeight: 120, borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <EnvironmentTab runCommandRunnerRef={runCommandRunnerRef} />
+      </div>
+    </div>
+  );
+}
+
+function PluginsCombinedTab({ connectedIntegrations }) {
+  return (
+    <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <IntegrationsTab connectedIntegrations={connectedIntegrations} />
+      <div style={{ borderTop: "1px solid var(--border)" }}>
+        <ProvidersTab />
+      </div>
+    </div>
+  );
+}
+
+function ToolsMcpTab({ availableCommands }) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+        <CommandsTab availableCommands={availableCommands || []} />
+      </div>
+      <div style={{ flexShrink: 0, padding: 12, borderTop: "1px solid var(--border)", background: "var(--bg-canvas)" }}>
+        <SectionLabel>MCP</SectionLabel>
+        <Btn onClick={() => { window.location.href = "/dashboard/mcp"; }}>Open MCP dashboard</Btn>
+      </div>
+    </div>
+  );
+}
+
+function DeployBetaTab({ runCommandRunnerRef, onDeployStart, onDeployComplete }) {
+  return (
+    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+      <div style={{ padding: "10px 16px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, borderBottom: "1px solid var(--border)", background: "var(--bg-canvas)" }}>
+        Wrangler, Workers, and D1 console. Output still streams to the Terminal tab when you run commands from here.
+      </div>
+      <WranglerTab
+        runCommandRunnerRef={runCommandRunnerRef}
+        onDeployStart={onDeployStart}
+        onDeployComplete={onDeployComplete}
+      />
+      <div style={{ height: 1, background: "var(--border)", margin: "0 8px" }} />
+      <WorkersTab runCommandRunnerRef={runCommandRunnerRef} />
+      <div style={{ height: 1, background: "var(--border)", margin: "0 8px" }} />
+      <D1Tab />
+    </div>
+  );
+}
+
+function DocsTab({ settingsGithubSlot }) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>Repositories</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>GitHub file browser (same as Files source)</div>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {settingsGithubSlot || (
+          <div style={{ flex: 1, padding: 16, color: "var(--text-muted)", fontSize: 12 }}>GitHub browser unavailable.</div>
+        )}
+      </div>
+      <div style={{ flexShrink: 0, padding: 12, borderTop: "1px solid var(--border)" }}>
+        <SectionLabel>Shortcuts</SectionLabel>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.7 }}>
+          <div><a href="/dashboard" style={{ color: "var(--accent)", textDecoration: "none" }}>Dashboard home</a></div>
+          <div><a href="/dashboard/user-settings" style={{ color: "var(--accent)", textDecoration: "none" }}>User settings</a></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Commands Tab (existing, preserved) ───────────────────────
 
 function CommandsTab({ availableCommands }) {
@@ -979,7 +1168,7 @@ function CommandsTab({ availableCommands }) {
 
 function GeneralTab() {
   return (
-    <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
+    <div style={{ padding: 16, overflowY: "auto", flexShrink: 0 }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>
         Workspace Settings
       </div>
@@ -1093,42 +1282,83 @@ export default function SettingsPanel({
   onDeployStart,
   onDeployComplete,
 }) {
-  const [tab, setTab] = useState("environment");
+  const [tab, setTab] = useState(readStoredSettingsTab);
+
+  const pickTab = (id) => {
+    setTab(id);
+    writeStoredSettingsTab(id);
+  };
 
   const tabContent = {
-    general: <GeneralTab />,
+    general: <GeneralWithEnvironment runCommandRunnerRef={runCommandRunnerRef} />,
+    plan_usage: <SpendTab />,
     agents: <AgentsTab />,
-    extensions: <IntegrationsTab connectedIntegrations={connectedIntegrations} />,
-    commands: <CommandsTab availableCommands={availableCommands || []} />,
-    wrangler: (
-      <WranglerTab
+    tab: (
+      <SettingsPlaceholderTab
+        title="Tab"
+        body="Inline completion and tab behavior for the agent composer are not wired here yet. This panel will follow Cursor-style Tab settings when APIs exist."
+      />
+    ),
+    models: (
+      <SettingsPlaceholderTab
+        title="Models"
+        body="Model list and routing UI will live here. Provider API keys stay in the vault: open General and scroll to Environment."
+      />
+    ),
+    cloud_agents: (
+      <SettingsPlaceholderTab
+        title="Cloud Agents"
+        body="Remote agent runs and Cloudflare Agents configuration are not exposed in this UI yet."
+      />
+    ),
+    plugins: <PluginsCombinedTab connectedIntegrations={connectedIntegrations} />,
+    rules_skills: <GuardrailsTab />,
+    tools_mcp: <ToolsMcpTab availableCommands={availableCommands} />,
+    hooks: (
+      <SettingsPlaceholderTab
+        title="Hooks"
+        body="Webhook subscriptions and hook execution history will surface here when wired to worker routes."
+      />
+    ),
+    indexing_docs: (
+      <SettingsPlaceholderTab
+        title="Indexing & Docs"
+        body="Documentation index jobs and RAG sources are planned; no controls yet."
+      />
+    ),
+    network: (
+      <SettingsPlaceholderTab
+        title="Network"
+        body="Proxy, connectivity diagnostics, and fetch tooling will be added when specified."
+      />
+    ),
+    beta: (
+      <DeployBetaTab
         runCommandRunnerRef={runCommandRunnerRef}
         onDeployStart={onDeployStart}
         onDeployComplete={onDeployComplete}
       />
     ),
-    workers: <WorkersTab runCommandRunnerRef={runCommandRunnerRef} />,
-    d1: <D1Tab />,
-    environment: <EnvironmentTab runCommandRunnerRef={runCommandRunnerRef} />,
-    providers: <ProvidersTab />,
-    guardrails: <GuardrailsTab />,
-    github: settingsGithubSlot || (
-      <div style={{ flex: 1, padding: 16, color: "var(--text-muted)", fontSize: 12 }}>
-        GitHub browser unavailable.
-      </div>
+    marketplace: (
+      <SettingsPlaceholderTab
+        title="Marketplace"
+        body="Curated integrations catalog is deferred. Use Plugins to connect OAuth accounts."
+      />
     ),
-    spend: <SpendTab />,
+    docs: <DocsTab settingsGithubSlot={settingsGithubSlot} />,
   };
+
+  const activeContent = tabContent[tab] || tabContent.general;
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {tabContent[tab]}
+        {activeContent}
       </div>
 
       <div
         style={{
-          width: "min(160px, 35%)",
+          width: "min(220px, 42%)",
           flexShrink: 0,
           background: "var(--bg-canvas)",
           borderLeft: "1px solid var(--border)",
@@ -1136,63 +1366,44 @@ export default function SettingsPanel({
           padding: "8px 0",
         }}
       >
-        {NAV_GROUPS.map((group, groupIndex) => (
-          <div key={group.label} style={{ marginBottom: 4 }}>
-            <div
+        {CURSOR_SETTINGS_TABS.map((item) => (
+          <div key={item.id}>
+            {item.sectionBreak ? (
+              <div style={{ borderTop: "1px solid var(--border)", margin: "10px 8px 6px" }} />
+            ) : null}
+            <button
+              type="button"
+              onClick={() => pickTab(item.id)}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "var(--text-secondary)",
-                padding: "10px 10px 4px",
-                marginTop: groupIndex === 0 ? 0 : 4,
-                borderTop: groupIndex === 0 ? "none" : "1px solid var(--border)",
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                background: tab === item.id ? "var(--bg-elevated)" : "none",
+                border: "none",
+                borderRight: tab === item.id ? "2px solid var(--accent)" : "2px solid transparent",
+                color: tab === item.id ? "var(--text-primary)" : "var(--text-secondary)",
+                padding: "7px 14px 7px 10px",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontSize: 12,
+                lineHeight: 1.35,
+                transition: "all 120ms",
+              }}
+              onMouseEnter={(e) => {
+                if (tab !== item.id) {
+                  e.currentTarget.style.background = "var(--bg-elevated)";
+                  e.currentTarget.style.color = "var(--text-primary)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (tab !== item.id) {
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = "var(--text-secondary)";
+                }
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", opacity: 0.7 }}>
-                {group.icon}
-              </span>
-              <span>{group.label}</span>
-            </div>
-            {group.items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setTab(item.id)}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  background: tab === item.id ? "var(--bg-elevated)" : "none",
-                  border: "none",
-                  borderRight: tab === item.id ? "2px solid var(--accent)" : "2px solid transparent",
-                  color: tab === item.id ? "var(--text-primary)" : "var(--text-secondary)",
-                  padding: "6px 16px 6px 10px",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  fontSize: 13,
-                  transition: "all 120ms",
-                }}
-                onMouseEnter={(e) => {
-                  if (tab !== item.id) {
-                    e.currentTarget.style.background = "var(--bg-elevated)";
-                    e.currentTarget.style.color = "var(--text-primary)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (tab !== item.id) {
-                    e.currentTarget.style.background = "none";
-                    e.currentTarget.style.color = "var(--text-secondary)";
-                  }
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
+              {item.label}
+            </button>
           </div>
         ))}
       </div>

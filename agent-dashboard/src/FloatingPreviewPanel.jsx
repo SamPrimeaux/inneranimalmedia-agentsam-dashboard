@@ -90,7 +90,7 @@ function GitPanel({ runCommandRunnerRef }) {
   const [commitMsg, setCommitMsg] = useState("");
 
   function run(cmd) {
-    runCommandRunnerRef?.current?.runCommandInTerminal?.(cmd);
+    runCommandRunnerRef?.current?.runCommandInTerminal?.(cmd, { focusTerminal: false });
   }
 
   useEffect(() => {
@@ -890,7 +890,7 @@ export default function FloatingPreviewPanel({
     if (terminalOutputRef.current) terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
   }, [terminalOutput]);
 
-  const runCommandInTerminal = useCallback(async (command) => {
+  const runCommandInTerminal = useCallback(async (command, opts = {}) => {
     try {
       const res = await fetch("/api/agent/terminal/run", {
         method: "POST",
@@ -904,7 +904,7 @@ export default function FloatingPreviewPanel({
       if (data.output) {
         setTerminalOutput((prev) => prev + "\r\n" + data.output);
       }
-      if (onTabChange) onTabChange("terminal");
+      if (onTabChange && opts.focusTerminal !== false) onTabChange("terminal");
       return { ok: res.ok, output: data.output, error: data.error };
     } catch (err) {
       console.error("[runCommandInTerminal]", err);

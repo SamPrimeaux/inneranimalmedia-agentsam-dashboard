@@ -104,6 +104,15 @@ if [[ -d overview-dashboard/dist ]]; then
   done < <(find overview-dashboard/dist -type f ! -name '.DS_Store' -print0 2>/dev/null)
 fi
 
+# --- 4c) Finance MPA (dashboard/finance.html loads /static/dashboard/Finance.js; Vite chunks must sit beside it)
+# Without this, sandbox /dashboard/finance shows shell only. Production agent-sam uses same keys.
+if [[ -d overview-dashboard/dist ]]; then
+  for file in overview-dashboard/dist/Finance.js overview-dashboard/dist/overview-dashboard-*.js; do
+    [[ -f "$file" ]] || continue
+    put_file "$file" "static/dashboard/$(basename "$file")"
+  done
+fi
+
 # --- 5) Agent Vite bundle LAST (must match live /dashboard/agent)
 put_file "agent-dashboard/dist/agent-dashboard.js" "static/dashboard/agent/agent-dashboard.js"
 put_file "agent-dashboard/dist/agent-dashboard.css" "static/dashboard/agent/agent-dashboard.css"

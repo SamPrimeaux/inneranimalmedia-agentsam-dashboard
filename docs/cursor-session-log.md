@@ -7367,3 +7367,41 @@ Deploy `worker.js` with `agentSamSystemCore` LIVE DATA RULE; D1 `deployments` in
 ### Known issues / next steps
 - `RAG_MIN_QUERY_WORDS = 10` silently skips pre-prompt RAG for short user messages; consider lowering (e.g. 4) or verify Vectorize index population via Worker test.
 
+## 2026-03-24 worker.js — agent/chat pre-prompt RAG via AutoRAG REST
+
+### What was asked
+Replace `/api/agent/chat` pre-prompt `vectorizeRagSearch` block with Cloudflare AI Search REST (`AI_SEARCH_TOKEN`, index `iam-autorag`); `RAG_MIN_QUERY_WORDS` 10 to 4; keep `vectorizeRagSearch` for other callers; show diff first; no deploy.
+
+### Files changed
+- `worker.js` (~7372–7415): `runRag` now gates on `env.AI_SEARCH_TOKEN` + 4-word minimum; `fetch` to `.../ai-search/indexes/iam-autorag/query`; `vectorizeRagSearch` unchanged.
+
+### Deploy status
+- Worker deployed: yes — see deploy entry **AutoRAG REST pre-prompt RAG** same day (`d50fea8e-ec07-4cb6-8ae8-1838b0359e75`).
+
+### What is live now
+- See deploy entry below; production uses AutoRAG REST for agent/chat pre-prompt RAG.
+
+### Known issues / next steps
+- Ensure `AI_SEARCH_TOKEN` is bound in production worker env/secrets if not already; confirm API response shape matches `result.data` / `data` for chunk text.
+
+## 2026-03-24 Deploy — AutoRAG REST pre-prompt RAG (`autorag-rest-api-fix`)
+
+### What was asked
+Deploy `worker.js` with AutoRAG REST replacing `vectorizeRagSearch` in `/api/agent/chat` `runRag` block; D1 `deployments`; post-deploy-record; session log; git push. `TRIGGERED_BY=autorag-rest-api-fix`.
+
+### Files changed
+- `worker.js`: already contained AutoRAG REST `runRag` (this deploy ships it).
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker deployed: yes — **Current Version ID:** `d50fea8e-ec07-4cb6-8ae8-1838b0359e75`
+- R2 uploaded: no
+- D1 `deployments.id`: `d50fea8e-ec07-4cb6-8ae8-1838b0359e75` (`triggered_by=autorag-rest-api-fix`, notes: RAG_MIN_QUERY_WORDS 10 to 4, AutoRAG REST + AI_SEARCH_TOKEN, iam-autorag)
+- Deploy approved by Sam: yes (CURSOR DEPLOY WORKER instruction)
+
+### What is live now
+- Production **inneranimalmedia** `/api/agent/chat` pre-prompt RAG uses Cloudflare AI Search REST (`iam-autorag`) when `AI_SEARCH_TOKEN` is set; `RAG_MIN_QUERY_WORDS` is 4. `vectorizeRagSearch` remains for other code paths.
+
+### Known issues / next steps
+- Wrangler deploy output does not list `AI_SEARCH_TOKEN` (often a secret); verify tail logs if `rag_context_chars` stays 0.
+

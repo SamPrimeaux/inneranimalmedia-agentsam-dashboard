@@ -7370,24 +7370,47 @@ async function handleAgentApi(request, url, env, ctx) {
       });
 
       let ragContext = '';
-      const RAG_MIN_QUERY_WORDS = 10;
+      const RAG_MIN_QUERY_WORDS = 4;
       const RAG_MIN_CONTEXT_CHARS = 100;
-      const runRag = (chatMode === 'agent') && env.AI && lastUserContent && lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
+      const runRag = (chatMode === 'agent') &&
+        env.AI_SEARCH_TOKEN &&
+        lastUserContent &&
+        lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
       if (runRag) {
         try {
-          const results = await vectorizeRagSearch(env, lastUserContent, { topK: 3 });
-          const rawResults = results?.results ?? results?.data ?? [];
-          if (rawResults.length) {
-            const raw = rawResults
-              .map(r => typeof r === 'string' ? r : r.text ?? r.content?.[0]?.text ?? '')
+          const ragRes = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/indexes/iam-autorag/query`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${env.AI_SEARCH_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: lastUserContent,
+                max_results: 5,
+              }),
+            }
+          );
+          if (ragRes.ok) {
+            const ragData = await ragRes.json();
+            const results = ragData?.result?.data ??
+              ragData?.data ?? [];
+            const raw = results
+              .map(r => r.content ?? r.text ?? '')
               .filter(Boolean)
               .join('\n\n');
             if (raw.length >= RAG_MIN_CONTEXT_CHARS) {
-              ragContext = capWithMarker(raw, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
+              ragContext = capWithMarker(
+                raw, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
             }
+          } else {
+            console.warn('[agent/chat] AutoRAG query failed:',
+              ragRes.status, await ragRes.text());
           }
         } catch (e) {
-          console.error('[agent/chat] AISEARCH failed:', e?.message ?? e);
+          console.error('[agent/chat] AutoRAG failed:',
+            e?.message ?? e);
         }
       }
 

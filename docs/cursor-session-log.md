@@ -7863,3 +7863,5 @@ Production and sandbox workers bind `DOCS_BUCKET` to `iam-docs`; agent screensho
 - Confirm R2 custom domain **`docs.inneranimalmedia.com`** serves **`iam-docs`** for public GET of docs and PNGs.
 - Optional: `wrangler r2` bucket listing via API/dashboard if full remote directory listing is required.
 
+**Git:** commit **`8c52ea6`** on `main` (`feat: DOCS_BUCKET + AUTORAG_BUCKET bindings, screenshots route to iam-docs`).
+

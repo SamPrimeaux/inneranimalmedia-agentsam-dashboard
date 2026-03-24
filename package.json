@@ -8,7 +8,8 @@
     "test:headed": "playwright test --headed",
     "test:report-upload": "playwright test && ./scripts/upload-playwright-report-to-r2.sh",
     "start": "node server.js",
-    "deploy": "./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml"
+    "deploy": "./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
+    "deploy:sandbox": "npx wrangler deploy ./worker.js -c ./wrangler.jsonc"
   },
   "keywords": [],
   "author": "",

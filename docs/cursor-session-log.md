@@ -7708,3 +7708,20 @@ Deploy worker (`deploy worker`).
 ### What is live now
 Production worker `inneranimalmedia` includes binding `env.AUTORAG_BUCKET` → R2 bucket `autorag` (confirmed in wrangler deploy binding list).
 
+## 2026-03-24 Sandbox Workers Builds — missing entry-point fix
+
+### What was asked
+Sandbox Cloudflare Workers Builds failed with Wrangler error “Missing entry-point to Worker script” while running `npx wrangler deploy -c wrangler.jsonc`.
+
+### Cause (likely)
+Build **root directory** not set to repo root (so `worker.js` absent in build cwd), or deploy command/config path ambiguity. Local `wrangler.jsonc` already had `"main": "worker.js"` and validates with dry-run.
+
+### Files changed
+- `package.json`: script `deploy:sandbox` → `npx wrangler deploy ./worker.js -c ./wrangler.jsonc`.
+- `wrangler.jsonc`: `AUTORAG_BUCKET` → `autorag` (parity with production); header comment points to docs.
+- `docs/SANDBOX_WORKERS_BUILDS.md`: Workers Builds deploy command + troubleshooting checklist.
+- `docs/cursor-session-log.md`: this entry.
+
+### Action for dashboard
+Set **Deploy command** to `npm run deploy:sandbox` and **Root directory** to repository root (empty). See `docs/SANDBOX_WORKERS_BUILDS.md`.
+

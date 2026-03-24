@@ -1,4 +1,5 @@
 // Sandbox Worker only: inneranimal-dashboard (Workers Builds / wrangler.jsonc).
+// Workers Builds deploy command: npm run deploy:sandbox (see docs/SANDBOX_WORKERS_BUILDS.md).
 // Production Worker (inneranimalmedia): ALWAYS deploy with -c wrangler.production.toml — never replace that file from here.
 // R2: ASSETS + DASHBOARD use agent-sam-sandbox-cidi; other bindings mirror production IDs for compatibility.
 // Queues omitted: same queue consumer cannot bind to two Workers; production inneranimalmedia keeps MY_QUEUE consumer.
@@ -45,6 +46,10 @@
     {
       "binding": "DASHBOARD",
       "bucket_name": "agent-sam-sandbox-cidi"
+    },
+    {
+      "binding": "AUTORAG_BUCKET",
+      "bucket_name": "autorag"
     },
     {
       "binding": "R2",

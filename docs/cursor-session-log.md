@@ -8023,3 +8023,14 @@ Update `docs/iam-docs/index.html` with `STRUCTURE`, `HOME_CARDS`, `renderHome()`
 ### Deploy status
 - Worker deployed: no
 
+## 2026-03-24 IAM docs index — SPA routing + mobile nav
+
+### What was asked
+`docs/iam-docs/index.html`: `history.pushState` / URL sync for `#agents/…` doc paths; load and render markdown on hash; sidebar `aria-current` from hash; card/link clicks `preventDefault` (no full reload); mobile hamburger + backdrop for sidebar.
+
+### Files changed
+- `docs/iam-docs/index.html`: `marked` CDN; `buildUrlWithHash`, `navigateTo`, `loadDoc` (fetch + `marked.parse`), `getHashPath`, `syncSidebarActive`, `popstate` / `hashchange` (with `spaNavigating` guard); home cards as `<button class="spa-nav">`; sidebar/quick links `href="#…"` + `data-doc-path`; topbar `#pageTitle`; `.mobile-menu-btn`, `.sidebar-backdrop`, responsive sidebar transform; `.doc-view` typography.
+
+### Deploy status
+- R2 / worker: not run this step (repo-only edit).
+

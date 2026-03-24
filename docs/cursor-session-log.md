@@ -8034,3 +8034,52 @@ Update `docs/iam-docs/index.html` with `STRUCTURE`, `HOME_CARDS`, `renderHome()`
 ### Deploy status
 - R2 / worker: not run this step (repo-only edit).
 
+## 2026-03-24 SettingsPanel Docs tab — embedded IAM docs viewer
+
+### What was asked
+Replace Docs / provider_docs tab content with inline fetch + markdown viewer for `docs.inneranimalmedia.com`; wire `docs` and `provider_docs` to the same `DocsTab`; inject `.docs-markdown` styles; no deploy.
+
+### Files changed
+- `agent-dashboard/src/SettingsPanel.jsx`: `tabContent.docs` and `tabContent.provider_docs` both `<DocsTab />`; removed `ProviderDocsTab`; dropped `settingsGithubSlot` from `SettingsPanel` props (parent may still pass it); `renderIamDocsMarkdown` fixes (fence split, list wrapping for single `li`, link extraction before escape for correct URLs); `inlineFmt` link handling order.
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (at that step)
+- `FloatingPreviewPanel.jsx`: later updated on full deploy (removed unused `settingsGithubSlot`; see entry below).
+
+### Deploy status (initial handoff)
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What was live before full deploy
+Repo-only; production unchanged until the v137 deploy below.
+
+### Known issues / next steps
+- Browser `fetch` to `docs.inneranimalmedia.com` requires CORS from that host; if loads fail, add a same-origin proxy or widen CORS on docs.
+
+## 2026-03-24 Full deploy — Docs tab inline reader (v137)
+
+### What was asked
+`npm run build` (agent-dashboard), `./scripts/with-cloudflare-env.sh npx wrangler deploy --config wrangler.production.toml`, R2 prod + sandbox (`agent-dashboard.js`, `agent-dashboard.css`, `agent.html`), D1 `deployments` + `dashboard_versions`, `post-deploy-record.sh`, session log append, git commit and push. `TRIGGERED_BY=settings-docs-tab-inline-reader`.
+
+### Files changed (this deploy)
+- `dashboard/agent.html`: `?v=` **136 to 137** (cache bust for agent bundle).
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: removed `settingsGithubSlot` `useMemo` and prop to `SettingsPanel` (Docs tab no longer uses GitHub slot there).
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Built: yes (`agent-dashboard/dist/agent-dashboard.js`, `agent-dashboard.css`)
+- R2 uploaded: yes
+  - **agent-sam:** `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`, `static/dashboard/agent.html`
+  - **agent-sam-sandbox-cidi:** same keys
+- Worker deployed: yes
+  - **Version ID:** `761a59c2-a802-4b81-9585-28bef1dfe6ed`
+  - Deploy time: ~17s (wall clock for wrangler deploy step)
+- D1 `deployments`: **rowid** `79`, **id** `761a59c2-a802-4b81-9585-28bef1dfe6ed`, `triggered_by` `settings-docs-tab-inline-reader`
+- D1 `dashboard_versions`: three rows for **v137** (agent-js, agent-css, agent-html)
+- Deploy approved by Sam: yes (explicit full-deploy instruction)
+
+### What is live now
+Production worker `inneranimalmedia` at the version ID above; agent dashboard loads **v137** assets from R2; sandbox bucket mirrors the same agent shell + bundle keys.
+

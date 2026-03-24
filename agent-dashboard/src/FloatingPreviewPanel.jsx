@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Editor from "@monaco-editor/react";
 import { DiffEditor } from "@monaco-editor/react";
 import SettingsPanel from "./SettingsPanel";
@@ -654,15 +654,6 @@ export default function FloatingPreviewPanel({
       .catch((e) => setFilesError(e.message || "Failed to load file"));
   }, [onCodeContentChange, onTabChange, onFileContextChange, previewableExtensions]);
 
-  const settingsGithubSlot = useMemo(() => (
-    <GitHubFileBrowser
-      connectedIntegrations={connectedIntegrations}
-      openGithubFileInCode={openGithubFileInCode}
-      setSelectedFileForView={setSelectedFileForView}
-      onTabChange={onTabChange}
-    />
-  ), [connectedIntegrations, openGithubFileInCode, onTabChange]);
-
   const saveFileToR2 = useCallback(async () => {
     if (!codeFilename || !filesBucket) return;
     setSaving(true);
@@ -1183,7 +1174,6 @@ export default function FloatingPreviewPanel({
             runCommandRunnerRef={runCommandRunnerRef}
             connectedIntegrations={connectedIntegrations}
             onOpenInBrowser={onOpenInBrowser}
-            settingsGithubSlot={settingsGithubSlot}
             onDeployStart={onDeployStart}
             onDeployComplete={onDeployComplete}
           />

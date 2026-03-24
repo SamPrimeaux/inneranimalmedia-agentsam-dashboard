@@ -79,6 +79,35 @@ const MODEL_LABELS = {
   "gpt-4o": "GPT-4o",
 };
 
+/** Fallback when ai_models lacks rows yet; id === model_key for /api/agent/chat resolution. */
+const WORKERS_AI_CHAT_PICKER_MODELS = [
+  {
+    id: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    model_key: "@cf/meta/llama-4-scout-17b-16e-instruct",
+    display_name: "Llama 4 Scout 17B 131k (Workers AI)",
+    provider: "workers_ai",
+    context_max_tokens: 131072,
+  },
+  {
+    id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    model_key: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    display_name: "Llama 3.3 70B Fast (Workers AI)",
+    provider: "workers_ai",
+    context_max_tokens: 131072,
+  },
+  {
+    id: "@cf/zai-org/glm-4.7-flash",
+    model_key: "@cf/zai-org/glm-4.7-flash",
+    display_name: "GLM 4.7 Flash 131k (Workers AI)",
+    provider: "workers_ai",
+    context_max_tokens: 131072,
+  },
+];
+
+const WORKERS_AI_CHAT_PICKER_KEYS = new Set(
+  WORKERS_AI_CHAT_PICKER_MODELS.map((m) => m.model_key)
+);
+
 function langToExt(lang) {
   const l = String(lang || "")
     .toLowerCase()
@@ -1094,6 +1123,19 @@ export default function AgentDashboard() {
       })
       .catch(() => {});
   }, []);
+
+  const workersAiPickerExtras = useMemo(
+    () =>
+      WORKERS_AI_CHAT_PICKER_MODELS.filter(
+        (s) => !models.some((m) => m.model_key === s.model_key)
+      ),
+    [models]
+  );
+
+  const pickerModelsMain = useMemo(
+    () => models.filter((m) => !WORKERS_AI_CHAT_PICKER_KEYS.has(m.model_key)),
+    [models]
+  );
 
   // ── OAuth popup success: refresh integrations after Google/GitHub connect ───
   useEffect(() => {
@@ -3740,7 +3782,9 @@ export default function AgentDashboard() {
                           Model
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "0 16px 16px 16px" }}>
-                          {(models || []).slice(0, 10).map((model) => (
+                          {[...workersAiPickerExtras, ...pickerModelsMain]
+                            .slice(0, 20)
+                            .map((model) => (
                             <button
                               key={model.id}
                               type="button"
@@ -3760,7 +3804,7 @@ export default function AgentDashboard() {
                                 cursor: "pointer",
                               }}
                             >
-                              {model.display_name}
+                              {MODEL_LABELS[model.model_key] ?? model.display_name}
                             </button>
                           ))}
                         </div>
@@ -3905,7 +3949,49 @@ export default function AgentDashboard() {
                       >
                         Auto
                       </div>
-                      {models.map((m) => (
+                      {workersAiPickerExtras.length > 0 && (
+                        <>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: "var(--text-secondary)",
+                              padding: "8px 14px 4px",
+                            }}
+                          >
+                            Workers AI
+                          </div>
+                          {workersAiPickerExtras.map((m) => (
+                            <div
+                              key={m.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                setSelectedModel(m);
+                                setActiveModel(m);
+                                setShowModelDropdown(false);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  setSelectedModel(m);
+                                  setActiveModel(m);
+                                  setShowModelDropdown(false);
+                                }
+                              }}
+                              style={{
+                                padding: "10px 14px",
+                                cursor: "pointer",
+                                background: selectedModel?.id === m.id ? "var(--bg-canvas)" : "transparent",
+                                fontSize: 13,
+                                color: "var(--color-text)",
+                              }}
+                            >
+                              {MODEL_LABELS[m.model_key] ?? m.display_name}
+                            </div>
+                          ))}
+                        </>
+                      )}
+                      {pickerModelsMain.map((m) => (
                         <div
                           key={m.id}
                           role="button"

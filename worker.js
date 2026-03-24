@@ -256,6 +256,13 @@ const MODEL_COST_TIERS = {
     output: 75.00,
     tier: 'max',
     provider: 'anthropic'
+  },
+  /** Manual / documentation tier only — selectAutoModel only matches budget|standard|premium|max, so this is never auto-selected. */
+  '@cf/meta/llama-4-scout-17b-16e-instruct': {
+    input: 0,
+    output: 0,
+    tier: 'workers_ai_premium',
+    provider: 'workers_ai'
   }
 };
 
@@ -328,6 +335,66 @@ async function selectAutoModel(env, lastUserContent) {
       'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
     ).bind('claude-haiku-4-5-20251001').first();
   }
+}
+
+/** Synthetic ai_models rows when D1 has not yet seeded these Workers AI chat keys. */
+const WORKERS_AI_CHAT_SYNTHETIC = {
+  '@cf/meta/llama-4-scout-17b-16e-instruct': {
+    display_name: 'Llama 4 Scout 17B 131k (Workers AI)',
+    context_max_tokens: 131072,
+  },
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
+    display_name: 'Llama 3.3 70B Fast (Workers AI)',
+    context_max_tokens: 131072,
+  },
+  '@cf/zai-org/glm-4.7-flash': {
+    display_name: 'GLM 4.7 Flash 131k (Workers AI)',
+    context_max_tokens: 131072,
+  },
+};
+
+const WORKERS_AI_IMAGE_MODEL_KEYS = new Set([
+  '@cf/black-forest-labs/flux-2-klein-9b',
+  '@cf/black-forest-labs/flux-2-klein-4b',
+  '@cf/leonardo/phoenix-1.0',
+  '@cf/leonardo/lucid-origin',
+]);
+
+const WORKERS_AI_TTS_MODEL_KEYS = new Set(['@cf/deepgram/aura-1']);
+const WORKERS_AI_STT_MODEL_KEYS = new Set(['@cf/deepgram/nova-3']);
+
+function syntheticWorkersAiChatModelRow(modelId) {
+  const meta = WORKERS_AI_CHAT_SYNTHETIC[modelId];
+  if (!meta) return null;
+  return {
+    id: modelId,
+    model_key: modelId,
+    provider: 'workers_ai',
+    display_name: meta.display_name,
+    context_max_tokens: meta.context_max_tokens,
+    input_rate_per_mtok: 0,
+    output_rate_per_mtok: 0,
+    is_active: 1,
+    show_in_picker: 1,
+  };
+}
+
+function extractWorkersAiImageBytes(result) {
+  if (!result || typeof result !== 'object') return null;
+  const raw = result.image ?? result.bytes ?? result.data ?? result.output ?? result;
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (typeof raw === 'string') {
+    try {
+      const bin = atob(raw);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
 }
 
 async function handleDeploymentLog(request, env, ctx) {
@@ -7328,6 +7395,93 @@ async function handleAgentApi(request, url, env, ctx) {
       });
     }
 
+    if (pathLower === '/api/agent/workers-ai/image' && method === 'POST') {
+      if (!env.AI) return jsonResponse({ error: 'Workers AI not configured' }, 503);
+      const body = await request.json().catch(() => ({}));
+      const modelKey = body.model_key || body.model;
+      const prompt = typeof body.prompt === 'string' ? body.prompt : '';
+      if (!modelKey || !WORKERS_AI_IMAGE_MODEL_KEYS.has(modelKey)) {
+        return jsonResponse({ error: 'model_key must be an allowlisted Workers AI image model' }, 400);
+      }
+      if (!prompt.trim()) return jsonResponse({ error: 'prompt required' }, 400);
+      try {
+        const result = await env.AI.run(modelKey, { prompt: prompt.trim() });
+        const bytes = extractWorkersAiImageBytes(result);
+        if (!bytes || !bytes.length) {
+          return jsonResponse({
+            error: 'No image bytes in model response',
+            raw_keys: result && typeof result === 'object' ? Object.keys(result) : [],
+          }, 502);
+        }
+        return new Response(bytes, {
+          headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' },
+        });
+      } catch (e) {
+        return jsonResponse({ error: e?.message ?? String(e) }, 502);
+      }
+    }
+
+    if (pathLower === '/api/agent/workers-ai/tts' && method === 'POST') {
+      if (!env.AI) return jsonResponse({ error: 'Workers AI not configured' }, 503);
+      const body = await request.json().catch(() => ({}));
+      const modelKey = body.model_key || body.model || '@cf/deepgram/aura-1';
+      const text = typeof body.text === 'string' ? body.text : '';
+      const voice = typeof body.voice === 'string' ? body.voice : undefined;
+      if (!WORKERS_AI_TTS_MODEL_KEYS.has(modelKey)) {
+        return jsonResponse({ error: 'model_key must be @cf/deepgram/aura-1' }, 400);
+      }
+      if (!text.trim()) return jsonResponse({ error: 'text required' }, 400);
+      try {
+        const input = voice != null && voice !== '' ? { text: text.trim(), voice } : { text: text.trim() };
+        const result = await env.AI.run(modelKey, input);
+        const audio = result?.audio ?? result?.wav ?? result?.data ?? result;
+        let bytes = null;
+        if (audio instanceof Uint8Array) bytes = audio;
+        else if (audio instanceof ArrayBuffer) bytes = new Uint8Array(audio);
+        if (!bytes || !bytes.length) {
+          return jsonResponse({
+            error: 'No audio bytes in model response',
+            raw_keys: result && typeof result === 'object' ? Object.keys(result) : [],
+          }, 502);
+        }
+        return new Response(bytes, {
+          headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' },
+        });
+      } catch (e) {
+        return jsonResponse({ error: e?.message ?? String(e) }, 502);
+      }
+    }
+
+    if (pathLower === '/api/agent/workers-ai/stt' && method === 'POST') {
+      if (!env.AI) return jsonResponse({ error: 'Workers AI not configured' }, 503);
+      const body = await request.json().catch(() => ({}));
+      const modelKey = body.model_key || body.model || '@cf/deepgram/nova-3';
+      const b64 = typeof body.audio === 'string' ? body.audio : '';
+      if (!WORKERS_AI_STT_MODEL_KEYS.has(modelKey)) {
+        return jsonResponse({ error: 'model_key must be @cf/deepgram/nova-3' }, 400);
+      }
+      if (!b64) return jsonResponse({ error: 'audio required (base64)' }, 400);
+      let audioU8;
+      try {
+        const bin = atob(b64);
+        audioU8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) audioU8[i] = bin.charCodeAt(i);
+      } catch (_) {
+        return jsonResponse({ error: 'invalid base64 audio' }, 400);
+      }
+      try {
+        const result = await env.AI.run(modelKey, { audio: audioU8 });
+        const text =
+          (typeof result?.text === 'string' && result.text)
+          || (typeof result?.transcript === 'string' && result.transcript)
+          || (typeof result?.result?.text === 'string' && result.result.text)
+          || '';
+        return jsonResponse({ ok: true, text, raw: result });
+      } catch (e) {
+        return jsonResponse({ error: e?.message ?? String(e) }, 502);
+      }
+    }
+
     if (pathLower === '/api/agent/chat' && method === 'POST') {
       const chatStartTime = Date.now();
       const body = await request.json();
@@ -7353,6 +7507,10 @@ async function handleAgentApi(request, url, env, ctx) {
         console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null');
       } else {
         model = await env.DB.prepare('SELECT * FROM ai_models WHERE id = ? OR model_key = ?').bind(model_id, model_id).first();
+        if (!model) {
+          const syn = syntheticWorkersAiChatModelRow(model_id);
+          if (syn) model = syn;
+        }
         console.log('[agent/chat] model_id:', model_id, 'resolved:', model ? `${model.provider}/${model.model_key}` : 'null');
       }
       if (!model) {
@@ -8105,8 +8263,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         result = await resp.json();
         if (!resp.ok) return jsonResponse(result, resp.status);
       }
-      if (result === undefined && model.provider === 'cloudflare_workers_ai' && env.AI) {
-        result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', { messages: [{ role: 'system', content: finalSystem }, ...apiMessages] });
+      if (result === undefined && (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && env.AI) {
+        const mk = (model.model_key || '').trim() || '@cf/meta/llama-3.1-8b-instruct';
+        result = await env.AI.run(mk, { messages: [{ role: 'system', content: finalSystem }, ...apiMessages] });
       }
       if (result === undefined) {
         return jsonResponse({ error: 'Provider not configured or unsupported' }, 503);
@@ -8141,7 +8300,14 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
         }
       }
-      const assistantContent = result?.content?.[0]?.text ?? result?.choices?.[0]?.message?.content ?? result?.candidates?.[0]?.content?.parts?.[0]?.text ?? (typeof result?.message === 'string' ? result.message : '');
+      const assistantContent =
+        result?.content?.[0]?.text
+        ?? result?.choices?.[0]?.message?.content
+        ?? result?.candidates?.[0]?.content?.parts?.[0]?.text
+        ?? (typeof result?.message === 'string' ? result.message : undefined)
+        ?? (typeof result?.response === 'string' ? result.response : undefined)
+        ?? (typeof result?.result?.response === 'string' ? result.result.response : undefined)
+        ?? '';
       conversationId = conversationId || crypto.randomUUID();
       await upsertMcpAgentSession(env, conversationId, agent_id);
       try {

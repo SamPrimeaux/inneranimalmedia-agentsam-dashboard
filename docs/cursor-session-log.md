@@ -8157,3 +8157,32 @@ Read-only discovery (workspaces, existing `dashboard_assets`, R2 listings), then
 - Worker deployed: no
 - D1 remote: yes (`agent_platform_context` only)
 
+## 2026-03-24 Workers AI model expansion (approved deploy)
+
+### What was asked
+Add Workers AI chat model support (synthetic D1 fallback, non-stream `model_key`), image/TTS/STT routes, Workers AI picker group in `AgentDashboard.jsx`, bump `agent.html` cache buster, build, R2 prod + sandbox mirror, production + sandbox worker deploy, D1 `deployments` record, commit/push.
+
+### Files changed
+- `worker.js`: `MODEL_COST_TIERS` entry for `@cf/meta/llama-4-scout-17b-16e-instruct` (`workers_ai_premium`, never auto-selected); Workers AI allowlists + synthetic chat row helper + image bytes helper; `POST /api/agent/workers-ai/image`, `/tts`, `/stt`; chat synthetic model resolution; non-stream `workers_ai` + dynamic `model_key`; assistant text extraction for Workers AI `response` shape.
+- `agent-dashboard/src/AgentDashboard.jsx`: static Workers AI chat picker entries (deduped vs DB), `useMemo` split, desktop "Workers AI" section, mobile list uses merged list slice 20.
+- `dashboard/agent.html`: `?v=137` to `?v=138` on agent-dashboard CSS/JS.
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, OAuth handlers: not in scope.
+- `wrangler.production.toml` / `wrangler.jsonc`: not modified (deploy only).
+
+### Deploy status
+- Built: yes (`agent-dashboard` Vite: `agent-dashboard.js`, `agent-dashboard.css`).
+- R2 uploaded: yes — **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`; **agent-sam-sandbox-cidi**: same keys (sandbox mirror).
+- Worker deployed: yes — **production** `inneranimalmedia` version ID **`7602fd59-2c5a-4508-82af-d5a2920dd4f9`**; **sandbox** `inneranimal-dashboard` version ID **`d165ab75-8095-440c-a2bf-d8d9f3e5376c`** (mirror).
+- `post-deploy-record.sh`: yes — `deployments.id` **`7602fd59-2c5a-4508-82af-d5a2920dd4f9`**, `triggered_by=workers-ai-model-expansion`; D1 meta `last_row_id` **81**.
+- Deploy approved by Sam: yes (chat approval + deploy instructions).
+
+### What is live now
+Production agent page loads bundle **`?v=138`**. Chat can use Workers AI models via DB or synthetic keys; non-stream path respects `model_key`. New JSON/binary routes: `/api/agent/workers-ai/image`, `/tts`, `/stt`. Sandbox worker + R2 carry the same dashboard artifacts for testing.
+
+### Known issues / next steps
+- Optional: seed `ai_models` rows for the three chat keys so boot API returns them without synthetic path.
+- Image/audio model I/O shapes may vary by CF runtime; handlers return `raw_keys` or `raw` on mismatch for debugging.
+

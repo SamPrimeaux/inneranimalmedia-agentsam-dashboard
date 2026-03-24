@@ -9342,3 +9342,26 @@ D1 `terminal_history` showed local Mac prompts; ensure **Remote** uses `GET /api
 - `curl -s https://inneranimalmedia.com/api/agent/terminal/socket-url -b 'SESSION_COOKIE'` should return JSON `{"url":"wss://terminal...?token=..."}`.
 - In Agent Sam: **VPS Remote** → prompt should match VPS hostname, not `Sams-iMac`.
 
+## 2026-03-24 Full deploy + keyboard-shortcuts API (worker)
+
+### What was asked
+Full deploy: build agent-dashboard, R2 upload `agent-dashboard.js`, `agent-dashboard.css`, `dashboard/agent.html`, deploy worker, git commit/push. Add `GET /api/agent/keyboard-shortcuts` and `PATCH /api/agent/keyboard-shortcuts/:id` before deploy. D1 migrations skipped (already applied). Report worker version ID and git hash.
+
+### worker.js lines added
+- **7560–7611**: `GET /api/agent/keyboard-shortcuts` — `getAuthUser`, `SELECT * FROM keyboard_shortcuts ORDER BY sort_order ASC, id ASC`, JSON `{ shortcuts }`.
+- **7576–7611**: `PATCH /api/agent/keyboard-shortcuts/:id` — JSON body `is_enabled`, `403` if `is_system = 1`, else `UPDATE keyboard_shortcuts SET is_enabled = ? WHERE id = ?`, returns `{ ok, shortcut }`.
+
+### Files changed (deploy bundle)
+- Built: `agent-dashboard/dist/agent-dashboard.js`, `agent-dashboard.css`.
+- R2: `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`, `agent-sam/static/dashboard/agent.html`.
+- Worker: `inneranimalmedia` deployed.
+
+### Deploy status
+- Built: yes — R2 uploaded: yes (paths above) — Worker deployed: yes — **Version ID:** `72ac7fb1-4051-4923-9f2d-bf8481a3f81c` — **Git:** `4fa3c932bd0e95bc381643d8015a911f559beffb` on `main` — deploy approved: yes (explicit full-deploy instructions).
+
+### What is live now
+- Production worker includes keyboard-shortcuts GET/PATCH; agent bundle and `agent.html` from this build are on R2.
+
+### Known issues / next steps
+- Agent UI does not yet load GET `/api/agent/keyboard-shortcuts` to gate keydown or render General-tab toggles; API is ready for a follow-up.
+

@@ -7320,3 +7320,50 @@ Full deploy: `agent-dashboard` build, `wrangler deploy`, R2 (`agent.html`, agent
 ### Known issues / next steps
 - None for this drop.
 
+## 2026-03-24 Backend — context_search_log, LIVE DATA RULE, AutoRAG investigation
+
+### What was asked
+Remote D1 ALTER for `context_search_log.query_snippet`; discover where Agent Sam core instructions live and add LIVE DATA RULE; investigate why `rag_context_chars` is always 0; vectorize smoke query; no deploy.
+
+### Files changed
+- `worker.js` lines 7511-7513: inserted LIVE DATA RULE bullet in `agentSamSystemCore` (compiled context for `/api/agent/chat`).
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: forbidden by request.
+- No migration file for Fix 1: user ran SQL directly on remote D1 only.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+- Remote D1 has `context_search_log.query_snippet` (verified via PRAGMA). Worker LIVE DATA RULE change is repo-only until deploy.
+
+### Known issues / next steps
+- `wrangler vectorize query` with JSON `--vector` fails (0 dims); 1024 separate `--vector` args also failed in this environment — use API/Worker to probe index if needed.
+- Pre-chat RAG uses `vectorizeRagSearch` only (not automatic `rag_search`); `rag_context_chars` stays 0 when gates fail or retrieval is empty.
+
+## 2026-03-24 Deploy — LIVE DATA RULE (worker only)
+
+### What was asked
+Deploy `worker.js` with `agentSamSystemCore` LIVE DATA RULE; D1 `deployments` insert; `post-deploy-record.sh`; session log; git commit/push. `TRIGGERED_BY=agent-system-prompt-live-data-rule`. No R2.
+
+### Files changed
+- `docs/cursor-session-log.md`: this entry (deploy record).
+
+### Deploy status
+- Built: no (worker bundle only via wrangler)
+- R2 uploaded: no
+- Worker deployed: yes — **Current Version ID:** `75d2ca4d-9d14-43bc-839e-4a8c1a4fa86e`
+- D1 `deployments.id`: `75d2ca4d-9d14-43bc-839e-4a8c1a4fa86e` (`triggered_by=agent-system-prompt-live-data-rule`, `deploy_time_seconds=0`, notes: LIVE DATA RULE in agentSamSystemCore)
+- Deploy approved by Sam: yes (explicit CURSOR DEPLOY WORKER ONLY instruction)
+
+### What is live now
+- Production **inneranimalmedia** includes LIVE DATA RULE in compiled Agent Sam core for `/api/agent/chat`. Remote D1 already had `context_search_log.query_snippet` from prior ALTER.
+
+### Known issues / next steps
+- `RAG_MIN_QUERY_WORDS = 10` silently skips pre-prompt RAG for short user messages; consider lowering (e.g. 4) or verify Vectorize index population via Worker test.
+

@@ -7865,3 +7865,27 @@ Production and sandbox workers bind `DOCS_BUCKET` to `iam-docs`; agent screensho
 
 **Git:** commit **`8c52ea6`** on `main` (`feat: DOCS_BUCKET + AUTORAG_BUCKET bindings, screenshots route to iam-docs`).
 
+## 2026-03-24 D1 roadmap_steps — mark billing, CI/CD, client, sandbox complete
+
+### What was asked
+Remote `roadmap_steps` updates for Stripe/billing, CI/CD, client dashboard/delivery, Sandbox.
+
+### What ran
+Four `UPDATE` statements on **`inneranimalmedia-business`** (`--remote`, `-c wrangler.production.toml`). Status set to **`completed`** (canonical value in `worker.js` / `docs/memory`; not the literal string `complete`).
+
+### Rows updated (verified SELECT)
+- `step_billing` — Billing — Stripe + invoicing wired  
+- `step_cicd_completion` — CI/CD — Completion wiring  
+- `step_client_dashboard` — Client dashboard — per-client status page  
+- `step_client_pipeline` — Client delivery pipeline — end to end  
+- `step_sandbox_agent_promote_workflow` — Sandbox agent UI to production — scripts and Agent workflow  
+
+### Files changed
+- `docs/cursor-session-log.md`: this entry only.
+
+### Deploy status
+- Worker / R2: no.
+
+### What is live now
+`plan_iam_dashboard_v1` roadmap steps above show **`completed`** in production D1.
+

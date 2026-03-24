@@ -7471,3 +7471,108 @@ Deploy `worker.js` after AutoRAG URL fixes; D1 `deployments` insert; `post-deplo
 ### Known issues / next steps
 - Tail `/api/agent/chat` for AutoRAG errors; confirm token scopes if 403 appears.
 
+## 2026-03-24 AutoRAG R2 knowledge upload (autorag bucket)
+
+### What was asked
+Compile session + architecture from repo into five markdown files under `knowledge/`; upload to R2 bucket **autorag** with `text/markdown`; attempt `wrangler ai-search sync`; verify. No `worker.js` edits, no worker deploy.
+
+### Files changed
+- `docs/cursor-session-log.md`: this entry only.
+
+### Files NOT changed (and why)
+- `worker.js`, `wrangler.production.toml`, dashboard sources: not in scope.
+
+### Staging paths (local, not committed)
+- `/tmp/autorag-upload/knowledge/architecture/shell-refactor-2026-03-23.md` (5200 B)
+- `/tmp/autorag-upload/knowledge/architecture/agent-sam-capabilities.md` (7110 B)
+- `/tmp/autorag-upload/knowledge/architecture/platform-stack.md` (5086 B)
+- `/tmp/autorag-upload/knowledge/architecture/worker-routing.md` (5613 B)
+- `/tmp/autorag-upload/knowledge/sessions/2026-03-23-session-summary.md` (4294 B)
+
+### R2 uploads (remote)
+- `autorag/knowledge/architecture/shell-refactor-2026-03-23.md`
+- `autorag/knowledge/architecture/agent-sam-capabilities.md`
+- `autorag/knowledge/architecture/platform-stack.md`
+- `autorag/knowledge/architecture/worker-routing.md`
+- `autorag/knowledge/sessions/2026-03-23-session-summary.md`
+
+### AI Search sync
+- `npx wrangler ai-search sync iam-autorag` **not available** in Wrangler 4.76.0 (unknown arguments). Trigger re-index from Cloudflare dashboard or API when ready.
+
+### Verification
+- `wrangler r2 object list` **not** exposed for this CLI version; confirmed each key with `wrangler r2 object get autorag/<key> --remote` (byte counts match local).
+
+### Deploy status
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+## 2026-03-24 docs: AutoRAG knowledge files in repo (`docs/autorag-knowledge/`)
+
+### What was asked
+Copy five markdown files from `/tmp/autorag-upload/` into `docs/autorag-knowledge/`; commit and push; no deploy.
+
+### Files added
+- `docs/autorag-knowledge/architecture/agent-sam-capabilities.md`
+- `docs/autorag-knowledge/architecture/platform-stack.md`
+- `docs/autorag-knowledge/architecture/shell-refactor-2026-03-23.md`
+- `docs/autorag-knowledge/architecture/worker-routing.md`
+- `docs/autorag-knowledge/sessions/2026-03-23-session-summary.md`
+
+### Deploy status
+- R2/worker: no
+
+## 2026-03-24 Deploy APPROVED — asset-only sidenav (`sidenav-header-fixes`)
+
+### What was asked
+Bump `agent.html` `?v=` 133 to 134; R2 upload `agent-sam/static/dashboard/agent.html`; `npm run build` (confirm bundle); D1 `deployments`; `post-deploy-record.sh`; session log; git commit/push. `TRIGGERED_BY=sidenav-header-fixes`. No worker deploy.
+
+### Files changed
+- `dashboard/agent.html`: cache bust **v134** (JS/CSS query params only; shell HTML already had sidenav fixes).
+- `docs/cursor-session-log.md`: this entry.
+
+### Actions
+- `agent-dashboard`: `npm run build` OK; bundle MD5 `agent-dashboard.js`=`3a4c6ee248252557be8a608af92e5d33`, `agent-dashboard.css`=`7e22421742a34e98afe8f0bbd7f1c777` (not uploaded; asset-only HTML).
+- R2: `agent-sam/static/dashboard/agent.html`
+- D1 `deployments.id`: `B7E820B8-6DFD-4E69-827A-901BD08F9B6A` (`triggered_by=sidenav-header-fixes`, `deploy_time_seconds=0`)
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: yes — `agent.html` only
+- Deploy approved by Sam: yes (`DEPLOY APPROVED, ASSET ONLY`)
+
+### What is live now
+- Production shell loads **v134** cache-bust for agent bundle URLs; HTML is sidenav-fixed revision.
+
+## 2026-03-24 Worker verification — `autoragAiSearchQuery` / `inneranimalmedia-aisearch`
+
+### What was asked
+Ensure `autoragAiSearchQuery` uses `/ai-search/instances/iam-autorag/search` (not inneranimalmedia-aisearch); report other VECTORIZE/RAG references; do not change other sites yet.
+
+### Result
+- **`autoragAiSearchQuery` (worker.js ~12620):** Already uses `.../ai-search/instances/iam-autorag/search` with `messages` + `ai_search_options`; **no edit applied.**
+- **String `inneranimalmedia-aisearch`:** **Not present in `worker.js`.** (Legacy docs and `wrangler.production.toml` still name Vectorize index `ai-search-inneranimalmedia-aisearch` for binding **VECTORIZE**.)
+
+### VECTORIZE / RAG-related references in `worker.js` (report only)
+- **~2564, ~2595:** `/api/admin/vectorize-kb` — requires `env.VECTORIZE`, upsert disabled (comment).
+- **~5154, ~10607:** `autoragAiSearchQuery` for tool/knowledge paths (AI Search, not VECTORIZE bind).
+- **~7382:** Pre-prompt RAG fetch to `iam-autorag` instances search URL.
+- **~8224–8235, ~8254:** R2/index admin routes — VECTORIZE checks.
+- **~9753:** capabilities / debug — `vectorize: !!env.VECTORIZE`.
+- **~12721–12758:** **`vectorizeRagSearch`** — uses `env.VECTORIZE_INDEX || env.VECTORIZE` and `index.query()` (embed + vector search); separate from `autoragAiSearchQuery`.
+- **~3337, ~8208, ~12159:** Call sites for `vectorizeRagSearch`.
+- **~13060, ~13134–13135, ~13177–13178, ~13225–13226:** Comments / reindex paths mentioning VECTORIZE and iam-autorag / index dimensions.
+
+## 2026-03-24 dashboard/agent.html — sidenav header fixes (no build/deploy)
+
+### What was asked
+Report line numbers for sidenav header/CSS/orange SVG/toggle JS/`--dashboard-sidenav-width`; remove accent logo SVG (keep IAM link + text); reorder header to logo, toggle, gear; move `margin-left: auto` to `#sidenavToggle`; wire `--dashboard-sidenav-width` to `.sidenav` width + `flex-shrink: 0`; mobile hamburger/overlay null-safe; show diff before apply; no build/deploy.
+
+### Files changed
+- `dashboard/agent.html`: removed `sidenav-logo-icon` SVG and its CSS; header DOM order logo → toggle → settings; `#sidenavToggle { margin-left: auto }`, header `gap: 8px`; `.sidenav` uses `var(--dashboard-sidenav-width)` and `flex-shrink: 0`; dropped `.sidenav.collapsed` width override (JS drives variable); mobile sidenav block keeps 240px drawer + `flex-shrink: 0`; hamburger/overlay listeners wrapped in null check.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+

@@ -163,8 +163,9 @@
         /* === SIDENAV === */
         /* Sidenav shell */
         .sidenav {
-            width: 240px;
-            min-width: 240px;
+            flex-shrink: 0;
+            width: var(--dashboard-sidenav-width);
+            min-width: var(--dashboard-sidenav-width);
             height: 100%;
             display: flex;
             flex-direction: column;
@@ -174,16 +175,13 @@
                 min-width 150ms cubic-bezier(0.4,0,0.2,1);
             overflow: hidden;
         }
-        .sidenav.collapsed {
-            width: 52px;
-            min-width: 52px;
-        }
 
         /* Header */
         .sidenav-header {
             display: flex;
             align-items: center;
             justify-content: flex-start;
+            gap: 8px;
             padding: 12px 12px 8px;
             flex-shrink: 0;
         }
@@ -197,11 +195,8 @@
             font-size: 14px;
             min-width: 0;
         }
-        .sidenav-logo-icon {
-            width: 20px;
-            height: 20px;
-            flex-shrink: 0;
-            color: var(--accent);
+        #sidenavToggle {
+            margin-left: auto;
         }
         .sidenav-toggle {
             background: none;
@@ -223,11 +218,8 @@
             transform: rotate(180deg);
         }
         .sidenav-header .sidenav-settings-btn {
-            margin-left: auto;
-            margin-right: 4px;
-        }
-        .sidenav.collapsed .sidenav-header .sidenav-settings-btn {
-            margin: 0 auto;
+            margin-left: 0;
+            margin-right: 0;
         }
 
         /* New chat button */
@@ -440,6 +432,7 @@
                 transition: transform 200ms cubic-bezier(0.4,0,0.2,1);
                 width: 240px;
                 min-width: 240px;
+                flex-shrink: 0;
             }
             .sidenav.open {
                 transform: translateX(0);
@@ -631,24 +624,7 @@
             <!-- Rail header: logo + collapse toggle -->
             <div class="sidenav-header">
                 <a href="/dashboard/agent" class="sidenav-logo-link">
-                    <svg class="sidenav-logo-icon" viewBox="0 0 24 24"
-                         fill="none" stroke="currentColor"
-                         stroke-width="2">
-                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                        <path d="M2 17l10 5 10-5"/>
-                        <path d="M2 12l10 5 10-5"/>
-                    </svg>
                     <span class="sidenav-logo-text">IAM</span>
-                </a>
-                <a href="/dashboard/user-settings"
-                   class="sidenav-footer-icon sidenav-settings-btn"
-                   title="Settings">
-                    <svg viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2"
-                         width="18" height="18">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
                 </a>
                 <button type="button" id="sidenavToggle"
                         class="sidenav-toggle"
@@ -659,6 +635,16 @@
                         <path d="M15 18l-6-6 6-6"/>
                     </svg>
                 </button>
+                <a href="/dashboard/user-settings"
+                   class="sidenav-footer-icon sidenav-settings-btn"
+                   title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2"
+                         width="18" height="18">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </a>
             </div>
 
             <!-- New Chat button -->
@@ -881,8 +867,8 @@
 <script>document.body.classList.add('agent-dashboard-page');</script>
 <div id="agent-dashboard-root" style="width:100%;height:100%;overflow:hidden;"></div>
 
-<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=133">
-    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=133"></script>
+<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=134">
+    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=134"></script>
         </main>
     </div>
 
@@ -1025,18 +1011,20 @@
         const hamburger = document.getElementById('hamburger');
         const sidenav = document.getElementById('sidenav');
         const overlay = document.getElementById('overlay');
-        
-        hamburger.addEventListener('click', () => {
-            hamburger.classList.toggle('open');
-            sidenav.classList.toggle('open');
-            overlay.classList.toggle('active');
-        });
-        
-        overlay.addEventListener('click', () => {
-            hamburger.classList.remove('open');
-            sidenav.classList.remove('open');
-            overlay.classList.remove('active');
-        });
+
+        if (hamburger && sidenav && overlay) {
+            hamburger.addEventListener('click', () => {
+                hamburger.classList.toggle('open');
+                sidenav.classList.toggle('open');
+                overlay.classList.toggle('active');
+            });
+
+            overlay.addEventListener('click', () => {
+                hamburger.classList.remove('open');
+                sidenav.classList.remove('open');
+                overlay.classList.remove('active');
+            });
+        }
 
         // Shell nav intercept — load non-agent pages in React viewer
         document.querySelectorAll(

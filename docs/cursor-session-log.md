@@ -8115,3 +8115,19 @@ Read-only discovery (workspaces, existing `dashboard_assets`, R2 listings), then
 ### What is live now
 `inneranimalmedia-business.dashboard_assets` lists production dashboard pages, v137 agent bundle + `shell.css`, and iam-docs bucket files with `docs.inneranimalmedia.com` URLs.
 
+## 2026-03-24 Notes — dashboard_assets coverage + agent_platform_context
+
+### Record notes (Sam)
+1. **Client dashboard HTML** not found in R2 is expected; do not invent paths. Client pages may use other key patterns or are not uploaded yet. Logo placeholder rows remain sufficient.
+2. **iam-docs indexing:** Confirmed `dashboard_assets` includes **all** R2 objects under `agents/` and `platform/` (non-empty keys):
+   - **`agents/`:** **8** rows — `README.md`, `anthropic.md`, `auto-mode.md`, `google-gemini.md`, `iam-docs-index.html`, `openai.md`, `tool-reference.md`, `workers-ai.md`. (If counting only the seven topic `.md` files beside README, those seven are all present; the eighth row is `iam-docs-index.html`.)
+   - **`platform/`:** **5** rows — `bindings-reference.md`, `d1-schema-overview.md`, `deploy-runbook.md`, `r2-bucket-map.md`, `worker-routing.md`. **None missing.**
+3. **D1** `INSERT OR REPLACE INTO agent_platform_context` id **`apc_020`**, `memory_key` **`dashboard_assets_count`**, value summarizing **55** total rows (breakdown in DB). `datetime('now')` used (not doubled quotes).
+
+### Files changed
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker deployed: no
+- D1 remote: yes (`agent_platform_context` only)
+

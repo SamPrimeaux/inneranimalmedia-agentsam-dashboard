@@ -7683,5 +7683,28 @@ Unchanged until `dashboard/agent.html` is uploaded to R2 and/or worker deploy pe
 - `triggered_by` = `cursor-shell-parity`
 
 ### What is live now
-Production and sandbox R2 serve `dashboard/agent.html` at v136. Worker code does not yet read `AUTORAG_BUCKET` until a future worker deploy applies the new binding.
+Production and sandbox R2 serve `dashboard/agent.html` at v136. Worker was deployed afterward (see next entry); `AUTORAG_BUCKET` is live on the worker.
+
+## 2026-03-23 Worker deploy — inneranimalmedia (post AUTORAG_BUCKET toml)
+
+### What was asked
+Deploy worker (`deploy worker`).
+
+### What ran
+`TRIGGERED_BY=agent DEPLOYMENT_NOTES='worker deploy; AUTORAG_BUCKET binding active' ./scripts/deploy-with-record.sh --worker-only --skip-docs` (source indexing R2 uploads + wrangler deploy + `post-deploy-record.sh`; no agent.html `?v=` bump, no dashboard JS/CSS/HTML R2 in this script path).
+
+### Deploy status
+- Built: no (worker bundle from repo as-is)
+- R2 uploaded: yes — `agent-sam/source/worker.js`, agent-dashboard + MCP source mirrors per script
+- Worker deployed: yes
+- Deploy approved by Sam: yes (implicit deploy request)
+
+### Cloudflare / D1
+- **Current Version ID:** `fe99217e-be02-4d1d-9cc6-b56d757eb65c`
+- **deploy_time_seconds:** 19
+- **deployments** insert meta `last_row_id` = **76**
+- **triggered_by:** `agent`
+
+### What is live now
+Production worker `inneranimalmedia` includes binding `env.AUTORAG_BUCKET` → R2 bucket `autorag` (confirmed in wrangler deploy binding list).
 

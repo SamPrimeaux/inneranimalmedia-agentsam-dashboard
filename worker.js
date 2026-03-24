@@ -7379,7 +7379,7 @@ async function handleAgentApi(request, url, env, ctx) {
       if (runRag) {
         try {
           const ragRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/indexes/iam-autorag/query`,
+            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/instances/iam-autorag/search`,
             {
               method: 'POST',
               headers: {
@@ -7387,17 +7387,16 @@ async function handleAgentApi(request, url, env, ctx) {
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
-                query: lastUserContent,
-                max_results: 5,
+                messages: [{ role: 'user', content: lastUserContent }],
+                ai_search_options: { retrieval: { max_num_results: 5 } },
               }),
             }
           );
           if (ragRes.ok) {
             const ragData = await ragRes.json();
-            const results = ragData?.result?.data ??
-              ragData?.data ?? [];
-            const raw = results
-              .map(r => r.content ?? r.text ?? '')
+            const chunks = ragData?.result?.chunks ?? [];
+            const raw = chunks
+              .map(r => r.text ?? '')
               .filter(Boolean)
               .join('\n\n');
             if (raw.length >= RAG_MIN_CONTEXT_CHARS) {
@@ -12618,19 +12617,23 @@ async function autoragAiSearchQuery(env, queryStr, maxResults) {
   if (!account || !token) return [];
   try {
     const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai-search/indexes/autorag/search`,
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai-search/instances/iam-autorag/search`,
       {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query: queryStr, max_results: n }),
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: queryStr }],
+          ai_search_options: { retrieval: { max_num_results: n } },
+        }),
       }
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.success === false) return [];
-    return parseAutoragHits(data.result ?? data.data ?? data);
+    const chunks = data?.result?.chunks ?? [];
+    return parseAutoragHits(chunks);
   } catch (e) {
     console.warn('[autoragAiSearchQuery] REST', e?.message ?? e);
     return [];

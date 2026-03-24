@@ -7405,3 +7405,69 @@ Deploy `worker.js` with AutoRAG REST replacing `vectorizeRagSearch` in `/api/age
 ### Known issues / next steps
 - Wrangler deploy output does not list `AI_SEARCH_TOKEN` (often a secret); verify tail logs if `rag_context_chars` stays 0.
 
+## 2026-03-23 AutoRAG URL report + D1 `context_search_log.scope`
+
+### What was asked
+Report correct Cloudflare AutoRAG / AI Search REST URL for 404 on pre-prompt RAG (`ai-search/indexes/iam-autorag/query`); run remote D1 migration `ALTER TABLE context_search_log ADD COLUMN scope TEXT`; do not change `worker.js` yet.
+
+### Files changed
+- `docs/cursor-session-log.md`: this entry only.
+
+### Files NOT changed (and why)
+- `worker.js`: user requested URL/report only, no code edits.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+- Remote D1 `inneranimalmedia-business` has `context_search_log.scope` column added (migration command succeeded). Pre-prompt RAG URL in production worker remains wrong until a future deploy; documented correct paths: `.../ai-search/instances/iam-autorag/search` (preferred) or legacy `.../autorag/rags/iam-autorag/search` / `.../ai-search`.
+
+### Known issues / next steps
+- Update `runRag` fetch URL and body/response parsing to match AI Search instances API; align `autoragAiSearchQuery` REST fallback off `ai-search/indexes/...`.
+
+## 2026-03-23 AI Search instances URL fixes in worker.js (no deploy)
+
+### What was asked
+Two URL/body/parsing fixes: `runRag` block and `autoragAiSearchQuery` REST path to `.../ai-search/instances/iam-autorag/search` with `messages` + `ai_search_options.retrieval.max_num_results`; parse `result.chunks` / `r.text`. Show diff before apply; no deploy.
+
+### Files changed
+- `worker.js` lines ~7381-7406: `runRag` fetch URL, body, chunk parsing for pre-prompt RAG.
+- `worker.js` lines ~12620-12636: `autoragAiSearchQuery` REST URL, body, `parseAutoragHits(chunks)`.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker deployed: no (per user)
+- Deploy approved by Sam: n/a
+
+### What is live now
+- Repo only; production unchanged until next deploy.
+
+### Known issues / next steps
+- Deploy worker when ready; confirm `AI_SEARCH_TOKEN` / `CLOUDFLARE_API_TOKEN` have AI Search Run permission.
+
+## 2026-03-23 Deploy — AutoRAG instances URL (`autorag-url-fix`)
+
+### What was asked
+Deploy `worker.js` after AutoRAG URL fixes; D1 `deployments` insert; `post-deploy-record.sh`; session log; git commit/push. `TRIGGERED_BY=autorag-url-fix`.
+
+### Files changed
+- `worker.js` (already in repo): `runRag` + `autoragAiSearchQuery` use `.../ai-search/instances/iam-autorag/search` with `messages` + `ai_search_options`, `result.chunks` parsing.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker deployed: yes — **Current Version ID:** `a0e5a6f7-1455-41a5-a268-71107e6f05e5`
+- Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy --config wrangler.production.toml`
+- D1 `deployments.id`: `a0e5a6f7-1455-41a5-a268-71107e6f05e5` (`triggered_by=autorag-url-fix`, `deploy_time_seconds=21`, notes: runRag + autoragAiSearchQuery instances URL / messages / chunks)
+- `post-deploy-record.sh`: yes
+- R2 uploaded: no
+- Deploy approved by Sam: yes (explicit "Deploy now" with steps)
+
+### What is live now
+- Production **inneranimalmedia** serves AutoRAG pre-prompt RAG and REST fallback against AI Search instances API for `iam-autorag`.
+
+### Known issues / next steps
+- Tail `/api/agent/chat` for AutoRAG errors; confirm token scopes if 403 appears.
+

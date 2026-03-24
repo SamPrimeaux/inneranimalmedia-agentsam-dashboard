@@ -1,5 +1,31 @@
 ## [2026-03-22] Worker production surface reference + Settings Cursor-bridge plan
 
+## 2026-03-24 IAM docs search migration
+
+### What was asked
+Replace all `iam-autorag` references in `worker.js` with `iam-docs-search`, deploy the worker, record the deployment in D1, and push a commit.
+
+### Files changed
+- `worker.js` lines 7420, 9806, 9844, 9895, 12772, 13212: replaced `iam-autorag` with `iam-docs-search` in AI Search instance URLs and one related comment.
+- `docs/cursor-session-log.md` lines 8135-8154: appended this deployment/task record.
+
+### Files NOT changed (and why)
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: not touched per rules and task scope.
+- `dashboard/agent.html`: not touched; task was limited to `worker.js` RAG instance references.
+- `wrangler.production.toml`: not touched per locked-file rules.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no — files: none
+- Worker deployed: yes — version ID: `eafdb913-a8ac-4cfd-b6a1-4ed62b4bee16`
+- Deploy approved by Sam: yes
+
+### What is live now
+`inneranimalmedia` worker is live at version `eafdb913-a8ac-4cfd-b6a1-4ed62b4bee16` with all `iam-autorag` instance references in `worker.js` updated to `iam-docs-search`.
+
+### Known issues / next steps
+- Wrangler reported non-blocking warnings about config drift and unexpected top-level fields in `wrangler.production.toml`.
+- Deployment record inserted into `deployments` with id `eafdb913-a8ac-4cfd-b6a1-4ed62b4bee16` and `triggered_by='iam-docs-search-migration'`.
 ### What was asked
 Note live Worker routes/bindings/secrets/cron; how to improve Settings UI toward Cursor parity and real backend capabilities.
 

@@ -7417,7 +7417,7 @@ async function handleAgentApi(request, url, env, ctx) {
       if (runRag) {
         try {
           const ragRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/instances/iam-autorag/search`,
+            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/instances/iam-docs-search/search`,
             {
               method: 'POST',
               headers: {
@@ -9803,7 +9803,7 @@ async function handleAgentsamApi(request, url, env) {
         return jsonResponse({ error: 'AutoRAG not configured' }, 503);
       }
       const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag`,
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json().catch(() => ({}));
@@ -9841,7 +9841,7 @@ async function handleAgentsamApi(request, url, env) {
         return jsonResponse({ error: 'AutoRAG not configured' }, 503);
       }
       const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag/jobs`,
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search/jobs`,
         {
           method: 'POST',
           headers: {
@@ -9892,7 +9892,7 @@ async function handleAgentsamApi(request, url, env) {
         return jsonResponse({ error: 'AutoRAG not configured' }, 503);
       }
       const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag/search`,
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search/search`,
         {
           method: 'POST',
           headers: {
@@ -12769,7 +12769,7 @@ async function autoragAiSearchQuery(env, queryStr, maxResults) {
   if (!account || !token) return [];
   try {
     const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai-search/instances/iam-autorag/search`,
+      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/ai-search/instances/iam-docs-search/search`,
       {
         method: 'POST',
         headers: {
@@ -13209,7 +13209,7 @@ async function compactAgentChatsToR2(env) {
 
 /**
  * Index R2 memory markdown (memory/daily/*.md, memory/schema-and-records.md) into Vectorize.
- * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-autorag).
+ * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-docs-search).
  * Returns { indexed: number of keys, chunks: number of vectors upserted, error?: string }.
  */
 async function indexMemoryMarkdownToVectorize(env) {

@@ -7635,3 +7635,53 @@ Build agent-dashboard, deploy `inneranimalmedia` worker, upload JS/CSS/`agent.ht
 - Worker deployed: yes — version ID above
 - Deploy approved by Sam: yes (full deploy request)
 
+## 2026-03-23 IAM shell Cursor-style (agent.html only, no deploy)
+
+### What was asked
+Align `dashboard/agent.html` shell with Cursor-like topbar command pill, sidenav header (logo only + panel toggle), topbar gear replacing notifications bell, bottom status bar, CSS vars only for new UI chrome, `iam_status_update` listener and `iam_shell_nav` for `.topbar-gear-btn`. No build, no deploy; show diff first (diff captured via `git diff dashboard/agent.html`).
+
+### Files changed
+- `dashboard/agent.html`: Topbar merged search + workspace into `#topbarCommandPill` inside `#searchWrap` (`.topbar-center-inner`); hidden `#workspaceSelect` kept for `getElementById` compatibility; gear link `.topbar-gear-btn`; removed topbar notifications UI and its script IIFE; sidenav header logo image + VS Code-style sidebar SVG toggle, removed IAM text and sidenav settings gear; `iam-status-bar` block after `app-container`; main agent area height adjusted for 24px status bar; new inline CSS for pill, gear, status bar, mobile pill behavior; shell nav intercept updated; status bar `iam_status_update` + sync button opacity stub after sidenav handlers; sidenav search focus fallback uses `.topbar-search-input`.
+
+### Files NOT changed (and why)
+- React/agent-dashboard bundle: not requested.
+- `worker.js`, R2, other dashboard HTML pages: out of scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+Unchanged until `dashboard/agent.html` is uploaded to R2 and/or worker deploy per project process.
+
+### Known issues / next steps
+- React app should dispatch `iam_status_update` with `{ model, mode, agent, workspace }` when composer footer changes (not done in this task).
+- Status Sync button is UI-only (TODO as in prompt).
+- Full unified diff available locally: `git diff dashboard/agent.html`.
+
+## 2026-03-23 Deploy approved — asset-only agent.html v136 + AUTORAG_BUCKET binding
+
+### What was asked
+`DEPLOY APPROVED, ASSET ONLY`: bump `?v=` 135 to 136; R2 upload `agent-sam/static/dashboard/agent.html` and mirror `agent-sam-sandbox-cidi/static/dashboard/agent.html`; D1 `deployments` via `post-deploy-record.sh`; `TRIGGERED_BY=cursor-shell-parity`; no worker deploy; no npm build. Add `AUTORAG_BUCKET` → bucket `autorag` in `wrangler.production.toml`. Git commit + push.
+
+### Files changed
+- `wrangler.production.toml`: `[[r2_buckets]]` binding `AUTORAG_BUCKET` / `autorag` (Indexing uploads target; effective after next worker deploy).
+- `dashboard/agent.html`: cache bust `?v=136` on agent-dashboard CSS/JS.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Built: no (bundle unchanged)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`, `agent-sam-sandbox-cidi/static/dashboard/agent.html`
+- Worker deployed: no
+- Deploy approved by Sam: yes (`DEPLOY APPROVED, ASSET ONLY`)
+
+### D1 deployments
+- `id` = `asset-agent-html-v136-<git-short>` (see commit; run used `076be56` at record time)
+- Wrangler meta `last_row_id` = **75**
+- `triggered_by` = `cursor-shell-parity`
+
+### What is live now
+Production and sandbox R2 serve `dashboard/agent.html` at v136. Worker code does not yet read `AUTORAG_BUCKET` until a future worker deploy applies the new binding.
+

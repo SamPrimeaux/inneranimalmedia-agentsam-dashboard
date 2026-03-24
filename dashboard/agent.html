@@ -90,7 +90,22 @@
             overflow-x: hidden;
         }
         .topbar-left { display: flex; align-items: center; gap: 12px; color: var(--text-nav); }
-        .topbar-center { flex: 1; display: flex; justify-content: center; }
+        .topbar-center {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-width: 0;
+        }
+        .topbar-center-inner {
+            position: relative;
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-width: 0;
+            max-width: 640px;
+        }
         .topbar-right { display: flex; align-items: center; gap: 16px; color: var(--text-nav); }
         
         .hamburger {
@@ -138,11 +153,17 @@
         .nav-icon-btn { color: var(--text-nav); }
 
         @media (max-width: 768px) {
-            .search-wrap .search-input { display: none; }
-            .search-wrap .search-dropdown { left: 0; right: auto; width: 280px; }
+            .topbar-command-pill .topbar-search-input { display: none; }
+            .topbar-center-inner .search-dropdown { left: 0; right: auto; width: 280px; }
             .search-mobile-btn { display: inline-flex; align-items: center; justify-content: center; }
-            .search-wrap.expanded .search-input { display: block; }
-            .search-wrap.expanded .search-mobile-btn { display: none; }
+            #searchWrap.expanded .topbar-command-pill .topbar-search-input { display: block; }
+            #searchWrap.expanded .search-mobile-btn { display: none; }
+            .topbar-search-side > svg {
+                display: none;
+            }
+            #searchWrap.expanded .topbar-search-side > svg {
+                display: block;
+            }
         }
         
         @media (min-width: 769px) {
@@ -188,12 +209,17 @@
         .sidenav-logo-link {
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
             text-decoration: none;
             color: var(--text-primary);
-            font-weight: 700;
-            font-size: 14px;
             min-width: 0;
+        }
+        .sidenav-logo-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            object-fit: contain;
+            flex-shrink: 0;
         }
         #sidenavToggle {
             margin-left: auto;
@@ -217,11 +243,6 @@
         .sidenav.collapsed .sidenav-toggle svg {
             transform: rotate(180deg);
         }
-        .sidenav-header .sidenav-settings-btn {
-            margin-left: 0;
-            margin-right: 0;
-        }
-
         /* New chat button */
         .sidenav-actions {
             padding: 4px 8px 8px;
@@ -455,8 +476,8 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            height: calc(100vh - 60px);
-            max-height: calc(100vh - 60px);
+            height: calc(100vh - 60px - 24px);
+            max-height: calc(100vh - 60px - 24px);
         }
         .main-content.agent-page-main #agent-dashboard-root {
             flex: 1;
@@ -527,7 +548,6 @@
             .main-content { padding: 16px 12px; }
             .topbar { padding: 0 12px; gap: 12px; }
             .hamburger { display: flex; }
-            .workspace-switcher { display: none; }
         }
         
         @media (min-width: 769px) {
@@ -564,6 +584,161 @@
         .btn-primary:hover {
             background: var(--accent-hover);
         }
+
+        /* Command pill (Cursor-style) */
+        .topbar-command-pill {
+            display: flex;
+            align-items: center;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            height: 32px;
+            min-width: 0;
+            width: 100%;
+            max-width: 560px;
+            flex: 1;
+            overflow: hidden;
+            transition: border-color 150ms;
+        }
+        .topbar-command-pill:focus-within {
+            border-color: var(--accent);
+        }
+        .topbar-search-side {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 10px;
+            flex: 1;
+            color: var(--text-muted);
+            min-width: 0;
+        }
+        .topbar-search-input {
+            background: none;
+            border: none;
+            outline: none;
+            font-size: 12px;
+            color: var(--text-primary);
+            width: 100%;
+            min-width: 0;
+        }
+        .topbar-search-input::placeholder {
+            color: var(--text-muted);
+        }
+        .topbar-pill-divider {
+            width: 1px;
+            height: 18px;
+            background: var(--border);
+            flex-shrink: 0;
+        }
+        .topbar-workspace-side {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 10px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 12px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            max-width: 42%;
+            transition: color 150ms;
+        }
+        .topbar-workspace-side span#workspaceName {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .topbar-workspace-side:hover {
+            color: var(--text-primary);
+        }
+
+        /* Topbar gear */
+        .topbar-icon-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 150ms, background 150ms;
+            flex-shrink: 0;
+        }
+        .topbar-icon-btn:hover {
+            color: var(--text-primary);
+            background: var(--bg-hover);
+        }
+
+        /* Status bar */
+        .iam-status-bar {
+            height: 24px;
+            min-height: 24px;
+            background: var(--bg-nav);
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 8px;
+            font-size: 11px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+            z-index: 100;
+            position: relative;
+        }
+        .status-bar-left,
+        .status-bar-center,
+        .status-bar-right {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .status-bar-center {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        .status-bar-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            cursor: default;
+            white-space: nowrap;
+            transition: background 150ms, color 150ms;
+            text-decoration: none;
+        }
+        button.status-bar-item {
+            cursor: pointer;
+        }
+        button.status-bar-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .status-bar-divider {
+            width: 1px;
+            height: 12px;
+            background: var(--border);
+            margin: 0 2px;
+        }
+
+        .sidenav-logo-text {
+            display: none !important;
+        }
+
+        .sidenav.collapsed .sidenav-logo-link {
+            display: none;
+        }
+
+        @media (min-width: 769px) {
+            .topbar-command-pill {
+                min-width: 360px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -577,13 +752,27 @@
             </button>
             <img id="ia-logo" class="app-logo" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="Inner Animal Media">
         </div>
-        <div class="topbar-center" style="display: flex; align-items: center; gap: 16px;">
-            <div class="search-wrap" id="searchWrap">
-                <button type="button" class="search-mobile-btn" id="searchMobileBtn" aria-label="Search">
-                    <svg class="nav-icon-btn" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                </button>
-                <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                <input type="text" class="search-input" id="searchInput" placeholder="Search or type a command..." autocomplete="off">
+        <div class="topbar-center">
+            <div class="topbar-center-inner" id="searchWrap">
+                <div class="topbar-command-pill" id="topbarCommandPill">
+                    <div class="topbar-search-side">
+                        <button type="button" class="search-mobile-btn" id="searchMobileBtn" aria-label="Search">
+                            <svg class="nav-icon-btn" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                        </button>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                        <input type="text" id="searchInput" class="topbar-search-input" placeholder="Search or type a command..." autocomplete="off"/>
+                    </div>
+                    <div class="topbar-pill-divider"></div>
+                    <div class="topbar-workspace-side" id="workspaceSelector" role="button" tabindex="0">
+                        <span id="workspaceName">Sam Primeaux Workspace</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                            <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                    </div>
+                </div>
                 <div class="search-dropdown" id="searchDropdown">
                     <div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary); text-transform: uppercase;">Recent</div>
                     <div class="item" data-url="/dashboard/overview">Overview</div>
@@ -592,28 +781,18 @@
                     <div class="item" data-url="/dashboard/draw">Draw</div>
                     <div class="item" data-url="/dashboard/meet">Meet</div>
                 </div>
+                <select id="workspaceSelect" hidden aria-hidden="true">
+                    <option value="ws_samprimeaux">Sam Primeaux Workspace</option>
+                </select>
             </div>
-            <select class="workspace-switcher" id="workspaceSelect">
-                <option value="ws_samprimeaux">Sam Primeaux Workspace</option>
-            </select>
         </div>
         <div class="topbar-right">
-            <button id="notifications-btn" class="nav-icon-btn" aria-label="Notifications" style="position: relative; border: none; background: transparent; cursor: pointer; padding: 6px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: inherit;">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.172V11a6 6 0 1 0-12 0v3.172a2 2 0 0 1-.586 1.414L4 17h5" />
-                    <path d="M9 21a3 3 0 0 0 6 0" />
+            <a href="/dashboard/user-settings" class="topbar-icon-btn topbar-gear-btn" id="topbarGearBtn" title="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                 </svg>
-                <span id="notifications-badge" style="position:absolute; top:4px; right:4px; min-width:14px; height:14px; border-radius:999px; background:#f97316; color:white; font-size:10px; line-height:14px; text-align:center; padding:0 3px; display:none;"></span>
-            </button>
-            <div id="notifications-dropdown" style="position:fixed; margin-top:8px; width:320px; max-height:420px; overflow-y:auto; background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; box-shadow:0 18px 45px rgba(0,0,0,0.15); padding:8px 0; display:none; z-index:10001;">
-                <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 16px 6px 16px;">
-                    <span style="font-size:13px; font-weight:600; color: var(--text-primary);">Notifications</span>
-                    <button id="notifications-mark-all" style="border:none; background:none; color: var(--text-secondary); font-size:11px; cursor:pointer;">Mark all read</button>
-                </div>
-                <div id="notifications-list" style="border-top:1px solid var(--border); padding-top:4px;">
-                    <div style="padding:12px 16px; font-size:13px; color: var(--text-secondary); text-align:center;">No notifications</div>
-                </div>
-            </div>
+            </a>
         </div>
     </header>
 
@@ -624,27 +803,18 @@
             <!-- Rail header: logo + collapse toggle -->
             <div class="sidenav-header">
                 <a href="/dashboard/agent" class="sidenav-logo-link">
-                    <span class="sidenav-logo-text">IAM</span>
+                    <img class="sidenav-logo-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="" width="28" height="28">
                 </a>
                 <button type="button" id="sidenavToggle"
                         class="sidenav-toggle"
                         aria-label="Collapse sidebar">
-                    <svg viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2"
+                    <svg viewBox="0 0 16 16" fill="none"
+                         stroke="currentColor" stroke-width="1.5"
                          width="16" height="16">
-                        <path d="M15 18l-6-6 6-6"/>
+                        <rect x="1" y="1" width="14" height="14" rx="2"/>
+                        <path d="M5 1v14"/>
                     </svg>
                 </button>
-                <a href="/dashboard/user-settings"
-                   class="sidenav-footer-icon sidenav-settings-btn"
-                   title="Settings">
-                    <svg viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2"
-                         width="18" height="18">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                    </svg>
-                </a>
             </div>
 
             <!-- New Chat button -->
@@ -867,9 +1037,44 @@
 <script>document.body.classList.add('agent-dashboard-page');</script>
 <div id="agent-dashboard-root" style="width:100%;height:100%;overflow:hidden;"></div>
 
-<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=135">
-    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=135"></script>
+<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=136">
+    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=136"></script>
         </main>
+    </div>
+
+    <div class="iam-status-bar" id="iamStatusBar">
+        <div class="status-bar-left">
+            <button type="button" class="status-bar-item" id="statusGitBtn" title="Source Control">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                    <circle cx="18" cy="18" r="3"/>
+                    <circle cx="6" cy="6" r="3"/>
+                    <path d="M13 6h3a2 2 0 0 1 2 2v7"/>
+                    <line x1="6" y1="9" x2="6" y2="21"/>
+                </svg>
+                <span id="statusGitBranch">main</span>
+            </button>
+            <span class="status-bar-divider"></span>
+            <span class="status-bar-item" id="statusRepo">inneranimalmedia</span>
+            <span class="status-bar-divider"></span>
+            <button type="button" class="status-bar-item" id="statusSyncBtn" title="Sync">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                <span>Sync</span>
+            </button>
+        </div>
+        <div class="status-bar-center">
+            <span class="status-bar-item" id="statusWorkspace">Sam Primeaux Workspace</span>
+            <span class="status-bar-divider"></span>
+            <span class="status-bar-item" id="statusAgent">Agent Sam</span>
+        </div>
+        <div class="status-bar-right">
+            <span class="status-bar-item" id="statusModel">Auto</span>
+            <span class="status-bar-divider"></span>
+            <span class="status-bar-item" id="statusMode">Agent</span>
+        </div>
     </div>
 
     <!-- Footer chat pane: context gauge, $ gauge, scrollable chat -->
@@ -1028,7 +1233,7 @@
 
         // Shell nav intercept — load non-agent pages in React viewer
         document.querySelectorAll(
-            '.sidenav-nav .nav-item, .sidenav-footer a[href], .sidenav-header a.sidenav-settings-btn'
+            '.sidenav-nav .nav-item, .sidenav-footer a[href], .topbar-gear-btn'
         ).forEach(link => {
             const href = link.getAttribute('href');
             if (!href || href === '/dashboard/agent') return;
@@ -1070,6 +1275,37 @@
             });
         }
 
+        // Status bar — update model/mode from React (CustomEvent)
+        window.addEventListener('iam_status_update', (e) => {
+            const { model, mode, agent, workspace } = e && e.detail ? e.detail : {};
+            if (model) {
+                const el = document.getElementById('statusModel');
+                if (el) el.textContent = model;
+            }
+            if (mode) {
+                const el = document.getElementById('statusMode');
+                if (el) el.textContent = mode;
+            }
+            if (agent) {
+                const el = document.getElementById('statusAgent');
+                if (el) el.textContent = agent;
+            }
+            if (workspace) {
+                const el = document.getElementById('statusWorkspace');
+                if (el) el.textContent = workspace;
+            }
+        });
+
+        const statusSyncBtn = document.getElementById('statusSyncBtn');
+        if (statusSyncBtn) {
+            statusSyncBtn.addEventListener('click', () => {
+                statusSyncBtn.style.opacity = '0.5';
+                setTimeout(() => {
+                    statusSyncBtn.style.opacity = '1';
+                }, 1000);
+            });
+        }
+
         // Load saved theme on page load (built-in or dynamic from API)
         function applyDynamicTheme(themeName, themeData) {
             if (!themeData) return;
@@ -1108,52 +1344,6 @@
                 updateHeaderLogo();
             })
             .catch(function () {});
-
-        // Simple notifications dropdown (UI shell only; data wiring can be added later)
-        (function () {
-            const btn = document.getElementById('notifications-btn');
-            const dropdown = document.getElementById('notifications-dropdown');
-            const badge = document.getElementById('notifications-badge');
-            const markAll = document.getElementById('notifications-mark-all');
-            if (!btn || !dropdown) return;
-
-            let open = false;
-
-            function toggle() {
-                open = !open;
-                dropdown.style.display = open ? 'block' : 'none';
-                if (open) positionHeaderDropdown(btn, dropdown, 'right');
-            }
-
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                toggle();
-            });
-
-            document.addEventListener('click', (e) => {
-                if (!open) return;
-                if (!dropdown.contains(e.target) && e.target !== btn) {
-                    open = false;
-                    dropdown.style.display = 'none';
-                }
-            });
-
-            if (markAll) {
-                markAll.addEventListener('click', () => {
-                    const list = document.getElementById('notifications-list');
-                    if (list) {
-                        list.innerHTML = '<div style=\"padding:12px 16px; font-size:13px; color:#9ca3af; text-align:center;\">All caught up</div>';
-                    }
-                    if (badge) badge.style.display = 'none';
-                });
-            }
-
-            // Example: show a single unread badge if needed later
-            if (badge) {
-                badge.textContent = '';
-                badge.style.display = 'none';
-            }
-        })();
 
         // Search: dropdown on focus, RAG knowledge search (debounced), history from localStorage, mobile magnifier
         (function () {
@@ -1294,7 +1484,7 @@
         if (searchBtn) {
             searchBtn.addEventListener('click', () => {
                 const topSearch = document.getElementById('searchInput')
-                    || document.querySelector('.search-input');
+                    || document.querySelector('.topbar-search-input');
                 if (topSearch) topSearch.focus();
             });
         }

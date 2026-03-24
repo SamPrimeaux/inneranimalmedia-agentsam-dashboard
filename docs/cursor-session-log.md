@@ -8186,3 +8186,37 @@ Production agent page loads bundle **`?v=138`**. Chat can use Workers AI models 
 - Optional: seed `ai_models` rows for the three chat keys so boot API returns them without synthetic path.
 - Image/audio model I/O shapes may vary by CF runtime; handlers return `raw_keys` or `raw` on mismatch for debugging.
 
+## 2026-03-24 AI Search / AutoRAG request and response alignment
+
+### What was asked
+Align `iam-docs-search` calls with Cloudflare AI Search API (2026-03-23): request bodies use `messages: [{ content, role: 'user' }]` with `ai_search_options`; parse `result.chunks` / top-level `chunks` with `.text`. No deploy in this step.
+
+### Files changed
+- `worker.js`: `runRag` fetch (~7585–7597), `/api/agentsam/autorag/search` (~10068–10076), `parseAutoragHits` (early `result.chunks` / `chunks`), `autoragAiSearchQuery` binding + REST (~12931–12966).
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: no
+
+### Known issues / next steps
+- Deploy when approved; if `env.AI_SEARCH.search` rejects `ai_search_options` or `messages`, trim binding call to fields the runtime documents.
+
+## 2026-03-24 AI Search format fix — production deploy (approved)
+
+### What was asked
+Deploy `worker.js` RAG / AI Search format changes only; no build, no R2 (`v138` unchanged). `post-deploy-record.sh`, commit, push. `TRIGGERED_BY=aisearch-api-format-fix`.
+
+### Files changed
+- `worker.js`: already contained AI Search `messages` + `result.chunks` / `parseAutoragHits` updates; deployed as-is.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: yes — version ID **`2cf5aca4-2dab-499c-b497-f25d59d4def6`**
+- `post-deploy-record.sh`: yes — `deployments.id` **`2cf5aca4-2dab-499c-b497-f25d59d4def6`**, `triggered_by=aisearch-api-format-fix`; D1 meta `last_row_id` **82**
+- Deploy approved by Sam: yes
+
+### What is live now
+Production `inneranimalmedia` serves the updated AutoRAG / `iam-docs-search` request shape and chunk parsing. Agent dashboard cache bust remains **`?v=138`**.
+

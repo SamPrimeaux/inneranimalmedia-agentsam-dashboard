@@ -7583,16 +7583,16 @@ async function handleAgentApi(request, url, env, ctx) {
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
-                messages: [{ role: 'user', content: lastUserContent }],
+                messages: [{ content: lastUserContent, role: 'user' }],
                 ai_search_options: { retrieval: { max_num_results: 5 } },
               }),
             }
           );
           if (ragRes.ok) {
             const ragData = await ragRes.json();
-            const chunks = ragData?.result?.chunks ?? [];
-            const raw = chunks
-              .map(r => r.text ?? '')
+            const chunks = ragData?.result?.chunks ?? ragData?.chunks ?? [];
+            const raw = (chunks ?? [])
+              .map((c) => c.text)
               .filter(Boolean)
               .join('\n\n');
             if (raw.length >= RAG_MIN_CONTEXT_CHARS) {
@@ -10066,13 +10066,13 @@ async function handleAgentsamApi(request, url, env) {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            messages: [{ role: 'user', content: query }],
+            messages: [{ content: query, role: 'user' }],
             ai_search_options: { retrieval: { max_num_results: 5 } },
           }),
         }
       );
       const data = await res.json().catch(() => ({}));
-      const chunks = data?.result?.chunks ?? [];
+      const chunks = data?.result?.chunks ?? data?.chunks ?? [];
       return jsonResponse({ ok: res.ok, chunks });
     }
 
@@ -12903,6 +12903,14 @@ function parseAutoragHits(raw) {
       filename,
     });
   };
+  if (raw && typeof raw === 'object' && Array.isArray(raw.result?.chunks)) {
+    raw.result.chunks.forEach(push);
+    return items;
+  }
+  if (raw && typeof raw === 'object' && Array.isArray(raw.chunks)) {
+    raw.chunks.forEach(push);
+    return items;
+  }
   if (Array.isArray(raw)) {
     raw.forEach(push);
     return items;
@@ -12924,7 +12932,11 @@ async function autoragAiSearchQuery(env, queryStr, maxResults) {
   const n = Math.min(Math.max(1, maxResults || 5), 20);
   if (env.AI_SEARCH && typeof env.AI_SEARCH.search === 'function') {
     try {
-      const raw = await env.AI_SEARCH.search({ query: queryStr, max_results: n });
+      const raw = await env.AI_SEARCH.search({
+        messages: [{ content: queryStr, role: 'user' }],
+        max_results: n,
+        ai_search_options: { retrieval: { max_num_results: n } },
+      });
       return parseAutoragHits(raw);
     } catch (e) {
       console.warn('[autoragAiSearchQuery] AI_SEARCH binding', e?.message ?? e);
@@ -12943,14 +12955,14 @@ async function autoragAiSearchQuery(env, queryStr, maxResults) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          messages: [{ role: 'user', content: queryStr }],
+          messages: [{ content: queryStr, role: 'user' }],
           ai_search_options: { retrieval: { max_num_results: n } },
         }),
       }
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.success === false) return [];
-    const chunks = data?.result?.chunks ?? [];
+    const chunks = data?.result?.chunks ?? data?.chunks ?? [];
     return parseAutoragHits(chunks);
   } catch (e) {
     console.warn('[autoragAiSearchQuery] REST', e?.message ?? e);

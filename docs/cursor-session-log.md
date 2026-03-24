@@ -8083,3 +8083,35 @@ Repo-only; production unchanged until the v137 deploy below.
 ### What is live now
 Production worker `inneranimalmedia` at the version ID above; agent dashboard loads **v137** assets from R2; sandbox bucket mirrors the same agent shell + bundle keys.
 
+## 2026-03-24 D1 backfill — dashboard_assets (R2 + iam-docs)
+
+### What was asked
+Read-only discovery (workspaces, existing `dashboard_assets`, R2 listings), then `INSERT OR IGNORE` backfill for dashboard HTML pages, agent bundle v137 + `shell.css`, all `iam-docs` objects; verify `GROUP BY`; optional client workspace HTML (only if present in R2); session log + git commit; no worker deploy.
+
+### STEP 1 — discovery (report)
+- **workspaces:** 22 rows (see D1 `SELECT id, name FROM workspaces ORDER BY name`).
+- **dashboard_assets before backfill:** 14 rows (seeded earlier), IDs including `da_iam_logo`, `da_docs_index`, `da_swamp_logo`, etc.
+- **R2 `wrangler r2 object list`:** not available in Wrangler 4.76; used **Cloudflare REST API** `GET /accounts/{account_id}/r2/buckets/{bucket}/objects` with `CLOUDFLARE_API_TOKEN` instead.
+- **agent-sam** `prefix=static/dashboard/`: **120** object keys (HTML, JS, CSS, draw-libraries, etc.).
+- **iam-docs:** **28** objects listed; **27** inserted (skipped zero-byte `agents/` prefix key).
+- **Cloudflare Images:** not queried (no tool run this step).
+- **Client HTML** (`swamp-blood.html`, etc.): `wrangler r2 object get agent-sam/static/dashboard/swamp-blood.html --remote` **failed** (key does not exist); no client-page rows added.
+
+### STEP 2–5 — applied
+- Remote D1: `--file` with 41 `INSERT OR IGNORE` statements (13 dashboard pages + 3 bundle assets + 27 iam-docs files). Sizes from API metadata; bundle JS/CSS sizes match `dashboard_versions` v137 hashes.
+- **STEP 5:** no inserts (no matching R2 keys for named client dashboard HTML files).
+
+### STEP 6 — verify
+- `SELECT workspace_id, kind, COUNT(*) ...`: e.g. `ws_inneranimal` **file** = **41**, `ws_inneranimal_app` **file** = **3**, `ws_samprimeaux` **file** = **1**; **total** `dashboard_assets` rows = **55**.
+
+### Files changed
+- `scripts/d1-backfill-dashboard_assets-20260324.sql`: canonical replay of applied backfill (idempotent `INSERT OR IGNORE`).
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker deployed: no
+- D1 remote writes: yes (backfill only)
+
+### What is live now
+`inneranimalmedia-business.dashboard_assets` lists production dashboard pages, v137 agent bundle + `shell.css`, and iam-docs bucket files with `docs.inneranimalmedia.com` URLs.
+

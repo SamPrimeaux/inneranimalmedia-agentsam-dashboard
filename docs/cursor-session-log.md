@@ -7678,7 +7678,7 @@ Unchanged until `dashboard/agent.html` is uploaded to R2 and/or worker deploy pe
 - Deploy approved by Sam: yes (`DEPLOY APPROVED, ASSET ONLY`)
 
 ### D1 deployments
-- `id` = `asset-agent-html-v136-<git-short>` (see commit; run used `076be56` at record time)
+- `id` = `asset-agent-html-v136-076be56`
 - Wrangler meta `last_row_id` = **75**
 - `triggered_by` = `cursor-shell-parity`
 

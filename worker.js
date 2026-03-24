@@ -9753,8 +9753,123 @@ async function handleAgentsamApi(request, url, env) {
           vectorize: !!env.VECTORIZE,
           r2: !!(env.R2 || env.ASSETS),
           workers_ai: !!env.AI,
+          autorag: !!(env.AI_SEARCH_TOKEN && env.CLOUDFLARE_ACCOUNT_ID),
         },
       });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/stats' && method === 'GET') {
+      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+      const token = env.AI_SEARCH_TOKEN;
+      if (!accountId || !token) {
+        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
+      }
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json().catch(() => ({}));
+      return jsonResponse({
+        ok: res.ok,
+        stats: data?.result ?? data,
+      });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/files' && method === 'GET') {
+      if (!env.DASHBOARD) return jsonResponse({ error: 'Storage not configured' }, 503);
+      const docsListed = await env.DASHBOARD.list({
+        prefix: 'source/docs/',
+        limit: 100,
+      });
+      const knowledgeListed = await env.DASHBOARD.list({
+        prefix: 'autorag-knowledge/',
+        limit: 100,
+      });
+      const files = [
+        ...(docsListed.objects || []),
+        ...(knowledgeListed.objects || []),
+      ].map((o) => ({
+        key: o.key,
+        size: o.size,
+        uploaded: o.uploaded,
+      }));
+      return jsonResponse({ files });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/sync' && method === 'POST') {
+      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+      const token = env.AI_SEARCH_TOKEN;
+      if (!accountId || !token) {
+        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
+      }
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag/jobs`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      return jsonResponse({
+        ok: res.ok,
+        job: data?.result ?? data,
+      });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/files' && method === 'DELETE') {
+      const body = await request.json().catch(() => ({}));
+      const key = body?.key;
+      if (!key) return jsonResponse({ error: 'key required' }, 400);
+      if (!env.DASHBOARD) return jsonResponse({ error: 'Storage not configured' }, 503);
+      await env.DASHBOARD.delete(key);
+      return jsonResponse({ ok: true, deleted: key });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/upload' && method === 'POST') {
+      const formData = await request.formData().catch(() => null);
+      if (!formData) return jsonResponse({ error: 'Invalid form data' }, 400);
+      const file = formData.get('file');
+      const targetKey = formData.get('key') || `source/docs/${file?.name || `upload-${Date.now()}`}`;
+      if (!file || !env.DASHBOARD) return jsonResponse({ error: 'Missing file or storage' }, 400);
+      const content = await file.arrayBuffer();
+      await env.DASHBOARD.put(targetKey, content, {
+        httpMetadata: {
+          contentType: file.type || 'text/markdown',
+        },
+      });
+      return jsonResponse({ ok: true, key: targetKey });
+    }
+
+    if (pathLower === '/api/agentsam/autorag/search' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const query = body?.query;
+      if (!query) return jsonResponse({ error: 'query required' }, 400);
+      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+      const token = env.AI_SEARCH_TOKEN;
+      if (!accountId || !token) {
+        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
+      }
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-autorag/search`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: query }],
+            ai_search_options: { retrieval: { max_num_results: 5 } },
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      const chunks = data?.result?.chunks ?? [];
+      return jsonResponse({ ok: res.ok, chunks });
     }
 
     if (pathLower === '/api/agentsam/runs' && method === 'GET') {

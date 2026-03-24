@@ -7576,3 +7576,62 @@ Report line numbers for sidenav header/CSS/orange SVG/toggle JS/`--dashboard-sid
 - R2 uploaded: no
 - Worker deployed: no
 
+## 2026-03-23 SettingsPanel Indexing & Docs + AutoRAG API (no build/deploy)
+
+### What was asked
+STEP 1: Quote Ignore tab, tab array, `agentsamWorkspaceQueryString`, and worker `handleAgentsamApi` routes for autorag/R2. STEPS 2–5: Add AutoRAG REST endpoints under `handleAgentsamApi`, extend `indexing-summary` bindings with `autorag`, rebuild `IndexingDocsTab` (AutoRAG status, files, test search, embedded ignore UI), remove Ignore nav tab (keep `IgnorePatternsTab` component), CSS vars only, no deploy.
+
+### Files changed
+- `worker.js` (after `/api/agentsam/indexing-summary`): added `bindings.autorag`; routes `GET/POST/DELETE` etc. for `/api/agentsam/autorag/stats`, `files`, `sync`, `upload`, `search` using `AI_SEARCH_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `DASHBOARD` R2.
+- `agent-dashboard/src/SettingsPanel.jsx`: removed `ignore_patterns` from `AGENT_SETTINGS_TABS` and `tabContent`; `readStoredSettingsTab` maps stored `ignore_patterns` to `indexing_docs`; replaced `IndexingDocsTab` with AutoRAG + R2 file browser + test search + repository code index + binding pills + embedded `IgnorePatternsTab`; helpers `formatR2Bytes`, `autoragStatsFields`, chunk helpers.
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`: out of scope.
+- `IgnorePatternsTab` function: kept for reuse inside `IndexingDocsTab`.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until worker/dashboard bundle are built and deployed.
+
+### Known issues / next steps
+- Cloudflare AI Search instance `GET`/`jobs` URLs must match current API; adjust if stats/sync return 404.
+- AutoRAG stats field names depend on API payload; UI maps several possible keys.
+- `DELETE /api/agentsam/autorag/files` does not restrict key prefix; consider server-side allowlist later.
+
+## 2026-03-23 Full deploy — Indexing & Docs + AutoRAG API + dashboard v135
+
+### What was asked
+Build agent-dashboard, deploy `inneranimalmedia` worker, upload JS/CSS/`agent.html` to R2 (`?v=135`), D1 `deployments` via `post-deploy-record.sh`, commit and push.
+
+### Deploy artifacts
+- **Worker Current Version ID:** `c9c33b62-2893-43ab-902e-5360bfa5a2d8`
+- **Dashboard cache bust:** `?v=135` in `dashboard/agent.html`
+- **Build SHA-256:** `agent-dashboard.js` `569e5c9d51326e05c2c9c6e3f529ba04aecf7b37acb9e2547de712957208b49e`; `agent-dashboard.css` `1c6e03b5f229ab09d4d8892cf9152a32bd58867368b0c811ff17db050a77e6cf`
+- **Vite build:** clean, ~639ms, 46 modules
+
+### R2 (agent-sam) uploaded
+- `static/dashboard/agent/agent-dashboard.js`
+- `static/dashboard/agent/agent-dashboard.css`
+- `static/dashboard/agent.html`
+
+### D1
+- `deployments.id` = `c9c33b62-2893-43ab-902e-5360bfa5a2d8` (matches worker version)
+- `triggered_by` = `indexing-docs-rebuild-autorag-crud`
+- `deploy_time_seconds` = 15
+- Wrangler meta `last_row_id` = 74 (SQLite rowid for insert)
+
+### Files in commit
+- `worker.js`, `agent-dashboard/src/SettingsPanel.jsx`, `dashboard/agent.html`, `docs/cursor-session-log.md`
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (files above)
+- Worker deployed: yes — version ID above
+- Deploy approved by Sam: yes (full deploy request)
+

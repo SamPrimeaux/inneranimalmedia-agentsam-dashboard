@@ -126,7 +126,6 @@ const AGENT_SETTINGS_TABS = [
   { id: "cmd_allowlist", label: "Cmd Allowlist" },
   { id: "mcp_tools", label: "MCP Tools" },
   { id: "routing_rules", label: "Routing Rules" },
-  { id: "ignore_patterns", label: "Ignore" },
   { id: "indexing_docs", label: "Indexing & Docs" },
   { id: "network", label: "Network" },
   { id: "beta", label: "Development" },
@@ -209,6 +208,7 @@ const WORKSPACE_ENFORCEMENT = [
 function readStoredSettingsTab() {
   try {
     const s = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+    if (s === "ignore_patterns") return "indexing_docs";
     if (s && SETTINGS_TAB_IDS.has(s)) return s;
   } catch (_) {}
   return "general";
@@ -4651,116 +4651,516 @@ function CloudAgentsSettingsTab() {
   );
 }
 
-function IndexingDocsTab() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+function formatR2Bytes(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  if (x < 1024) return `${x} B`;
+  if (x < 1048576) return `${(x / 1024).toFixed(1)} KB`;
+  return `${(x / 1048576).toFixed(1)} MB`;
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetch(`/api/agentsam/indexing-summary?${agentsamWorkspaceQueryString()}`, { credentials: "same-origin" })
+function autoragStatsFields(stats) {
+  if (!stats || typeof stats !== "object") {
+    return {
+      name: "iam-autorag",
+      vectorCount: null,
+      fileCount: null,
+      lastSync: null,
+      statusLabel: "Unknown",
+    };
+  }
+  const st = String(stats.status || stats.state || stats.job_status || "").toLowerCase();
+  let statusLabel = "Indexed";
+  if (st.includes("process") || st === "running") statusLabel = "Processing";
+  else if (st.includes("queue") || st === "pending") statusLabel = "Queued";
+  else if (st.includes("error") || st === "failed") statusLabel = "Error";
+  else if (!st && stats) statusLabel = "Indexed";
+  return {
+    name: stats.name || stats.instance_name || stats.id || "iam-autorag",
+    vectorCount: stats.vector_count ?? stats.vectorCount ?? stats.metrics?.vector_count ?? stats.indexed_vectors ?? null,
+    fileCount: stats.file_count ?? stats.source_file_count ?? stats.document_count ?? stats.files_indexed ?? null,
+    lastSync: stats.last_synced_at || stats.last_sync_at || stats.updated_at || stats.modified_at || null,
+    statusLabel,
+  };
+}
+
+function chunkPreviewText(chunk) {
+  if (chunk == null) return "";
+  if (typeof chunk === "string") return chunk;
+  const t = chunk.content ?? chunk.text ?? chunk.body ?? chunk.snippet;
+  if (t != null) return String(t);
+  try {
+    return JSON.stringify(chunk);
+  } catch {
+    return String(chunk);
+  }
+}
+
+function chunkSourceName(chunk) {
+  if (!chunk || typeof chunk !== "object") return "—";
+  const m = chunk.metadata && typeof chunk.metadata === "object" ? chunk.metadata : null;
+  return (
+    chunk.filename
+    || chunk.source
+    || chunk.file_id
+    || m?.filename
+    || m?.source
+    || m?.path
+    || "—"
+  );
+}
+
+function IndexingDocsTab() {
+  const wsq = agentsamWorkspaceQueryString();
+  const fileInputRef = useRef(null);
+  const [summary, setSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState(null);
+
+  const [statsBody, setStatsBody] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+
+  const [files, setFiles] = useState([]);
+  const [filesLoading, setFilesLoading] = useState(true);
+  const [filesError, setFilesError] = useState(null);
+  const [uploadMsg, setUploadMsg] = useState(null);
+
+  const [searchQ, setSearchQ] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [searchChunks, setSearchChunks] = useState([]);
+
+  const loadSummary = useCallback(() => {
+    setSummaryError(null);
+    setSummaryLoading(true);
+    fetch(`/api/agentsam/indexing-summary?${wsq}`, { credentials: "same-origin" })
       .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
         if (!ok) throw new Error(d?.error || "Failed to load indexing summary");
-        if (!cancelled) setData(d);
+        setSummary(d);
       })
       .catch((e) => {
-        if (!cancelled) {
-          setError(e?.message || String(e));
-          setData(null);
-        }
+        setSummaryError(e?.message || String(e));
+        setSummary(null);
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .finally(() => setSummaryLoading(false));
+  }, [wsq]);
+
+  const loadStats = useCallback(() => {
+    setStatsError(null);
+    setStatsLoading(true);
+    fetch("/api/agentsam/autorag/stats", { credentials: "same-origin" })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok && d?.error) throw new Error(d.error);
+        setStatsBody(d);
+      })
+      .catch((e) => {
+        setStatsError(e?.message || String(e));
+        setStatsBody(null);
+      })
+      .finally(() => setStatsLoading(false));
   }, []);
 
-  const ci = data?.code_index || {};
-  const status = String(ci.status || "idle").toLowerCase();
-  const statusStyle = (() => {
-    if (status === "running") return { color: "var(--accent)", label: status };
-    if (status === "complete") return { color: "var(--color-success, var(--accent))", label: status };
-    if (status === "error") return { color: "var(--color-danger, var(--text-secondary))", label: status };
-    return { color: "var(--text-muted)", label: status || "idle" };
+  const loadFiles = useCallback(() => {
+    setFilesError(null);
+    setFilesLoading(true);
+    fetch("/api/agentsam/autorag/files", { credentials: "same-origin" })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok) throw new Error(d?.error || "Failed to load files");
+        setFiles(Array.isArray(d.files) ? d.files : []);
+      })
+      .catch((e) => {
+        setFilesError(e?.message || String(e));
+        setFiles([]);
+      })
+      .finally(() => setFilesLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  useEffect(() => {
+    loadStats();
+    loadFiles();
+  }, [loadStats, loadFiles]);
+
+  const onSyncNow = async () => {
+    setSyncMsg(null);
+    setSyncing(true);
+    try {
+      const r = await fetch("/api/agentsam/autorag/sync", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error || `Sync failed (${r.status})`);
+      setSyncMsg("Sync job started.");
+      setTimeout(() => {
+        loadStats();
+      }, 3000);
+    } catch (e) {
+      setSyncMsg(e?.message || String(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const onDeleteFile = async (key) => {
+    if (!key || !window.confirm("Remove this file from storage?")) return;
+    setFilesError(null);
+    try {
+      const r = await fetch("/api/agentsam/autorag/files", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error || `Delete failed (${r.status})`);
+      await loadFiles();
+    } catch (e) {
+      setFilesError(e?.message || String(e));
+    }
+  };
+
+  const onUploadPick = () => fileInputRef.current?.click();
+
+  const onFileSelected = async (e) => {
+    const input = e.target;
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    setUploadMsg(null);
+    setFilesError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/agentsam/autorag/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        body: fd,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error || `Upload failed (${r.status})`);
+      setUploadMsg(`Uploaded: ${d.key || file.name}`);
+      await loadFiles();
+    } catch (err) {
+      setFilesError(err?.message || String(err));
+    }
+  };
+
+  const onSearch = async () => {
+    const query = searchQ.trim();
+    if (!query) return;
+    setSearchError(null);
+    setSearching(true);
+    setSearchChunks([]);
+    try {
+      const r = await fetch("/api/agentsam/autorag/search", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error || `Search failed (${r.status})`);
+      setSearchChunks(Array.isArray(d.chunks) ? d.chunks : []);
+    } catch (err) {
+      setSearchError(err?.message || String(err));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const ci = summary?.code_index || {};
+  const codeStatus = String(ci.status || "idle").toLowerCase();
+  const arStats = statsBody?.stats;
+  const arFields = autoragStatsFields(arStats);
+  const bindings = summary?.bindings || {};
+
+  const groupedFiles = (() => {
+    const g = { "source/docs": [], "autorag-knowledge": [], other: [] };
+    for (const f of files) {
+      const k = f.key || "";
+      if (k.startsWith("source/docs/")) g["source/docs"].push(f);
+      else if (k.startsWith("autorag-knowledge/")) g["autorag-knowledge"].push(f);
+      else g.other.push(f);
+    }
+    return g;
   })();
 
+  const pill = (label, on) => (
+    <span style={{
+      fontSize: 10,
+      padding: "4px 10px",
+      borderRadius: 999,
+      border: "1px solid var(--border)",
+      color: on ? "var(--color-success, var(--accent))" : "var(--text-muted)",
+      background: "var(--bg-canvas)",
+      fontWeight: 500,
+    }}>{label}{on ? "" : " (inactive)"}</span>
+  );
+
+  const cardStyle = {
+    marginBottom: 16,
+    padding: 14,
+    background: "var(--bg-canvas)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+  };
+
   return (
-    <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
-      {loading ? (
-        <div style={{ fontSize: 11, color: "var(--text-muted)", padding: 20, textAlign: "center" }}>Loading…</div>
-      ) : error ? (
-        <div style={{ fontSize: 11, color: "var(--text-secondary)", padding: 16 }}>{error}</div>
-      ) : !data ? (
-        <div style={{ fontSize: 11, color: "var(--text-muted)", padding: 20, textAlign: "center" }}>No indexing data.</div>
-      ) : (
-        <>
-          <SectionLabel>Code Index</SectionLabel>
-          <div style={{ marginBottom: 12, padding: 12, background: "var(--bg-canvas)", border: "1px solid var(--border)", borderRadius: 6 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: statusStyle.color }}>{statusStyle.label}</span>
-              {ci.vector_backend ? (
-                <span style={{
-                  fontSize: 9,
-                  padding: "2px 6px",
-                  borderRadius: 4,
-                  border: "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                }}>{ci.vector_backend}</span>
+    <div style={{ padding: 16, overflowY: "auto", flex: 1, minHeight: 0 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>
+        Indexing and docs
+      </div>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 16, lineHeight: 1.55 }}>
+        AutoRAG instance, knowledge files in R2, test retrieval, and ignore patterns.
+      </div>
+
+      <SectionLabel>AutoRAG index</SectionLabel>
+      <div style={cardStyle}>
+        {statsLoading ? (
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading AutoRAG status…</div>
+        ) : statsError ? (
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{statsError}</div>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{arFields.name}</span>
+              <span style={{
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+                color: "var(--accent)",
+              }}>{arFields.statusLabel}</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 12 }}>
+              <div>Vectors: {arFields.vectorCount != null ? String(arFields.vectorCount) : "—"}</div>
+              <div>Files (reported): {arFields.fileCount != null ? String(arFields.fileCount) : "—"}</div>
+              <div>Last sync: {arFields.lastSync ? (relativeTime(arFields.lastSync) || String(arFields.lastSync)) : "—"}</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <Btn variant="primary" disabled={syncing} onClick={onSyncNow}>{syncing ? "Syncing…" : "Sync now"}</Btn>
+              {syncMsg ? <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{syncMsg}</span> : null}
+            </div>
+          </>
+        )}
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+          <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 8 }}>
+            Repository code index
+          </div>
+          {summaryLoading ? (
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading…</div>
+          ) : summaryError ? (
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{summaryError}</div>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                <span>Status: {codeStatus}</span>
+                {ci.vector_backend ? (
+                  <span style={{
+                    fontSize: 9,
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    color: "var(--text-secondary)",
+                  }}>{ci.vector_backend}</span>
+                ) : null}
+              </div>
+              <div>{Number(ci.file_count) || 0} files indexed</div>
+              <div style={{ width: "100%", height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden", marginTop: 8 }}>
+                <div style={{
+                  width: `${Math.min(100, Math.max(0, Number(ci.progress_percent) || 0))}%`,
+                  height: 4,
+                  marginTop: 1,
+                  background: "var(--accent)",
+                  borderRadius: 2,
+                }} />
+              </div>
+              {ci.last_sync_at ? (
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8 }}>
+                  Last sync {relativeTime(ci.last_sync_at) || String(ci.last_sync_at)}
+                </div>
+              ) : null}
+              {ci.last_error ? (
+                <div style={{ fontSize: 10, color: "var(--color-danger, var(--text-secondary))", marginTop: 8 }}>{ci.last_error}</div>
               ) : null}
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 }}>
-              {Number(ci.file_count) || 0} files indexed
-            </div>
-            <div style={{ width: "100%", height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
-              <div style={{
-                width: `${Math.min(100, Math.max(0, Number(ci.progress_percent) || 0))}%`,
-                height: 4,
-                marginTop: 1,
-                background: "var(--accent)",
-                borderRadius: 2,
-              }} />
-            </div>
-            {ci.last_sync_at ? (
-              <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8 }}>
-                Last sync {relativeTime(ci.last_sync_at) || String(ci.last_sync_at)}
+          )}
+        </div>
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {pill("Vectorize", !!bindings.vectorize)}
+          {pill("R2", !!bindings.r2)}
+          {pill("Workers AI", !!bindings.workers_ai)}
+          {pill("AutoRAG API", !!bindings.autorag)}
+        </div>
+      </div>
+
+      <SectionLabel>Knowledge files</SectionLabel>
+      <div style={{ ...cardStyle, padding: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12, alignItems: "center" }}>
+          <Btn variant="primary" onClick={onUploadPick}>Upload doc</Btn>
+          <input
+            ref={fileInputRef}
+            type="file"
+            style={{ display: "none" }}
+            onChange={onFileSelected}
+          />
+          {uploadMsg ? <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{uploadMsg}</span> : null}
+          <Btn variant="ghost" size="sm" onClick={() => loadFiles()}>Refresh</Btn>
+        </div>
+        {filesLoading ? (
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading files…</div>
+        ) : filesError ? (
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 }}>{filesError}</div>
+        ) : null}
+        {["source/docs", "autorag-knowledge", "other"].map((groupKey) => {
+          const list = groupedFiles[groupKey];
+          if (!list.length) return null;
+          return (
+            <div key={groupKey} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6 }}>{groupKey}</div>
+              <div style={{ border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 72px 100px 40px",
+                  gap: 0,
+                  padding: "8px 10px",
+                  background: "var(--bg-elevated)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--text-muted)",
+                  textTransform: "uppercase",
+                }}>
+                  <span>File</span>
+                  <span>Size</span>
+                  <span>Uploaded</span>
+                  <span style={{ textAlign: "center" }}>Del</span>
+                </div>
+                {list.map((f) => {
+                  const name = (f.key || "").split("/").pop() || f.key;
+                  const uploaded = f.uploaded ? new Date(f.uploaded).toLocaleString() : "—";
+                  return (
+                    <div
+                      key={f.key}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 72px 100px 40px",
+                        alignItems: "center",
+                        padding: "8px 10px",
+                        borderTop: "1px solid var(--border)",
+                        fontSize: 11,
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      <code style={{ fontSize: 10, wordBreak: "break-all", color: "var(--text-primary)" }} title={f.key}>{name}</code>
+                      <span style={{ color: "var(--text-secondary)" }}>{formatR2Bytes(f.size)}</span>
+                      <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{uploaded}</span>
+                      <div style={{ textAlign: "center" }}>
+                        <button
+                          type="button"
+                          title="Delete file"
+                          onClick={() => onDeleteFile(f.key)}
+                          style={{
+                            background: "none",
+                            border: "1px solid var(--border)",
+                            borderRadius: 4,
+                            cursor: "pointer",
+                            fontSize: 14,
+                            lineHeight: 1,
+                            padding: "2px 6px",
+                            color: "var(--text-secondary)",
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ) : null}
-            {ci.last_error ? (
-              <div style={{ fontSize: 10, color: "var(--color-danger, var(--text-secondary))", marginTop: 8 }}>{ci.last_error}</div>
-            ) : null}
+            </div>
+          );
+        })}
+        {!filesLoading && !files.length && !filesError ? (
+          <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: 16 }}>
+            No files under source/docs or autorag-knowledge.
           </div>
+        ) : null}
+      </div>
 
-          <SectionLabel>Knowledge Base</SectionLabel>
-          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 }}>
-            {Number(data.knowledge?.active_documents) || 0} active documents
-          </div>
-          <a href="/dashboard/knowledge" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none", display: "inline-block", marginBottom: 16 }}>
-            Manage knowledge base
-          </a>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+        <SectionLabel>Knowledge base (D1)</SectionLabel>
+        <a href="/dashboard/knowledge" style={{ fontSize: 11, color: "var(--accent)", textDecoration: "none" }}>
+          Manage knowledge base
+        </a>
+      </div>
+      <div style={{ ...cardStyle, fontSize: 11, color: "var(--text-secondary)", marginTop: 0 }}>
+        {summaryLoading ? "…" : `${Number(summary?.knowledge?.active_documents) || 0} active documents`}
+      </div>
 
-          <SectionLabel>Bindings</SectionLabel>
-          <div style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span>Vectorize Index</span>
-              <span style={{ color: data.bindings?.vectorize ? "var(--color-success, var(--accent))" : "var(--text-muted)" }}>
-                {data.bindings?.vectorize ? "Active" : "Not bound"}
-              </span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span>R2 Storage</span>
-              <span style={{ color: data.bindings?.r2 ? "var(--color-success, var(--accent))" : "var(--text-muted)" }}>
-                {data.bindings?.r2 ? "Active" : "Not bound"}
-              </span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span>Workers AI</span>
-              <span style={{ color: data.bindings?.workers_ai ? "var(--color-success, var(--accent))" : "var(--text-muted)" }}>
-                {data.bindings?.workers_ai ? "Active" : "Not bound"}
-              </span>
-            </div>
-          </div>
-        </>
-      )}
+      <SectionLabel>Test search</SectionLabel>
+      <div style={cardStyle}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <Input
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="Test a query…"
+            style={{ flex: 1, minWidth: 200 }}
+            onKeyDown={(e) => e.key === "Enter" && onSearch()}
+          />
+          <Btn variant="primary" disabled={searching} onClick={onSearch}>{searching ? "Searching…" : "Search"}</Btn>
+        </div>
+        {searchError ? (
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 8 }}>{searchError}</div>
+        ) : null}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {searchChunks.map((ch, i) => {
+            const text = chunkPreviewText(ch);
+            const short = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+            const src = chunkSourceName(ch);
+            return (
+              <div
+                key={i}
+                style={{
+                  padding: 10,
+                  borderRadius: 6,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 6 }}>{String(src)}</div>
+                <div style={{ fontSize: 11, color: "var(--text-primary)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{short}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <SectionLabel>Ignore rules</SectionLabel>
+      <div style={{
+        marginBottom: 24,
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        overflow: "hidden",
+        maxHeight: 520,
+        display: "flex",
+        flexDirection: "column",
+      }}
+      >
+        <IgnorePatternsTab />
+      </div>
     </div>
   );
 }
@@ -5227,7 +5627,6 @@ export default function SettingsPanel({
     cmd_allowlist: <CmdAllowlistTab />,
     mcp_tools: <McpToolsTab />,
     routing_rules: <RoutingRulesTab />,
-    ignore_patterns: <IgnorePatternsTab />,
     indexing_docs: <IndexingDocsTab />,
     network: <NetworkSettingsTab onOpenGeneral={() => pickTab("general")} />,
     beta: (

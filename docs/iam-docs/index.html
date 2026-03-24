@@ -206,7 +206,7 @@
     .content {
       flex: 1;
       padding: 28px 32px 48px;
-      max-width: 52rem;
+      max-width: 56rem;
     }
     .content h2 {
       font-size: 1.125rem;
@@ -245,6 +245,60 @@
       font-size: 11px;
       color: var(--text-faint);
       margin-left: auto;
+    }
+
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+      margin: 1.25rem 0 1.75rem;
+    }
+    .home-card {
+      display: block;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-elevated);
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 150ms, background 150ms;
+    }
+    .home-card:hover {
+      border-color: var(--amber);
+      background: var(--amber-glow);
+    }
+    .home-card-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .home-card-icon {
+      font-size: 1.35rem;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .home-card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .home-card-desc {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.45;
+      margin-bottom: 10px;
+    }
+    .home-card-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+    .md-body {
+      margin-top: 0.5rem;
+    }
+    .md-body h2 {
+      margin-top: 1.75rem;
     }
   </style>
 </head>
@@ -285,45 +339,138 @@
           <input type="search" id="searchInput" placeholder="Filter navigation" autocomplete="off" aria-label="Filter sidebar links">
         </div>
       </header>
-      <main class="content">
-        <p>Public documentation for the Inner Animal Media platform. Files are served from the <strong>iam-docs</strong> R2 bucket at <a id="baseLink" href="#">docs.inneranimalmedia.com</a>.</p>
-
-        <h2>Directories</h2>
-        <table>
-          <thead>
-            <tr><th>Path</th><th>Contents</th></tr>
-          </thead>
-          <tbody>
-            <tr><td><code>cursor/</code></td><td>Cursor IDE context docs</td></tr>
-            <tr><td><code>agents/</code></td><td>AI provider references and tool docs</td></tr>
-            <tr><td><code>autorag/</code></td><td>AutoRAG knowledge base source files</td></tr>
-            <tr><td><code>platform/</code></td><td>Deploy runbooks, routing, bindings, schema</td></tr>
-            <tr><td><code>clients/</code></td><td>Per-client documentation</td></tr>
-            <tr><td><code>sessions/</code></td><td>Session logs and summaries</td></tr>
-            <tr><td><code>screenshots/</code></td><td>Agent and test screenshots</td></tr>
-            <tr><td><code>archive/</code></td><td>Long-term storage</td></tr>
-          </tbody>
-        </table>
-
-        <h2>Quick links</h2>
-        <ul>
-          <li><a href="/cursor/IAM-CURSOR-CONTEXT.md">Cursor context</a></li>
-          <li><a href="/platform/deploy-runbook.md">Deploy runbook</a></li>
-          <li><a href="/agents/README.md">All AI providers</a></li>
-          <li><a href="/agents/tool-reference.md">Tool reference</a></li>
-          <li><a href="/platform/worker-routing.md">Worker routing</a></li>
-          <li><a href="/platform/r2-bucket-map.md">R2 bucket map</a></li>
-        </ul>
-      </main>
+      <main class="content" id="homeContent"></main>
     </div>
   </div>
 
   <script>
     const BASE = 'https://docs.inneranimalmedia.com';
-    (function () {
-      const a = document.getElementById('baseLink');
-      if (a) { a.href = BASE; a.textContent = 'docs.inneranimalmedia.com'; }
-    })();
+
+    const STRUCTURE = {
+      toolCount: 73,
+      categoryCount: 18,
+      toolCategories: [
+        'ai_3d_generation', 'browser', 'browser_control', 'browser_debug',
+        'browser_emulation', 'browser_navigation', 'browser_network', 'browser_performance',
+        'context', 'database', 'execute', 'file_conversion', 'image',
+        'integrations', 'ops', 'platform', 'quality', 'query', 'storage', 'telemetry', 'terminal'
+      ]
+    };
+
+    const HOME_CARDS = [
+      {
+        icon: '\u2325',
+        title: 'Cursor Context',
+        desc: 'Full platform context doc for Cursor IDE',
+        path: 'cursor/IAM-CURSOR-CONTEXT.md',
+        count: '1 doc'
+      },
+      {
+        icon: '\u2726',
+        title: 'AI Agents',
+        desc: 'Anthropic ($565), OpenAI ($87), Gemini ($55), Workers AI — real cost data',
+        path: 'agents/README.md',
+        count: '7 docs'
+      },
+      {
+        icon: '\u26A1',
+        title: 'Platform',
+        desc: 'Deploy runbooks, worker routing, R2 map, D1 schema, bindings',
+        path: 'platform/deploy-runbook.md',
+        count: '5 docs'
+      },
+      {
+        icon: '\u2699',
+        title: 'Tool Reference',
+        desc: '73 tools across 18 categories — CDT, terminal, R2, D1, image, 3D, MCP',
+        path: 'agents/tool-reference.md',
+        count: '73 tools'
+      },
+      {
+        icon: '\u22C8',
+        title: 'AutoRAG',
+        desc: 'RAG pipeline, iam-autorag index, knowledge base architecture',
+        path: 'autorag/architecture/how-rag-works.md',
+        count: '1 doc'
+      },
+      {
+        icon: '\u25D0',
+        title: 'Clients',
+        desc: 'Per-client documentation and build overviews',
+        path: 'clients/README.md',
+        count: '3 docs'
+      }
+    ];
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderHome() {
+      const root = document.getElementById('homeContent');
+      if (!root) return;
+
+      const cardsHtml = HOME_CARDS.map(function (c) {
+        const href = '/' + c.path;
+        return (
+          '<a class="home-card" href="' + esc(href) + '">' +
+          '<div class="home-card-head">' +
+          '<span class="home-card-icon" aria-hidden="true">' + esc(c.icon) + '</span>' +
+          '<div><div class="home-card-title">' + esc(c.title) + '</div></div>' +
+          '</div>' +
+          '<p class="home-card-desc">' + esc(c.desc) + '</p>' +
+          '<div class="home-card-meta">' + esc(c.count) + '</div>' +
+          '</a>'
+        );
+      }).join('');
+
+      const catNote = STRUCTURE.toolCount + ' tools across ' + STRUCTURE.categoryCount + ' category groupings (' +
+        STRUCTURE.toolCategories.length + ' distinct tool_category values in D1).';
+
+      root.innerHTML =
+        '<p>Public documentation for the Inner Animal Media platform. Files are served from the <strong>iam-docs</strong> R2 bucket at <a id="baseLink" href="' + esc(BASE) + '">docs.inneranimalmedia.com</a>.</p>' +
+        '<p style="font-size:13px;color:var(--text-faint)">' + esc(catNote) + '</p>' +
+        '<div class="cards-grid">' + cardsHtml + '</div>' +
+        '<div class="md-body">' +
+        '<h2>System Reality</h2>' +
+        '<table>' +
+        '<thead><tr><th>Provider</th><th>Top Model</th><th>Calls</th><th>Spend</th></tr></thead>' +
+        '<tbody>' +
+        '<tr><td>Anthropic</td><td>claude-haiku-4-5-20251001</td><td>338</td><td>$2.50</td></tr>' +
+        '<tr><td>Anthropic</td><td>claude-sonnet-4-6</td><td>113</td><td>$4.58</td></tr>' +
+        '<tr><td>Google</td><td>gemini-2.5-flash</td><td>104</td><td>$0.009</td></tr>' +
+        '<tr><td>OpenAI</td><td>gpt-4.1</td><td>8</td><td>$0.11</td></tr>' +
+        '<tr><td>Workers AI</td><td>llama-3.1-8b-instruct</td><td>5</td><td>$0.00007</td></tr>' +
+        '<tr><td>Cursor IDE</td><td>claude-auto / opus</td><td>670+</td><td>$450+</td></tr>' +
+        '</tbody></table>' +
+        '<p>Sprint: <strong>44/77 steps complete (57%)</strong> &mdash; Worker <code>924e4b04</code> &mdash; v136 &mdash; 2026-03-23</p>' +
+        '</div>' +
+        '<h2>Directories</h2>' +
+        '<table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody>' +
+        '<tr><td><code>cursor/</code></td><td>Cursor IDE context docs</td></tr>' +
+        '<tr><td><code>agents/</code></td><td>AI provider references and tool docs</td></tr>' +
+        '<tr><td><code>autorag/</code></td><td>AutoRAG knowledge base source files</td></tr>' +
+        '<tr><td><code>platform/</code></td><td>Deploy runbooks, routing, bindings, schema</td></tr>' +
+        '<tr><td><code>clients/</code></td><td>Per-client documentation</td></tr>' +
+        '<tr><td><code>sessions/</code></td><td>Session logs and summaries</td></tr>' +
+        '<tr><td><code>screenshots/</code></td><td>Agent and test screenshots</td></tr>' +
+        '<tr><td><code>archive/</code></td><td>Long-term storage</td></tr>' +
+        '</tbody></table>' +
+        '<h2>Quick links</h2><ul>' +
+        '<li><a href="/cursor/IAM-CURSOR-CONTEXT.md">Cursor context</a></li>' +
+        '<li><a href="/platform/deploy-runbook.md">Deploy runbook</a></li>' +
+        '<li><a href="/agents/README.md">All AI providers</a></li>' +
+        '<li><a href="/agents/tool-reference.md">Tool reference</a></li>' +
+        '<li><a href="/platform/worker-routing.md">Worker routing</a></li>' +
+        '<li><a href="/platform/r2-bucket-map.md">R2 bucket map</a></li>' +
+        '</ul>';
+    }
+
+    renderHome();
 
     function initSearch() {
       const input = document.getElementById('searchInput');

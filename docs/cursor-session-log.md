@@ -8004,3 +8004,22 @@ Add `docs/iam-docs/index.html`: theme-aware `:root` using dashboard CSS vars wit
 ### Deploy status
 - Worker deployed: no
 
+## 2026-03-24 IAM docs — index HOME_CARDS + agents docs (spend_ledger data)
+
+### What was asked
+Update `docs/iam-docs/index.html` with `STRUCTURE`, `HOME_CARDS`, `renderHome()` (cards grid + System Reality table + directories/quick links); regenerate all 7 files under `docs/iam-docs/agents/` with real **`spend_ledger`** figures provided in chat (no re-query); upload `index.html` to **`iam-docs/index.html`** and **`iam-docs/iam-docs-index.html`**, upload all **`agents/*.md`**; commit and push; no worker deploy.
+
+### Files changed
+- `docs/iam-docs/index.html`: `STRUCTURE` (73 tools, 18 category groupings, 21 D1 `tool_category` slugs), `HOME_CARDS`, client-side home render, System Reality table (Haiku/Sonnet/Gemini/OpenAI/Workers AI/Cursor), sprint line; Unicode icon escapes for card glyphs.
+- `docs/iam-docs/agents/README.md`: real spend table + retained architecture sections.
+- `docs/iam-docs/agents/anthropic.md`, `openai.md`, `google-gemini.md`, `workers-ai.md`, `auto-mode.md`: **Real usage** / alignment sections from provided ledger snapshot.
+- `docs/iam-docs/agents/tool-reference.md`: rebuilt from 73-tool category list (21 categories).
+- `docs/cursor-session-log.md`: this entry.
+
+### R2 uploads (`--remote -c wrangler.production.toml`)
+- `iam-docs/index.html`, `iam-docs/iam-docs-index.html` — `text/html`.
+- `agents/README.md`, `anthropic.md`, `openai.md`, `google-gemini.md`, `workers-ai.md`, `auto-mode.md`, `tool-reference.md` — `text/markdown`.
+
+### Deploy status
+- Worker deployed: no
+

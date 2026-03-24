@@ -7889,3 +7889,118 @@ Four `UPDATE` statements on **`inneranimalmedia-business`** (`--remote`, `-c wra
 ### What is live now
 `plan_iam_dashboard_v1` roadmap steps above show **`completed`** in production D1.
 
+## 2026-03-23 IAM docs — AI provider documentation (agents/*) to R2
+
+### What was asked
+Create seven markdown files under `iam-docs/agents/` (provider overview, Anthropic, OpenAI, Gemini, Workers AI, auto mode, tool reference from D1), upload each to R2 bucket **`iam-docs`** with `--remote -c wrangler.production.toml`, report keys and sizes, no worker deploy, append this log.
+
+### Files changed (repo)
+- `docs/iam-docs/agents/README.md`: provider matrix, auto mode summary, model keys, UI switching, rate-limit note.
+- `docs/iam-docs/agents/anthropic.md`: Claude API, `chatWithToolsAnthropic`, `runToolLoop`, secrets, line refs.
+- `docs/iam-docs/agents/openai.md`: chat completions, tools vs Anthropic, imgx, secrets.
+- `docs/iam-docs/agents/google-gemini.md`: `generativelanguage.googleapis.com`, `x-goog-api-key`, tool_declarations.
+- `docs/iam-docs/agents/workers-ai.md`: `@cf/baai/bge-*`, `@cf/meta/llama-3.1-8b-instruct`, RAG embed model constants.
+- `docs/iam-docs/agents/auto-mode.md`: `classifyIntent`, `INTENT_TO_TIER`, `selectAutoModel`, `filterToolsByMode`.
+- `docs/iam-docs/agents/tool-reference.md`: all **73** tools from remote D1 `mcp_registered_tools` (`enabled = 1`), grouped by `tool_category`.
+- `docs/cursor-session-log.md`: this entry.
+
+### R2 uploads (bucket `iam-docs`, staging `/tmp/iam-docs-agents/`)
+
+| Key | Size (bytes) |
+|-----|----------------|
+| `agents/README.md` | 4929 |
+| `agents/anthropic.md` | 3830 |
+| `agents/openai.md` | 2875 |
+| `agents/google-gemini.md` | 2734 |
+| `agents/workers-ai.md` | 2010 |
+| `agents/auto-mode.md` | 2698 |
+| `agents/tool-reference.md` | 10539 |
+
+All seven uploads completed successfully (`wrangler r2 object put`).
+
+### Files NOT changed
+- `worker.js`, `AgentDashboard.jsx`, `wrangler.production.toml`: not modified (docs only).
+- `FloatingPreviewPanel.jsx`, OAuth handlers: not touched.
+
+### Deploy status
+- Built: no
+- R2 uploaded: yes — keys above
+- Worker deployed: no
+- Deploy approved by Sam: n/a (docs/R2 only)
+
+### What is live now
+R2 bucket **`iam-docs`** contains the seven **`agents/*.md`** objects at the keys listed; repo copies live under **`docs/iam-docs/agents/`**.
+
+### Known issues / next steps
+- Optional: wire `docs.inneranimalmedia.com` or internal index page to link **`agents/README.md`** if not already linked from navigation.
+
+## 2026-03-23 IAM docs — root README for docs.inneranimalmedia.com
+
+### What was asked
+Add `docs/iam-docs/README.md` (index: directories, quick links), upload to R2 bucket **`iam-docs`** at key **`README.md`**, no worker deploy, append session log.
+
+### Files changed
+- `docs/iam-docs/README.md`: new — landing content for public docs bucket.
+- `docs/cursor-session-log.md`: this entry.
+
+### R2 upload
+- **Bucket:** `iam-docs`
+- **Key:** `README.md`
+- **Size:** 845 bytes
+- **Status:** Upload complete (`wrangler r2 object put`, `--remote -c wrangler.production.toml`).
+
+### Deploy status
+- Worker deployed: no
+- Deploy approved by Sam: n/a (R2 only)
+
+### What is live now
+Bucket **`iam-docs`** root object **`README.md`** serves the IAM Docs index (directories + quick links) when the site maps `/` to that object.
+
+## 2026-03-23 IAM docs — root README re-upload (iam-docs/README.md)
+
+### What was asked
+Ensure `docs/iam-docs/README.md` matches the IAM Docs index content; upload to R2 **`iam-docs/README.md`**; session log; no worker deploy.
+
+### Files changed
+- `docs/iam-docs/README.md`: unchanged (already matched requested content).
+- `docs/cursor-session-log.md`: this entry.
+
+### R2 upload
+- **Key:** `README.md` (bucket `iam-docs`)
+- **Size:** 845 bytes
+- **Status:** Upload complete (`--remote -c wrangler.production.toml`).
+
+### Deploy status
+- Worker deployed: no
+
+## 2026-03-24 IAM docs site — index.html (theme, sidebar, R2)
+
+### What was asked
+Add `docs/iam-docs/index.html`: theme-aware `:root` using dashboard CSS vars with Kimbie-style fallbacks; collapsible sidebar (toggle, `localStorage`, `sidebar-collapsed`); `Cmd/Ctrl+B` toggle, `Cmd/Ctrl+K` focus search; `BASE = https://docs.inneranimalmedia.com` unchanged; upload to R2 keys **`iam-docs`** / **`iam-docs-index.html`** and **`index.html`**; commit and push; no worker deploy.
+
+### Theme report (dashboard `agent.html` + canonical DB)
+- **Inline `<style>` `:root` in `dashboard/agent.html` (lines 31–41):** defines `--bg-active: var(--bg-hover)`, fonts, safe areas, logos — **no** palette hex for `--bg`, `--accent`, etc.
+- **Default `data-theme` on `<html>`:** `meaux-glass-blue`. Color tokens load from external **`styles_themes.css`** (R2), not from the inline block.
+- **`theme-meaux-glass-blue` (`theme-migration.sql`, `cms_themes`):** `--bg-canvas` `#f8f9fa`, `--bg-elevated` `#ffffff`, `--bg-nav` `rgba(59, 130, 246, 0.95)`, `--text-primary` `#111827`, `--text-secondary` / `--text-muted` `#6b7280`, `--border` `#e5e7eb`, `--color-primary` `#3b82f6`. **`--bg-hover`**, **`--accent`**, **`--color-success`**, **`--color-danger`** are **not** in that JSON row (may come from other CSS or be unset for that theme).
+- **`docs/theme-presets/iam-v2-kimbie-solarized.css` `[data-theme="kimbie-dark"]`:** includes `--color-success` `#889b4a`, `--color-danger` `#dc322f` (reference only; not the default active theme in `agent.html`).
+
+### Implementation note
+- `:root` uses `--bg: var(--bg-canvas, var(--bg-primary, #1a1712))` so embedded docs inherit **`--bg-canvas`** from the dashboard; **`--amber`** uses `var(--accent, var(--color-primary, #d4a847))` for parent themes that expose **`--color-primary`**.
+
+### Files changed
+- `docs/iam-docs/index.html`: new — layout, search filter, sidebar collapse, keyboard shortcuts.
+- `docs/cursor-session-log.md`: this entry.
+
+### R2 uploads (production)
+- **`iam-docs/index.html`** — 13412 bytes (local file), `text/html`, upload complete.
+- **`iam-docs/iam-docs-index.html`** — same file, upload complete.
+
+### Git
+- Commit **`a7e6644`**: `feat: IAM docs site — theme-aware, collapsible sidebar, Cmd+B toggle, Cmd+K search` (file: `docs/iam-docs/index.html`).
+
+### Verify
+- `curl -sI` to both URLs returned **HTTP 403** with Cloudflare challenge (`cf-mitigated: challenge`) from this environment — **browser check recommended** for `https://docs.inneranimalmedia.com/index.html` and `https://docs.inneranimalmedia.com/iam-docs-index.html`.
+
+### Deploy status
+- Worker deployed: no
+

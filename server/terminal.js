@@ -41,7 +41,11 @@ wss.on("connection", (ws, req) => {
     cols: 80,
     rows: 24,
     cwd: process.env.HOME || process.cwd(),
-    env: { ...process.env, TERM: "xterm-256color" },
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      PS1: "[ sam@iam \\W ]\\$ ",
+    },
   });
 
   shell.onData((data) => {

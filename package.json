@@ -8,8 +8,12 @@
     "test:headed": "playwright test --headed",
     "test:report-upload": "playwright test && ./scripts/upload-playwright-report-to-r2.sh",
     "start": "node server.js",
-    "deploy": "./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
-    "deploy:sandbox": "npx wrangler deploy ./worker.js -c ./wrangler.jsonc"
+    "deploy": "npm run generate:route-map && npm run generate:d1-schema-doc && npm run ingest:docs && npm run ingest:d1-memory && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
+    "deploy:sandbox": "npx wrangler deploy ./worker.js -c ./wrangler.jsonc",
+    "generate:route-map": "node scripts/generate-route-map.js",
+    "generate:d1-schema-doc": "node scripts/generate-d1-agentic-schema.js",
+    "ingest:docs": "./scripts/with-cloudflare-env.sh node scripts/ingest-docs.js",
+    "ingest:d1-memory": "./scripts/with-cloudflare-env.sh node scripts/ingest-d1-memory.js"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +22,7 @@
   "dependencies": {
     "@cloudflare/playwright": "^1.1.0",
     "node-pty": "^1.1.0",
+    "pg": "^8.20.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

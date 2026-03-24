@@ -221,12 +221,12 @@ function writeStoredSettingsTab(id) {
 }
 
 const PROVIDER_COLORS = {
-  anthropic:  "#c48aff",
-  openai:     "#19c37d",
-  google:     "#4285f4",
-  cloudflare: "#f6821f",
-  stripe:     "#635bff",
-  github:     "#8b949e",
+  anthropic:  "var(--color-warning)",
+  openai:     "var(--color-primary)",
+  google:     "var(--color-accent)",
+  cloudflare: "var(--color-primary)",
+  stripe:     "var(--color-accent)",
+  github:     "var(--text-muted)",
   other:      "var(--text-secondary)",
 };
 
@@ -288,7 +288,7 @@ function Btn({ onClick, variant = "ghost", size = "sm", disabled, children, styl
   };
   const variants = {
     primary: { background: "var(--accent)", color: "var(--bg-canvas)" },
-    danger:  { background: "var(--bg-danger, #7d1f2a)", color: "var(--text-danger, #f7a8b0)", border: "1px solid var(--border-danger, #cf667940)" },
+    danger:  { background: "var(--color-error)", color: "var(--bg-surface)", border: "1px solid var(--color-border)" },
     ghost:   { background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-secondary)" },
     inline:  { background: "transparent", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "2px 6px", fontSize: 10 },
   };
@@ -301,7 +301,7 @@ function Btn({ onClick, variant = "ghost", size = "sm", disabled, children, styl
 }
 
 function StatusDot({ status }) {
-  const colors = { ok: "var(--color-success, #4caf86)", fail: "var(--color-error, #cf6679)", untested: "var(--text-muted, #64748b)", checking: "var(--color-warning, #f0a040)" };
+  const colors = { ok: "var(--color-primary)", fail: "var(--color-error)", untested: "var(--text-muted)", checking: "var(--color-warning)" };
   return (
     <span style={{
       display: "inline-block", width: 7, height: 7, borderRadius: "50%",
@@ -324,12 +324,12 @@ function SectionLabel({ children }) {
 function Modal({ open, onClose, title, children }) {
   if (!open) return null;
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999,
+    <div style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-text) 70%, transparent)", zIndex: 9999,
       display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)",
         borderRadius: 8, padding: 16, minWidth: 340, maxWidth: 480, width: "90vw",
-        maxHeight: "80vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+        maxHeight: "80vh", overflowY: "auto", boxShadow: "0 8px 32px color-mix(in srgb, var(--color-text) 50%, transparent)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
           marginBottom: 14, fontWeight: 600, fontSize: 13, color: "var(--text-primary)" }}>
           <span>{title}</span>
@@ -450,16 +450,16 @@ function EnvironmentTab({ runCommandRunnerRef }) {
   }, {});
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+    <div id="iam-settings-vault" style={{ flex: 1, overflowY: "auto", padding: 16 }}>
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <Btn variant="primary" onClick={() => setShowAdd(v => !v)}>+ Add Secret</Btn>
         <Btn onClick={loadAudit}>Audit Log</Btn>
         <span style={{ marginLeft: "auto", fontSize: 10, fontFamily: "monospace",
           padding: "2px 6px", borderRadius: 3,
-          background: vaultOk === null ? "var(--bg-elevated)" : vaultOk ? "var(--bg-success, #0d2b1a)" : "var(--bg-danger-muted, #2b0d0d)",
-          color: vaultOk === null ? "var(--text-secondary)" : vaultOk ? "var(--color-success, #4caf86)" : "var(--color-error, #cf6679)",
-          border: `1px solid ${vaultOk === null ? "transparent" : vaultOk ? "var(--border-success, #4caf8640)" : "var(--border-danger, #cf667940)"}` }}>
+          background: vaultOk === null ? "var(--bg-elevated)" : vaultOk ? "color-mix(in srgb, var(--color-primary) 12%, transparent)" : "color-mix(in srgb, var(--color-error) 12%, transparent)",
+          color: vaultOk === null ? "var(--text-secondary)" : vaultOk ? "var(--color-primary)" : "var(--color-error)",
+          border: `1px solid ${vaultOk === null ? "transparent" : vaultOk ? "var(--color-border)" : "var(--color-border)"}` }}>
           {vaultOk === null ? "checking..." : vaultOk ? "vault ok" : "VAULT_KEY missing"}
         </span>
       </div>
@@ -509,13 +509,13 @@ function EnvironmentTab({ runCommandRunnerRef }) {
 
       {/* Reveal modal */}
       <Modal open={!!revealModal} onClose={() => { setRevealModal(null); clearInterval(revealTimerRef.current); }} title={`Reveal — ${revealModal}`}>
-        <div style={{ fontSize: 10, color: "var(--color-warning, #f0a040)", background: "var(--bg-warning-muted, #2b1d00)",
+        <div style={{ fontSize: 10, color: "var(--color-warning)", background: "color-mix(in srgb, var(--color-warning) 12%, transparent)",
           padding: "4px 8px", borderRadius: 4, marginBottom: 10 }}>
           Auto-hides in {revealCountdown}s
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <code style={{ flex: 1, wordBreak: "break-all", fontSize: 11, background: "var(--bg-canvas)",
-            padding: 8, borderRadius: 4, border: "1px solid var(--border)", color: "var(--color-success, #4caf86)",
+            padding: 8, borderRadius: 4, border: "1px solid var(--border)", color: "var(--color-primary)",
             fontFamily: "monospace", display: "block" }}>{revealValue}</code>
           <Btn variant="inline" onClick={() => navigator.clipboard.writeText(revealValue)}>Copy</Btn>
         </div>
@@ -556,7 +556,7 @@ function EnvironmentTab({ runCommandRunnerRef }) {
                   </td>
                   <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text-primary)", fontFamily: "monospace" }}>{e.key_name}</td>
                   <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", fontFamily: "monospace",
-                    color: { read: "var(--text-secondary)", rotate: "var(--color-warning, #f0a040)", create: "var(--color-success, #4caf86)", delete: "var(--color-error, #cf6679)" }[e.action] || "var(--text-secondary)" }}>
+                    color: { read: "var(--text-secondary)", rotate: "var(--color-warning)", create: "var(--color-primary)", delete: "var(--color-error)" }[e.action] || "var(--text-secondary)" }}>
                     {e.action}
                   </td>
                   <td style={{ padding: "4px 6px", borderBottom: "1px solid var(--border)", color: "var(--text-secondary)" }}>{e.note || ""}</td>
@@ -863,7 +863,7 @@ function WorkersTab({ runCommandRunnerRef }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const priorityColor = { critical: "var(--color-error, #cf6679)", high: "var(--color-warning, #f0a040)", medium: "var(--color-success, #4caf86)", low: "var(--text-secondary)" };
+  const priorityColor = { critical: "var(--color-error)", high: "var(--color-warning)", medium: "var(--color-primary)", low: "var(--text-secondary)" };
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
@@ -974,8 +974,8 @@ function D1Tab() {
 
       {/* Error */}
       {error && (
-        <div style={{ background: "var(--bg-danger-muted, #2b0d0d)", border: "1px solid var(--border-danger, #cf667940)", borderRadius: 4,
-          padding: 8, fontSize: 11, color: "var(--color-error, #cf6679)", marginBottom: 8, fontFamily: "monospace" }}>
+        <div style={{ background: "color-mix(in srgb, var(--color-error) 12%, transparent)", border: "1px solid var(--color-border)", borderRadius: 4,
+          padding: 8, fontSize: 11, color: "var(--color-error)", marginBottom: 8, fontFamily: "monospace" }}>
           {error}
         </div>
       )}
@@ -1563,7 +1563,7 @@ function WideModal({ open, onClose, title, children }) {
   return (
     <div
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 10000,
+        position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-text) 70%, transparent)", zIndex: 10000,
         display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
       }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
@@ -1574,7 +1574,7 @@ function WideModal({ open, onClose, title, children }) {
           background: "var(--bg-elevated)", border: "1px solid var(--border)",
           borderRadius: 8, padding: 16, width: "min(920px, 96vw)", maxHeight: "90vh",
           overflow: "hidden", display: "flex", flexDirection: "column", boxSizing: "border-box",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+          boxShadow: "0 8px 32px color-mix(in srgb, var(--color-text) 50%, transparent)",
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -5587,6 +5587,23 @@ function NetworkSettingsTab({ onOpenGeneral }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [tunnel, setTunnel] = useState(null);
+  const [tunnelErr, setTunnelErr] = useState(null);
+  const [restarting, setRestarting] = useState(false);
+
+  const loadTunnelStatus = useCallback(() => {
+    fetch("/api/tunnel/status", { credentials: "same-origin" })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok) throw new Error(d?.error || "Tunnel status failed");
+        setTunnel(d);
+        setTunnelErr(null);
+      })
+      .catch((e) => {
+        setTunnel(null);
+        setTunnelErr(e?.message || String(e));
+      });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -5607,6 +5624,26 @@ function NetworkSettingsTab({ onOpenGeneral }) {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    loadTunnelStatus();
+    const id = setInterval(loadTunnelStatus, 30000);
+    return () => clearInterval(id);
+  }, [loadTunnelStatus]);
+
+  const onRestartTunnel = useCallback(() => {
+    setRestarting(true);
+    fetch("/api/tunnel/restart", { method: "POST", credentials: "same-origin" })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (!ok) throw new Error(d?.error || "Restart failed");
+        loadTunnelStatus();
+      })
+      .catch((e) => {
+        setTunnelErr(e?.message || String(e));
+      })
+      .finally(() => setRestarting(false));
+  }, [loadTunnelStatus]);
+
   const row = (label, on) => (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
       <span style={{ fontSize: 12, color: "var(--text-primary)" }}>{label}</span>
@@ -5618,6 +5655,85 @@ function NetworkSettingsTab({ onOpenGeneral }) {
 
   return (
     <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
+      <div
+        style={{
+          marginBottom: 20,
+          padding: 12,
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          background: "var(--bg-canvas)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, fontSize: 12, color: "var(--text-primary)" }}>Cloudflare Tunnel</span>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 4,
+              border: "1px solid var(--border)",
+              color: tunnelErr
+                ? "var(--text-muted)"
+                : tunnel?.healthy
+                  ? "var(--color-success, var(--accent))"
+                  : "var(--text-muted)",
+              background: "var(--bg-elevated)",
+            }}
+          >
+            {tunnelErr ? "Status unavailable" : tunnel?.healthy ? "Healthy" : "Not healthy"}
+          </span>
+        </div>
+        {tunnel && !tunnelErr ? (
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 10, lineHeight: 1.5 }}>
+            {tunnel.status != null && tunnel.status !== "" ? (
+              <div>
+                Status: <span style={{ color: "var(--text-primary)" }}>{String(tunnel.status)}</span>
+              </div>
+            ) : null}
+            <div>
+              Connections: <span style={{ color: "var(--text-primary)" }}>{typeof tunnel.connections === "number" ? tunnel.connections : "—"}</span>
+            </div>
+            {tunnel.created_at ? (
+              <div style={{ marginTop: 4 }}>
+                Created: <span style={{ color: "var(--text-primary)" }}>{String(tunnel.created_at)}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : tunnelErr ? (
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 10 }}>{tunnelErr}</div>
+        ) : (
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 10 }}>Loading tunnel status…</div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={onRestartTunnel}
+            disabled={restarting}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "var(--bg-elevated)",
+              color: "var(--text-primary)",
+              fontSize: 12,
+              fontFamily: "inherit",
+              cursor: restarting ? "wait" : "pointer",
+              opacity: restarting ? 0.7 : 1,
+            }}
+          >
+            {restarting ? "Restarting…" : "Restart Tunnel"}
+          </button>
+          <a
+            href="https://one.dash.cloudflare.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: "var(--accent)", textDecoration: "underline" }}
+          >
+            Open Zero Trust Dashboard
+          </a>
+        </div>
+      </div>
       {loading ? (
         <div style={{ fontSize: 11, color: "var(--text-muted)", padding: 20, textAlign: "center" }}>Loading…</div>
       ) : error ? (
@@ -5941,6 +6057,18 @@ export default function SettingsPanel({
     setTab(id);
     writeStoredSettingsTab(id);
   };
+
+  useEffect(() => {
+    const onGo = (e) => {
+      const id = e?.detail?.tab;
+      if (id && SETTINGS_TAB_IDS.has(id)) {
+        setTab(id);
+        writeStoredSettingsTab(id);
+      }
+    };
+    window.addEventListener("iam-settings-goto-tab", onGo);
+    return () => window.removeEventListener("iam-settings-goto-tab", onGo);
+  }, []);
 
   const tabContent = {
     general: <GeneralWithEnvironment runCommandRunnerRef={runCommandRunnerRef} />,

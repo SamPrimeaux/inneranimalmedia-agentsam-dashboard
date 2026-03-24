@@ -1,8 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import FloatingPreviewPanel from "./FloatingPreviewPanel";
+import AgentBottomPanel from "./AgentBottomPanel";
 import AnimatedStatusText from "./AnimatedStatusText";
 import ExecutionPlanCard from "./ExecutionPlanCard";
 import QueueIndicator from "./QueueIndicator";
+import {
+  ViewerPanelStripIcon,
+  ViewerPanelToggleIcon,
+  VIEWER_STRIP_TITLES,
+} from "./viewer-panel-strip-icons";
+import { ChatAtContextPicker, getActiveAtMention } from "./ChatAtContextPicker";
 
 const SpeechRecognitionAPI =
   typeof window !== "undefined"
@@ -68,9 +75,6 @@ const LOADING_SAYINGS = [
   "Running it through the filter...",
 ];
 
-const COMPANY_ICON =
-  "https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail";
-
 const MODEL_LABELS = {
   "claude-haiku-4-5-20251001": "Haiku 4.5",
   "claude-sonnet-4-6": "Sonnet 4.6",
@@ -78,6 +82,54 @@ const MODEL_LABELS = {
   "gemini-2.5-flash": "Gemini 2.5",
   "gpt-4o": "GPT-4o",
 };
+
+/** Reserved slugs merged before agent_commands (slash picker). */
+const SLASH_BUILTIN_SLUGS = new Set(["health", "daily", "review", "deploy", "terminal", "search"]);
+
+const SLASH_BUILTIN_COMMANDS = [
+  {
+    slug: "health",
+    name: "/health check",
+    description: "Run wf_worker_health_check (D1, pm2, production /api/health).",
+    category: "workflow",
+    __builtinSendText: "Health check",
+  },
+  {
+    slug: "daily",
+    name: "/daily briefing",
+    description: "Run wf_daily_briefing.",
+    category: "workflow",
+    __builtinSendText: "Daily briefing",
+  },
+  {
+    slug: "review",
+    name: "/review",
+    description: "Run wf_code_review (Architect + Tester).",
+    category: "workflow",
+    __builtinSendText: "/review",
+  },
+  {
+    slug: "deploy",
+    name: "/deploy",
+    description: "Run wf_dashboard_deploy.",
+    category: "workflow",
+    __builtinSendText: "/deploy",
+  },
+  {
+    slug: "terminal",
+    name: "/terminal",
+    description: "Headless shell: /terminal <command> then send (runs via /run).",
+    category: "shell",
+    __builtinSetInput: "/terminal ",
+  },
+  {
+    slug: "search",
+    name: "/search",
+    description: "Knowledge search: /search <query> then send.",
+    category: "knowledge",
+    __builtinSetInput: "/search ",
+  },
+];
 
 /** Fallback when ai_models lacks rows yet; id === model_key for /api/agent/chat resolution. */
 const WORKERS_AI_CHAT_PICKER_MODELS = [
@@ -157,6 +209,35 @@ function parseFencedParts(text) {
     parts.push({ type: "text", text: s });
   }
   return parts;
+}
+
+/** Heuristic: fenced blocks that look like MCP / tool JSON or shell tool output — render collapsed like Claude tool rows. */
+function toolOutputSummaryLine(lang, code) {
+  const l = String(lang || "").toLowerCase();
+  const c = String(code || "").trim();
+  if (!c) return null;
+  if (l === "tool" || l === "tool_result") return "Tool result";
+  if (l === "bash" || l === "sh" || l === "shell" || l === "zsh") {
+    const first = c.split("\n").find((x) => String(x).trim()) || "";
+    const t = String(first).trim();
+    if (t.length <= 72) return t ? `Ran terminal: ${t}` : "Ran terminal command";
+    return `Ran terminal command (${c.split("\n").length} lines)`;
+  }
+  if (l === "json") {
+    try {
+      const j = JSON.parse(c);
+      if (j && typeof j === "object") {
+        const tn = j.tool_name || j.tool || j.name;
+        if (tn) return `Ran ${String(tn)}`;
+        if (Object.prototype.hasOwnProperty.call(j, "error")) return "Tool returned an error";
+        if ("result" in j || "rows" in j || "data" in j) return "Tool result";
+      }
+    } catch (_) {
+      if (c.length > 400) return "Large JSON output";
+    }
+  }
+  if (/\b(tool_use|tool_name|mcp_|invokeMcp)\b/i.test(c.slice(0, 400))) return "Tool output";
+  return null;
 }
 
 /** Split plain text into alternating text and image URL segments for inline chat rendering. */
@@ -258,32 +339,85 @@ const MODE_ICONS = {
   ),
 };
 
+/** Fallback when GET /api/agent/modes is empty or fails; overridden by DB-driven injection. */
+const DEFAULT_AGENT_MODE_HEX = {
+  ask: "#89b4d4",
+  agent: "#98c379",
+  plan: "#e5c07b",
+  debug: "#e06c75",
+};
+const FALLBACK_MODE_SLUGS = ["ask", "agent", "plan", "debug"];
+
+function isAgentThemeDark() {
+  if (typeof document === "undefined") return true;
+  const t = (document.documentElement.getAttribute("data-theme") || "").toLowerCase();
+  if (!t) return true;
+  if (t.includes("light") && !/(dark|night|slate|storm|mono|forest)/.test(t)) return false;
+  return true;
+}
+
+function resolveAgentModeCssValue(row, isDark) {
+  const cv = row.color_var != null && String(row.color_var).trim();
+  if (cv) return cv;
+  const light = row.color_hex != null && String(row.color_hex).trim();
+  const dk = row.color_hex_dark != null && String(row.color_hex_dark).trim();
+  if (isDark) return dk || light || "";
+  return light || dk || "";
+}
+
+function applyAgentModeVarsToDocument(rows) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  const isDark = isAgentThemeDark();
+  if (rows && rows.length) {
+    for (const row of rows) {
+      const slug = String(row.slug || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "");
+      if (!slug) continue;
+      const val = resolveAgentModeCssValue(row, isDark);
+      if (val) root.style.setProperty(`--mode-${slug}`, val);
+    }
+    return;
+  }
+  for (const [slug, hex] of Object.entries(DEFAULT_AGENT_MODE_HEX)) {
+    root.style.setProperty(`--mode-${slug}`, hex);
+  }
+}
+
 function DiffProposalCard({ filename, content, onOpenInEditor, onAccept, onReject }) {
-  const [expanded, setExpanded] = useState(false);
   const name = filename || "file";
   const lines = (content || "").split("\n");
   const lineCount = lines.length;
-  const previewLines = lines.slice(0, 20);
+  const preview8 = lines.slice(0, 8);
+  const restLines = lines.slice(8);
   return (
     <div style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", margin: "6px 0", maxWidth: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid var(--border)", background: "var(--bg-canvas)" }}>
         <span style={{ fontSize: 11, fontFamily: "monospace", color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
         <span style={{ fontSize: 10, color: "var(--mode-ask)", fontFamily: "monospace" }}>{lineCount} lines</span>
-        <button type="button" onClick={() => setExpanded((v) => !v)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontFamily: "monospace" }}>
-          {expanded ? "^ collapse" : "v preview"}
-        </button>
       </div>
-      {expanded && (
-        <div style={{ maxHeight: 200, overflowY: "auto", padding: "8px 12px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.6, background: "var(--bg-canvas)", color: "var(--text-primary)" }}>
-          {previewLines.map((line, i) => (
-            <div key={i} style={{ color: line.startsWith("+") ? "var(--mode-ask)" : line.startsWith("-") ? "var(--color-danger)" : "var(--text-secondary)" }}>{line}</div>
-          ))}
-          {lineCount > 20 && <div style={{ color: "var(--text-muted)", marginTop: 4 }}>... {lineCount - 20} more lines</div>}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 6, padding: "8px 12px", borderTop: expanded ? "1px solid var(--border)" : "none", flexWrap: "wrap" }}>
+      <div
+        className="iam-diff-mini-preview"
+        style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.55, background: "var(--bg-canvas)", color: "var(--text-primary)", borderBottom: restLines.length ? "1px solid var(--border)" : "none" }}
+      >
+        {preview8.map((line, i) => (
+          <div key={i} style={{ color: line.startsWith("+") ? "var(--mode-ask)" : line.startsWith("-") ? "var(--color-danger)" : "var(--text-secondary)" }}>{line}</div>
+        ))}
+        {lineCount > 8 && (
+          <details style={{ marginTop: 6 }}>
+            <summary style={{ cursor: "pointer", fontSize: 10, color: "var(--text-muted)", listStyle: "none" }}>{`+ ${lineCount - 8} more lines`}</summary>
+            <div style={{ marginTop: 6, maxHeight: 240, overflowY: "auto" }}>
+              {restLines.map((line, i) => (
+                <div key={i} style={{ color: line.startsWith("+") ? "var(--mode-ask)" : line.startsWith("-") ? "var(--color-danger)" : "var(--text-secondary)" }}>{line}</div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, padding: "8px 12px", flexWrap: "wrap" }}>
         <button type="button" onClick={onOpenInEditor} style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 11 }}>
-          Open in Editor
+          Open in Monaco
         </button>
         <button type="button" onClick={onAccept} style={{ background: "var(--mode-ask)", border: "1px solid var(--border)", color: "var(--color-on-mode)", padding: "4px 10px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace", fontSize: 11, fontWeight: 600 }}>
           Accept
@@ -698,33 +832,6 @@ function DeployStatusPill({ message }) {
   );
 }
 
-function ViewerPanelStripIcon({ tab, size }) {
-  const dim = size ?? (tab === "files" || tab === "settings" ? 18 : 16);
-  const a = { width: dim, height: dim, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2 };
-  if (tab === "terminal") return <svg {...a}><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>;
-  if (tab === "browser") return <svg {...a}><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>;
-  if (tab === "files") return <svg {...a}><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M13 2v7h7" /></svg>;
-  if (tab === "code") return <svg {...a}><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>;
-  if (tab === "view") return <svg {...a}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="3" y1="9" x2="21" y2="9" /></svg>;
-  if (tab === "git") return <svg {...a}><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>;
-  if (tab === "draw") return <svg {...a}><path d="M12 19l7-7 3 3-7 7-3-3z" /><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" /><path d="M2 2l7.586 7.586" /><circle cx="11" cy="11" r="2" /></svg>;
-  if (tab === "settings") return <svg {...a}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>;
-  return null;
-}
-
-const VIEWER_STRIP_TAB_ORDER = ["terminal", "browser", "draw", "files", "code", "view", "git", "settings"];
-
-const VIEWER_STRIP_TITLES = {
-  terminal: "Terminal",
-  browser: "Browser",
-  draw: "Draw",
-  files: "Files",
-  code: "Code",
-  view: "View",
-  git: "Git",
-  settings: "Settings",
-};
-
 function AssistantFencedContent({
   content,
   setCodeContent,
@@ -856,6 +963,73 @@ function AssistantFencedContent({
               )
             )}
           </div>
+        ) : toolOutputSummaryLine(part.lang, part.code) ? (
+          <details
+            key={i}
+            className="iam-chat-tool-details"
+            style={{
+              marginBottom: 8,
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--bg-elevated)",
+              maxWidth: "100%",
+            }}
+          >
+            <summary
+              style={{
+                cursor: "pointer",
+                padding: "8px 10px",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                fontWeight: 600,
+                listStyle: "none",
+              }}
+            >
+              {toolOutputSummaryLine(part.lang, part.code)}
+              <span style={{ fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>
+                {(part.lang || "text")} · {part.code.split("\n").length} lines
+              </span>
+            </summary>
+            <pre
+              style={{
+                fontSize: 12,
+                fontFamily: "monospace",
+                overflowX: "auto",
+                maxWidth: "100%",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                background: "var(--bg-canvas)",
+                padding: "0 10px 10px",
+                margin: 0,
+                color: "var(--color-text)",
+                borderTop: "1px solid var(--border)",
+              }}
+            >
+              <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{part.code}</code>
+            </pre>
+            <div style={{ display: "flex", gap: 8, padding: "0 10px 10px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCodeContent(part.code);
+                  setCodeFilename((prev) => prev || `agent-output.${langToExt(part.lang)}`);
+                  setActiveTab("code");
+                  setPreviewOpen(true);
+                }}
+                style={{
+                  fontSize: "11px",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--color-border)",
+                  background: "transparent",
+                  color: "var(--color-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                Open in editor
+              </button>
+            </div>
+          </details>
         ) : (
           <div key={i} style={{ marginBottom: "8px" }}>
             <pre
@@ -915,6 +1089,9 @@ function AssistantFencedContent({
   );
 }
 
+const AGENT_DOCK_OPEN_LS_KEY = "agent-dock-open";
+const AGENT_DOCK_HEIGHT_LS_KEY = "agent-dock-height";
+
 export default function AgentDashboard() {
   // ── Core chat state ───────────────────────────────────────────────────────
   const [messages, setMessages] = useState([
@@ -971,7 +1148,9 @@ export default function AgentDashboard() {
   // ── Knowledge search (RAG) panel ─────────────────────────────────────────
 
   const [mode, setMode] = useState("ask");
-  const [useStreaming, setUseStreaming] = useState(false);
+  const [agentModeRows, setAgentModeRows] = useState(null);
+  const agentModeRowsRef = useRef(null);
+  agentModeRowsRef.current = agentModeRows;
   const [modePopupOpen, setModePopupOpen] = useState(false);
   const modeDropdownRef = useRef(null);
   const modelDropdownRef = useRef(null);
@@ -1017,6 +1196,11 @@ export default function AgentDashboard() {
   const [availableCommands, setAvailableCommands] = useState([]);
   const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
   const [slashPickerSuppressed, setSlashPickerSuppressed] = useState(false);
+  const [inputCaret, setInputCaret] = useState(0);
+  const [atPickerSuppressed, setAtPickerSuppressed] = useState(false);
+  const [chatContextMentions, setChatContextMentions] = useState([]);
+  const atPickerRef = useRef(null);
+  const [atPickerOffset, setAtPickerOffset] = useState(0);
   const [panelWidthPct, setPanelWidthPct] = useState(() => {
     try {
       const v = localStorage.getItem("iam_panel_width");
@@ -1032,19 +1216,66 @@ export default function AgentDashboard() {
   const [splitPos, setSplitPos] = useState(58);
   const dragRef = useRef(null);
 
+  const [bottomDockOpen, setBottomDockOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const v = localStorage.getItem(AGENT_DOCK_OPEN_LS_KEY);
+      if (v === "1") return true;
+      if (v === "0") return false;
+    } catch (_) {}
+    return false;
+  });
+  const [bottomDockHeight, setBottomDockHeight] = useState(() => {
+    if (typeof window === "undefined") return 160;
+    try {
+      const raw = localStorage.getItem(AGENT_DOCK_HEIGHT_LS_KEY);
+      if (raw != null) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 80 && n <= 1200) return Math.round(n);
+      }
+    } catch (_) {}
+    return 160;
+  });
+  const [bottomDockTab, setBottomDockTab] = useState("terminal");
+  const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
+  const [workflowCollabRunId, setWorkflowCollabRunId] = useState(null);
+
+  useEffect(() => {
+    setWorkflowCollabRunId(null);
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AGENT_DOCK_OPEN_LS_KEY, bottomDockOpen ? "1" : "0");
+    } catch (_) {}
+  }, [bottomDockOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AGENT_DOCK_HEIGHT_LS_KEY, String(bottomDockHeight));
+    } catch (_) {}
+  }, [bottomDockHeight]);
+
   // ── Mobile ────────────────────────────────────────────────────────────────
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768
   );
-  const [mobileIconsOpen, setMobileIconsOpen] = useState(false);
-  const mobileIconsStripRef = useRef(null);
-
   // ── File context (for agent) ──────────────────────────────────────────────
   const [codeContent, setCodeContent] = useState("");
   const [codeFilename, setCodeFilename] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
   const [browserUrl, setBrowserUrl] = useState("");
   const [shellNavActive, setShellNavActive] = useState(false);
+
+  const handleViewerTabFromHeader = useCallback((tab) => {
+    if (tab === "terminal") {
+      setBottomDockOpen(true);
+      setBottomDockTab("terminal");
+    }
+    setActiveTab(tab);
+    if (tab === "browser") setShellNavActive(false);
+  }, []);
+
   const [lightboxImage, setLightboxImage] = useState(null);
   const [pendingDrawImage, setPendingDrawImage] = useState(null);
   const pendingDrawImageRef = useRef(null);
@@ -1065,6 +1296,7 @@ export default function AgentDashboard() {
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
   const textareaRef = useRef(null);
+  const chatInputShellRef = useRef(null);
   const runCommandRunnerRef = useRef(null);
 
   // ── Default R2 bucket for Open in Monaco (no hardcoded bucket) ─────────────
@@ -1078,6 +1310,63 @@ export default function AgentDashboard() {
       })
       .catch(() => {});
   }, []);
+
+  // ── Agent mode colors (GET /api/agent/modes) → --mode-{slug} on documentElement ──
+  useEffect(() => {
+    applyAgentModeVarsToDocument(null);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/agent/modes", { credentials: "same-origin" });
+        const data = await res.json();
+        if (cancelled) return;
+        if (Array.isArray(data) && data.length) {
+          setAgentModeRows(data);
+          applyAgentModeVarsToDocument(data);
+        } else {
+          setAgentModeRows([]);
+          applyAgentModeVarsToDocument(null);
+        }
+      } catch (_) {
+        if (!cancelled) {
+          setAgentModeRows([]);
+          applyAgentModeVarsToDocument(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
+    const obs = new MutationObserver(() => {
+      const rows = agentModeRowsRef.current;
+      if (rows && rows.length) applyAgentModeVarsToDocument(rows);
+      else applyAgentModeVarsToDocument(null);
+    });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
+
+  const modePickerSlugs = useMemo(() => {
+    if (agentModeRows && agentModeRows.length) {
+      return agentModeRows
+        .map((r) => String(r.slug || "").toLowerCase().replace(/[^a-z0-9-]/g, ""))
+        .filter((s) => s && s !== "stream");
+    }
+    return [...FALLBACK_MODE_SLUGS];
+  }, [agentModeRows]);
+
+  const modeLabel = useCallback((slug) => {
+    const s = String(slug || "").toLowerCase();
+    const row = agentModeRows?.find((r) => String(r.slug || "").toLowerCase() === s);
+    if (row && row.display_name) return row.display_name;
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  }, [agentModeRows]);
+
+  const modeIconFor = useCallback((slug) => MODE_ICONS[slug] || MODE_ICONS.ask, []);
 
   // ── Persist panel width ───────────────────────────────────────────────────
   useEffect(() => {
@@ -1439,30 +1728,80 @@ export default function AgentDashboard() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [connectorPopupOpen, costPopoverOpen, modelPickerOpen, agentPickerOpen, showModeDropdown, showModelDropdown, showChatMenu]);
 
-  useEffect(() => {
-    if (!mobileIconsOpen) return;
-    const onDoc = (e) => {
-      if (mobileIconsStripRef.current && !mobileIconsStripRef.current.contains(e.target)) {
-        setMobileIconsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [mobileIconsOpen]);
-
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
     function handleKeyboardShortcut(e) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === "j") {
+        e.preventDefault();
+        setBottomDockOpen((v) => !v);
+        return;
+      }
+      if (mod && e.key === "p") {
+        e.preventDefault();
+        if (agentState !== AGENT_STATES.IDLE) {
+          textareaRef.current?.focus();
+          return;
+        }
+        setAtPickerSuppressed(false);
+        const ta = textareaRef.current;
+        const start = ta && typeof ta.selectionStart === "number" ? ta.selectionStart : inputCaret;
+        const end = ta && typeof ta.selectionEnd === "number" ? ta.selectionEnd : start;
+        const newVal = input.slice(0, start) + "@" + input.slice(end);
+        const newCaret = start + 1;
+        setInput(newVal);
+        setInputCaret(newCaret);
+        syncInputCaretOffset(newVal, newCaret);
+        requestAnimationFrame(() => {
+          try {
+            ta?.focus();
+            ta?.setSelectionRange(newCaret, newCaret);
+          } catch (_) {}
+        });
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setPreviewOpen(true);
+        setActiveTab("browser");
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        setPreviewOpen(true);
+        setActiveTab("files");
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setPreviewOpen(true);
+        setActiveTab("git");
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === "?" || e.code === "Slash")) {
+        e.preventDefault();
+        setKeyboardHelpOpen((v) => !v);
+        return;
+      }
+      if (mod && e.key === "k") {
         e.preventDefault();
         setPreviewOpen(true);
         setActiveTab("settings");
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+      if (mod && e.key === "/") {
         e.preventDefault();
         textareaRef.current?.focus();
       }
+      if (mod && e.key === "`") {
+        e.preventDefault();
+        setBottomDockOpen((v) => !v);
+        setBottomDockTab("terminal");
+      }
       if (e.key === "Escape") {
+        if (keyboardHelpOpen) {
+          setKeyboardHelpOpen(false);
+          return;
+        }
         if (lightboxImage) {
           setLightboxImage(null);
           return;
@@ -1476,7 +1815,14 @@ export default function AgentDashboard() {
     }
     window.addEventListener("keydown", handleKeyboardShortcut);
     return () => window.removeEventListener("keydown", handleKeyboardShortcut);
-  }, [lightboxImage]);
+  }, [
+    lightboxImage,
+    agentState,
+    input,
+    inputCaret,
+    syncInputCaretOffset,
+    keyboardHelpOpen,
+  ]);
 
   // ── Load commands (for Settings tab) ──────────────────────────────────────
   useEffect(() => {
@@ -1495,14 +1841,23 @@ export default function AgentDashboard() {
     return line.slice(1).split(/\s+/)[0].toLowerCase();
   }, [input]);
 
+  const mergedSlashCommands = useMemo(() => {
+    const custom = availableCommands.filter((c) => {
+      const s = String(c.slug || "").toLowerCase();
+      return s && !SLASH_BUILTIN_SLUGS.has(s);
+    });
+    return [...SLASH_BUILTIN_COMMANDS, ...custom];
+  }, [availableCommands]);
+
   const filteredSlashCommands = useMemo(() => {
-    if (!slashFilterToken) return availableCommands;
-    return availableCommands.filter((cmd) => {
+    if (!slashFilterToken) return mergedSlashCommands;
+    const t = slashFilterToken.toLowerCase();
+    return mergedSlashCommands.filter((cmd) => {
       const slug = String(cmd.slug || "").toLowerCase();
       const name = String(cmd.name || "").toLowerCase();
-      return slug.includes(slashFilterToken) || name.includes(slashFilterToken);
+      return slug.includes(t) || name.includes(t);
     });
-  }, [availableCommands, slashFilterToken]);
+  }, [mergedSlashCommands, slashFilterToken]);
 
   useEffect(() => {
     const line = (input.split("\n")[0] || "").trimEnd();
@@ -1510,8 +1865,37 @@ export default function AgentDashboard() {
   }, [input]);
 
   useEffect(() => {
+    const m = getActiveAtMention(input, inputCaret);
+    if (!m) setAtPickerSuppressed(false);
+  }, [input, inputCaret]);
+
+  const syncInputCaretOffset = useCallback((value, caretPos) => {
+    const pos = typeof caretPos === "number" ? caretPos : value.length;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;
+    const col = Math.max(0, pos - lineStart);
+    setAtPickerOffset(Math.min(col * 7, 220));
+  }, []);
+
+  useEffect(() => {
     setSlashHighlightIndex(0);
   }, [slashFilterToken]);
+
+  useEffect(() => {
+    const line = (input.split("\n")[0] || "").trimEnd();
+    const slashShown =
+      agentState === AGENT_STATES.IDLE && line.startsWith("/") && !slashPickerSuppressed;
+    const atMention = getActiveAtMention(input, inputCaret);
+    const atShown =
+      agentState === AGENT_STATES.IDLE && !!atMention && !slashShown && !atPickerSuppressed;
+    if (!slashShown && !atShown) return;
+    const onDocDown = (e) => {
+      if (chatInputShellRef.current?.contains(e.target)) return;
+      setAtPickerSuppressed(true);
+      setSlashPickerSuppressed(true);
+    };
+    document.addEventListener("mousedown", onDocDown, true);
+    return () => document.removeEventListener("mousedown", onDocDown, true);
+  }, [agentState, input, inputCaret, slashPickerSuppressed, atPickerSuppressed]);
 
   // ── Split-pane drag (mouse + touch) ──────────────────────────────────────
   const onDragStart = useCallback(() => setDragging(true), []);
@@ -1681,6 +2065,16 @@ export default function AgentDashboard() {
       (attachedImages.length ? "(image attached)" : "(files attached)");
 
     if (trimmedInput.startsWith("/")) {
+      const termExec = trimmedInput.match(/^\/terminal\s+(.+)$/i);
+      if (termExec && termExec[1].trim()) {
+        return sendMessage(`/run ${termExec[1].trim()}`);
+      }
+      const searchExec = trimmedInput.match(/^\/search\s+(.+)$/i);
+      if (searchExec && searchExec[1].trim()) {
+        return sendMessage(
+          `Knowledge base search (use knowledge_search and related tools as needed): ${searchExec[1].trim()}`
+        );
+      }
       const commandParts = trimmedInput.slice(1).split(/\s+/);
       const commandName = commandParts[0] || "";
       const paramsStr = commandParts.slice(1).join(" ").trim();
@@ -1752,6 +2146,10 @@ export default function AgentDashboard() {
     const filesToSend = attachedFiles.length
       ? attachedFiles.map((f) => ({ name: f.name, content: f.content, encoding: f.encoding || "utf8", size: f.size }))
       : undefined;
+    const contextMentionsPayload = chatContextMentions
+      .filter((entry) => entry?.displayPill && trimmedInput.includes(entry.displayPill))
+      .map((entry) => entry.structured)
+      .filter(Boolean);
     const userMsg = {
       id: `m${Date.now()}`,
       role: "user",
@@ -1765,8 +2163,10 @@ export default function AgentDashboard() {
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    setChatContextMentions([]);
     setAttachedImages([]);
     setAttachedFiles([]);
+    setWorkflowCollabRunId(null);
     setIsLoading(true);
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -1813,9 +2213,10 @@ export default function AgentDashboard() {
           messages: [...conversationMessages, { role: "user", content: text }],
           images: imagesToSend,
           attached_files: filesToSend,
-          stream: useStreaming,
+          stream: true,
           mode,
           fileContext: currentFileContext,
+          context_refs: contextMentionsPayload.length ? contextMentionsPayload : undefined,
         }),
       });
 
@@ -1975,6 +2376,26 @@ export default function AgentDashboard() {
         ]);
         return;
       }
+      if (data.workflow_triggered === true && typeof data.message === "string") {
+        if (data.workflow_run_id) {
+          setWorkflowCollabRunId(String(data.workflow_run_id));
+        } else {
+          setWorkflowCollabRunId(null);
+        }
+        setBottomDockOpen(true);
+        setBottomDockTab("output");
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `m${Date.now()}`,
+            role: "assistant",
+            content: data.message,
+            provider: activeModel?.provider ?? "system",
+            created_at: Date.now(),
+          },
+        ]);
+        return;
+      }
       if (data.tool_approval_request === true && data.tool) {
         setPendingToolApproval(data.tool);
         if (data.text != null && data.text !== "") {
@@ -2053,7 +2474,27 @@ export default function AgentDashboard() {
 
   sendMessageRef.current = sendMessage;
 
+  const onAtContextPick = useCallback((entry) => {
+    if (!entry?.structured) return;
+    setChatContextMentions((prev) => [...prev, entry]);
+  }, []);
+
   const applySlashCommandSelection = (cmd) => {
+    if (cmd.__builtinSendText != null) {
+      setSlashPickerSuppressed(false);
+      setSlashHighlightIndex(0);
+      setInput("");
+      void sendMessage(cmd.__builtinSendText);
+      setTimeout(() => textareaRef.current?.focus(), 0);
+      return;
+    }
+    if (cmd.__builtinSetInput != null) {
+      setSlashPickerSuppressed(true);
+      setSlashHighlightIndex(0);
+      setInput(cmd.__builtinSetInput);
+      setTimeout(() => textareaRef.current?.focus(), 0);
+      return;
+    }
     const slugRaw = String(cmd.slug || cmd.name || "").trim();
     const slugKey = (slugRaw.startsWith("/") ? slugRaw.slice(1) : slugRaw).toLowerCase();
     const ct = String(cmd.command_text || "").trim();
@@ -2271,6 +2712,19 @@ export default function AgentDashboard() {
     setShellNavActive(false);
   }, [setBrowserUrl, setActiveTab, setPreviewOpen]);
 
+  const openSettingsVaultSection = useCallback(() => {
+    try {
+      localStorage.setItem("iam-settings-tab", "general");
+    } catch (_) {}
+    window.dispatchEvent(new CustomEvent("iam-settings-goto-tab", { detail: { tab: "general" } }));
+    setPreviewOpen(true);
+    setActiveTab("settings");
+    const scrollVault = () => {
+      document.getElementById("iam-settings-vault")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    queueMicrotask(() => queueMicrotask(scrollVault));
+  }, [setPreviewOpen, setActiveTab]);
+
   const openImageInDrawPanel = useCallback((url) => {
     if (!url || typeof url !== "string") return;
     const u = url.trim();
@@ -2449,11 +2903,11 @@ export default function AgentDashboard() {
   // ── Provider bubble color ─────────────────────────────────────────────────
   const providerBorderColor = (provider) => {
     if (!provider || provider === "system") return "var(--color-border)";
-    if (provider === "anthropic") return "#D97757";
-    if (provider === "openai") return "#10a37f";
-    if (provider === "google") return "#4285F4";
-    if (provider === "cloudflare_workers_ai") return "#00E5CC";
-    if (provider === "error") return "var(--color-danger, #ef4444)";
+    if (provider === "anthropic") return "var(--color-warning)";
+    if (provider === "openai") return "var(--color-primary)";
+    if (provider === "google") return "var(--color-accent)";
+    if (provider === "cloudflare_workers_ai") return "var(--color-primary)";
+    if (provider === "error") return "var(--color-error)";
     return "var(--color-border)";
   };
 
@@ -2476,8 +2930,17 @@ export default function AgentDashboard() {
   const showSlashPicker =
     agentState === AGENT_STATES.IDLE &&
     slashFirstLine.startsWith("/") &&
-    availableCommands.length > 0 &&
+    mergedSlashCommands.length > 0 &&
     !slashPickerSuppressed;
+  const atMentionActive = useMemo(
+    () => getActiveAtMention(input, inputCaret),
+    [input, inputCaret]
+  );
+  const showAtPicker =
+    agentState === AGENT_STATES.IDLE &&
+    !!atMentionActive &&
+    !showSlashPicker &&
+    !atPickerSuppressed;
   const slashSafeIndex =
     filteredSlashCommands.length > 0
       ? Math.min(Math.max(0, slashHighlightIndex), filteredSlashCommands.length - 1)
@@ -2500,6 +2963,107 @@ export default function AgentDashboard() {
         border: "none",
       }}
     >
+      {keyboardHelpOpen ? (
+        <div
+          className="agent-keyboard-help-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-keyboard-help-title"
+          onMouseDown={(ev) => {
+            if (ev.target === ev.currentTarget) setKeyboardHelpOpen(false);
+          }}
+        >
+          <div className="agent-keyboard-help-dialog">
+            <div className="agent-keyboard-help-header">
+              <h2 id="agent-keyboard-help-title" className="agent-keyboard-help-title">
+                Keyboard shortcuts
+              </h2>
+              <button
+                type="button"
+                className="agent-keyboard-help-close"
+                onClick={() => setKeyboardHelpOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <table className="agent-keyboard-help-table">
+              <thead>
+                <tr>
+                  <th scope="col">Shortcut</th>
+                  <th scope="col">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">J</kbd>
+                  </td>
+                  <td>Toggle bottom panel</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">`</kbd>
+                  </td>
+                  <td>Toggle bottom panel and focus Terminal tab</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">P</kbd>
+                  </td>
+                  <td>Open @ context picker (inserts @ in chat when idle)</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">K</kbd>
+                  </td>
+                  <td>Open viewer Settings</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">/</kbd>
+                  </td>
+                  <td>Focus chat input</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">Shift</kbd> +{" "}
+                    <kbd className="agent-keyboard-help-kbd">B</kbd>
+                  </td>
+                  <td>Open Browser panel</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">Shift</kbd> +{" "}
+                    <kbd className="agent-keyboard-help-kbd">E</kbd>
+                  </td>
+                  <td>Open Files panel</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">Shift</kbd> +{" "}
+                    <kbd className="agent-keyboard-help-kbd">G</kbd>
+                  </td>
+                  <td>Open Git panel</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Cmd</kbd> + <kbd className="agent-keyboard-help-kbd">Shift</kbd> +{" "}
+                    <kbd className="agent-keyboard-help-kbd">?</kbd>
+                  </td>
+                  <td>Toggle this help</td>
+                </tr>
+                <tr>
+                  <td>
+                    <kbd className="agent-keyboard-help-kbd">Esc</kbd>
+                  </td>
+                  <td>Close help, lightbox, or viewer (in order)</td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="agent-keyboard-help-foot">Use Ctrl instead of Cmd on Windows and Linux.</p>
+          </div>
+        </div>
+      ) : null}
       {showQueueIndicator && (
         <QueueIndicator
           current={queueCurrent}
@@ -2512,10 +3076,32 @@ export default function AgentDashboard() {
       <div
         style={{
           display: "flex",
+          flexDirection: "column",
           flex: "1 1 0%",
-          height: "100%",
-          overflow: "hidden",
           minHeight: 0,
+          minWidth: 0,
+          maxWidth: "100%",
+          overflow: "hidden",
+        }}
+      >
+        {/* Main workspace: chat + preview row (bottom dock lives inside viewer column only) */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            flex: "1 1 0%",
+            minHeight: 0,
+            minWidth: 0,
+            maxWidth: "100%",
+            overflow: "hidden",
+          }}
+        >
+      <div
+        style={{
+          display: "flex",
+          flex: "1 1 0%",
+          minHeight: 0,
+          overflow: "hidden",
           flexDirection: "row",
         }}
       >
@@ -2636,7 +3222,7 @@ export default function AgentDashboard() {
                       borderRadius: 6,
                       padding: 4,
                       minWidth: 160,
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                      boxShadow: "0 4px 12px color-mix(in srgb, var(--color-text) 15%, transparent)",
                     }}
                   >
                     {[
@@ -2702,6 +3288,58 @@ export default function AgentDashboard() {
                 )}
               </div>
             </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                title={previewOpen ? "Hide viewer panel" : "Show viewer panel"}
+                onClick={() => setPreviewOpen((v) => !v)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: previewOpen ? "var(--bg-canvas)" : "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  color: previewOpen ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <ViewerPanelToggleIcon size={18} />
+              </button>
+              <button
+                type="button"
+                title={VIEWER_STRIP_TITLES.settings}
+                onClick={() => {
+                  setPreviewOpen(true);
+                  setActiveTab("settings");
+                }}
+                style={{
+                  width: 36,
+                  height: 36,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: previewOpen && activeTab === "settings" ? "var(--bg-canvas)" : "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  color: previewOpen && activeTab === "settings" ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <ViewerPanelStripIcon tab="settings" size={18} />
+              </button>
+            </div>
           </div>
 
           {showProjectSelector && (
@@ -2712,7 +3350,7 @@ export default function AgentDashboard() {
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    background: "rgba(0,0,0,0.5)",
+                    background: "color-mix(in srgb, var(--color-text) 50%, transparent)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -2789,7 +3427,7 @@ export default function AgentDashboard() {
                     left: 0,
                     right: 0,
                     bottom: 0,
-                    background: "rgba(0,0,0,0.5)",
+                    background: "color-mix(in srgb, var(--color-text) 50%, transparent)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -2886,11 +3524,6 @@ export default function AgentDashboard() {
                   width: "100%",
                 }}
               >
-                <img
-                  src={COMPANY_ICON}
-                  alt="Inner Animal Media"
-                  style={{ width: "56px", height: "56px", borderRadius: "12px", objectFit: "contain", opacity: 0.85 }}
-                />
                 <div style={{ fontSize: "18px", fontWeight: "600", color: "var(--color-primary)", letterSpacing: "-0.01em" }}>
                   level AI
                 </div>
@@ -2985,6 +3618,8 @@ export default function AgentDashboard() {
                           message={msg}
                           gitType={gitActionType}
                           onOpenTerminal={() => {
+                            setBottomDockOpen(true);
+                            setBottomDockTab("terminal");
                             setActiveTab("terminal");
                             setPreviewOpen(true);
                           }}
@@ -2993,6 +3628,8 @@ export default function AgentDashboard() {
                         <TerminalOutputCard
                           message={msg}
                           onOpenTerminal={() => {
+                            setBottomDockOpen(true);
+                            setBottomDockTab("terminal");
                             setActiveTab("terminal");
                             setPreviewOpen(true);
                           }}
@@ -3517,10 +4154,11 @@ export default function AgentDashboard() {
             <div
               style={{
                 flexShrink: 0,
-                padding: "12px 16px",
+                padding: "0 16px",
+                marginBottom: 12,
                 paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
-                background: "var(--bg-nav)",
-                borderTop: "1px solid var(--color-border)",
+                background: "transparent",
+                border: "none",
               }}
               onDrop={onDropFiles}
               onDragOver={onDragOverFiles}
@@ -3528,25 +4166,51 @@ export default function AgentDashboard() {
               onDragLeave={onDragLeaveFiles}
             >
               <div
-                className="agent-input-container agent-input-bar-wrap"
+                ref={chatInputShellRef}
+                className="agent-input-container agent-input-bar-wrap agent-chat-input-pill"
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: window.innerWidth < 768 ? 2 : 10,
                   padding: "10px 14px",
-                  background: "var(--bg-elevated)",
-                  border: isDraggingOver ? "2px dashed var(--color-primary)" : "1px solid var(--color-border)",
-                  borderRadius: 10,
+                  background: "var(--agent-chat-input-bg)",
+                  border: isDraggingOver ? "2px dashed var(--color-primary)" : "1px solid var(--agent-chat-border)",
+                  borderRadius: 12,
                   minHeight: 48,
                   width: "100%",
-                  maxWidth: "min(900px, 100%)",
+                  maxWidth: 680,
                   margin: "0 auto",
                   position: "relative",
                   boxSizing: "border-box",
+                  boxShadow: "0 4px 24px rgba(0, 0, 0, 0.4)",
                 }}
               >
+                {showAtPicker && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: "calc(100% + 8px)",
+                      zIndex: 1003,
+                    }}
+                  >
+                    <ChatAtContextPicker
+                      ref={atPickerRef}
+                      open={showAtPicker}
+                      mention={atMentionActive}
+                      input={input}
+                      setInput={setInput}
+                      textareaRef={textareaRef}
+                      onPick={onAtContextPick}
+                      onSuppress={() => setAtPickerSuppressed(true)}
+                      offsetLeft={atPickerOffset}
+                    />
+                  </div>
+                )}
                 {showSlashPicker && (
                   <div
+                    className="iam-slash-command-picker"
                     role="listbox"
                     aria-label="Slash commands"
                     style={{
@@ -3554,12 +4218,6 @@ export default function AgentDashboard() {
                       left: 0,
                       right: 0,
                       bottom: "calc(100% + 8px)",
-                      maxHeight: "calc(8 * 44px)",
-                      overflowY: "auto",
-                      background: "var(--bg-elevated)",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: "8px",
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
                       zIndex: 1002,
                     }}
                   >
@@ -3581,6 +4239,7 @@ export default function AgentDashboard() {
                             key={`${slugLabel}-${cmd.name || ""}-${idx}`}
                             role="option"
                             aria-selected={selected}
+                            className={`iam-slash-command-picker__row${selected ? " iam-slash-command-picker__row--selected" : ""}`}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => applySlashCommandSelection(cmd)}
                             onMouseEnter={() => setSlashHighlightIndex(idx)}
@@ -3589,7 +4248,7 @@ export default function AgentDashboard() {
                               padding: "8px 44px 8px 12px",
                               cursor: "pointer",
                               fontSize: 12,
-                              borderBottom: "1px solid var(--color-border)",
+                              borderBottom: "1px solid var(--border, var(--color-border))",
                               background: selected ? "var(--bg-canvas)" : "transparent",
                               color: "var(--color-text)",
                             }}
@@ -3631,8 +4290,8 @@ export default function AgentDashboard() {
                     style={{
                       position: "absolute",
                       inset: 0,
-                      borderRadius: 10,
-                      background: "var(--bg-elevated)",
+                      borderRadius: 12,
+                      background: "color-mix(in srgb, var(--agent-chat-input-bg) 85%, var(--color-primary) 15%)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -3659,13 +4318,13 @@ export default function AgentDashboard() {
                       height: 32,
                       borderRadius: 8,
                       background: "transparent",
-                      border: "1px solid var(--color-border)",
+                      border: "1px solid var(--agent-chat-border)",
                       cursor: "pointer",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       fontSize: 18,
-                      color: "var(--color-text)",
+                      color: "var(--agent-chat-input-text)",
                       flexShrink: 0,
                     }}
                   >
@@ -3674,7 +4333,7 @@ export default function AgentDashboard() {
                   {isMobile && connectorPopupOpen && (
                     <div
                       onClick={() => setConnectorPopupOpen(false)}
-                      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 10000 }}
+                      style={{ position: "fixed", inset: 0, background: "color-mix(in srgb, var(--color-text) 45%, transparent)", zIndex: 10000 }}
                       aria-hidden="true"
                     />
                   )}
@@ -3695,7 +4354,7 @@ export default function AgentDashboard() {
                               maxHeight: "75vh",
                               overflowY: "auto",
                               padding: "0 0 16px 0",
-                              boxShadow: "0 -4px 20px rgba(0,0,0,0.2)",
+                              boxShadow: "0 -4px 20px color-mix(in srgb, var(--color-text) 20%, transparent)",
                             }
                           : {
                               position: "absolute",
@@ -3711,7 +4370,7 @@ export default function AgentDashboard() {
                               overflowY: "auto",
                               padding: "8px 0",
                               zIndex: 9999,
-                              boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                              boxShadow: "0 8px 24px color-mix(in srgb, var(--color-text) 20%, transparent)",
                             }
                       }
                     >
@@ -3759,22 +4418,22 @@ export default function AgentDashboard() {
                           Mode
                         </div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 16px" }}>
-                          {["ask", "agent", "plan", "debug"].map((m) => (
+                          {modePickerSlugs.map((m) => (
                             <button
                               key={m}
                               type="button"
                               onClick={() => { setMode(m); setConnectorPopupOpen(false); }}
                               style={{
                                 padding: "8px 12px",
-                                background: mode === m ? "var(--mode-color)" : "var(--bg-elevated)",
-                                color: mode === m ? "var(--color-on-mode)" : "var(--color-text)",
-                                border: "1px solid var(--color-border)",
+                                background: "transparent",
+                                color: mode === m ? `var(--mode-${m})` : "var(--text-muted)",
+                                border: mode === m ? `1px solid var(--mode-${m})` : "1px solid transparent",
                                 borderRadius: 6,
                                 fontSize: 13,
                                 cursor: "pointer",
                               }}
                             >
-                              {m.charAt(0).toUpperCase() + m.slice(1)}
+                              {modeLabel(m)}
                             </button>
                           ))}
                         </div>
@@ -3824,18 +4483,18 @@ export default function AgentDashboard() {
                       alignItems: "center",
                       gap: 6,
                       padding: "6px 12px",
-                      border: "1px solid var(--color-border)",
+                      border: "1px solid var(--agent-chat-border)",
                       borderRadius: 6,
                       background: "transparent",
                       cursor: "pointer",
                       fontSize: 13,
-                      color: "var(--color-text)",
+                      color: "var(--agent-chat-input-text)",
                     }}
                   >
-                    <span style={{ display: "flex", color: "var(--mode-color)" }}>
-                      {MODE_ICONS[mode]}
+                    <span style={{ display: "flex", color: `var(--mode-${mode})` }}>
+                      {modeIconFor(mode)}
                     </span>
-                    <span style={{ textTransform: "capitalize" }}>{mode}</span>
+                    <span>{modeLabel(mode)}</span>
                     <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
                       <path d="M5 7L1 3h8z" />
                     </svg>
@@ -3851,11 +4510,11 @@ export default function AgentDashboard() {
                         border: "1px solid var(--color-border)",
                         borderRadius: 8,
                         minWidth: 160,
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        boxShadow: "0 4px 12px color-mix(in srgb, var(--color-text) 15%, transparent)",
                         zIndex: 1000,
                       }}
                     >
-                      {["ask", "agent", "plan", "debug"].map((m) => (
+                      {modePickerSlugs.map((m) => (
                         <div
                           key={m}
                           role="button"
@@ -3868,23 +4527,16 @@ export default function AgentDashboard() {
                             gap: 10,
                             padding: "10px 14px",
                             cursor: "pointer",
-                            background: mode === m ? "var(--bg-canvas)" : "transparent",
+                            background: "transparent",
                             fontSize: 13,
-                            borderLeft: mode === m ? `3px solid var(--mode-${m})` : "3px solid transparent",
-                            color: "var(--color-text)",
+                            border: mode === m ? `1px solid var(--mode-${m})` : "1px solid transparent",
+                            color: mode === m ? `var(--mode-${m})` : "var(--text-muted)",
                           }}
                         >
-                          <span style={{ display: "flex", color: `var(--mode-${m})` }}>{MODE_ICONS[m]}</span>
-                          <span style={{ textTransform: "capitalize" }}>{m}</span>
+                          <span style={{ display: "flex", color: `var(--mode-${m})` }}>{modeIconFor(m)}</span>
+                          <span>{modeLabel(m)}</span>
                         </div>
                       ))}
-                      <div style={{ borderTop: "1px solid var(--color-border)", marginTop: 4, paddingTop: 8 }}>
-                        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", cursor: "pointer", fontSize: 13, color: "var(--color-text)" }}>
-                          <input type="checkbox" checked={useStreaming} onChange={(e) => setUseStreaming(e.target.checked)} style={{ accentColor: "var(--mode-color)" }} />
-                          <span>Stream</span>
-                        </label>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", padding: "0 14px 8px" }}>Off = tools + approval for all providers</div>
-                      </div>
                     </div>
                   )}
                 </div>
@@ -3900,12 +4552,12 @@ export default function AgentDashboard() {
                       alignItems: "center",
                       gap: 6,
                       padding: "6px 12px",
-                      border: "1px solid var(--color-border)",
+                      border: "1px solid var(--agent-chat-border)",
                       borderRadius: 6,
                       background: "transparent",
                       cursor: "pointer",
                       fontSize: 13,
-                      color: "var(--color-text)",
+                      color: "var(--agent-chat-input-text)",
                     }}
                   >
                     <span>{selectedModel?.id === "auto" ? "Auto" : (selectedModel ? (MODEL_LABELS[selectedModel.model_key] ?? selectedModel.display_name) : (activeModel ? (MODEL_LABELS[activeModel.model_key] ?? activeModel.display_name) : "Auto"))}</span>
@@ -3926,7 +4578,7 @@ export default function AgentDashboard() {
                         minWidth: 200,
                         maxHeight: 300,
                         overflowY: "auto",
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        boxShadow: "0 4px 12px color-mix(in srgb, var(--color-text) 15%, transparent)",
                         zIndex: 1000,
                       }}
                     >
@@ -4027,7 +4679,7 @@ export default function AgentDashboard() {
                     position: "relative",
                     background: isListening ? "var(--mode-color)" : "transparent",
                     border: "none",
-                    color: isListening ? "var(--color-on-mode)" : "var(--text-muted)",
+                    color: isListening ? "var(--color-on-mode)" : "var(--agent-chat-placeholder)",
                     cursor: "pointer",
                     padding: "6px",
                     borderRadius: "4px",
@@ -4036,10 +4688,10 @@ export default function AgentDashboard() {
                     transition: "all 200ms",
                   }}
                   onMouseEnter={(e) => {
-                    if (!isListening) e.currentTarget.style.color = "var(--color-text)";
+                    if (!isListening) e.currentTarget.style.color = "var(--agent-chat-input-text)";
                   }}
                   onMouseLeave={(e) => {
-                    if (!isListening) e.currentTarget.style.color = "var(--text-muted)";
+                    if (!isListening) e.currentTarget.style.color = "var(--agent-chat-placeholder)";
                   }}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -4057,7 +4709,7 @@ export default function AgentDashboard() {
                         width: "8px",
                         height: "8px",
                         borderRadius: "50%",
-                        background: "var(--color-danger, var(--error, #ef4444))",
+                        background: "var(--color-error)",
                         animation: "agent-mic-pulse 1.5s ease-in-out infinite",
                       }}
                     />
@@ -4095,7 +4747,31 @@ export default function AgentDashboard() {
                   ref={textareaRef}
                   placeholder={placeholderText}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const pos = e.target.selectionStart ?? v.length;
+                    setInput(v);
+                    setInputCaret(pos);
+                    syncInputCaretOffset(v, pos);
+                  }}
+                  onSelect={(e) => {
+                    const t = e.target;
+                    const pos = t.selectionStart ?? input.length;
+                    setInputCaret(pos);
+                    syncInputCaretOffset(t.value, pos);
+                  }}
+                  onKeyUp={(e) => {
+                    const t = e.target;
+                    const pos = t.selectionStart ?? input.length;
+                    setInputCaret(pos);
+                    syncInputCaretOffset(t.value, pos);
+                  }}
+                  onClick={(e) => {
+                    const t = e.target;
+                    const pos = t.selectionStart ?? input.length;
+                    setInputCaret(pos);
+                    syncInputCaretOffset(t.value, pos);
+                  }}
                   onPaste={(e) => {
                     const items = e.clipboardData?.items;
                     if (!items?.length) return;
@@ -4142,6 +4818,9 @@ export default function AgentDashboard() {
                         }
                       }
                     }
+                    if (showAtPicker && atPickerRef.current?.handleKeyDown(e)) {
+                      return;
+                    }
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       sendMessage();
@@ -4168,7 +4847,6 @@ export default function AgentDashboard() {
                     minHeight: 28,
                     maxHeight: 120,
                     overflowY: "auto",
-                    color: "var(--color-text)",
                     fontFamily: "inherit",
                   }}
                 />
@@ -4193,7 +4871,7 @@ export default function AgentDashboard() {
                   }}
                 >
                   <svg width="20" height="20" viewBox="0 0 36 36" style={{ display: "block" }}>
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--color-border)" strokeWidth="2" />
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--agent-chat-border)" strokeWidth="2" />
                     <circle
                       cx="18"
                       cy="18"
@@ -4218,7 +4896,7 @@ export default function AgentDashboard() {
                         borderRadius: 8,
                         padding: "12px 14px",
                         minWidth: 180,
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        boxShadow: "0 4px 12px color-mix(in srgb, var(--color-text) 15%, transparent)",
                         zIndex: 1001,
                       }}
                     >
@@ -4288,43 +4966,6 @@ export default function AgentDashboard() {
             </div>
           </div>
 
-          {/* Status bar */}
-          <div
-            className="agent-status-bar"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: "4px 8px",
-              padding: "3px 12px",
-              background: "var(--bg-nav)",
-              borderTop: "1px solid var(--color-border)",
-              fontSize: "11px",
-              color: "rgba(255, 255, 255, 0.8)",
-              flexShrink: 0,
-            }}
-          >
-            {agentActivity ? (
-              <>
-                <span style={{ color: "var(--accent)", animation: "spPulse 1s infinite" }} aria-hidden>
-                  *
-                </span>
-                <span style={{ color: "var(--text-secondary)", fontSize: 11, marginLeft: 4 }}>
-                  {agentActivity.label}
-                </span>
-              </>
-            ) : (
-              <span>Agent Sam</span>
-            )}
-            <span>
-              {selectedModel?.id === "auto"
-                ? (lastUsedModel ? `Auto (${MODEL_LABELS[lastUsedModel] ?? lastUsedModel})` : "Auto")
-                : (activeModel?.display_name ?? "Auto")
-              } · level AI
-            </span>
-          </div>
-
           {recentFiles.length > 0 && (
             <div style={{ flexShrink: 0 }} aria-hidden="true" />
           )}
@@ -4366,7 +5007,7 @@ export default function AgentDashboard() {
           </div>
         )}
 
-        {/* ── Mobile: side drawer from right + backdrop + collapsed strip ─ */}
+        {/* ── Mobile: side drawer from right + backdrop (tabs in panel header) ─ */}
         {isMobile && (
           <>
             {previewOpen && (
@@ -4375,7 +5016,7 @@ export default function AgentDashboard() {
                 style={{
                   position: "fixed",
                   inset: 0,
-                  background: "rgba(0,0,0,0.5)",
+                  background: "color-mix(in srgb, var(--color-text) 50%, transparent)",
                   zIndex: 998,
                 }}
               />
@@ -4392,65 +5033,13 @@ export default function AgentDashboard() {
                 background: "var(--bg-elevated)",
                 borderLeft: "1px solid var(--border)",
                 display: "flex",
-                flexDirection: "row",
+                flexDirection: "column",
                 overflow: "hidden",
                 transform: previewOpen ? "translateX(0)" : "translateX(100%)",
                 transition: "transform 250ms cubic-bezier(0.4, 0, 0.2, 1)",
-                boxShadow: previewOpen ? "-4px 0 24px rgba(0,0,0,0.3)" : "none",
+                boxShadow: previewOpen ? "-4px 0 24px color-mix(in srgb, var(--color-text) 30%, transparent)" : "none",
               }}
             >
-              <div
-                className="iam-viewer-icon-strip"
-                style={{
-                  width: 44,
-                  flexShrink: 0,
-                  background: "var(--bg-canvas)",
-                  borderRight: "1px solid var(--border)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  paddingTop: 34,
-                  paddingBottom: 110,
-                  gap: 4,
-                  overflowY: "auto",
-                  scrollbarWidth: "none",
-                }}
-              >
-                {VIEWER_STRIP_TAB_ORDER.map((tab) => {
-                  const isActive = previewOpen && activeTab === tab;
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      title={VIEWER_STRIP_TITLES[tab]}
-                      onClick={() => {
-                        if (previewOpen && activeTab === tab) {
-                          setPreviewOpen(false);
-                        } else {
-                          setPreviewOpen(true);
-                          setActiveTab(tab);
-                          if (tab === "browser") setShellNavActive(false);
-                        }
-                      }}
-                      style={{
-                        width: 36,
-                        height: 36,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: isActive ? "var(--bg-elevated)" : "transparent",
-                        border: "none",
-                        borderRight: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                        borderRadius: "4px 0 0 4px",
-                        color: isActive ? "var(--accent)" : "var(--text-muted)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <ViewerPanelStripIcon tab={tab} size={16} />
-                    </button>
-                  );
-                })}
-              </div>
               <div
                 style={{
                   flex: 1,
@@ -4459,135 +5048,78 @@ export default function AgentDashboard() {
                   overflow: "hidden",
                   display: "flex",
                   flexDirection: "column",
+                  minHeight: 0,
                 }}
               >
-                <FloatingPreviewPanel
-                  open={previewOpen}
-                  onClose={() => setPreviewOpen(false)}
-                  activeTab={activeTab}
-                  onTabChange={setActiveTab}
-                  previewHtml={previewHtml}
-                  onPreviewHtmlChange={setPreviewHtml}
-                  browserUrl={browserUrl}
-                  onBrowserUrlChange={setBrowserUrl}
-                  onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
-                  codeContent={codeContent}
-                  onCodeContentChange={setCodeContent}
-                  codeFilename={codeFilename}
-                  onCodeFilenameChange={setCodeFilename}
-                  onFileContextChange={handleFileContextChange}
-                  isDarkTheme={true}
-                  activeThemeSlug={activeThemeSlug}
-                  proposedFileChange={proposedFileChange}
-                  onProposedChangeResolved={() => setProposedFileChange(null)}
-                  monacoDiffFromChat={monacoDiffFromChat}
-                  onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
-                  openFileKey={openFileKeyForPanel}
-                  onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
-                  connectedIntegrations={connectedIntegrations}
-                  runCommandRunnerRef={runCommandRunnerRef}
-                  availableCommands={availableCommands}
-                  onOpenInBrowser={handleOpenInBrowser}
-                  onDeployStart={handleDeployStart}
-                  onDeployComplete={handleDeployComplete}
-                  shellNavActive={shellNavActive}
-                />
-              </div>
-            </div>
-            {!previewOpen && (
-              <div
-                ref={mobileIconsStripRef}
-                className="iam-mobile-icon-toggle"
-                style={{
-                  position: "fixed",
-                  top: "calc(52px + env(safe-area-inset-top, 0px))",
-                  right: 0,
-                  zIndex: 50,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setMobileIconsOpen((v) => !v)}
+                <div
                   style={{
-                    width: 32,
-                    height: 32,
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--border)",
-                    borderRight: "none",
-                    borderRadius: "6px 0 0 6px",
+                    flex: 1,
+                    minHeight: 0,
+                    minWidth: 0,
+                    overflow: "hidden",
                     display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
+                    flexDirection: "column",
                   }}
-                  aria-expanded={mobileIconsOpen}
-                  aria-label="Open tools menu"
                 >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-                    <circle cx="4" cy="4" r="1.5" />
-                    <circle cx="12" cy="4" r="1.5" />
-                    <circle cx="4" cy="12" r="1.5" />
-                    <circle cx="12" cy="12" r="1.5" />
-                  </svg>
-                </button>
-                {mobileIconsOpen && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 32,
-                      right: 0,
-                      background: "var(--bg-elevated)",
-                      border: "1px solid var(--border)",
-                      borderRight: "none",
-                      borderRadius: "6px 0 0 6px",
-                      padding: "4px 0",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 2,
-                      boxShadow: "-2px 4px 12px rgba(0,0,0,0.3)",
-                    }}
-                  >
-                    {VIEWER_STRIP_TAB_ORDER.map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        title={VIEWER_STRIP_TITLES[tab]}
-                        onClick={() => {
-                          setActiveTab(tab);
-                          setPreviewOpen(true);
-                          setMobileIconsOpen(false);
-                          if (tab === "browser") setShellNavActive(false);
-                        }}
-                        style={{
-                          width: 36,
-                          height: 36,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "transparent",
-                          border: "none",
-                          color: "var(--text-muted)",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <ViewerPanelStripIcon tab={tab} size={14} />
-                      </button>
-                    ))}
-                  </div>
+                  <FloatingPreviewPanel
+                    open={previewOpen}
+                    onClose={() => setPreviewOpen(false)}
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    onViewerTabChange={handleViewerTabFromHeader}
+                    previewHtml={previewHtml}
+                    onPreviewHtmlChange={setPreviewHtml}
+                    browserUrl={browserUrl}
+                    onBrowserUrlChange={setBrowserUrl}
+                    onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
+                    codeContent={codeContent}
+                    onCodeContentChange={setCodeContent}
+                    codeFilename={codeFilename}
+                    onCodeFilenameChange={setCodeFilename}
+                    onFileContextChange={handleFileContextChange}
+                    isDarkTheme={true}
+                    activeThemeSlug={activeThemeSlug}
+                    proposedFileChange={proposedFileChange}
+                    onProposedChangeResolved={() => setProposedFileChange(null)}
+                    monacoDiffFromChat={monacoDiffFromChat}
+                    onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
+                    openFileKey={openFileKeyForPanel}
+                    onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
+                    connectedIntegrations={connectedIntegrations}
+                    runCommandRunnerRef={runCommandRunnerRef}
+                    availableCommands={availableCommands}
+                    onOpenInBrowser={handleOpenInBrowser}
+                    onDeployStart={handleDeployStart}
+                    onDeployComplete={handleDeployComplete}
+                    shellNavActive={shellNavActive}
+                  />
+                </div>
+                {bottomDockOpen && (
+                  <AgentBottomPanel
+                    open={bottomDockOpen}
+                    height={bottomDockHeight}
+                    onHeightChange={setBottomDockHeight}
+                    activeTab={bottomDockTab}
+                    onTabChange={setBottomDockTab}
+                    runCommandRunnerRef={runCommandRunnerRef}
+                    onOpenBrowserPanel={handleOpenInBrowser}
+                    onOpenSettingsVault={openSettingsVaultSection}
+                    agentSessionId={currentSessionId}
+                    workflowCollabRunId={workflowCollabRunId}
+                  />
                 )}
               </div>
-            )}
+            </div>
           </>
         )}
 
-        {/* ── Desktop: vertical icon strip (left edge of viewer) + tool panel ─ */}
-        {!isMobile && (
+        {/* ── Desktop: viewer column (tabs in panel header; no side rail) ─ */}
+        {!isMobile && previewOpen && (
           <div
             style={{
               display: "flex",
               flexDirection: "row",
-              flex: previewOpen && !isMobile ? `0 0 ${panelWidthPct}%` : "0 0 48px",
+              flex: `0 0 ${panelWidthPct}%`,
               minWidth: 0,
               minHeight: 0,
               alignSelf: "stretch",
@@ -4595,69 +5127,6 @@ export default function AgentDashboard() {
               transition: dragging ? "none" : "flex 0.15s ease",
             }}
           >
-            <div
-              className="iam-viewer-icon-strip"
-              style={{
-                width: 48,
-                flexShrink: 0,
-                position: "relative",
-                alignSelf: "stretch",
-                minHeight: 0,
-                background: "transparent",
-                borderLeft: "none",
-                borderRight: previewOpen ? "1px solid var(--border)" : "none",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "center",
-                alignItems: "flex-end",
-                gap: 4,
-                overflowY: "auto",
-                overflowX: "hidden",
-                scrollbarWidth: "none",
-              }}
-            >
-              {VIEWER_STRIP_TAB_ORDER.map((tab) => {
-                const isActive = previewOpen && activeTab === tab;
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    title={VIEWER_STRIP_TITLES[tab]}
-                    onClick={() => {
-                      if (previewOpen && activeTab === tab) {
-                        setPreviewOpen(false);
-                      } else {
-                        setPreviewOpen(true);
-                        setActiveTab(tab);
-                        if (tab === "browser") setShellNavActive(false);
-                      }
-                    }}
-                    style={{
-                      width: 36,
-                      height: 36,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background: isActive ? "var(--bg-canvas)" : "transparent",
-                      border: "none",
-                      borderLeft: "none",
-                      borderRight: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                      borderRadius: isActive ? "4px 0 0 4px" : 4,
-                      color: isActive ? "var(--accent)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      fontFamily: "monospace",
-                      fontSize: 13,
-                      transition: "all 150ms",
-                    }}
-                    onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = "var(--text-primary)"; }}
-                    onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = "var(--text-muted)"; }}
-                  >
-                    <ViewerPanelStripIcon tab={tab} />
-                  </button>
-                );
-              })}
-            </div>
-            {previewOpen && (
               <div
                 style={{
                   flex: 1,
@@ -4666,43 +5135,71 @@ export default function AgentDashboard() {
                   overflow: "hidden",
                   display: "flex",
                   flexDirection: "column",
+                  minHeight: 0,
                 }}
               >
-                <FloatingPreviewPanel
-                  open={previewOpen}
-                  onClose={() => setPreviewOpen(false)}
-                  activeTab={activeTab}
-                  onTabChange={setActiveTab}
-                  previewHtml={previewHtml}
-                  onPreviewHtmlChange={setPreviewHtml}
-                  browserUrl={browserUrl}
-                  onBrowserUrlChange={setBrowserUrl}
-                  onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
-                  codeContent={codeContent}
-                  onCodeContentChange={setCodeContent}
-                  codeFilename={codeFilename}
-                  onCodeFilenameChange={setCodeFilename}
-                  onFileContextChange={handleFileContextChange}
-                  isDarkTheme={true}
-                  activeThemeSlug={activeThemeSlug}
-                  proposedFileChange={proposedFileChange}
-                  onProposedChangeResolved={() => setProposedFileChange(null)}
-                  monacoDiffFromChat={monacoDiffFromChat}
-                  onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
-                  openFileKey={openFileKeyForPanel}
-                  onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
-                  connectedIntegrations={connectedIntegrations}
-                  runCommandRunnerRef={runCommandRunnerRef}
-                  availableCommands={availableCommands}
-                  onOpenInBrowser={handleOpenInBrowser}
-                  onDeployStart={handleDeployStart}
-                  onDeployComplete={handleDeployComplete}
-                  shellNavActive={shellNavActive}
-                />
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <FloatingPreviewPanel
+                    open={previewOpen}
+                    onClose={() => setPreviewOpen(false)}
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    onViewerTabChange={handleViewerTabFromHeader}
+                    previewHtml={previewHtml}
+                    onPreviewHtmlChange={setPreviewHtml}
+                    browserUrl={browserUrl}
+                    onBrowserUrlChange={setBrowserUrl}
+                    onBrowserScreenshotUrl={handleBrowserScreenshotUrl}
+                    codeContent={codeContent}
+                    onCodeContentChange={setCodeContent}
+                    codeFilename={codeFilename}
+                    onCodeFilenameChange={setCodeFilename}
+                    onFileContextChange={handleFileContextChange}
+                    isDarkTheme={true}
+                    activeThemeSlug={activeThemeSlug}
+                    proposedFileChange={proposedFileChange}
+                    onProposedChangeResolved={() => setProposedFileChange(null)}
+                    monacoDiffFromChat={monacoDiffFromChat}
+                    onMonacoDiffResolved={() => setMonacoDiffFromChat(null)}
+                    openFileKey={openFileKeyForPanel}
+                    onOpenFileKeyDone={() => setOpenFileKeyForPanel(null)}
+                    connectedIntegrations={connectedIntegrations}
+                    runCommandRunnerRef={runCommandRunnerRef}
+                    availableCommands={availableCommands}
+                    onOpenInBrowser={handleOpenInBrowser}
+                    onDeployStart={handleDeployStart}
+                    onDeployComplete={handleDeployComplete}
+                    shellNavActive={shellNavActive}
+                  />
+                </div>
+                {bottomDockOpen && (
+                  <AgentBottomPanel
+                    open={bottomDockOpen}
+                    height={bottomDockHeight}
+                    onHeightChange={setBottomDockHeight}
+                    activeTab={bottomDockTab}
+                    onTabChange={setBottomDockTab}
+                    runCommandRunnerRef={runCommandRunnerRef}
+                    onOpenBrowserPanel={handleOpenInBrowser}
+                    onOpenSettingsVault={openSettingsVaultSection}
+                    agentSessionId={currentSessionId}
+                    workflowCollabRunId={workflowCollabRunId}
+                  />
+                )}
               </div>
-            )}
           </div>
         )}
+      </div>
+        </div>
       </div>
 
       {lightboxImage && (
@@ -4713,7 +5210,7 @@ export default function AgentDashboard() {
             position: "fixed",
             inset: 0,
             zIndex: 9999,
-            background: "rgba(0,0,0,0.92)",
+            background: "color-mix(in srgb, var(--color-text) 92%, transparent)",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -4741,7 +5238,7 @@ export default function AgentDashboard() {
                 maxHeight: "80vh",
                 objectFit: "contain",
                 borderRadius: "var(--radius-md)",
-                boxShadow: "0 8px 64px rgba(0,0,0,0.8)",
+                boxShadow: "0 8px 64px color-mix(in srgb, var(--color-text) 80%, transparent)",
               }}
             />
             <div style={{ display: "flex", gap: "var(--spacing-sm)" }}>
@@ -4801,7 +5298,7 @@ export default function AgentDashboard() {
                 Close
               </button>
             </div>
-            <span style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.3)" }}>
+            <span style={{ fontSize: "11px", color: "color-mix(in srgb, var(--color-text) 30%, transparent)" }}>
               Click outside or press Esc to close
             </span>
           </div>

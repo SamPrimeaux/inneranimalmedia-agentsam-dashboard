@@ -21,9 +21,85 @@
         }
     })();
     </script>
+    <script nonce="MzY2NjEzNTM0Myw3NTI5NTA5MzM=">
+        (function() {
+            function applyShellTheme(slug, config, apiVariables) {
+                if (!slug) return;
+                document.documentElement.setAttribute('data-theme', slug);
+                var cssVars = (config && (config.cssVars || config.css_vars)) || {};
+                if (apiVariables && typeof apiVariables === 'object' && Object.keys(apiVariables).length) {
+                    cssVars = apiVariables;
+                } else if (config && typeof config === 'object' && !config.cssVars && !config.css_vars) {
+                    var c = config;
+                    cssVars['--bg-nav'] = c.nav || c.bg || c.surface || '#1e293b';
+                    cssVars['--text-nav'] = c.text || c.textSecondary || '#f1f5f9';
+                    cssVars['--text-primary'] = c.text || c.textSecondary || '#f1f5f9';
+                    cssVars['--text-secondary'] = c.textSecondary || c.text || '#94a3b8';
+                    cssVars['--color-border'] = c.border || '#334155';
+                    cssVars['--border-nav'] = c.border || '#334155';
+                    cssVars['--accent'] = c.primary || '#3b82f6';
+                    cssVars['--color-primary'] = c.primary || '#3b82f6';
+                    if (!c.bg && !c.surface) { cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b'; } else { if (c.bg) cssVars['--bg-canvas'] = c.bg; if (c.surface) cssVars['--bg-elevated'] = c.surface; }
+                }
+                if (Object.keys(cssVars).length === 0) {
+                    cssVars['--bg-nav'] = '#1e293b'; cssVars['--text-nav'] = '#f1f5f9'; cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b';
+                }
+                var cssText = ':root[data-theme="' + String(slug).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"] {';
+                for (var k in cssVars) if (Object.prototype.hasOwnProperty.call(cssVars, k)) {
+                    var key = String(k).indexOf('--') === 0 ? k : '--' + k;
+                    cssText += key + ':' + cssVars[k] + ';';
+                }
+                cssText += '}';
+                try { localStorage.setItem('dashboard-theme', slug); localStorage.setItem('dashboard-theme-vars', cssText); } catch (e) {}
+                var styleEl = document.getElementById('theme-dynamic-inject');
+                if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'theme-dynamic-inject'; document.head.appendChild(styleEl); }
+                styleEl.textContent = cssText;
+            }
+            fetch('/api/settings/theme', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    var slug = (d && d.theme) ? d.theme.trim() : null;
+                    if (!slug) {
+                        try { slug = localStorage.getItem('dashboard-theme'); } catch (e) {}
+                        if (!slug) return;
+                    }
+                    if (d && d.variables && typeof d.variables === 'object' && Object.keys(d.variables).length) {
+                        applyShellTheme(slug, {}, d.variables);
+                        return;
+                    }
+                    fetch('/api/themes', { credentials: 'same-origin' })
+                        .then(function(r2) { return r2.json(); })
+                        .then(function(data) {
+                            var themes = data.themes || [];
+                            var applied = false;
+                            for (var i = 0; i < themes.length; i++) {
+                                var t = themes[i];
+                                var s = (t.slug || t.name || '').toLowerCase();
+                                if (s === slug.toLowerCase()) {
+                                    var cfg = t.config;
+                                    if (typeof cfg === 'string') try { cfg = JSON.parse(cfg); } catch (e) { cfg = {}; }
+                                    applyShellTheme(slug, cfg || {});
+                                    applied = true;
+                                    break;
+                                }
+                            }
+                            if (!applied) applyShellTheme(slug, {});
+                        })
+                        .catch(function() { applyShellTheme(slug, {}); });
+                })
+                .catch(function() {
+                    try {
+                        var local = localStorage.getItem('dashboard-theme');
+                        if (local) applyShellTheme(local, {});
+                    } catch (e) {}
+                });
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/static/dashboard/styles_themes.css">
+    <link rel="stylesheet" href="/static/dashboard/shell.css">
     <style>
         /* === THEME SYSTEM === */
         :root {
@@ -1913,7 +1989,11 @@
                     el.id = 'theme-dynamic-inject';
                     document.head.appendChild(el);
                 }
-                el.textContent = '[data-theme="' + themeName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]{--bg-canvas:' + bg + ';--bg-elevated:' + elevated + ';--bg-nav:' + nav + ';--text-primary:' + text + ';--text-secondary:' + text2 + ';--border:' + border + ';--accent:' + primary + ';--accent-hover:' + primary + ';--text-nav:#fff;--text-nav-muted:rgba(255,255,255,0.75);--border-nav:rgba(255,255,255,0.2);}';
+                const accentHover = v['--accent-hover'] || primary;
+                const textNav = v['--text-nav'] || text;
+                const textNavMuted = v['--text-nav-muted'] || text2;
+                const borderNav = v['--border-nav'] || border;
+                el.textContent = '[data-theme="' + themeName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]{--bg-canvas:' + bg + ';--bg-elevated:' + elevated + ';--bg-nav:' + nav + ';--text-primary:' + text + ';--text-secondary:' + text2 + ';--border:' + border + ';--accent:' + primary + ';--accent-hover:' + accentHover + ';--text-nav:' + textNav + ';--text-nav-muted:' + textNavMuted + ';--border-nav:' + borderNav + ';}';
             } catch (e) {}
         }
         const savedTheme = localStorage.getItem('dashboard-theme');

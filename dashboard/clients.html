@@ -1350,7 +1350,11 @@
                     el.id = 'theme-dynamic-inject';
                     document.head.appendChild(el);
                 }
-                el.textContent = '[data-theme="' + themeName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]{--bg-canvas:' + bg + ';--bg-elevated:' + elevated + ';--bg-nav:' + nav + ';--text-primary:' + text + ';--text-secondary:' + text2 + ';--border:' + border + ';--accent:' + primary + ';--accent-hover:' + primary + ';--text-nav:#fff;--text-nav-muted:rgba(255,255,255,0.75);--border-nav:rgba(255,255,255,0.2);}';
+                const accentHover = v['--accent-hover'] || primary;
+                const textNav = v['--text-nav'] || text;
+                const textNavMuted = v['--text-nav-muted'] || text2;
+                const borderNav = v['--border-nav'] || border;
+                el.textContent = '[data-theme="' + themeName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]{--bg-canvas:' + bg + ';--bg-elevated:' + elevated + ';--bg-nav:' + nav + ';--text-primary:' + text + ';--text-secondary:' + text2 + ';--border:' + border + ';--accent:' + primary + ';--accent-hover:' + accentHover + ';--text-nav:' + textNav + ';--text-nav-muted:' + textNavMuted + ';--border-nav:' + borderNav + ';}';
             } catch (e) {}
         }
         const savedTheme = localStorage.getItem('dashboard-theme');

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <title>Agent — Inner Animal Media</title>
+    <style id="flash-guard">html:not([data-theme-ready]) body { visibility: hidden; }</style>
     <!-- CRITICAL: Theme must load BEFORE any visible content -->
     <script>
     (function() {
@@ -11,7 +12,6 @@
         if (saved) {
             document.documentElement.setAttribute('data-theme', saved);
         }
-        // Preload theme CSS vars to prevent flash
         const savedVars = localStorage.getItem('dashboard-theme-vars');
         if (savedVars) {
             const style = document.createElement('style');
@@ -19,7 +19,91 @@
             style.textContent = savedVars;
             document.head.appendChild(style);
         }
+        document.documentElement.setAttribute('data-theme-ready','1');
+        var fg=document.getElementById('flash-guard');
+        if(fg) fg.textContent='';
     })();
+    </script>
+    <script>
+        (function() {
+            function applyShellTheme(slug, config, apiVariables) {
+                if (!slug) return;
+                document.documentElement.setAttribute('data-theme', slug);
+                var cssVars = (config && (config.cssVars || config.css_vars)) || {};
+                if (apiVariables && typeof apiVariables === 'object' && Object.keys(apiVariables).length) {
+                    cssVars = apiVariables;
+                } else if (config && typeof config === 'object' && !config.cssVars && !config.css_vars) {
+                    var c = config;
+                    cssVars['--bg-nav'] = c.nav || c.bg || c.surface || '#1e293b';
+                    cssVars['--text-nav'] = c.text || c.textSecondary || '#f1f5f9';
+                    cssVars['--text-primary'] = c.text || c.textSecondary || '#f1f5f9';
+                    cssVars['--text-secondary'] = c.textSecondary || c.text || '#94a3b8';
+                    cssVars['--color-border'] = c.border || '#334155';
+                    cssVars['--border-nav'] = c.border || '#334155';
+                    cssVars['--accent'] = c.primary || '#3b82f6';
+                    cssVars['--color-primary'] = c.primary || '#3b82f6';
+                    if (!c.bg && !c.surface) { cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b'; } else { if (c.bg) cssVars['--bg-canvas'] = c.bg; if (c.surface) cssVars['--bg-elevated'] = c.surface; }
+                }
+                if (Object.keys(cssVars).length === 0) {
+                    cssVars['--bg-nav'] = '#1e293b'; cssVars['--text-nav'] = '#f1f5f9'; cssVars['--bg-canvas'] = '#0f172a'; cssVars['--bg-elevated'] = '#1e293b';
+                }
+                var cssText = ':root[data-theme="' + String(slug).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"] {';
+                for (var k in cssVars) if (Object.prototype.hasOwnProperty.call(cssVars, k)) {
+                    var key = String(k).indexOf('--') === 0 ? k : '--' + k;
+                    cssText += key + ':' + cssVars[k] + ';';
+                }
+                cssText += '}';
+                try { localStorage.setItem('dashboard-theme', slug); localStorage.setItem('dashboard-theme-vars', cssText); } catch (e) {}
+                var styleEl = document.getElementById('theme-dynamic-inject');
+                if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'theme-dynamic-inject'; document.head.appendChild(styleEl); }
+                styleEl.textContent = cssText;
+                document.documentElement.setAttribute('data-theme-ready','1');
+                var fg2 = document.getElementById('flash-guard');
+                if (fg2) fg2.textContent = '';
+            }
+            fetch('/api/settings/theme', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    var slug = (d && d.theme) ? d.theme.trim() : null;
+                    if (!slug) {
+                        try { slug = localStorage.getItem('dashboard-theme'); } catch (e) {}
+                        if (!slug) return;
+                    }
+                    if (d && d.variables && typeof d.variables === 'object' && Object.keys(d.variables).length) {
+                        applyShellTheme(slug, {}, d.variables);
+                        return;
+                    }
+                    fetch('/api/themes', { credentials: 'same-origin' })
+                        .then(function(r2) { return r2.json(); })
+                        .then(function(data) {
+                            var themes = data.themes || [];
+                            var applied = false;
+                            for (var i = 0; i < themes.length; i++) {
+                                var t = themes[i];
+                                var s = (t.slug || t.name || '').toLowerCase();
+                                if (s === slug.toLowerCase()) {
+                                    var cfg = t.config;
+                                    if (typeof cfg === 'string') try { cfg = JSON.parse(cfg); } catch (e) { cfg = {}; }
+                                    applyShellTheme(slug, cfg || {});
+                                    applied = true;
+                                    break;
+                                }
+                            }
+                            if (!applied) {
+                                applyShellTheme(slug, {});
+                            }
+                        })
+                        .catch(function() { applyShellTheme(slug, {}); });
+                })
+                .catch(function() {
+                    try {
+                        var local = localStorage.getItem('dashboard-theme');
+                        if (local) {
+                            applyShellTheme(local, {});
+                        }
+                    } catch (e) {}
+                });
+        })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,6 +122,9 @@
             --transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
             --logo-dark: url('https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/8e323ffb-4338-41dc-1f71-9c7bdc57bb00/thumbnail');
             --logo-light: url('https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail');
+            --status-bar-bg: var(--bg-nav);
+            --status-bar-text: var(--text-muted);
+            --repo-switcher-bg: transparent;
         }
 
         /* Voice input recording indicator */
@@ -206,23 +293,8 @@
             padding: 12px 12px 8px;
             flex-shrink: 0;
         }
-        .sidenav-logo-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            color: var(--text-primary);
-            min-width: 0;
-        }
-        .sidenav-logo-icon {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            object-fit: contain;
-            flex-shrink: 0;
-        }
         #sidenavToggle {
-            margin-left: auto;
+            margin-left: 0;
         }
         .sidenav-toggle {
             background: none;
@@ -346,14 +418,22 @@
             flex-shrink: 0;
         }
 
-        /* Footer */
+        /* Footer: profile row + notifications bell bottom-right */
         .sidenav-footer {
             flex-shrink: 0;
             padding: 8px;
             border-top: 1px solid var(--border);
+        }
+        .sidenav-footer-bottom {
             display: flex;
-            flex-direction: column;
-            gap: 4px;
+            flex-direction: row;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .sidenav-footer .sidenav-profile {
+            flex: 1;
+            min-width: 0;
         }
         .sidenav-footer-icon {
             display: flex;
@@ -414,7 +494,6 @@
         }
 
         /* Collapsed state */
-        .sidenav.collapsed .sidenav-logo-text,
         .sidenav.collapsed .sidenav-new-chat span,
         .sidenav.collapsed .sidenav-search-btn span,
         .sidenav.collapsed .nav-section-label,
@@ -435,11 +514,11 @@
             justify-content: center;
             padding: 6px;
         }
-        .sidenav.collapsed .sidenav-footer-icon {
-            margin: 0 auto;
+        .sidenav.collapsed .sidenav-footer-bottom {
+            align-items: center;
         }
         .sidenav.collapsed .sidenav-profile {
-            justify-content: center;
+            justify-content: flex-start;
         }
 
         @media (max-width: 768px) {
@@ -642,6 +721,8 @@
             flex-shrink: 0;
             max-width: 42%;
             transition: color 150ms;
+            background: var(--repo-switcher-bg);
+            border-radius: 6px;
         }
         .topbar-workspace-side span#workspaceName {
             overflow: hidden;
@@ -673,14 +754,14 @@
         .iam-status-bar {
             height: 24px;
             min-height: 24px;
-            background: var(--bg-nav);
+            background: var(--status-bar-bg);
             border-top: 1px solid var(--border);
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 0 8px;
             font-size: 11px;
-            color: var(--text-muted);
+            color: var(--status-bar-text);
             flex-shrink: 0;
             z-index: 100;
             position: relative;
@@ -705,7 +786,7 @@
             border-radius: 3px;
             background: none;
             border: none;
-            color: var(--text-muted);
+            color: var(--status-bar-text);
             font-size: 11px;
             cursor: default;
             white-space: nowrap;
@@ -719,19 +800,23 @@
             background: var(--bg-hover);
             color: var(--text-primary);
         }
+        .status-sync-dirty-dot {
+            display: none;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-warning, var(--color-warning));
+            flex-shrink: 0;
+            margin-left: 2px;
+        }
+        .status-sync-dirty-dot.visible {
+            display: inline-block;
+        }
         .status-bar-divider {
             width: 1px;
             height: 12px;
             background: var(--border);
             margin: 0 2px;
-        }
-
-        .sidenav-logo-text {
-            display: none !important;
-        }
-
-        .sidenav.collapsed .sidenav-logo-link {
-            display: none;
         }
 
         @media (min-width: 769px) {
@@ -800,11 +885,8 @@
         <!-- Sidenav -->
         <aside class="sidenav" id="sidenav">
 
-            <!-- Rail header: logo + collapse toggle -->
+            <!-- Rail header: collapse toggle only (brand mark lives in topbar) -->
             <div class="sidenav-header">
-                <a href="/dashboard/agent" class="sidenav-logo-link">
-                    <img class="sidenav-logo-icon" src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="" width="28" height="28">
-                </a>
                 <button type="button" id="sidenavToggle"
                         class="sidenav-toggle"
                         aria-label="Collapse sidebar">
@@ -1007,26 +1089,28 @@
 
             </nav>
 
-            <!-- Footer: bell top, avatar -->
+            <!-- Footer: avatar / profile left, notifications bell bottom-right -->
             <div class="sidenav-footer">
-                <button type="button" class="sidenav-footer-icon"
-                        id="sidenavBellBtn"
-                        title="Notifications">
-                    <svg viewBox="0 0 24 24" fill="none"
-                         stroke="currentColor" stroke-width="2"
-                         width="18" height="18">
-                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                    </svg>
-                </button>
-                <div class="sidenav-profile">
-                    <img id="sidenavAvatar"
-                         src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail"
-                         alt="Profile"
-                         class="sidenav-avatar-img" />
-                    <span class="sidenav-profile-name">Sam Primeaux</span>
-                    <button type="button" id="sidenavLogoutBtn"
-                            class="sidenav-logout-btn">Sign out</button>
+                <div class="sidenav-footer-bottom">
+                    <div class="sidenav-profile">
+                        <img id="sidenavAvatar"
+                             src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/b5557284-485e-4305-2c5a-49c6acf99a00/thumbnail"
+                             alt="Agent Sam"
+                             class="sidenav-avatar-img" />
+                        <span class="sidenav-profile-name">Sam Primeaux</span>
+                        <button type="button" id="sidenavLogoutBtn"
+                                class="sidenav-logout-btn">Sign out</button>
+                    </div>
+                    <button type="button" class="sidenav-footer-icon sidenav-bell-btn"
+                            id="sidenavBellBtn"
+                            title="Notifications">
+                        <svg viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2"
+                             width="18" height="18">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
 
@@ -1051,10 +1135,10 @@
                     <path d="M13 6h3a2 2 0 0 1 2 2v7"/>
                     <line x1="6" y1="9" x2="6" y2="21"/>
                 </svg>
-                <span id="statusGitBranch">main</span>
+                <span id="statusGitBranch"></span>
             </button>
             <span class="status-bar-divider"></span>
-            <span class="status-bar-item" id="statusRepo">inneranimalmedia</span>
+            <span class="status-bar-item" id="statusRepo"></span>
             <span class="status-bar-divider"></span>
             <button type="button" class="status-bar-item" id="statusSyncBtn" title="Sync">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
@@ -1063,6 +1147,7 @@
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                 </svg>
                 <span>Sync</span>
+                <span id="statusSyncDirtyDot" class="status-sync-dirty-dot" aria-hidden="true"></span>
             </button>
         </div>
         <div class="status-bar-center">
@@ -1296,54 +1381,58 @@
             }
         });
 
+        function refreshIamGitStatus() {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            fetch('/api/agent/git/status', { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (!data || data.error) return;
+                    var branchEl = document.getElementById('statusGitBranch');
+                    var repoEl = document.getElementById('statusRepo');
+                    var syncBtn = document.getElementById('statusSyncBtn');
+                    var dot = document.getElementById('statusSyncDirtyDot');
+                    if (branchEl) branchEl.textContent = data.branch != null && data.branch !== '' ? data.branch : '';
+                    if (repoEl) repoEl.textContent = data.worker_name != null && data.worker_name !== '' ? data.worker_name : '';
+                    if (syncBtn) {
+                        var tip = 'Sync';
+                        if (data.dirty) tip = 'Uncommitted changes';
+                        else if (data.sync_last_at) tip = 'Last wf_github_sync: ' + data.sync_last_at;
+                        syncBtn.title = tip;
+                        syncBtn.style.color = data.dirty ? 'var(--accent-warning, var(--color-warning, inherit))' : '';
+                    }
+                    if (dot) {
+                        if (data.dirty) dot.classList.add('visible');
+                        else dot.classList.remove('visible');
+                        dot.setAttribute('aria-hidden', data.dirty ? 'false' : 'true');
+                    }
+                })
+                .catch(function () {});
+        }
+        function refreshIamGitStatusIfVisible() {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+            refreshIamGitStatus();
+        }
+        refreshIamGitStatusIfVisible();
+        setInterval(refreshIamGitStatusIfVisible, 30000);
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') refreshIamGitStatusIfVisible();
+        });
         const statusSyncBtn = document.getElementById('statusSyncBtn');
         if (statusSyncBtn) {
-            statusSyncBtn.addEventListener('click', () => {
+            statusSyncBtn.addEventListener('click', function () {
                 statusSyncBtn.style.opacity = '0.5';
-                setTimeout(() => {
-                    statusSyncBtn.style.opacity = '1';
-                }, 1000);
+                fetch('/api/agent/git/sync', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({}),
+                })
+                    .catch(function () {})
+                    .finally(function () {
+                        statusSyncBtn.style.opacity = '1';
+                    });
             });
         }
-
-        // Load saved theme on page load (built-in or dynamic from API)
-        function applyDynamicTheme(themeName, themeData) {
-            if (!themeData) return;
-            try {
-                const td = typeof themeData === 'string' ? JSON.parse(themeData) : themeData;
-                const v = td.css_vars || {};
-                const bg = v['--bg-surface'] || v['--color-bg'] || v['--bg-canvas'] || '#f8f9fa';
-                const elevated = v['--bg-elevated'] || v['--surface-2'] || bg;
-                const primary = v['--color-primary'] || v['--accent'] || v['--teal'] || '#3b82f6';
-                const nav = v['--bg-nav'] || primary;
-                const text = v['--text-primary'] || v['--color-text'] || v['--text'] || '#111827';
-                const text2 = v['--text-secondary'] || v['--text-muted'] || '#6b7280';
-                const border = v['--border'] || v['--color-border'] || '#e5e7eb';
-                let el = document.getElementById('theme-dynamic-inject');
-                if (!el) {
-                    el = document.createElement('style');
-                    el.id = 'theme-dynamic-inject';
-                    document.head.appendChild(el);
-                }
-                el.textContent = '[data-theme="' + themeName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]{--bg-canvas:' + bg + ';--bg-elevated:' + elevated + ';--bg-nav:' + nav + ';--text-primary:' + text + ';--text-secondary:' + text2 + ';--border:' + border + ';--accent:' + primary + ';--accent-hover:' + primary + ';--text-nav:#fff;--text-nav-muted:rgba(255,255,255,0.75);--border-nav:rgba(255,255,255,0.2);}';
-            } catch (e) {}
-        }
-        const savedTheme = localStorage.getItem('dashboard-theme');
-        if (savedTheme) {
-            document.documentElement.setAttribute('data-theme', savedTheme);
-            updateHeaderLogo();
-        }
-        fetch('/api/settings/theme', { credentials: 'same-origin' })
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (d) {
-                if (!d || !d.theme) return;
-                var t = String(d.theme).trim();
-                document.documentElement.setAttribute('data-theme', t);
-                try { localStorage.setItem('dashboard-theme', t); } catch (e) {}
-                if (d.variables && Object.keys(d.variables).length) applyDynamicTheme(t, { css_vars: d.variables });
-                updateHeaderLogo();
-            })
-            .catch(function () {});
 
         // Search: dropdown on focus, RAG knowledge search (debounced), history from localStorage, mobile magnifier
         (function () {

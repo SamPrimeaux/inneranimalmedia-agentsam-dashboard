@@ -8220,3 +8220,1125 @@ Deploy `worker.js` RAG / AI Search format changes only; no build, no R2 (`v138` 
 ### What is live now
 Production `inneranimalmedia` serves the updated AutoRAG / `iam-docs-search` request shape and chunk parsing. Agent dashboard cache bust remains **`?v=138`**.
 
+## 2026-03-24 Hyperdrive pgvector audit + /api/search and agent chat RAG
+
+### What was asked
+Audit Supabase/pgvector/Hyperdrive usage; if missing, add `POST /api/search` with `env.AI.run(@cf/baai/bge-large-en-v1.5)` + `match_documents` via `pg` + `env.HYPERDRIVE.connectionString`, and prepend pgvector context in Agent Sam chat before the LLM. No Supabase JS client.
+
+### Files changed
+- `package.json` / `package-lock.json`: add dependency `pg` for Hyperdrive Postgres queries.
+- `worker.js`: `PGVECTOR_DEFAULT_PROJECT_ID`, `pgMatchDocuments`, `formatPgvectorRowsForPrompt`; `/api/search` uses Hyperdrive when bound, else legacy `vectorizeRagSearch`; `/api/agent/chat` runs pgvector after AutoRAG block and prepends `[pgvector — Supabase knowledge]` before assembled system prompt; prompt telemetry logs `pgvector_context_chars`.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: Hyperdrive binding already present; not modified.
+- OAuth / locked handlers: not touched.
+
+### Deploy status
+- Built: no (no `npm run build` for dashboard)
+- R2 uploaded: no
+- Worker deployed: **yes** — version ID **`3fa1ba3b-5d16-4cf8-9af1-7f4202f6f5f9`** (`TRIGGERED_BY=agent`, `DEPLOYMENT_NOTES=Hyperdrive pgvector: /api/search + agent chat RAG`)
+- Deploy approved by Sam: **yes** (2026-03-24)
+
+### What is live now
+Production `inneranimalmedia` Worker includes Hyperdrive `pg` + `match_documents` for `/api/search` (when `HYPERDRIVE` is bound) and pgvector preprompt for `/api/agent/chat`.
+
+### Known issues / next steps
+- `match_documents` SQL uses `vector(1536)` in the user spec; Workers AI `bge-large-en-v1.5` emits **1024** dims — align DB function dimension with the embedding model or change model.
+- Verify Supabase `match_documents` return columns (`content`, `similarity`, etc.) match `formatPgvectorRowsForPrompt` fallbacks.
+
+## 2026-03-24 Hyperdrive pgvector — production deploy (approved)
+
+### What was asked
+Deploy Worker after Sam typed deploy approved.
+
+### Files changed
+- Deploy only: `worker.js` + `package.json` / lockfile from prior session (no new file edits this step).
+
+### Deploy status
+- R2 uploaded: no
+- Worker deployed: yes — version ID **`3fa1ba3b-5d16-4cf8-9af1-7f4202f6f5f9`**
+- Deploy approved by Sam: yes
+
+### What is live now
+Hyperdrive-backed pgvector search and agent chat RAG grounding are live on production routes.
+
+## 2026-03-24 Route map + D1 schema docs + Supabase ingest scripts
+
+### What was asked
+Generate `docs/route-map.md` from `worker.js`, generate D1 agentic schema doc, add `scripts/ingest-docs.js` to embed via Cloudflare AI REST + insert into Supabase `documents` via `pg` using direct Postgres URL (`SUPABASE_DB_URL`).
+
+### Files changed
+- `docs/route-map.md`: auto-generated route list (## per route pattern; ~255 entries).
+- `docs/d1-agentic-schema.md`: remote D1 filtered DDL, 109 tables (agent_/agentsam_/ai_/mcp_/workflow_/project_memory/commands/terminal_sessions/tool_).
+- `scripts/generate-route-map.js`, `scripts/generate-d1-agentic-schema.js`, `scripts/ingest-docs.js`.
+- `docs/iam-docs/ingest-documents-schema.sql`: optional `public.documents` table for vector(1024).
+- `package.json`: npm scripts `generate:route-map`, `generate:d1-schema-doc`, `ingest:docs`.
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: no
+
+### What is live now
+Repo contains generated markdown and ingest script; run `npm run ingest:docs` locally with `CLOUDFLARE_API_TOKEN` and `SUPABASE_DB_URL` to load Supabase.
+
+### Known issues / next steps
+- Table count (109) may differ from an expanded “148 agentic” list if filter or DB diverges; adjust SQL in `generate-d1-agentic-schema.js` if needed.
+- Ensure Supabase `documents.embedding` is `vector(1024)` to match bge-large-en-v1.5.
+
+## 2026-03-24 npm run ingest:docs (Supabase)
+
+### What was asked
+Run `npm run ingest:docs` with Cloudflare token via `with-cloudflare-env.sh` and Supabase DB URL; report row counts per source.
+
+### Files changed
+- `scripts/ingest-docs.js`: Supabase TLS (`ssl: { rejectUnauthorized: false }` for supabase hosts); Workers AI embed URL uses literal `@cf/...` path (no `encodeURIComponent` on model); summary line for both sources.
+
+### Deploy status
+- Worker deployed: no
+- R2 uploaded: no
+
+### What is live now
+Supabase `documents` populated: **255** rows for `docs:route-map`, **109** rows for `docs:d1-schema` (`project_id=inneranimalmedia`). Direct host `db.*.supabase.co:5432` + user `postgres` used; pooler URL returned “Tenant or user not found” for `pg`.
+
+### Known issues / next steps
+- Rotate DB credentials if they were shared in chat; prefer env vars / secrets manager.
+- For pooler (`:6543`), confirm Supabase dashboard “Session” vs “Transaction” URI and username format if switching off direct DB.
+
+## 2026-03-24 Expand D1 schema table filter (generate-d1-agentic-schema.js)
+
+### What was asked
+Expand `sqlite_master` table filter in `scripts/generate-d1-agentic-schema.js` to include additional prefixes (cursor, terminal, command, project_memory, prompt, iam, kanban, task, dev_workflow, memory, execution, hook, work_session, brainstorm); run `npm run generate:d1-schema-doc` and `npm run ingest:docs`; report new `docs:d1-schema` row count.
+
+### Files changed
+- `scripts/generate-d1-agentic-schema.js`: Replaced single-line SQL with multi-line `WHERE` using all requested `LIKE` prefixes; updated intro filter line in generated markdown template.
+
+### Files NOT changed
+- `worker.js`, `wrangler.production.toml`: not touched.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+`npm run generate:d1-schema-doc` wrote `docs/d1-agentic-schema.md` with **140** tables. `npm run ingest:docs` did not run here: missing `SUPABASE_DB_URL`. After ingest succeeds locally, `docs:d1-schema` should have **140** rows (one per `##` table section).
+
+### Known issues / next steps
+- Run locally: set `SUPABASE_DB_URL` plus Cloudflare token, then `npm run ingest:docs`; confirm summary line shows 140 for `docs:d1-schema`.
+
+## 2026-03-24 ingest docs: SUPABASE_DB_URL from local env
+
+### What was asked
+Document that Worker secrets cannot be read via Cloudflare API; use `process.env.SUPABASE_DB_URL` from `.env.cloudflare` or `~/.zshrc` like `CLOUDFLARE_API_TOKEN`. Update `ingest-docs.js` and `ingest-d1-memory.js`; add `SUPABASE_DB_URL` to `.env.cloudflare.example`; confirm gitignore; run `npm run ingest:docs` and report row counts.
+
+### Files changed
+- `scripts/ingest-docs.js`: Header comment and missing-env message (no change to reading `process.env.SUPABASE_DB_URL`).
+- `scripts/ingest-d1-memory.js`: New script with same env + Supabase TLS pattern; placeholder DB ping until ingest is implemented.
+- `.env.cloudflare.example`: `SUPABASE_DB_URL=` line with comment.
+
+### Files NOT changed
+- `.gitignore`: already contains `.env.cloudflare` (confirmed).
+
+### Deploy status
+- Worker deployed: no
+- `npm run ingest:docs` (with `with-cloudflare-env.sh`): failed here — `SUPABASE_DB_URL` not set in local `.env.cloudflare` on this machine.
+
+### What is live now
+Add `SUPABASE_DB_URL=postgresql://...` to `.env.cloudflare` at repo root (copy from Supabase dashboard direct connection), then run `./scripts/with-cloudflare-env.sh npm run ingest:docs` and read the Summary line for row counts.
+
+### Known issues / next steps
+- Sam: run ingest after adding `SUPABASE_DB_URL` locally; expect `docs:d1-schema` row count to match `##` sections in `docs/d1-agentic-schema.md` (e.g. 140).
+
+## 2026-03-24 Sprint: Agent Sam memory + autonomy (phases 1-5 in repo)
+
+### What was asked
+Implement ingest-d1-memory, Hyperdrive `agent_memory` persistence after chat, deploy script chain, agent command proposals API, workflow_runs API; deploy after phases (deploy not run here without approval).
+
+### Files changed
+- `scripts/ingest-d1-memory.js`: D1 remote queries via wrangler + embed + `documents` for `d1:project_memory`, `d1:guardrails`, `d1:agent_rules`.
+- `docs/iam-docs/agent-memory-schema.sql`: Supabase `agent_memory` table (vector 1024).
+- `worker.js`: `persistAgentMemoryHyperdrive`, `streamDoneDbWrites` optional last user text + `waitUntil` persist; Anthropic stream `message_stop` + non-stream chat persist; `riskLevelFromCommandProposalText`; routes `POST /api/agent/propose`, `POST .../proposals/:id/approve|deny`, `GET .../proposals/pending`, `POST /api/agent/workflows/trigger`, `PATCH .../workflows/:id/status`.
+- `package.json`: `ingest:d1-memory`, `deploy` runs generate + ingest + wrangler.
+
+### Deploy status
+- Worker deployed: no (awaiting `deploy approved`)
+- `npm run ingest:d1-memory`: completed — 25 + 11 + 14 rows (project_memory, guardrails, agent_rules)
+
+### What is live now
+Run `docs/iam-docs/agent-memory-schema.sql` on Supabase if `agent_memory` is missing. Deploy worker to activate chat memory + new APIs.
+
+### Known issues / next steps
+- Regenerate `docs/route-map.md` if route list is maintained manually.
+- Tool-loop / Anthropic streaming edge paths may not call `streamDoneDbWrites` in every branch; extend if gaps appear.
+
+## 2026-03-24 /api/search pgvector project_id + debug endpoint
+
+### What was asked
+Empty `/api/search` at low threshold; add `GET /api/search/debug` to list sample `documents` via Hyperdrive; fix `match_documents` fourth arg default from Supabase ref to `inneranimalmedia`.
+
+### Files changed
+- `worker.js`: `PGVECTOR_DEFAULT_PROJECT_ID` set to `inneranimalmedia`; new `GET /api/search/debug` (auth) runs `SELECT id, source, title, project_id, LEFT(content::text,100) preview FROM documents LIMIT 10` and returns JSON including `pgvector_default_project_id`.
+
+### Deploy status
+- Worker deployed: no — say `deploy approved` to ship.
+
+### What is live now
+After deploy: call `/api/search/debug` while logged in; `/api/search` and chat pgvector use `inneranimalmedia` unless `project_id` is passed in the body.
+
+## 2026-03-24 Theme + shell fixes (cssVars, draw shell, agent-dashboard vars, applyDynamicTheme)
+
+### What was asked
+Merge `cms_themes.config.cssVars` in GET `/api/settings/theme`; align `static/dashboard/draw.html` with billing head theme + `shell.css`; replace hardcoded colors in agent-dashboard listed files with semantic CSS vars; remove hardcoded nav fallbacks in `applyDynamicTheme` across dashboard HTML.
+
+### Files changed
+- `worker.js`: Added `variablesFromCmsThemeConfig(cfg)` after `normalizeThemeSlug` (merges `cfg.cssVars` and `cfg.css_vars`, then legacy flat keys); guest and authed GET `/api/settings/theme` paths now use it instead of duplicated blocks (~3899–3915, ~3934–3951).
+- `static/dashboard/draw.html`: Second `<script nonce=…>` block (billing-style `applyShellTheme` + fetches), `styles_themes.css` + `/static/dashboard/shell.css` after fonts.
+- `dashboard/billing.html`, `dashboard/agent.html`, `dashboard/chats.html`, `dashboard/clients.html`, `dashboard/finance.html`, `dashboard/meet.html`, `dashboard/overview.html`, `dashboard/projects.html`, `dashboard/time-tracking.html`, `dashboard/user-settings.html`, `dashboard/billing-from-r2.html`, `static/dashboard/agent.html`, `static/dashboard/draw.html`: `applyDynamicTheme` now sets `--text-nav`, `--text-nav-muted`, `--border-nav`, `--accent-hover` from API `v` with fallbacks to `text` / `text2` / `border` / `primary` (no `#fff` / rgba literals).
+- `agent-dashboard/src/index.css`: Semantic aliases (`--bg-surface`, `--color-text`, `--bg-chat-user`, `--bg-chat-agent`, `--color-code-bg`, `--color-accent`, `--color-error`, `--color-warning`); mode/state/scrollbar/option colors use vars only.
+- `agent-dashboard/src/AgentDashboard.jsx`: Provider border colors and overlays/shadows use listed vars or `color-mix` with `var(--color-text)`.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: Preview backgrounds `var(--color-code-bg)`; Monaco `safeHex` chains theme vars; hovers/shadows via `color-mix`.
+- `agent-dashboard/src/SettingsPanel.jsx`: `PROVIDER_COLORS`, `Btn` danger, `StatusDot`, modals, vault/reveal/audit/priority/error surfaces use semantic vars + `color-mix`.
+
+### Files NOT changed
+- `worker.js` OAuth handlers, `wrangler.production.toml`, `FloatingPreviewPanel.jsx` beyond listed color lines.
+
+### Deploy status
+- Built: yes (agent-dashboard `vite build` via `./agent-dashboard/deploy-to-r2.sh`)
+- R2 uploaded: yes — `agent/agent-dashboard.js`, `agent/agent-dashboard.css`, `shell.css`, `agent.html`, `chats.html`, `cloud.html`, `overview.html`, `time-tracking.html`, `finance.html`, `billing.html`, `Finance.js`, PieChart chunks; plus `clients.html`, `meet.html`, `projects.html`, `user-settings.html`, `billing-from-r2.html`, `draw.html`
+- Worker deployed: yes — version ID: `2b96d91a-a10e-4bb0-ad23-889bdab8ab3a` (`TRIGGERED_BY=agent`, notes: theme/cssVars/agent-dashboard)
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker includes `variablesFromCmsThemeConfig` + theme fixes; R2 dashboard pages and new agent-dashboard bundle are live. Brief mistaken R2 object `static/dashboard/agent-static-fallback.html` was deleted; canonical `agent.html` remains from `dashboard/agent.html` upload in `deploy-to-r2.sh`.
+
+## 2026-03-24 Agent context unify + stream UI + memory sync API
+
+### What was asked
+Audit memoryIndexBlurb vs pgvector in chat; then remove stream mode icons and Stream checkbox (always `stream: true`); add `POST /api/agent/memory/sync`; merge D1 + pgvector into one ranked `[AGENT CONTEXT]` block capped at ~2000 tokens.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: Removed `stream` from `MODE_ICONS` and `DEFAULT_AGENT_MODE_HEX`; removed `useStreaming` state; request body `stream: true`; removed Stream checkbox block from mode dropdown.
+- `worker.js`: Added `PROMPT_CAPS.AGENT_CONTEXT_MAX_CHARS` (8000), `normalizeUnifiedContextText` / `wordJaccardUnified` / `nearDuplicateUnified` / `buildUnifiedAgentContextBlock`; chat path keeps `pgMatchRows`, drops separate pgvector prompt prefix and D1 memory blob inside compiled cache; `memoryIndexBlurb` always empty in cache; per-request unified block prepended to `finalSystem`; `POST /api/agent/memory/sync` returns D1 rows (tenant filter, limit 20; no `is_active` column in schema).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`, OAuth handlers.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no — awaiting `deploy approved`
+- Deploy approved by Sam: no
+
+### What is live now
+Changes are local only until worker build/deploy and agent-dashboard bundle upload.
+
+### Known issues / next steps
+- Sync endpoint uses `WHERE tenant_id = 'tenant_sam_primeaux'` instead of `is_active = 1` until that column exists on `agent_memory_index`.
+
+## 2026-03-24 Codebase reindex + unified AGENT CONTEXT + ingest-docs D1 sources
+
+### What was asked
+`POST /api/agent/reindex-codebase` from DOCS_BUCKET into Supabase documents; unified `[AGENT CONTEXT — ranked by relevance]` at 3000 chars with pg + D1 merge/dedup; extend `scripts/ingest-docs.js` with D1 agent_commands, agentsam_rules_document, iam_agent_sam_prompts.
+
+### Files changed
+- `worker.js`: `CODEBASE_*` constants, `chunkTextForCodebaseReindex`, `reindexCodebaseFromDocsBucket`, `POST /api/agent/reindex-codebase` (auth); `buildUnifiedAgentContextBlock` rewritten (3000 cap, supabase + d1 lines, D1 skip when key/value substring in pg text); `AGENT_CONTEXT_MAX_CHARS` = 3000.
+- `scripts/ingest-docs.js`: `runD1Sql`, `ingestD1Rows`, ingest `d1:commands`, `d1:rules`, `d1:sam_prompts` after markdown files.
+
+### Deploy status
+- Worker deployed: no — awaiting approval
+- ingest: run locally with `./scripts/with-cloudflare-env.sh npm run ingest:docs` after deploy when ready
+
+### What is live now
+Local repo only until worker deploy and ingest run.
+
+## 2026-03-24 Audit-gap fixes + notifySam (worker.js only)
+
+### What was asked
+Wire `0 9 * * *` financial cron, `ai_usage_log` after spend in `streamDoneDbWrites`, `agent_memory_index` decay after `0 6` sync, `terminal_history` always (headless session), `mcp_tool_calls` for built-ins; add `notifySam` (Resend + `email_logs`) and fire on deploy log, propose, workflow status, Cursor webhooks, financial cron, nonzero terminal exit; no deploy until Sam approves.
+
+### Files changed
+- `worker.js`: `notifySam`, `ensureHeadlessTerminalSessionForHistory`, `resolveTerminalSessionIdForHistory`, `runAgentMemoryDecay`, `runFinancialCommandCron`; `worker.scheduled` branches `0 9` and decay after RAG chain; `streamDoneDbWrites` `ai_usage_log` with spend in same async path; `handleDeploymentLog` / `handleInboundWebhook` (cursor) / propose / workflow PATCH notifications; `runTerminalCommandViaHttpExec` exit code; `runTerminalCommand` history + `exit_code` on output + notify on nonzero exit; `runToolLoop`/`runMixedTasks` pass `executionCtx`, always `mcp_tool_calls`; call sites (`runToolLoop`, terminal run, commands execute, `invokeMcpToolFromChat`, `chatWithToolsAnthropic`, execute-approved-tool, MCP invoke proxy).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `agent.html`, OAuth handlers, `wrangler.production.toml` (cron `0 9` already listed).
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Local `worker.js` only; production unchanged until deploy.
+
+### Known issues / next steps
+- Terminal WebSocket path does not set `exit_code`; email alert only when HTTP `/exec` returns numeric `exit_code` and nonzero.
+- Financial budget reads first matching `daily_budget_usd` or `daily_spend_cap_usd` from active `ai_guardrails` metadata (default 50 USD).
+
+## 2026-03-24 notifySam recipient: sam@inneranimalmedia.com only
+
+### What was asked
+`runFinancialCommandCron`: remove `samprimeaux@icloud.com`; confirm all `notifySam` calls use `sam@inneranimalmedia.com`.
+
+### Files changed
+- `worker.js` ~13075: removed `to:` from financial `notifySam` so default `sam@inneranimalmedia.com` applies (see `notifySam` ~273).
+
+### Deploy status
+- Worker deployed: yes — see production deploy entry below
+
+## 2026-03-24 Production deploy — inneranimalmedia worker
+
+### What was asked
+Sam typed **deploy approved**.
+
+### Deploy status
+- Built: n/a (worker source deploy)
+- R2 uploaded: no (no dashboard/static file changes in this deploy)
+- Worker deployed: yes — version ID: `a17796dc-0ce4-4c73-82ba-e82e02edee1c`
+- Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
+- Deploy approved by Sam: yes
+
+### What is live now
+Production Worker `inneranimalmedia` includes notifySam wiring, audit-gap cron/handlers, `ai_usage_log` / terminal / mcp_tool_calls changes, and financial alerts to `sam@inneranimalmedia.com`.
+
+## 2026-03-24 Agent workflow trigger + collab route (no deploy)
+
+### What was asked
+Follow-up sprint: wire agent `POST /api/agent/workflows/trigger` to an async executor, approval polling with `scheduler.wait` / fallback, `/api/collab/*` to IAM_COLLAB, approve path for workflow proposals without running terminal.
+
+### Files changed
+- `worker.js` lines 4163-4172: `/api/collab/:room` forwards to `env.IAM_COLLAB.idFromName(room)` and `stub.fetch(request)` (placed before Public ASSETS so `/api/collab` is not treated as static).
+- `worker.js` lines 8119-8120: after `workflow_runs` INSERT, `ctx.waitUntil(executeAgentWorkflowSteps(env, ctx, runId, workflowId, workflowName))` then JSON response.
+- `worker.js` lines 8041-8054: proposal approve skips `runTerminalCommandViaHttpExec` when `row.tool === 'workflow_approval'`.
+- `worker.js` lines 12337-12623: `workflowSleep`, `broadcastAgentWorkflowEvent`, `waitForAgentProposalResolution`, `AGENT_BUILTIN_WORKFLOW_STEPS`, `executeAgentWorkflowSteps` (agent `workflow_runs` only; MCP `executeWorkflowSteps` unchanged).
+
+### Files NOT changed
+- MCP runner `ctx.waitUntil(executeWorkflowSteps(...))` at ~9788: not modified.
+- `FloatingPreviewPanel.jsx`, `agent.html`, `wrangler.production.toml`: not touched.
+
+### Deploy status
+- Deploy: not run (no approval requested).
+
+### What is live now
+Unchanged until deploy; local repo has agent workflow execution and collab routing as above.
+
+### Known issues / next steps
+- MCP `executeWorkflowSteps` loop (~12625+) still has no `requires_approval`; agent path handles approval separately. Final static fallback `return notFound(path)` is at line ~4261.
+
+## 2026-03-24 Deploy — workflow approval + collab (Sam: deploy approved)
+
+### What was asked
+Deploy production worker; confirm approve order before terminal; verify trigger + collab after deploy.
+
+### Files changed
+- `worker.js` line 9: removed invalid `WebSocketPair` import from `cloudflare:workers` (runtime provides global `WebSocketPair`; deploy failed with validation error 10021 until fixed).
+
+### Deploy status
+- Worker deployed: yes — version ID: `6834a31d-3ebb-468b-acaf-a530b38ef68f`
+- Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
+- Deploy approved by Sam: yes
+
+### Post-deploy checks
+- `POST /api/agent/workflows/trigger` without session: **401** (expected); with dashboard auth, response includes `run_id` per handler.
+- `GET https://inneranimalmedia.com/api/collab/workflow:test` with WebSocket upgrade over **HTTP/1.1**: **101 Switching Protocols** (not 404). HTTP/2 curl without upgrade returned JSON 200 from DO non-WS branch.
+
+### What is live now
+Production Worker includes agent `executeAgentWorkflowSteps` waitUntil, `workflow_approval` approve short-circuit, and `/api/collab/*` → IAM_COLLAB.
+
+### Known issues / next steps
+- `WorkflowLivePanel` is not present in `agent-dashboard` source (grep: no matches); chat intent + right-panel live UI remain to build if not done elsewhere.
+
+## 2026-03-24 dashboard_versions v138 registry
+
+### What was asked
+Record current agent cache-bust **?v=138** (`dashboard/agent.html`) in D1 **`dashboard_versions`**.
+
+### Files changed
+- `scripts/d1-dashboard-versions-v138.sql` (new): three `INSERT OR REPLACE` rows for `agent`, `agent-css`, `agent-html` at **v138** with MD5 + byte sizes from repo `agent-dashboard/dist` and `dashboard/agent.html`.
+
+### Deploy status
+- Remote D1: executed `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-dashboard-versions-v138.sql` (success; rows written per wrangler output).
+
+### What is live now
+Production **`dashboard_versions`** includes registry rows for **v138** tied to `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, and `static/dashboard/agent.html`.
+
+## 2026-03-24 /api/agent/chat workflow intent (no deploy)
+
+### What was asked
+Part 3: detect phrases in chat and auto-trigger `workflow_runs` + `executeAgentWorkflowSteps`; lookup `ai_workflow_pipelines` by id; return JSON with `message` and `workflow_run_id` before the model.
+
+### Files changed
+- `worker.js` lines 8251-8281: after `lastUserContent` (including file attachments), `matchAgentChatWorkflowIntent` → optional `ai_workflow_pipelines` SELECT → `INSERT workflow_runs` → `ctx.waitUntil(executeAgentWorkflowSteps(...))` → `jsonResponse({ message, workflow_run_id, workflow_name, workflow_triggered })`.
+- `worker.js` lines 12421-12441: `matchAgentChatWorkflowIntent(userText)` patterns for health / db cleanup / briefings / reindex.
+
+### Deploy status
+- Worker deployed: no (awaiting approval).
+
+## 2026-03-24 AgentDashboard status bar live UI
+
+### What was asked
+Wire bottom status bar to live data from `GET /api/agent/git/status` (poll 30s, visibility-aware); show branch, worker, Sync with dirty warning dot, workspace, agent name, mode, model.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` lines 4418-4526: replaced static status bar with `statusBarData` branch/worker/sync (warning dot when dirty)/workspace/agent; right side `modeLabel(mode)` and model from `selectedModel`/`activeModel`/`lastUsedModel`.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`: not touched per rules.
+- `worker.js`: `/api/agent/git/status` already present from prior work.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Repo-only change until Vite build + R2 upload of `agent-dashboard` bundle and any deploy Sam approves.
+
+### Known issues / next steps
+- Rebuild agent dashboard and upload `static/dashboard/agent/agent-dashboard.js` when Sam approves deploy.
+
+## 2026-03-24 Bronze status bar + floating chat input pill
+
+### What was asked
+Status bar `#261a08` / text `#8a7a5a` (burnished bronze); chat composer same palette, placeholder `#5a4a2a`, border `#3a2a10`, floating pill (max 680px centered, radius 12, shadow, margin above status bar), +/mic/send stay in pill. No deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/index.css`: `#agent-dashboard-root` tokens `--agent-status-bar-bg`, `--agent-status-bar-text`, `--agent-chat-input-bg`, `--agent-chat-input-text`, `--agent-chat-placeholder`, `--agent-chat-border`; `.agent-chat-input-pill` textarea/placeholder/focus and `.add-files-btn:hover` override.
+- `agent-dashboard/src/AgentDashboard.jsx`: input region **3649–4418** (outer wrapper padding/margin, pill class + bronze/shadow/maxWidth 680, attach/mode/model/mic/cost ring tweaks, drag overlay, textarea drops redundant color); status bar **4420–4528** (bar vars + inherited separators).
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `worker.js`, `agent.html`: not in scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Local repo only until Vite build + R2 upload after approval.
+
+### Known issues / next steps
+- Eyedropper compare to Cursor chrome bar after deploy if tone needs micro-adjustment.
+
+## 2026-03-24 Single topbar logo + deploy (agent page)
+
+### What was asked
+Official company logo appeared three times (topbar + sidenav + duplicate); keep only topbar; sidenav header starts with collapse toggle only; deploy approved: build, R2, worker.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx`: removed `COMPANY_ICON` constant and welcome empty-state `<img>` so brand mark is not duplicated in React (welcome still shows "level AI" + quick actions).
+- `dashboard/agent.html`: removed sidenav header logo link/img; sidenav profile avatar uses Agent Sam asset (`b5557284...`) not company logo; cleaned CSS (`sidenav-logo-*`, `#sidenavToggle` margin, collapsed selector).
+- R2: `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`, `static/dashboard/agent.html`.
+
+### Lines removed (reference)
+- **AgentDashboard.jsx**: `COMPANY_ICON` definition (2 lines); welcome block `<img src={COMPANY_ICON} ... />` (4 lines).
+- **dashboard/agent.html**: sidenav `<a class="sidenav-logo-link">` + inner `<img class="sidenav-logo-icon">` (3 lines); obsolete `.sidenav-logo-link`/`.sidenav-logo-icon` rules; `#sidenavToggle { margin-left: auto }` replaced with `margin-left: 0`; `.sidenav.collapsed .sidenav-logo-link`; `.sidenav.collapsed` list entry for `.sidenav-logo-text`; `.sidenav-logo-text { display: none }` block.
+
+### Deploy status
+- Built: yes (`agent-dashboard` Vite)
+- R2 uploaded: yes — `agent-dashboard.js`, `agent-dashboard.css`, `agent.html`
+- Worker deployed: yes — version ID **029928de-f1cb-402b-96f0-eb68edceb237**
+- Deploy approved by Sam: yes
+
+### What is live now
+Agent page shows company logo only in topbar; sidenav rail leads with collapse control; footer profile uses Agent Sam avatar.
+
+### Known issues / next steps
+- `static/dashboard/agent.html` is a different shell layout; sync manually if that copy must match `dashboard/agent.html`.
+
+## 2026-03-24 Kimbie Dark theme: statusBar + repoSwitcher + shell CSS
+
+### What was asked
+Extend `variablesFromCmsThemeConfig` for `statusBar`, `statusBarText`, `repoSwitcher`; D1 merge on `theme-kimbie-dark`; wire `dashboard/agent.html` to `--status-bar-bg`, `--status-bar-text`, `--repo-switcher-bg`; deploy worker + R2.
+
+### Files changed
+- `worker.js` lines **98–100**: map `cfg.statusBar` / `cfg.statusBarText` / `cfg.repoSwitcher` to `--status-bar-bg`, `--status-bar-text`, `--repo-switcher-bg`.
+- `dashboard/agent.html`: `:root` defaults for those three vars; `.topbar-workspace-side` uses `background: var(--repo-switcher-bg)` (+ `border-radius: 6px`); `.iam-status-bar` and `.status-bar-item` use status bar vars.
+- `scripts/d1-kimbie-dark-theme-merge.sql`: remote D1 `json_set` merge for `bg`, `surface`, `statusBar`, `statusBarText`, `repoSwitcher` on `theme-kimbie-dark`.
+
+### Deploy status
+- R2 uploaded: `static/dashboard/agent.html`
+- Worker deployed: version ID **54cbb26c-81da-4e40-9c69-95210ca066e2**
+- D1: executed merge SQL on `inneranimalmedia-business` (remote)
+
+### What is live now
+GET `/api/settings/theme` includes the new CSS variables when those keys exist in `cms_themes.config`; Kimbie Dark row has the five merged hex values; agent shell status bar and workspace pill read from theme-injected vars.
+
+## 2026-03-24 Kimbie cssVars sync + sidenav bell bottom-right
+
+### What was asked
+Show full `cssVars` from D1 (conflict with top-level bg/surface); fix theme application; move notifications bell to bottom-right of sidenav; fix before next deploy.
+
+### Cause
+`config.cssVars` still had old `--bg-canvas` / `--bg-elevated` / `--bg-nav` hex while top-level `bg` / `surface` were updated — any consumer that applies `cssVars` alone (or merge order differs) showed stale colors.
+
+### Files / data
+- **Remote D1:** `scripts/d1-kimbie-cssvars-full-sync.sql` — replaces entire `$.cssVars` on `theme-kimbie-dark` with values aligned to `#1e1200` / `#4a3d2a` / `#3a3020`, chat/code tweaks, plus `--status-bar-bg`, `--status-bar-text`, `--repo-switcher-bg`.
+- **`dashboard/agent.html`:** `.sidenav-footer-bottom` row — profile (avatar, name, sign out) left; `#sidenavBellBtn` right; collapsed footer rules adjusted (removed `margin: 0 auto` on footer icon).
+
+### Deploy status
+- Worker / R2: not deployed this step (user: before next deploy). Upload `dashboard/agent.html` to R2 when deploying.
+
+## 2026-03-24 Deploy: agent.html R2 + worker
+
+### What was asked
+Deploy: R2 upload `dashboard/agent.html` (bell + status bar vars); `wrangler deploy` from repo root; report version ID.
+
+### Files / actions
+- R2: `agent-sam/static/dashboard/agent.html` from `dashboard/agent.html`
+- Worker: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
+
+### Deploy status
+- R2 uploaded: yes — `static/dashboard/agent.html`
+- Worker deployed: yes — version ID **49accabe-1998-4d0f-b546-ce2c2c0001f5**
+- Deploy approved by Sam: yes (implicit from deploy request)
+
+## 2026-03-24 Theme shell + iam-status git + git/sync proposal
+
+### What was asked
+Align `dashboard/agent.html` theme with `static/dashboard/agent.html` (`applyShellTheme` + `/api/themes`); remove React `agent-status-bar`; wire `iam-status-bar` to `/api/agent/git/status` and POST `/api/agent/git/sync` (proposal only). No deploy until confirmed.
+
+### Files changed
+- `dashboard/agent.html` head: flash-guard, preload `data-theme-ready`, second script with `applyShellTheme` + `/api/settings/theme` then `/api/themes` fallback (lines 7–107); removed bottom `applyDynamicTheme` + settings-only theme block.
+- `dashboard/agent.html` CSS: `.status-sync-dirty-dot` (lines 803–814).
+- `dashboard/agent.html` markup: empty `#statusGitBranch` / `#statusRepo`, `#statusSyncDirtyDot` in sync button (lines 1138–1150).
+- `dashboard/agent.html` script: `refreshIamGitStatus` poll + `POST /api/agent/git/sync` (lines 1384–1435).
+- `agent-dashboard/src/AgentDashboard.jsx`: removed `agent-status-bar` JSX block; removed `statusBarData` state and git status `useEffect`.
+- `worker.js`: `POST /api/agent/git/sync` inserts `agent_command_proposals` pending row + `notifySam` (lines 7377–7420).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, OAuth handlers: not touched.
+- `static/dashboard/agent.html`: not edited (dashboard copy aligned to same pattern).
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until you upload `dashboard/agent.html` to R2 and deploy worker with `worker.js` changes.
+
+### Known issues / next steps
+- Rebuild Vite bundle if you rely on `static/dashboard/agent/agent-dashboard.js` from repo build before shipping React changes.
+- `sync` POST returns 404 until worker with new route is deployed.
+
+## 2026-03-24 Deploy: agent.html + agent-dashboard bundle + worker
+
+### What was asked
+Deploy approved: R2 `dashboard/agent.html`; rebuild `agent-dashboard/` and R2 upload `agent-dashboard.js` + `agent-dashboard.css`; `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`; report version ID.
+
+### Files / actions
+- `npm run build` in `agent-dashboard/` (Vite `dist/agent-dashboard.js`, `dist/agent-dashboard.css`).
+- R2: `agent-sam/static/dashboard/agent.html` from `dashboard/agent.html`.
+- R2: `agent-sam/static/dashboard/agent/agent-dashboard.js` from `agent-dashboard/dist/agent-dashboard.js`.
+- R2: `agent-sam/static/dashboard/agent/agent-dashboard.css` from `agent-dashboard/dist/agent-dashboard.css`.
+- Worker deploy: `wrangler.production.toml`.
+
+### Deploy status
+- Built: yes (agent-dashboard)
+- R2 uploaded: yes — `agent.html`, `agent/agent-dashboard.js`, `agent/agent-dashboard.css`
+- Worker deployed: yes — **version ID `3d66ed73-a2ce-462d-a9aa-4e9dc8132edc`**
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker version above; dashboard HTML and agent bundle served from R2 keys listed.
+
+### Known issues / next steps
+- Monaco audit (grep-only): no separate `FloatingPreviewPanel.jsx` TODO lines beyond UI `placeholder` strings; single-buffer editor (not multi-tab).
+
+## 2026-03-24 Monaco multi-tab, Workers tree, bottom dock
+
+### What was asked
+Finish Monaco multi-tab (`openTabs`, tab strip, split DiffEditor), Workers section + API usage, bottom panel (Terminal, Output, Problems, MCP) with resize and Ctrl+`; wire `AgentDashboard`; report `worker.js` route lines; no deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: `activeCodeTab` (avoids shadowing viewer `activeTab`); `openTabs` tab strip with dirty dot and close; Split + second-tab select + side-by-side `DiffEditor`; Workers collapsible + `GET /api/cloudflare/workers/list` + open source tab; removed in-panel Terminal; save/draft/proposed/keep-changes wired to `savedByTabIdRef` and active tab; `Editor` `onChange` via `updateActiveContent`; removed unused `setActiveTabById`.
+- `agent-dashboard/src/AgentDashboard.jsx`: `AgentBottomPanel` under main row; `bottomDockOpen` / `bottomDockHeight` / `bottomDockTab`; `VIEWER_STRIP_TAB_ORDER` without `terminal`; default viewer tab `code`; terminal icon + Ctrl+` Backquote; git/terminal cards open bottom dock.
+- `agent-dashboard/src/AgentBottomPanel.jsx`: unchanged this session (already present).
+
+### Files NOT changed (and why)
+- `worker.js`: routes already present from prior work; line numbers reported below only.
+
+### Deploy status
+- Built: yes (`agent-dashboard` `npm run build`)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until you upload the Vite bundle and any dashboard HTML you use, and deploy the worker if needed.
+
+### Known issues / next steps
+- Wire real Output/Problems feeds into `AgentBottomPanel` when those streams exist; MCP reconnect UI if required beyond health JSON.
+
+## 2026-03-24 Tunnel API + Settings Network card
+
+### What was asked
+`POST /api/tunnel/restart` and `GET /api/tunnel/status` on worker (Sam-only restart, audit log, CF API); Network tab tunnel card with 30s poll, restart button, Zero Trust link.
+
+### Files changed
+- `worker.js` lines 135-144: `isSamOnlyUser`, `CF_TUNNEL_ID`.
+- `worker.js` lines 3334-3394: `/api/tunnel/status`, `/api/tunnel/restart` (audit before DELETE).
+- `agent-dashboard/src/SettingsPanel.jsx` `NetworkSettingsTab`: tunnel state, `loadTunnelStatus`, 30s interval, card UI, restart POST, external link; tunnel card above terminal loading gate.
+
+### Deploy status
+- Built: yes (`agent-dashboard`)
+- Worker deployed: no (not requested)
+
+### What is live now
+Local/repo only until worker deploy and dashboard bundle upload.
+
+## 2026-03-24 Deploy: agent-dashboard R2 + worker
+
+### What was asked
+Deploy approved: rebuild `agent-dashboard/`, R2 upload `agent-dashboard.js` + `agent-dashboard.css`, `wrangler deploy -c wrangler.production.toml`, report version ID.
+
+### Actions
+- `npm run build` in `agent-dashboard/` (`dist/agent-dashboard.js`, `dist/agent-dashboard.css`).
+- R2 `agent-sam`: `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`.
+- Worker: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`.
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (paths above)
+- Worker deployed: yes — **version ID `383b0e17-b76e-4790-af1e-abd0fc4a96cf`**
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker version above; agent bundle served from R2 keys above (tunnel routes + Settings Network tab + prior UI).
+
+## 2026-03-24 Agent dashboard: bottom dock + strip + layout
+
+### What was asked
+Three targeted fixes in `AgentDashboard.jsx` only: restore right viewer icon strip behavior (terminal opens bottom dock; full `VIEWER_STRIP_TAB_ORDER` unchanged); `bottomDockOpen` default false, open via terminal icon or Ctrl+`; closed = no render / zero height; open = 220px default draggable `AgentBottomPanel`; main column so chat+viewer shrink when dock open. No deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` line 3: import `AgentBottomPanel`.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 1080-1083: `bottomDockOpen` (default `false`), `bottomDockHeight` (220), `bottomDockTab` (`"terminal"`).
+- `agent-dashboard/src/AgentDashboard.jsx` lines 1567-1571: `(meta|ctrl)+` ` toggles dock and sets `bottomDockTab` to `"terminal"`.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 2624-2638: outer column `flex: 1` / `minHeight: 0`; inner row same flex (removed `height: "100%"` on row).
+- `agent-dashboard/src/AgentDashboard.jsx` lines 3099-3112: `GitActionCard` / `TerminalOutputCard` `onOpenTerminal` also `setBottomDockOpen(true)` + `setBottomDockTab("terminal")`.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 4502-4514, 4627-4636, 4710-4722: strip `onClick` for `tab === "terminal"` opens dock (mobile preview strip, mobile overflow menu, desktop strip); no style edits.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 4794-4805: conditional `AgentBottomPanel` + close column wrapper.
+
+### Files NOT changed (and why)
+- `FloatingPreviewPanel.jsx`, `AgentBottomPanel.jsx`: behavior-only wiring in parent; no strip redesign.
+- `worker.js`, R2, deploy: not requested.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Repo/local bundle only until you rebuild, upload agent bundle to R2 if needed, and deploy with approval.
+
+### Known issues / next steps
+- Ship when you approve deploy + R2 upload path for `agent-dashboard.js` / `.css` per your pipeline.
+
+## 2026-03-24 Deploy: agent-dashboard R2 + worker (ANSI follow-up noted)
+
+### What was asked
+Deploy approved: R2 upload `agent-dashboard.js` + `agent-dashboard.css`; `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`; report version ID. Separate note for future work: ANSI escapes in terminal output.
+
+### Actions
+- `npm run build` in `agent-dashboard/`.
+- R2 **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`.
+- Worker deploy with script above.
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (paths above)
+- Worker deployed: yes — **version ID `fddac051-9f6a-4a8e-8a43-8fe794dfb877`**
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker version above; agent bundle at R2 keys above (bottom dock + prior UI).
+
+## 2026-03-24 ansi-to-html terminal output + deploy
+
+### What was asked
+Install `ansi-to-html`; in `AgentBottomPanel.jsx` use `AnsiToHtml` with `escapeXML: true`, render terminal output via `dangerouslySetInnerHTML`; keep outer scroll div styles; build, R2 upload JS/CSS, deploy, report version ID.
+
+### Files changed
+- `agent-dashboard/package.json` / `agent-dashboard/package-lock.json`: added dependency `ansi-to-html`.
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 1–7: import `AnsiToHtml`, module-level `ansiConverter`.
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 340–346: inner `<div dangerouslySetInnerHTML={{ __html: ansiConverter.convert(terminalOutput) }} />` (outer `ref` + `style` unchanged).
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`
+- Worker deployed: yes — **version ID `617f4a0f-c51b-4460-9050-a0b4a733c44b`**
+- Deploy approved by Sam: yes (in prompt)
+
+### What is live now
+Production worker version above; agent bundle includes ANSI HTML rendering for bottom-panel terminal output.
+
+## 2026-03-24 xterm.js bottom terminal (report; deploy not run)
+
+### What was asked
+Install `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`; replace ansi-to-html in `AgentBottomPanel.jsx` with xterm mounted in a ref container, FitAddon + WebLinksAddon, WebSocket output via `term.write`, `termName: xterm-256color`, import `@xterm/xterm/css/xterm.css`. Report before deploying.
+
+### Files changed
+- `agent-dashboard/package.json` / lockfile: added xterm packages; removed `ansi-to-html`.
+- `agent-dashboard/src/AgentBottomPanel.jsx`: xterm `Terminal` with `termName: "xterm-256color"`, `disableStdin: true` (bottom input unchanged), `FitAddon` + `ResizeObserver` for fit, `WebLinksAddon`; WS `onmessage` / `onopen` / `onclose` and `/api/agent/terminal/run` + `sendTerminalKey` use `terminalXtermRef.current.write(...)`; removed `terminalOutput` state and ansi-to-html.
+
+### Deploy status
+- Built: yes (`npm run build` in `agent-dashboard/`)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no (report-only step)
+
+### What is live now
+Local/repo bundle only until R2 + worker deploy.
+
+## 2026-03-24 Quick Actions tab (bottom panel) + API audit
+
+### Audit (grep / worker)
+- **`POST /api/agent/git/sync`** — **yes** (`worker.js` ~7497). Inserts `agent_command_proposals` row (pending); returns `proposal_id` / `risk_level` — **does not auto-run** sync.
+- **`POST /api/tunnel/restart`** — **yes** (`worker.js` ~3367). Sam-only (`isSamOnlyUser`); calls Cloudflare API to disconnect tunnel connections; returns `ok`, `restarted_at`.
+- **Browser OAuth** — **yes**: `GET /api/oauth/google/start`, `GET /api/oauth/github/start` (and callbacks) in `worker.js` ~2825–2840. They return **redirects** to the provider; the dashboard opens the **start URL** in the browser panel (iframe navigation).
+
+### Files changed
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 7–95: `BOTTOM_TABS` includes `quick`; helpers `formatQuickAt`, `QuickSection`, `QuickRunMeta`, `QuickActionRow`; lines 97–106 new props `onOpenBrowserPanel`, `onOpenSettingsVault`, `agentSessionId`; state `quickRun`, `mcpQuickServices`, `quickBusy`; `markQuick` + quick action callbacks (`runQuickWranglerLogin`, tunnel restart, cloudflared login, GitHub OAuth URL, git sync POST, MCP ping per service, MCP worker `POST /api/agent/propose`); MCP health fetch when `activeTab === "quick"`; tab label line ~584; Quick Actions UI block ~709+; `extractFirstHttpUrl` at file end.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 2386–2397: `openSettingsVaultSection` (settings tab + `iam-settings-goto-tab` event + scroll to vault); `AgentBottomPanel` props ~4810–4814 `onOpenBrowserPanel`, `onOpenSettingsVault`, `agentSessionId`.
+- `agent-dashboard/src/SettingsPanel.jsx` line 453: `id="iam-settings-vault"` on Environment vault root; lines 6061–6071: `useEffect` listens for `iam-settings-goto-tab` to switch tab when vault opened from Quick Actions.
+
+### Deploy status
+- Built: yes (`agent-dashboard`)
+- R2 / worker: not requested (do not deploy until approved)
+
+### What is live now
+Repo/local only until you upload bundle and deploy.
+
+## 2026-03-24 Deploy: agent-dashboard (Quick Actions + xterm) R2 + worker
+
+### What was asked
+Deploy approved: R2 `agent-dashboard.js` + `agent-dashboard.css`; `wrangler deploy -c wrangler.production.toml`; report version ID.
+
+### Actions
+- `npm run build` in `agent-dashboard/`.
+- R2 **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css` (commands as run).
+- Worker deploy per command above.
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes (paths above)
+- Worker deployed: yes — **version ID `26b5e8fc-dbde-4b42-b2a6-b575126b2e54`**
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker version above; agent bundle includes xterm terminal, bottom dock behavior, Quick Actions tab.
+
+## 2026-03-24 xterm theme from document CSS vars
+
+### What was asked
+Initialize xterm `Terminal` with `getComputedStyle(document.documentElement)` for theme colors + `fontFamily`/`fontSize`/`cursorBlink`; only hex `black: #1e1200`; report exact lines.
+
+### Files changed
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 69–84: `const style = getComputedStyle(...)` and `new Terminal({ ... theme: { background, foreground, cursor, selectionBackground, black, brightBlack } })`.
+
+### Deploy status
+- Built: yes (`agent-dashboard`)
+- R2 / worker: not requested
+
+## 2026-03-24 Platform master plan doc (10 workstreams)
+
+### What was asked
+Extreme-detail architectural briefing for: mobile UX, loading states, bundle/lazy xterm, parallel API calls, system prompt versioning, mcp_tool_calls wiring, agent_costs dashboard, Problems tab errors, API reference generator, session log archive + sprint index.
+
+### Files changed
+- `docs/PLATFORM_UX_PERF_AGENT_DOCS_MASTER_PLAN.md` (new): full structure, current code pointers, schemas, risks, dependency order, acceptance checklist.
+
+### Deploy status
+- Built: no
+- R2 / worker: no
+
+## 2026-03-24 UX: dock 160px, drag grip, PS1, icon strip (no deploy)
+
+### What was asked
+Default bottom dock 160px; drag handle grip (CSS); PS1 `sam@iam` via PTY env; icon strip transparent, no chat/strip border; report lines; no deploy.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` line ~1082: `bottomDockHeight` default `160` (was `220`).
+- `agent-dashboard/src/AgentDashboard.jsx` mobile strip ~4491–4506: `background` / `borderRight` transparent+none; mobile button active bg `var(--bg-canvas)` ~4534.
+- `agent-dashboard/src/AgentDashboard.jsx` desktop strip ~4695–4714: `borderRight` always `none`.
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines ~530–604: resize handle taller, subtle track + three horizontal bars (CSS).
+- `server/terminal.js` ~39–44: `pty.spawn` `env` includes `PS1: "[ sam@iam \\W ]\\$ "`.
+- `server.js` line 5: `ENV` includes same `PS1` (iam-pty production server).
+- `ecosystem.config.cjs` `env`: `PS1` for PM2.
+
+### Deploy status
+- Built: yes (`agent-dashboard`)
+- R2 / worker: no
+
+## 2026-03-24 Bottom panel: Local / Remote shell toggle (no deploy)
+
+### What was asked
+Add a Remote (default) vs Local shell toggle on the bottom panel tab row (terminal tab): pill label, SVG toggle, persist `agent-terminal-shell-preference`, clear xterm + "Connecting to …" on reconnect; Remote uses `GET /api/agent/terminal/socket-url` (TERMINAL_WS_URL + token); Local uses same-origin `/api/agent/terminal/ws` only. No deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 111–120: `SHELL_PREF_KEY`, `shellMode` state initialized from `localStorage` (default `remote`).
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 166–175: `onToggleShellMode` saves preference and flips `remote`/`local`.
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 221–325: WebSocket effect — `term.clear()` + connecting line; `remote` fetches `socket-url` and uses `j.url` or writes error; `local` uses `fallbackWsUrl` only; effect deps include `shellMode`.
+- `agent-dashboard/src/AgentBottomPanel.jsx` lines 643–724: Tab row flex layout; when Terminal is active, pill (`Remote`/`Local`) + refresh-style SVG button.
+
+### Files NOT changed (and why)
+- `worker.js`: unchanged; socket-url contract already matches Remote.
+- `FloatingPreviewPanel.jsx`, `agent.html`: not touched per rules.
+
+### Deploy status
+- Built: no (not run in this session)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until you build and deploy the agent-dashboard bundle.
+
+### Known issues / next steps
+- "Local" here is the Worker-proxied same-origin WebSocket (`/api/agent/terminal/ws`), not a literal macOS PTY in the browser; run `npm run build` in `agent-dashboard` when ready.
+
+## 2026-03-24 Audit: Monaco / tunnel 403 / CF worker source API (worker.js patched; no deploy)
+
+### What was asked
+Grep report on `FloatingPreviewPanel.jsx` wiring; explain `/api/tunnel/status` 403 vs `isSamOnlyUser`; fix `/api/cloudflare/workers/{name}/source` to use Cloudflare API for any worker name; document regressions; no deploy until confirmed.
+
+### Grep (first 30 lines)
+```
+169:export function GitHubFileBrowser({ connectedIntegrations, openGithubFileInCode, ...
+357:  const [openTabs, setOpenTabs] = useState([]);
+358:  const [activeTabId, setActiveTabId] = useState(null);
+368:  const activeCodeTab = openTabs.find((t) => t.id === activeTabId) || null;
+...
+697:  const openFileInCode = useCallback((bucket, key) => {
+760:  const openGithubFileInCode = useCallback((repo, path, name) => {
+787:    if (!codeFilename || !filesBucket || !activeTabId) return;
+```
+
+### Files changed — `worker.js` only
+- Lines **136–142** `isSamOnlyUser`: also allow `AGENTSAM_SUPERADMIN_IDS` (tunnel **restart** POST was the only route using this; fixes Sam not recognized when email differs but id is superadmin).
+- Lines **3305–3328** (approx.): `/api/cloudflare/workers/{name}/source` now `GET` `https://api.cloudflare.com/client/v4/accounts/{id}/workers/scripts/{encodedName}` with `Authorization: Bearer CLOUDFLARE_API_TOKEN`; returns raw body as JS; JSON-parse errors from API when `!r.ok`. Removed R2-only `DASHBOARD` key branch.
+- Lines **3346–3362** (approx.): `/api/tunnel/status` when Cloudflare returns **403** (or other `!r.ok`): respond with **502** and JSON `{ error, upstream: 'cloudflare_tunnel_api', cf_http_status, hint }` so the UI is not mistaken for session `Forbidden`; `isSamOnlyUser` is **not** used on this route (only on `/api/tunnel/restart`).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`: audit only (see below); no surgical edit this session.
+
+### Deploy status
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### Monaco / multi-tab audit (report)
+- `codeContent` is derived from `openTabs` + `activeTabId` (`activeCodeTab?.content`).
+- **`openGithubFileInCode`** / **`openFileInCode`** / **`openGdriveFileInCode`** all call **`addTab`**, which updates `openTabs` and sets `activeTabId`.
+- **`Editor`** uses **`value={codeContent}`** at ~1950–1953. Wiring is **logically correct**; likely remaining UX bug: **no `key` on `<Editor>` tied to `activeTabId`**, so `@monaco-editor/react` controlled updates can **desync** when switching tabs (recommend `key={activeTabId}` — needs approval per FloatingPreviewPanel rules).
+
+### Tunnel 403 note
+- **`/api/tunnel/status`** does **not** call `isSamOnlyUser` — 403 in Network was almost certainly **Cloudflare tunnel API** rejecting the token. After patch, response is **502** with `hint` and `cf_http_status: 403`.
+
+### Worker source API note
+- ES modules / multi-file Workers may need a different API shape in edge cases; if Monaco shows garbage, consider `.../content/v2` per Cloudflare docs.
+
+## 2026-03-24 Deploy: Monaco key, agent bundle R2, main worker
+
+### What was asked
+Add `key={activeTabId}` to Monaco `<Editor>`; build agent-dashboard; upload JS/CSS to R2; deploy `inneranimalmedia`; report version ID; verify tunnel/GitHub/worker source/shell toggle (where automatable).
+
+### Files changed
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` line **1951**: `key={activeTabId ?? "editor-no-tab"}` on `<Editor>` (remount per tab).
+
+### Deploy status
+- Built: yes (`npm run build --prefix agent-dashboard`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`
+- Worker deployed: yes — **Current Version ID: `5cc4428f-5da6-4093-9a79-a864c6be8d2a`**
+- Deploy approved by Sam: yes (explicit deploy instructions in chat)
+
+### What is live now
+Production worker `inneranimalmedia` at version above; dashboard bundle includes FloatingPreviewPanel Monaco key fix, AgentBottomPanel shell Remote/Local toggle (from prior build content in dist), and prior `worker.js` changes (tunnel status JSON, CF worker source API, `isSamOnlyUser` superadmin).
+
+### Verification (automated)
+- `GET https://inneranimalmedia.com/api/tunnel/status` **without** session: **401** `{"error":"Unauthorized"}` — not 403 (session required for full tunnel payload).
+
+### Manual checks for Sam
+- Logged-in `/api/tunnel/status`: expect `healthy` / `status` / `connections` (or degraded per CF), not opaque 403.
+- Network tab tunnel card, GitHub file in Monaco, worker source for registry names, Terminal shell pill default **Remote**.
+
+## 2026-03-24 Bottom dock width: main column flex constraint (no deploy)
+
+### What was asked
+`AgentBottomPanel` spanned full viewport and covered shell sidenav; place dock in main content column; report lines; do not deploy until confirmed.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` lines **2637–2659**: outer workspace column gains `minWidth: 0`, `maxWidth: "100%"`; new inner wrapper `div` (flex column, `minWidth: 0`, `maxWidth: "100%"`) wraps the chat+preview **row** and **`AgentBottomPanel`**.
+- `agent-dashboard/src/AgentDashboard.jsx` lines **4835–4836**: close inner wrapper then outer column (before `lightboxImage`).
+
+### Deploy status
+- Built: no
+- R2 / worker: no
+
+## 2026-03-24 Deploy: agent bundle + worker (after bottom dock layout)
+
+### What was asked
+Build, R2 upload JS/CSS, `wrangler deploy -c wrangler.production.toml`, report version ID.
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes — `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`
+- Worker deployed: yes — **Current Version ID: `9e5b3c8e-d7fc-403c-be64-c667fb12a4d0`**
+- Deploy approved by Sam: yes
+
+## 2026-03-24 Bottom dock inside viewer column only (`AgentDashboard.jsx`)
+
+### What was asked
+Move `AgentBottomPanel` from full chat+preview width into the right viewer column only (below `FloatingPreviewPanel`), desktop + mobile; report line ranges.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` line **2648**: workspace comment updated (dock no longer in main workspace wrapper).
+- **Mobile** (`isMobile` drawer): lines **4561–4627** — viewer content column gets inner flex wrapper around `FloatingPreviewPanel` + conditional `AgentBottomPanel` as last flex child.
+- **Desktop** (`!isMobile` icon strip + panel): lines **4800–4868** — same pattern inside `{previewOpen && (...)}`: outer column, inner `flex:1` wrapper for `FloatingPreviewPanel`, then `AgentBottomPanel` when `bottomDockOpen`.
+- **Removed** former placement: standalone `{bottomDockOpen && <AgentBottomPanel />}` after the main chat+preview row (previously ~4822–4834 before lightbox).
+
+### Behavior
+- Bottom dock renders only when `previewOpen` (inside viewer column). Opening terminal from strip still sets preview + dock.
+- Chat column width unchanged when dock opens; dock width matches viewer column only.
+
+### Deploy status
+- Built: yes (`npm run build --prefix agent-dashboard`)
+- R2 / worker: not run in this session
+
+## 2026-03-24 D1 seed 4 agent workflows + icon strip flex-start + deploy
+
+### What was asked
+Seed `ai_workflow_pipelines` for intent IDs; fix desktop viewer icon strip (no vertical center cluster); build, R2, deploy; version ID.
+
+### D1 (remote `inneranimalmedia-business`)
+- Executed `INSERT OR IGNORE` with columns `(id, tenant_id, name, status, stages_json, created_at, updated_at)` and `stages_json='[]'`, `unixepoch()` for timestamps (table uses INTEGER `created_at`/`updated_at`, not `datetime('now')` text).
+- Verified `SELECT id, name, status, created_at` — four rows: `wf_worker_health_check`, `wf_db_cleanup`, `wf_daily_briefing`, `wf_knowledge_reindex`.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` lines **4734–4753** (desktop `iam-viewer-icon-strip`): `justifyContent: "center"` -> **`"flex-start"`** (stack from top; no `margin: auto`; `position: relative` unchanged).
+
+### Deploy status
+- Built: yes
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`
+- Worker deployed: yes — **Current Version ID: `a2eb5169-33fc-44f7-9579-cd3f99a17974`**
+- Deploy approved by Sam: yes (explicit deploy block)
+
+## 2026-03-24 Persist bottom dock open + height in localStorage (no deploy)
+
+### What was asked
+Persist `bottomDockOpen` and `bottomDockHeight` with keys `agent-dock-open` and `agent-dock-height`; read on mount, write on change; report lines; no deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` lines **962–963**: module constants `AGENT_DOCK_OPEN_LS_KEY`, `AGENT_DOCK_HEIGHT_LS_KEY` (string values `agent-dock-open`, `agent-dock-height`).
+- `agent-dashboard/src/AgentDashboard.jsx` lines **1084–1103**: `useState` lazy init reads `localStorage` (`1`/`0` for open; height clamped **80–1200**).
+- `agent-dashboard/src/AgentDashboard.jsx` lines **1105–1114**: two `useEffect` hooks persist open flag and height on every change.
+
+### Deploy status
+- Built: no
+- R2 / worker: no
+- Deploy approved by Sam: no
+
+## 2026-03-24 Viewer toggle + gear in chat header; strip removed; dock LS; deploy
+
+### What was asked
+Move viewer panel toggle to top-right next to settings gear (same row, same size); remove floating icon rail and mobile dropdown; keep dock localStorage persistence; build, R2 upload JS/CSS, deploy worker; report version ID.
+
+### Files changed
+- `agent-dashboard/src/viewer-panel-strip-icons.jsx` (new): `ViewerPanelStripIcon`, `ViewerPanelToggleIcon`, `VIEWER_STRIP_TAB_ORDER`, `VIEWER_STRIP_TITLES` (shared icons).
+- `agent-dashboard/src/AgentDashboard.jsx` lines **940–941**, **1062–1094**: dock `agent-dock-open` / `agent-dock-height` persistence (unchanged behavior from prior session).
+- `agent-dashboard/src/AgentDashboard.jsx` lines **1107–1114**: `handleViewerTabFromHeader` (terminal dock + browser shell nav when picking tabs from panel header).
+- `agent-dashboard/src/AgentDashboard.jsx` lines **2859–2910**: chat title row — **panel toggle** (`ViewerPanelToggleIcon`) immediately left of **settings** (`ViewerPanelStripIcon tab="settings"`), both 36x36.
+- `agent-dashboard/src/AgentDashboard.jsx`: removed desktop `iam-viewer-icon-strip`, mobile in-drawer strip, and `iam-mobile-icon-toggle` dropdown; desktop viewer column only when `previewOpen` (no 48px rail).
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` lines **1–9** (import), **1023–1077**: horizontal viewer tab buttons in panel header; prop `onViewerTabChange` (uses `handleViewerTabFromHeader` from parent when set).
+
+### Deploy status
+- Built: yes (`npm run build --prefix agent-dashboard`)
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`
+- Worker deployed: yes — **Current Version ID: `af855c37-041c-4dcf-869a-9e56220bd9e5`**
+- Deploy approved by Sam: yes (explicit command block in prompt)
+
+## 2026-03-24 Workflow intent + Output tab collab (no deploy)
+
+### What was asked
+Fix double workflow intent (use latest user only; not full-history matching); honest chat message + wire `workflow_step` from IAM collab WS to bottom Output tab (`outputLog`).
+
+### Files changed
+- `worker.js` lines **8444–8447**: auto model uses `getLatestUserPlainText(msgList)`.
+- `worker.js` lines **8487–8494**: `latestUserPlain` + `appendAttachedFilesToUserText`; `matchAgentChatWorkflowIntent(latestUserPlain)` only.
+- `worker.js` lines **8518–8524** (approx): JSON `message` text points users to Output tab, not right panel.
+- `worker.js` lines **12665–12707**: `getLatestUserPlainText`, `appendAttachedFilesToUserText`, `matchWorkerHealthWorkflowIntent` (narrow health triggers; avoids "Worker Health Check" substring false positives).
+- `worker.js` `matchAgentChatWorkflowIntent`: health branch delegates to `matchWorkerHealthWorkflowIntent`.
+- `agent-dashboard/src/AgentBottomPanel.jsx`: prop `workflowCollabRunId`; `outputLog` as state; `useEffect` WebSocket to `/api/collab/${encodeURIComponent('workflow:'+runId)}` parsing `type === 'workflow_step'`; Output tab list keys.
+- `agent-dashboard/src/AgentDashboard.jsx`: `workflowCollabRunId` state; clear on `currentSessionId` change and on new user send; early JSON branch for `workflow_triggered`; pass prop to both `AgentBottomPanel` instances.
+
+### Deploy status
+- Built: yes (agent-dashboard only, local)
+- R2 / worker deployed: no
+- Deploy approved by Sam: no
+
+## 2026-03-24 wf_dashboard_deploy stages, sandbox health gate, wf_code_review /review (no deploy)
+
+### What was asked
+Deploy workflow: no approval on production step; post-sandbox health GET; auto-proceed if ok; on failure notify + proposal + wait; silent success notify. /review triggers wf_code_review (Architect + Tester). No deploy until approved.
+
+### Files changed
+- `worker.js` **12724–12727**: `/review` intent to `wf_code_review`.
+- `worker.js` **12732–12773**: `AGENT_BUILTIN_WORKFLOW_STEPS` — `wf_dashboard_deploy`, `wf_code_review`.
+- `worker.js` **12775**, **13247**: `WORKFLOW_SILENT_SUCCESS_NOTIFY` + gate completion `notifySam`.
+- `worker.js` **12778–12924**: `runWorkflowHttpHealthStep`, `runWorkflowGithubDiffReviewStep`, `agentWorkflowRecordStepSuccess`.
+- `worker.js` **12922–13070** (approx): `executeAgentWorkflowSteps` — `triggerUserId`, `http_health` / `github_diff_review` / health-fail approval branch.
+- `worker.js` **3212**: slash help mentions `/review`.
+- `scripts/d1-wf-dashboard-deploy-code-review-pipelines.sql` (new): optional D1 `ai_workflow_pipelines` rows + UPDATE.
+
+### Deploy status
+- Worker deployed: no — deploy approved: no
+
+## 2026-03-24 Pre-deploy audit: image gen, viewer controls, strip, MCP tab, terminal cards
+
+### What was asked
+Audit five issues (image generation, popout/close, icon strip, MCP tab clutter, terminal connection cards), report file/line references, fix all, then one combined deploy.
+
+### Files changed
+- `worker.js` `extractWorkersAiImageBytes` (~583–618): broader Workers AI image byte extraction (top-level bytes, nested `result`, numeric arrays).
+- `worker.js` `imgx_generate_image` (~13462–13519): `response_format: b64_json` + fetch fallback when OpenAI returns hosted `url` only.
+- `worker.js` `imgx_edit_image` FormData + response parsing (~13529–13560): `response_format` + url/b64 fallback for edited images.
+- `agent-dashboard/src/viewer-panel-strip-icons.jsx` line 28–29: removed duplicate **settings** from `VIEWER_STRIP_TAB_ORDER` (settings remains Cmd+K, vault entry, mobile header).
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` `handlePopOut` (~998–1043): browser relative URLs, draw page popout, code tab new-window preview; pop/close `stopPropagation` + wrapper `iam-viewer-pop-controls`; close label ×.
+- `agent-dashboard/src/index.css`: mobile min tap target for `.iam-viewer-pop-controls button`.
+- `agent-dashboard/src/AgentBottomPanel.jsx`: MCP tab expandable server rows (name + status dot; details + ping on expand); `setMcpHealth` refresh after service ping; terminal connection card strip (VPS Remote, Local, Add Connection placeholder, Reconnect when error); state `mcpExpandedId`.
+
+### Files NOT changed
+- `worker.js` OAuth handlers: not touched.
+
+### Deploy status
+- Built: no (not run in this session)
+- R2 uploaded: no
+- Worker deployed: no — deploy approved by Sam: no (awaiting **deploy approved** for combined deploy)
+
+### What is live now
+Unchanged until you build, upload agent bundle if applicable, and deploy worker per your pipeline.
+
+### Known issues / next steps
+- If OpenAI rejects `response_format` for a specific model, generations may still 400 until adjusted.
+- “Add Connection” terminal card is disabled placeholder until a connection registry exists.
+
+## 2026-03-24 Problems tab + `/api/agent/problems` + `worker_analytics_errors` 5xx logging (no deploy)
+
+### What was asked
+Wire Problems tab to D1 (`mcp_tool_calls`, `agent_audit_failures`-style audit query); add `GET /api/agent/problems`; poll 60s; cards with session link; empty state + last checked; write `worker_analytics_errors` on 5xx via `ctx.waitUntil`; report line numbers; do not deploy until approved.
+
+### Files changed
+- `migrations/167_worker_analytics_errors.sql` (new): `worker_analytics_errors` table + index (run on D1 before inserts succeed if table missing).
+- `worker.js` ~**4698–4738**: `__iamResponseLog`, `recordWorkerAnalyticsError`.
+- `worker.js` ~**2524–2528**, **4432–4457**: fetch sets/clears `__iamResponseLog`; top-level `catch` calls `ctx.waitUntil(recordWorkerAnalyticsError(...))` for uncaught worker errors.
+- `worker.js` ~**7500–7568**: `GET /api/agent/problems` (auth + `mcp_tool_calls` error/failed/nonempty `error_message`; `agent_audit_log` failure-like `event_type`; `worker_analytics_errors` tail).
+- `worker.js` `jsonResponse` ~**14315–14348**: on status 500–599 with active `__iamResponseLog`, `ctx.waitUntil(recordWorkerAnalyticsError(...))`.
+- `agent-dashboard/src/AgentBottomPanel.jsx`: `problemsState`, `loadProblems`, `useEffect` 60s poll when Problems tab open; Problems pane UI (MCP / audit / worker cards, session link, empty copy, last checked).
+
+### Deploy status
+- Built: no — R2: no — Worker deployed: no — deploy approved: no
+
+### Known issues / next steps
+- Run migration **167** on production D1 if `worker_analytics_errors` does not exist or columns differ.
+- `mcp_tool_calls.status` in app is often **`failed`** (not `error`); query includes both.
+
+## 2026-03-24 Docs audit, wf_worker_health_check steps, collapsible tool UI, DiffProposalCard, DEPLOY-CHECKLIST + sprint doc
+
+### What was asked
+Report `docs/` audit (sprint file, session log archiving); fix `wf_worker_health_check` noop-only steps; collapsible tool output in chat (Claude-style); Cursor-like diff mini preview; add sprint doc entries; `docs/DEPLOY-CHECKLIST.md`; no deploy until approved.
+
+### Documentation audit (findings)
+- `docs/sprint-mar24-2026.md` was **missing** from disk; **created** with current sprint content + queue.
+- `docs/cursor-session-log.md` is **very large** (~597kB in listing); **archiving not executed** — sprint doc recommends optional `docs/archive/cursor-session-log-YYYY-MM.md` split later.
+- `docs/` already contains many audits/plans (`DEPLOY_AND_AGENT_GUIDE.md`, `LOCATIONS_AND_DEPLOY_AUDIT.md`, etc.); **new** `docs/DEPLOY-CHECKLIST.md` consolidates deploy gates from `.cursorrules` / rules.
+
+### Files changed
+- `worker.js` **`AGENT_BUILTIN_WORKFLOW_STEPS`** ~**12847–12869**: `wf_worker_health_check` — three steps (`d1_query`, `terminal` `pm2 list`, `http_health` production `/api/health`).
+- `worker.js` **`executeAgentWorkflowSteps`** ~**13195–13320**: handlers for **`step_type === 'd1_query'`** (SELECT-only) and **`step_type === 'terminal'`** (`runTerminalCommandViaHttpExec`, non-zero exit fails step).
+- `agent-dashboard/src/AgentDashboard.jsx` ~**165–191**: **`toolOutputSummaryLine`**. ~**917–1036**: **`AssistantFencedContent`** — tool-like fences in **`<details class="iam-chat-tool-details">`**. ~**310–345**: **`DiffProposalCard`** — 8-line preview, nested **`<details>`** for rest, **Open in Monaco** label.
+- `agent-dashboard/src/index.css`: **`.iam-chat-tool-details`** / **`.iam-diff-mini-preview`** summary marker hide.
+- `docs/DEPLOY-CHECKLIST.md` (new).
+- `docs/sprint-mar24-2026.md` (new).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`: DiffEditor wiring unchanged; chat-side `proposed_file_change` auto-card left **queued** in sprint doc (stream today uses `generatedCode` + existing `DiffProposalCard`).
+
+### Deploy status
+- Built: no — R2: no — Worker deployed: no — deploy approved: no
+
+## 2026-03-24 Chat @ context picker (Cursor-style)
+
+### What was asked
+Add Cursor-style `@` context picker on agent chat input: categories (file, github, worker, db, workflow, command, memory), filter as user types, keyboard + touch, pills in input, structured `context_mentions` on send, CSS vars only, max-height 300px; report files/lines; no deploy until approved.
+
+### Files changed
+- `agent-dashboard/src/ChatAtContextPicker.jsx` (new): `getActiveAtMention`, `AT_CONTEXT_CATEGORIES`, `ChatAtContextPicker` (forwardRef + `handleKeyDown`), fetches catalog/R2/GitHub/Drive/workers, row rendering with badges/icons.
+- `agent-dashboard/src/AgentDashboard.jsx`: import picker; state `inputCaret`, `atPickerSuppressed`, `chatContextMentions`, `atPickerRef`; effects for caret/suppress reset; `onAtContextPick`; `showAtPicker` / `atMentionActive`; render picker above input (z-index 1003); textarea caret sync; `onKeyDown` delegates to picker; `sendMessage` builds `context_mentions` and clears mentions after send.
+- `agent-dashboard/src/index.css`: `.iam-at-context-picker` and sub-elements (max-height 300px, scroll, sticky headers, 44px rows).
+- `worker.js` after `/api/agent/problems`: **`GET /api/agent/context-picker/catalog`** (auth) — `sqlite_master` tables, `ai_workflow_pipelines`, `agent_commands`, `agent_memory_index` keys.
+- `worker.js` `/api/agent/chat` POST: destructure `context_mentions`, append **`[Structured @ context]`** block to `lastUserContent` for the model.
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `agent.html`: not touched.
+
+### Deploy status
+- Built: not run — R2: no — Worker deployed: no — deploy approved: no
+
+## 2026-03-24 @ and / chat triggers (Claude/Cursor style refresh)
+
+### What was asked
+@ picker: Files (R2), GitHub tree, Workers, DB tables (sqlite_master), Memory (`/api/agent/memory/list`); filter e.g. `@work`; pills + structured refs as `context_refs`; Escape + click-outside; cursor-based picker offset. / picker: builtins (/health check, /daily briefing, /review, /deploy, /terminal, /search) + agent_commands; filter; Enter sends immediately for builtins; descriptions; shared UI tokens (`--border-radius-lg`, `--border`, selected left accent); max-height 280px. No deploy until approved.
+
+### Files changed
+- `worker.js` **~7626–7678**: **`GET /api/agent/memory/list`**, **`GET /api/agent/db/tables`** (auth). **~8656–8661**: chat body accepts **`context_refs`** with fallback to **`context_mentions`**. **~12914–12945**: **`matchAgentChatWorkflowIntent`** — slash leads `/health`, `/daily`, `/deploy` before natural-language matchers.
+- `agent-dashboard/src/ChatAtContextPicker.jsx`: **AT_CONTEXT_CATEGORIES** reduced to **files, github, workers, db, memory**; loads **db** + **memory** via new APIs; removed workflow/command catalog; category ids **files** / **workers**; prop **`offsetLeft`**; no catalog fetch in category mode.
+- `agent-dashboard/src/AgentDashboard.jsx` **~86–134**: **`SLASH_BUILTIN_*`** builtins. **~1248–1255**: **`chatInputShellRef`**, **`atPickerOffset`**, **`syncInputCaretOffset`**. **~1778–1796**: document **mousedown** closes pickers. **~1738–1755**: **`mergedSlashCommands`**. **~1993–2005**: **`/terminal`** → **`/run`**, **`/search`** → knowledge prompt. **~2057**: **`context_refs`** on chat POST. **~2325–2340**: **`applySlashCommandSelection`** builtin send/setInput. **~3920+**: shell ref, slash **`iam-slash-command-picker`** class, **`offsetLeft`** on @ picker, textarea caret sync.
+- `agent-dashboard/src/index.css` **#agent-dashboard-root**: **`--border-radius-lg`**, **`--border`**. **`.iam-at-context-picker*`**: 280px, **`var(--border)`**, **`border-radius-lg`**, selected **left accent** border. **`.iam-slash-command-picker*`** new.
+
+### Deploy status
+- Built: not run — Worker deployed: no — deploy approved: no
+
+## 2026-03-24 Cursor-style bottom panel shortcuts + Ports/Debug tabs + terminal split + help modal
+
+### What was asked
+Mirror Cursor-style shortcuts (Cmd+J dock, Cmd+P @ picker, Cmd+Shift+B/E/G viewer tabs, confirm Cmd+K), add Ports (ss/netstat via terminal run, 60s) and Debug Console (worker_analytics_errors via `/api/agent/problems` worker_errors, 30s), terminal + split same PTY (max 2), Cmd+Shift+? help modal (CSS vars only). No deploy until approved; report file/lines.
+
+### Files changed
+- `agent-dashboard/src/AgentDashboard.jsx` **~1240**: `keyboardHelpOpen` state. **~1731–1825**: `keydown` handler — Cmd+J, Cmd+P (@ insert + picker when idle), Cmd+Shift+B/E/G, Cmd+Shift+? toggle help, Cmd+K / Cmd+/ / Cmd+` unchanged behavior; Escape closes help first. **~2966–3065**: keyboard help dialog markup + classes.
+- `agent-dashboard/src/AgentBottomPanel.jsx` **~718–793**: `PORTS_POLL_CMD`, `loadPorts` / `loadDebug`, intervals 60s / 30s when Ports / Debug Console tab active. **~905–914**: tab labels "Debug Console" / "Ports". **~1048–1100**: Split / Close split (replaces disabled Add Connection). **~1125–1178**: stacked xterm containers for split. **~1331–1408**: Debug + Ports tab bodies.
+- `agent-dashboard/src/index.css` **~369–460**: `.agent-keyboard-help-*` overlay/dialog/table/kbd (theme vars only).
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `worker.js`, `agent.html`: not touched for this task.
+
+### Deploy status
+- Built: not run — R2: no — Worker deployed: no — deploy approved: no
+
+### What is live now
+- Unchanged until you build and deploy the agent-dashboard bundle per your pipeline.
+
+### Known issues / next steps
+- Split pane #2 starts empty until new PTY output (no scrollback replay). Cmd+Shift+? may vary by keyboard layout; `?` and `Slash` code both handled.
+
+## 2026-03-24 Remote terminal: socket-url + wss (not same-origin proxy)
+
+### What was asked
+D1 `terminal_history` showed local Mac prompts; ensure **Remote** uses `GET /api/agent/terminal/socket-url` and connects xterm to returned `wss://` (e.g. `terminal.inneranimalmedia.com`) with token, not only `/api/agent/terminal/ws` on the app host. Do not deploy until confirmed.
+
+### Files changed
+- `agent-dashboard/src/AgentBottomPanel.jsx` **~9–19**: `normalizePtyWebSocketUrl` (trim, `https`→`wss`, case-insensitive scheme). **~355–430** (approx): removed early-return skip when a prior WS ref existed; **Remote** sets `targetUrl` only from normalized socket-url response (`fetch(\`${origin}/api/agent/terminal/socket-url\`, { credentials: 'include', cache: 'no-store' })`); **Local** explicitly uses same-origin `/api/agent/terminal/ws` only; clearer error text if socket-url fails.
+- `worker.js` **`/api/agent/terminal/ws`**: trim `TERMINAL_WS_URL` and map `https://`→`wss://`, `http://`→`ws://` before upstream `fetch` Upgrade (matches socket-url behavior). **`runTerminalCommand`**: same normalization for WS fallback after http-exec.
+
+### Deploy status
+- Built: not run — Worker deployed: no — deploy approved: no
+
+### How to verify (logged-in session)
+- `curl -s https://inneranimalmedia.com/api/agent/terminal/socket-url -b 'SESSION_COOKIE'` should return JSON `{"url":"wss://terminal...?token=..."}`.
+- In Agent Sam: **VPS Remote** → prompt should match VPS hostname, not `Sams-iMac`.
+

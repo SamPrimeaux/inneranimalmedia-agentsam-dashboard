@@ -2,7 +2,7 @@ import{WebSocketServer}from"ws";import pty from"node-pty";import http from"http"
 const PORT=process.env.PTY_PORT||3099,TOKEN=process.env.PTY_AUTH_TOKEN||"";
 const SHELL=process.env.SHELL||"/bin/bash";
 const CWD=process.env.HOME||process.env.PWD||"/";
-const ENV={...process.env,PATH:process.env.PATH||"/usr/bin:/bin:/usr/sbin:/sbin",HOME:process.env.HOME||CWD,TERM:"xterm-256color"};
+const ENV={...process.env,PATH:process.env.PATH||"/usr/bin:/bin:/usr/sbin:/sbin",HOME:process.env.HOME||CWD,TERM:"xterm-256color",PS1:"[ sam@iam \\W ]\\$ "};
 const s=http.createServer((q,r)=>{
   if(q.url==="/health"){r.writeHead(200);r.end("ok");return;}
   if(q.url==="/exec"&&q.method==="POST"){

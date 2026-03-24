@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Editor from "@monaco-editor/react";
 import { DiffEditor } from "@monaco-editor/react";
 import SettingsPanel from "./SettingsPanel";
+import {
+  ViewerPanelStripIcon,
+  VIEWER_STRIP_TAB_ORDER,
+  VIEWER_STRIP_TITLES,
+} from "./viewer-panel-strip-icons";
 
 function buildR2Url(bucket, key) {
   const base = typeof window !== "undefined" ? window.location.origin : "";
@@ -39,7 +44,7 @@ function renderViewPanel(filename, r2Url) {
 
   if (imageExts.includes(ext)) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#0d1117", overflow: "auto" }}>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--color-code-bg)", overflow: "auto" }}>
         <img src={r2Url} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
       </div>
     );
@@ -51,14 +56,14 @@ function renderViewPanel(filename, r2Url) {
   }
   if (videoExts.includes(ext)) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#0d1117" }}>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--color-code-bg)" }}>
         <video src={r2Url} controls style={{ maxWidth: "100%", maxHeight: "100%" }} />
       </div>
     );
   }
   if (audioExts.includes(ext)) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#0d1117" }}>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--color-code-bg)" }}>
         <audio src={r2Url} controls />
       </div>
     );
@@ -246,7 +251,7 @@ export function GitHubFileBrowser({ connectedIntegrations, openGithubFileInCode,
             {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading repos...</div>}
             {!githubLoading && githubRepos.map((repo) => (
               <div key={repo.full_name}>
-                <button type="button" onClick={() => setGithubSelectedRepo(repo.full_name)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                <button type="button" onClick={() => setGithubSelectedRepo(repo.full_name)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                   <span style={{ color: "var(--accent)" }}>[dir]</span> {repo.full_name}
                 </button>
               </div>
@@ -259,7 +264,7 @@ export function GitHubFileBrowser({ connectedIntegrations, openGithubFileInCode,
             {githubLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading...</div>}
             {!githubLoading && githubFiles.filter((item) => item.type === "dir").map((item) => (
               <div key={item.path}>
-                <button type="button" onClick={() => { setGithubPathStack((s) => [...s, githubPath]); setGithubPath(githubPath + item.name + "/"); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                <button type="button" onClick={() => { setGithubPathStack((s) => [...s, githubPath]); setGithubPath(githubPath + item.name + "/"); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                   <span style={{ color: "var(--accent)" }}>[dir]</span> {item.name}
                 </button>
               </div>
@@ -273,7 +278,7 @@ export function GitHubFileBrowser({ connectedIntegrations, openGithubFileInCode,
               const isPreviewable = GITHUB_FILE_BROWSER_PREVIEWABLE.has(ext);
               return (
                 <div key={item.path} style={{ display: "flex", alignItems: "center", width: "100%" }}>
-                  <button type="button" onClick={() => openGithubFileInCode(githubSelectedRepo, fullPath, item.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <button type="button" onClick={() => openGithubFileInCode(githubSelectedRepo, fullPath, item.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                     <span style={{ color: "var(--text-muted)" }}>[doc]</span> {item.name}
                   </button>
                   {isPreviewable && (
@@ -295,12 +300,13 @@ export default function FloatingPreviewPanel({
   onClose,
   activeTab,
   onTabChange,
+  onViewerTabChange,
   previewHtml,
   onPreviewHtmlChange,
   browserUrl,
   onBrowserUrlChange,
   onBrowserScreenshotUrl,
-  codeContent = "",
+  codeContent: codeContentFromParent = "",
   onCodeContentChange,
   codeFilename: codeFilenameProp,
   onCodeFilenameChange,
@@ -325,13 +331,6 @@ export default function FloatingPreviewPanel({
   const [previewEdit, setPreviewEdit] = useState(false);
   const [browserInputUrl, setBrowserInputUrl] = useState("");
   const [browserLoading, setBrowserLoading] = useState(false);
-  const [terminalWsState, setTerminalWsState] = useState("idle");
-  const [terminalOutput, setTerminalOutput] = useState("");
-  const [terminalInput, setTerminalInput] = useState("");
-  const [terminalUserReconnect, setTerminalUserReconnect] = useState(0);
-  const terminalWsRef = useRef(null);
-  const terminalOutputRef = useRef(null);
-  const terminalInputRef = useRef(null);
   const viewContainerRef = useRef(null);
   const wsGuardRef = useRef(false);
   const openRef = useRef(open);
@@ -360,31 +359,127 @@ export default function FloatingPreviewPanel({
   const [filesFlatList, setFilesFlatList] = useState([]);
   const [hoveredFileKey, setHoveredFileKey] = useState(null);
   const [refreshListTrigger, setRefreshListTrigger] = useState(0);
-  const [localCodeFilename, setLocalCodeFilename] = useState("");
   const filenameControlled = typeof onCodeFilenameChange === "function";
-  const codeFilename = filenameControlled ? (codeFilenameProp ?? "") : localCodeFilename;
-  const setCodeFilename = useCallback(
-    (v) => {
-      if (filenameControlled) {
-        if (typeof v === "function") onCodeFilenameChange(v(codeFilenameProp ?? ""));
-        else onCodeFilenameChange(v);
-      } else {
-        setLocalCodeFilename(v);
-      }
+  const [openTabs, setOpenTabs] = useState([]);
+  const [activeTabId, setActiveTabId] = useState(null);
+  const [splitMode, setSplitMode] = useState(false);
+  const [splitRightTabId, setSplitRightTabId] = useState(null);
+  const [workersOpen, setWorkersOpen] = useState(true);
+  const [workersList, setWorkersList] = useState([]);
+  const [workersLoading, setWorkersLoading] = useState(false);
+  const [workerSourceBusy, setWorkerSourceBusy] = useState(false);
+  const lastInjectRef = useRef({ fn: "", c: "" });
+  const savedByTabIdRef = useRef({});
+
+  const activeCodeTab = openTabs.find((t) => t.id === activeTabId) || null;
+  const codeFilename = activeCodeTab?.filename ?? "";
+  const codeContent = activeCodeTab?.content ?? "";
+
+  const upsertTab = useCallback((tab) => {
+    setOpenTabs((prev) => {
+      const exists = prev.find((t) => t.id === tab.id);
+      if (exists) return prev.map((t) => (t.id === tab.id ? { ...t, ...tab } : t));
+      return [...prev, tab];
+    });
+  }, []);
+
+  const addTab = useCallback((partial) => {
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tab-${Date.now()}-${Math.random()}`;
+    const tab = {
+      id,
+      filename: partial.filename || "untitled",
+      content: partial.content ?? "",
+      dirty: false,
+      source: partial.source || "unknown",
+      bucket: partial.bucket,
+      repo: partial.repo,
+      path: partial.path,
+      workerName: partial.workerName,
+    };
+    savedByTabIdRef.current[id] = tab.content;
+    setOpenTabs((prev) => [...prev, tab]);
+    setActiveTabId(id);
+    if (filenameControlled && onCodeFilenameChange) onCodeFilenameChange(tab.filename);
+    if (onCodeContentChange) onCodeContentChange(tab.content);
+    return id;
+  }, [filenameControlled, onCodeFilenameChange, onCodeContentChange]);
+
+  const updateActiveFilename = useCallback(
+    (fn) => {
+      if (!activeTabId) return;
+      setOpenTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, filename: fn } : t)));
+      if (filenameControlled && onCodeFilenameChange) onCodeFilenameChange(fn);
     },
-    [filenameControlled, onCodeFilenameChange, codeFilenameProp]
+    [activeTabId, filenameControlled, onCodeFilenameChange]
   );
+
+  const closeTabById = useCallback(
+    (id) => {
+      const t = openTabs.find((x) => x.id === id);
+      if (!t) return;
+      if (t.dirty) {
+        const ok = typeof window !== "undefined" ? window.confirm("Discard unsaved changes?") : true;
+        if (!ok) return;
+      }
+      setOpenTabs((prev) => prev.filter((x) => x.id !== id));
+      delete savedByTabIdRef.current[id];
+      if (activeTabId === id) {
+        const idx = openTabs.findIndex((x) => x.id === id);
+        const next = openTabs.filter((x) => x.id !== id);
+        const fallback = next[Math.max(0, idx - 1)] || next[0] || null;
+        setActiveTabId(fallback ? fallback.id : null);
+        if (fallback) {
+          if (filenameControlled && onCodeFilenameChange) onCodeFilenameChange(fallback.filename);
+          if (onCodeContentChange) onCodeContentChange(fallback.content);
+        } else {
+          if (filenameControlled && onCodeFilenameChange) onCodeFilenameChange("");
+          if (onCodeContentChange) onCodeContentChange("");
+        }
+      }
+      if (splitRightTabId === id) setSplitRightTabId(null);
+    },
+    [openTabs, activeTabId, splitRightTabId, filenameControlled, onCodeFilenameChange, onCodeContentChange]
+  );
+
+  const updateActiveContent = useCallback(
+    (text) => {
+      if (!activeTabId) return;
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, content: text ?? "", dirty: (savedByTabIdRef.current[activeTabId] ?? "") !== (text ?? "") } : t))
+      );
+      if (onCodeContentChange) onCodeContentChange(text ?? "");
+    },
+    [activeTabId, onCodeContentChange]
+  );
+
+  useEffect(() => {
+    const fn = codeFilenameProp ?? "";
+    const c = codeContentFromParent ?? "";
+    if (fn === lastInjectRef.current.fn && c === lastInjectRef.current.c) return;
+    lastInjectRef.current = { fn, c };
+    if (!fn && !c) return;
+    setOpenTabs((prev) => {
+      const match = prev.find((t) => t.filename === fn);
+      if (match) {
+        savedByTabIdRef.current[match.id] = c;
+        return prev.map((t) => (t.id === match.id ? { ...t, content: c, dirty: false } : t));
+      }
+      const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tab-${Date.now()}`;
+      const tab = { id, filename: fn || "untitled", content: c, dirty: false, source: "chat" };
+      savedByTabIdRef.current[id] = c;
+      setActiveTabId(id);
+      return [...prev, tab];
+    });
+  }, [codeFilenameProp, codeContentFromParent]);
   const [saveState, setSaveState] = useState("idle");
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const monacoEditorRef = useRef(null);
-  const terminalSessionIdRef = useRef(null);
 
   const [diffMode, setDiffMode] = useState(false);
   const [proposedContent, setProposedContent] = useState(null);
-  const lastSavedContentRef = useRef("");
 
   // Google Drive integration (Files tab when source is __gdrive__)
   const [gdriveFolderId, setGdriveFolderId] = useState("root");
@@ -449,12 +544,12 @@ export default function FloatingPreviewPanel({
     if (typeof window === "undefined" || !window.monaco) return;
     const s = getComputedStyle(document.documentElement);
     const get = (v) => s.getPropertyValue(v).trim() || undefined;
-    const bg = safeHex(get("--bg-canvas"), "#1e1e1e");
-    const fg = safeHex(get("--text-primary"), "#d4d4d4");
-    const muted = safeHex(get("--text-muted"), "#858585");
-    const accentDim = safeHex(get("--accent-dim"), "#264f78");
-    const accent = safeHex(get("--accent"), "#aeafad");
-    const elevated = safeHex(get("--bg-elevated"), "#2d2d2d");
+    const bg = safeHex(get("--bg-canvas") || get("--bg-surface") || get("--color-code-bg"), safeHex(get("--color-code-bg") || get("--bg-surface"), ""));
+    const fg = safeHex(get("--text-primary") || get("--color-text"), safeHex(get("--color-text"), ""));
+    const muted = safeHex(get("--text-muted"), "");
+    const accentDim = safeHex(get("--accent-dim") || get("--color-border"), safeHex(get("--color-border"), ""));
+    const accent = safeHex(get("--accent") || get("--color-primary"), safeHex(get("--color-primary"), ""));
+    const elevated = safeHex(get("--bg-elevated") || get("--bg-surface"), safeHex(get("--bg-surface"), ""));
     if ([bg, fg, muted, accentDim, accent, elevated].every((c) => c && c.startsWith("#"))) {
       window.monaco.editor.defineTheme("iam-custom", {
         base: isDark ? "vs-dark" : "vs",
@@ -561,6 +656,50 @@ export default function FloatingPreviewPanel({
       .finally(() => setGdriveLoading(false));
   }, [activeTab, open, filesBucket, gdriveFolderId]);
 
+  useEffect(() => {
+    if (activeTab !== "files" || !open) return;
+    setWorkersLoading(true);
+    fetch("/api/cloudflare/workers/list", { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((d) => setWorkersList(Array.isArray(d.names) ? d.names : []))
+      .catch(() => setWorkersList([]))
+      .finally(() => setWorkersLoading(false));
+  }, [activeTab, open]);
+
+  useEffect(() => {
+    if (!splitMode || !activeTabId) return;
+    const rightOk = splitRightTabId && openTabs.some((t) => t.id === splitRightTabId);
+    if (!rightOk) {
+      const other = openTabs.find((t) => t.id !== activeTabId);
+      setSplitRightTabId(other ? other.id : null);
+    }
+  }, [splitMode, activeTabId, splitRightTabId, openTabs]);
+
+  const openWorkerSourceInTab = useCallback(
+    (name) => {
+      setWorkerSourceBusy(true);
+      fetch(`/api/cloudflare/workers/${encodeURIComponent(name)}/source`, { credentials: "same-origin" })
+        .then((r) => {
+          if (!r.ok) {
+            return r.text().then((t) => {
+              throw new Error(t || String(r.status));
+            });
+          }
+          return r.text();
+        })
+        .then((text) => {
+          addTab({ filename: `${name}/worker.js`, content: text ?? "", source: "worker", workerName: name });
+          setEditMode(false);
+          if (onTabChange) onTabChange("code");
+        })
+        .catch((e) => setFilesError(e.message || "Worker source failed"))
+        .finally(() => setWorkerSourceBusy(false));
+    },
+    [addTab, onTabChange]
+  );
+
+  const splitRightTab = splitRightTabId ? openTabs.find((t) => t.id === splitRightTabId) : null;
+
   const openFileInCode = useCallback((bucket, key) => {
     const url = buildR2Url(bucket, key);
     fetch(`/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`, { credentials: "same-origin" })
@@ -570,15 +709,14 @@ export default function FloatingPreviewPanel({
       })
       .then((text) => {
         const name = key || "";
-        setCodeFilename(name);
+        addTab({ filename: name, content: text ?? "", source: "r2", bucket });
         setSelectedFileForView({ key: name, url });
-        if (onCodeContentChange) onCodeContentChange(text);
         onFileContextChange?.({ filename: name, content: text ?? "", bucket });
         setEditMode(false);
         if (onTabChange) onTabChange("code");
       })
       .catch((e) => setFilesError(e.message || "Failed to load file"));
-  }, [onCodeContentChange, onTabChange, onFileContextChange]);
+  }, [addTab, onTabChange, onFileContextChange]);
 
   // When parent asks to open a file by key (e.g. after r2_write), fetch and open in Code tab and refresh file list
   useEffect(() => {
@@ -587,8 +725,7 @@ export default function FloatingPreviewPanel({
     fetch(`/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
       .then((text) => {
-        setCodeFilename(key);
-        if (onCodeContentChange) onCodeContentChange(text ?? "");
+        addTab({ filename: key, content: text ?? "", source: "r2", bucket });
         onFileContextChange?.({ filename: key, content: text ?? "", bucket });
         setEditMode(false);
         if (onTabChange) onTabChange("code");
@@ -598,7 +735,7 @@ export default function FloatingPreviewPanel({
       .finally(() => {
         if (onOpenFileKeyDone) onOpenFileKeyDone();
       });
-  }, [open, openFileKey?.bucket, openFileKey?.key]);
+  }, [open, openFileKey?.bucket, openFileKey?.key, addTab, onFileContextChange, onTabChange, onOpenFileKeyDone]);
 
   const openGdriveFileInCode = useCallback((fileId, name) => {
     fetch(`/api/integrations/gdrive/file?fileId=${encodeURIComponent(fileId)}`, { credentials: "same-origin" })
@@ -610,8 +747,7 @@ export default function FloatingPreviewPanel({
         }
         const fname = name || "";
         const content = data.content ?? "";
-        setCodeFilename(fname);
-        if (onCodeContentChange) onCodeContentChange(content);
+        addTab({ filename: fname, content, source: "gdrive" });
         onFileContextChange?.({ filename: fname, content, bucket: undefined });
         setEditMode(false);
         if (onTabChange) onTabChange("code");
@@ -625,7 +761,7 @@ export default function FloatingPreviewPanel({
         }
       })
       .catch((e) => setGdriveError(e.message || "Failed to load file"));
-  }, [onCodeContentChange, onTabChange, onFileContextChange, previewableExtensions]);
+  }, [addTab, onTabChange, onFileContextChange, previewableExtensions]);
 
   const openGithubFileInCode = useCallback((repo, path, name) => {
     fetch(`/api/integrations/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`, { credentials: "same-origin" })
@@ -637,8 +773,7 @@ export default function FloatingPreviewPanel({
         }
         const fname = name || path.split("/").pop() || "";
         const content = data.content ?? "";
-        setCodeFilename(fname);
-        if (onCodeContentChange) onCodeContentChange(content);
+        addTab({ filename: fname, content, source: "github", repo, path });
         onFileContextChange?.({ filename: fname, content, bucket: undefined });
         setEditMode(false);
         if (onTabChange) onTabChange("code");
@@ -652,10 +787,10 @@ export default function FloatingPreviewPanel({
         }
       })
       .catch((e) => setFilesError(e.message || "Failed to load file"));
-  }, [onCodeContentChange, onTabChange, onFileContextChange, previewableExtensions]);
+  }, [addTab, onTabChange, onFileContextChange, previewableExtensions]);
 
   const saveFileToR2 = useCallback(async () => {
-    if (!codeFilename || !filesBucket) return;
+    if (!codeFilename || !filesBucket || !activeTabId) return;
     setSaving(true);
     try {
       const currentContent = monacoEditorRef.current?.getValue() ?? codeContent;
@@ -668,7 +803,11 @@ export default function FloatingPreviewPanel({
         }
       );
       if (res.ok) {
-        lastSavedContentRef.current = typeof currentContent === "string" ? currentContent : codeContent;
+        const saved = typeof currentContent === "string" ? currentContent : codeContent;
+        savedByTabIdRef.current[activeTabId] = saved;
+        setOpenTabs((prev) =>
+          prev.map((t) => (t.id === activeTabId ? { ...t, content: saved, dirty: false } : t))
+        );
         setEditMode(false);
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 2000);
@@ -679,13 +818,13 @@ export default function FloatingPreviewPanel({
     } finally {
       setSaving(false);
     }
-  }, [codeFilename, filesBucket, codeContent, onCodeContentChange]);
+  }, [codeFilename, filesBucket, codeContent, onCodeContentChange, activeTabId]);
 
   const handleSaveDraftToR2 = useCallback(async () => {
     let fn = (codeFilename || "").trim();
     if (!fn) {
       fn = "agent-output.txt";
-      setCodeFilename(fn);
+      updateActiveFilename(fn);
     }
     const bodyContent = monacoEditorRef.current?.getValue() ?? codeContent ?? "";
     setSaveState("saving");
@@ -710,7 +849,7 @@ export default function FloatingPreviewPanel({
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 2000);
     }
-  }, [codeFilename, codeContent, setCodeFilename]);
+  }, [codeFilename, codeContent, updateActiveFilename]);
 
   const acceptProposedChange = useCallback(async () => {
     if (proposedContent == null || !codeFilename || !filesBucket) return;
@@ -721,6 +860,12 @@ export default function FloatingPreviewPanel({
         { method: "PUT", headers: { "Content-Type": "text/plain" }, body: proposedContent }
       );
       if (res.ok) {
+        if (activeTabId) {
+          savedByTabIdRef.current[activeTabId] = proposedContent;
+          setOpenTabs((prev) =>
+            prev.map((t) => (t.id === activeTabId ? { ...t, content: proposedContent, dirty: false } : t))
+          );
+        }
         if (onCodeContentChange) onCodeContentChange(proposedContent);
         setDiffMode(false);
         setProposedContent(null);
@@ -731,7 +876,7 @@ export default function FloatingPreviewPanel({
     } finally {
       setSaving(false);
     }
-  }, [proposedContent, codeFilename, filesBucket, onCodeContentChange, onProposedChangeResolved]);
+  }, [proposedContent, codeFilename, filesBucket, onCodeContentChange, onProposedChangeResolved, activeTabId]);
 
   const rejectProposedChange = useCallback(() => {
     setDiffMode(false);
@@ -756,7 +901,19 @@ export default function FloatingPreviewPanel({
         }
       );
       if (res.ok) {
-        setCodeFilename(monacoDiffFromChat.filename);
+        const fn = monacoDiffFromChat.filename;
+        setOpenTabs((prev) => {
+          const ex = prev.find((t) => t.filename === fn);
+          if (ex) {
+            savedByTabIdRef.current[ex.id] = monacoDiffFromChat.modified;
+            return prev.map((t) =>
+              t.id === ex.id ? { ...t, content: monacoDiffFromChat.modified, dirty: false } : t
+            );
+          }
+          const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `t-${Date.now()}`;
+          savedByTabIdRef.current[id] = monacoDiffFromChat.modified;
+          return [...prev, { id, filename: fn, content: monacoDiffFromChat.modified, dirty: false, source: "r2", bucket }];
+        });
         if (onCodeContentChange) onCodeContentChange(monacoDiffFromChat.modified);
         onMonacoDiffResolved?.();
         setSaveSuccess(true);
@@ -784,17 +941,16 @@ export default function FloatingPreviewPanel({
     }
   }, [monacoDiffFromChat, onMonacoDiffResolved]);
 
-  const hasChanges = codeContent !== lastSavedContentRef.current;
+  const hasChanges = !!(activeCodeTab && activeCodeTab.dirty);
   const handleUndoChanges = useCallback(() => {
-    const saved = lastSavedContentRef.current;
+    if (!activeTabId) return;
+    const saved = savedByTabIdRef.current[activeTabId] ?? "";
+    setOpenTabs((prev) =>
+      prev.map((t) => (t.id === activeTabId ? { ...t, content: saved, dirty: false } : t))
+    );
     if (onCodeContentChange) onCodeContentChange(saved);
     if (monacoEditorRef.current) monacoEditorRef.current.setValue(saved);
-  }, [onCodeContentChange]);
-
-  // Sync last-saved content when file loads (for hasChanges / Undo)
-  useEffect(() => {
-    if (codeFilename && codeContent !== undefined) lastSavedContentRef.current = codeContent;
-  }, [codeFilename, codeContent]);
+  }, [onCodeContentChange, activeTabId]);
 
   // Notify parent whenever file loaded in Code tab changes (for agent context)
   useEffect(() => {
@@ -814,7 +970,7 @@ export default function FloatingPreviewPanel({
     }
     const bucket = proposedFileChange.bucket || filesBucket || (filesBuckets.length > 0 ? filesBuckets[0] : "");
     if (!bucket) {
-      setCodeFilename(fn);
+      addTab({ filename: fn, content: "", source: "proposed" });
       if (onCodeContentChange) onCodeContentChange("");
       setProposedContent(proposedFileChange.content);
       setDiffMode(true);
@@ -825,182 +981,60 @@ export default function FloatingPreviewPanel({
       .then((r) => (r.ok ? r.text() : ""))
       .then((text) => {
         if (onCodeContentChange) onCodeContentChange(text);
-        setCodeFilename(fn);
+        addTab({ filename: fn, content: text, source: "r2", bucket });
         setProposedContent(proposedFileChange.content);
         setDiffMode(true);
         if (onTabChange) onTabChange("code");
       })
       .catch(() => {
         if (onCodeContentChange) onCodeContentChange("");
-        setCodeFilename(fn);
+        addTab({ filename: fn, content: "", source: "proposed" });
         setProposedContent(proposedFileChange.content);
         setDiffMode(true);
         if (onTabChange) onTabChange("code");
       });
-  }, [proposedFileChange, codeFilename, onTabChange, filesBucket, filesBuckets, onCodeContentChange]);
-
-  // Terminal WebSocket: prefer direct wss:// to TERMINAL_WS_URL (one hop); fallback to same-origin Worker proxy.
-  useEffect(() => {
-    if (activeTab !== "terminal" || !open) return;
-    if (terminalWsRef.current && terminalWsRef.current.readyState < 2) return;
-    wsGuardRef.current = false;
-    let cancelled = false;
-    const wsProto = (typeof window !== "undefined" && window.location.protocol === "https:") ? "wss:" : "ws:";
-    const wsHost = (typeof window !== "undefined") ? window.location.host : "inneranimalmedia.com";
-    const fallbackWsUrl = `${wsProto}//${wsHost}/api/agent/terminal/ws`;
-    setTerminalWsState("connecting");
-    setTerminalOutput("");
-
-    (async () => {
-      let targetUrl = fallbackWsUrl;
-      try {
-        const r = await fetch("/api/agent/terminal/socket-url", { credentials: "same-origin" });
-        if (r.ok) {
-          const j = await r.json().catch(() => ({}));
-          if (j && typeof j.url === "string" && (j.url.startsWith("wss://") || j.url.startsWith("ws://"))) targetUrl = j.url;
-        }
-      } catch (_) {}
-      if (cancelled) return;
-      if (terminalWsRef.current && terminalWsRef.current.readyState < 2) return;
-      let ws = null;
-      try {
-        ws = new WebSocket(targetUrl);
-        terminalWsRef.current = ws;
-      } catch (_) {
-        if (!cancelled) setTerminalWsState("error");
-        return;
-      }
-    ws.onopen = () => {
-      if (cancelled) return;
-      if (terminalWsRef.current !== ws) return;
-      setTerminalWsState("connected");
-      setTerminalOutput((prev) => prev + "\r\nConnected.\r\n");
-    };
-    ws.onmessage = (ev) => {
-      if (cancelled) return;
-      if (terminalWsRef.current !== ws) return;
-      const raw = typeof ev.data === "string" ? ev.data : ev.data?.toString?.() ?? "";
-      try {
-        const msg = JSON.parse(raw);
-        if (msg.type === "session_id") {
-          terminalSessionIdRef.current = msg.session_id;
-          return;
-        }
-        if (msg.type === "output" && msg.data) {
-          setTerminalOutput((prev) => prev + msg.data);
-          return;
-        }
-      } catch (_) {}
-      setTerminalOutput((prev) => prev + raw);
-    };
-    ws.onclose = () => {
-      if (cancelled) return;
-      if (terminalWsRef.current !== ws) return;
-      terminalWsRef.current = null;
-      terminalSessionIdRef.current = null;
-      setTerminalOutput((prev) => (prev && !prev.endsWith("[Disconnected]\r\n") ? prev + "\r\n[Disconnected]\r\n" : prev || "[Disconnected]\r\n"));
-      setTerminalWsState("disconnected");
-    };
-    ws.onerror = () => {
-      if (cancelled) return;
-      if (terminalWsRef.current !== ws) return;
-      setTerminalWsState("error");
-    };
-    })();
-
-    return () => {
-      cancelled = true;
-      if (!mountedRef.current || !openRef.current || activeTabRef.current !== "terminal") {
-        wsGuardRef.current = true;
-        try {
-          if (terminalWsRef.current) terminalWsRef.current.close();
-        } catch (_) {}
-        terminalWsRef.current = null;
-      }
-    };
-  }, [open, activeTab, terminalUserReconnect]);
-
-  useEffect(() => {
-    if (activeTab === "terminal" && terminalInputRef.current) {
-      terminalInputRef.current.focus();
-    }
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (terminalOutputRef.current) terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
-  }, [terminalOutput]);
-
-  const runCommandInTerminal = useCallback(async (command, opts = {}) => {
-    try {
-      const res = await fetch("/api/agent/terminal/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          command: (command || "").trim(),
-          session_id: terminalSessionIdRef.current ?? null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.output) {
-        setTerminalOutput((prev) => prev + "\r\n" + data.output);
-      }
-      if (onTabChange && opts.focusTerminal !== false) onTabChange("terminal");
-      return { ok: res.ok, output: data.output, error: data.error };
-    } catch (err) {
-      console.error("[runCommandInTerminal]", err);
-      return { ok: false, error: err?.message ?? String(err) };
-    }
-  }, [onTabChange]);
-
-  /** Enter: PTY via WebSocket when OPEN; otherwise one-shot HTTP /api/agent/terminal/run (same as mac tunnel run path). */
-  const sendTerminalKey = useCallback((e) => {
-    const isEnter = e.key === "Enter" || e.key === "NumpadEnter";
-    if (!isEnter) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const ws = terminalWsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      const line = terminalInput.trimEnd() + "\n";
-      try {
-        ws.send(JSON.stringify({ type: "input", data: line }));
-      } catch (_) {
-        return;
-      }
-      setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + terminalInput + "\r\n");
-      setTerminalInput("");
-      return;
-    }
-    const cmd = terminalInput.trim();
-    if (!cmd) return;
-    void (async () => {
-      setTerminalOutput((prev) => prev + (prev ? "" : "[ sam@iam ~ ]$ ") + cmd + "\r\n");
-      setTerminalInput("");
-      const r = await runCommandInTerminal(cmd);
-      if (r && !r.ok) {
-        const errLine = r.error ? String(r.error) : "Terminal run failed";
-        setTerminalOutput((prev) => prev + "\r\n" + errLine + "\r\n");
-      }
-    })();
-  }, [terminalInput, runCommandInTerminal]);
-
-  useEffect(() => {
-    if (runCommandRunnerRef) {
-      runCommandRunnerRef.current = { runCommandInTerminal };
-      return () => { runCommandRunnerRef.current = null; };
-    }
-  }, [runCommandRunnerRef, runCommandInTerminal]);
+  }, [proposedFileChange, codeFilename, onTabChange, filesBucket, filesBuckets, onCodeContentChange, addTab]);
 
   const handlePopOut = () => {
-    if (activeTab === "browser" && (browserInputUrl || browserUrl)) {
-      const u = (browserInputUrl || browserUrl || "").trim();
-      const url = u.startsWith("http") ? u : "https://" + u;
-      try { window.open(url, "_blank", "noopener"); } catch (_) {}
-    } else if (activeTab === "view" && previewHtml?.trim()) {
-      try {
+    const esc = (s) =>
+      String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    try {
+      if (activeTab === "browser" && (browserInputUrl || browserUrl)) {
+        const u = (browserInputUrl || browserUrl || "").trim();
+        const url = u.startsWith("http") || u.startsWith("/") ? (u.startsWith("/") ? `${typeof window !== "undefined" ? window.location.origin : ""}${u}` : u) : "https://" + u;
+        window.open(url, "_blank", "noopener");
+        return;
+      }
+      if (activeTab === "view" && previewHtml?.trim()) {
         const w = window.open("", "_blank", "noopener");
-        if (w) { w.document.write(previewHtml); w.document.close(); }
-      } catch (_) {}
-    }
+        if (w) {
+          w.document.write(previewHtml);
+          w.document.close();
+        }
+        return;
+      }
+      if (activeTab === "draw" && drawPageSrc?.trim()) {
+        const p = drawPageSrc.trim();
+        const abs = p.startsWith("http") ? p : `${typeof window !== "undefined" ? window.location.origin : ""}${p.startsWith("/") ? p : `/${p}`}`;
+        window.open(abs, "_blank", "noopener");
+        return;
+      }
+      if (activeTab === "code" && (codeContent != null || codeFilename)) {
+        const w = window.open("", "_blank", "noopener");
+        if (w) {
+          const title = esc(codeFilename || "code");
+          const body = esc(codeContent ?? "");
+          w.document.write(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${title}</title><style>body{margin:16px;background:var(--bg-canvas,#111);color:var(--color-text,#eee);font:13px/1.45 ui-monospace,monospace;}pre{white-space:pre-wrap;word-break:break-word;}</style></head><body><pre>${body}</pre></body></html>`
+          );
+          w.document.close();
+        }
+      }
+    } catch (_) {}
   };
 
   return (
@@ -1015,7 +1049,7 @@ export default function FloatingPreviewPanel({
         overflow: "hidden",
       }}
     >
-      {/* Header: pop out + close (tab labels live on AgentDashboard icon strip) */}
+      {/* Header: viewer tabs + pop out + close */}
       <div
         style={{
           display: "flex",
@@ -1024,35 +1058,92 @@ export default function FloatingPreviewPanel({
           background: "var(--bg-canvas)",
           borderBottom: "1px solid var(--border)",
           flexShrink: 0,
+          gap: 4,
+          minWidth: 0,
         }}
       >
-        <div style={{ flex: 1 }} />
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            overflowX: "auto",
+            flexWrap: "nowrap",
+            scrollbarWidth: "none",
+          }}
+          className="iam-viewer-header-tabs"
+        >
+          {VIEWER_STRIP_TAB_ORDER.map((tab) => {
+            const isActive = activeTab === tab;
+            const pickTab = onViewerTabChange || onTabChange;
+            return (
+              <button
+                key={tab}
+                type="button"
+                title={VIEWER_STRIP_TITLES[tab]}
+                onClick={() => pickTab(tab)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: isActive ? "var(--bg-elevated)" : "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  color: isActive ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <ViewerPanelStripIcon tab={tab} size={16} />
+              </button>
+            );
+          })}
+        </div>
         <button
           type="button"
           className="iam-panel-back"
-          onClick={onClose}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof onClose === "function") onClose();
+          }}
           style={{ display: "none", marginRight: "6px", padding: "3px 7px", border: "1px solid var(--border)", background: "var(--bg-canvas)", color: "var(--text-primary)", borderRadius: "3px", fontSize: "11px", cursor: "pointer", fontFamily: "inherit" }}
           aria-label="Back to chat"
         >
           Back
         </button>
-        <button
-          type="button"
-          onClick={handlePopOut}
-          aria-label="Pop out"
-          style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", padding: "3px", marginRight: "3px", fontSize: "13px", lineHeight: 1 }}
-          title="Pop out"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close panel"
-          style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", padding: "3px", fontSize: "14px", lineHeight: 1 }}
-        >
-          x
-        </button>
+        <div className="iam-viewer-pop-controls" style={{ display: "flex", alignItems: "center", flexShrink: 0, gap: 2 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handlePopOut();
+            }}
+            aria-label="Pop out"
+            style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", padding: "6px", marginRight: "2px", fontSize: "13px", lineHeight: 1, flexShrink: 0 }}
+            title="Pop out"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (typeof onClose === "function") onClose();
+            }}
+            aria-label="Close panel"
+            style={{ background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer", padding: "6px", fontSize: "16px", lineHeight: 1, flexShrink: 0 }}
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1069,7 +1160,7 @@ export default function FloatingPreviewPanel({
               return (
                 <>
                   {activeFile && (
-                    <div style={{ height: 32, background: "rgba(0,0,0,0.06)", fontSize: 12, color: "var(--text-secondary)", padding: "0 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <div style={{ height: 32, background: "color-mix(in srgb, var(--color-text) 6%, transparent)", fontSize: 12, color: "var(--text-secondary)", padding: "0 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                       <span style={{ opacity: 0.9 }}>[doc]</span>
                       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeFile.key.split("/").pop() || activeFile.key}</span>
                       <button type="button" onClick={() => { if (onBrowserUrlChange) onBrowserUrlChange(activeFile.url); if (onTabChange) onTabChange("browser"); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 12, fontFamily: "inherit", padding: "0 4px", whiteSpace: "nowrap" }}>Open in Browser tab {'->'}</button>
@@ -1302,7 +1393,7 @@ export default function FloatingPreviewPanel({
                   +
                 </button>
                 {addBucketPopoverOpen && addBucketList.length > 0 && (
-                  <div style={{ position: "absolute", left: 0, top: "100%", marginTop: "4px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "6px", boxShadow: "0 8px 20px rgba(0,0,0,0.15)", zIndex: 10001, minWidth: "160px", maxHeight: "200px", overflowY: "auto", padding: "4px 0" }}>
+                  <div style={{ position: "absolute", left: 0, top: "100%", marginTop: "4px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "6px", boxShadow: "0 8px 20px color-mix(in srgb, var(--color-text) 15%, transparent)", zIndex: 10001, minWidth: "160px", maxHeight: "200px", overflowY: "auto", padding: "4px 0" }}>
                     {addBucketList.map((b) => (
                       <button key={b} type="button" onClick={() => { setFilesBuckets((prev) => [...prev, b].sort()); setAddBucketPopoverOpen(false); }} style={{ display: "block", width: "100%", padding: "6px 10px", border: "none", background: "none", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-canvas)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}>{b}</button>
                     ))}
@@ -1334,20 +1425,136 @@ export default function FloatingPreviewPanel({
             {(filesBucket !== "__gdrive__" && filesBucket !== "__github__" && filesError) && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{filesError}</div>}
             {filesBucket === "__gdrive__" && gdriveError && <div style={{ padding: "8px", fontSize: "11px", color: "var(--danger)" }}>{gdriveError}</div>}
             {filesBucket === "__github__" ? (
-              <GitHubFileBrowser
-                connectedIntegrations={connectedIntegrations}
-                openGithubFileInCode={openGithubFileInCode}
-                setSelectedFileForView={setSelectedFileForView}
-                onTabChange={onTabChange}
-              />
+              <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                <div style={{ flexShrink: 0, padding: "8px 8px 0", borderBottom: "1px solid var(--border)" }}>
+                  <button
+                    type="button"
+                    onClick={() => setWorkersOpen((v) => !v)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "6px 8px",
+                      border: "none",
+                      borderRadius: 4,
+                      background: "transparent",
+                      color: "var(--text-primary)",
+                      fontSize: 12,
+                      fontFamily: "inherit",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ color: "var(--accent)" }}>{workersOpen ? "[-]" : "[+]"}</span>
+                    Workers
+                  </button>
+                  {workersOpen && (
+                    <div style={{ padding: "4px 0 8px 8px" }}>
+                      {workersLoading && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading workers...</div>}
+                      {!workersLoading &&
+                        workersList.map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            disabled={workerSourceBusy}
+                            onClick={() => openWorkerSourceInTab(name)}
+                            style={{
+                              display: "block",
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "4px 8px",
+                              marginBottom: 2,
+                              border: "none",
+                              borderRadius: 4,
+                              background: "transparent",
+                              color: "var(--text-primary)",
+                              fontSize: 12,
+                              fontFamily: "inherit",
+                              cursor: workerSourceBusy ? "wait" : "pointer",
+                            }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      {!workersLoading && workersList.length === 0 && (
+                        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>No workers in registry</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <GitHubFileBrowser
+                  connectedIntegrations={connectedIntegrations}
+                  openGithubFileInCode={openGithubFileInCode}
+                  setSelectedFileForView={setSelectedFileForView}
+                  onTabChange={onTabChange}
+                />
+              </div>
             ) : (
             <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "8px" }}>
+              <div style={{ marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setWorkersOpen((v) => !v)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    width: "100%",
+                    padding: "6px 8px",
+                    border: "none",
+                    borderRadius: 4,
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    fontSize: 12,
+                    fontFamily: "inherit",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ color: "var(--accent)" }}>{workersOpen ? "[-]" : "[+]"}</span>
+                  Workers
+                </button>
+                {workersOpen && (
+                  <div style={{ padding: "4px 0 8px 8px" }}>
+                    {workersLoading && <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading workers...</div>}
+                    {!workersLoading &&
+                      workersList.map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          disabled={workerSourceBusy}
+                          onClick={() => openWorkerSourceInTab(name)}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "4px 8px",
+                            marginBottom: 2,
+                            border: "none",
+                            borderRadius: 4,
+                            background: "transparent",
+                            color: "var(--text-primary)",
+                            fontSize: 12,
+                            fontFamily: "inherit",
+                            cursor: workerSourceBusy ? "wait" : "pointer",
+                          }}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    {!workersLoading && workersList.length === 0 && (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>No workers in registry</div>
+                    )}
+                  </div>
+                )}
+              </div>
               {filesBucket === "__gdrive__" && (
                 <>
                   {gdriveLoading && <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Loading...</div>}
                   {!gdriveLoading && (Array.isArray(gdriveFiles) ? gdriveFiles : []).filter((f) => f.mimeType === "application/vnd.google-apps.folder").map((f) => (
                     <div key={f.id}>
-                      <button type="button" onClick={() => { setGdriveFolderIdStack((s) => [...s, f.id]); setGdriveFolderId(f.id); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                      <button type="button" onClick={() => { setGdriveFolderIdStack((s) => [...s, f.id]); setGdriveFolderId(f.id); }} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                         <span style={{ color: "var(--accent)" }}>[dir]</span> {f.name}
                       </button>
                     </div>
@@ -1361,7 +1568,7 @@ export default function FloatingPreviewPanel({
                     const isPreviewable = previewableExtensions.has(ext);
                     return (
                       <div key={f.id} style={{ display: "flex", alignItems: "center", width: "100%" }}>
-                        <button type="button" onClick={() => openGdriveFileInCode(f.id, f.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                        <button type="button" onClick={() => openGdriveFileInCode(f.id, f.name)} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                           <span style={{ color: "var(--text-muted)" }}>[doc]</span> {f.name}
                           {f.size != null && <span style={{ marginLeft: "auto", fontSize: "10px", color: "var(--text-muted)" }}>{(Number(f.size) / 1024).toFixed(1)} KB</span>}
                         </button>
@@ -1382,7 +1589,7 @@ export default function FloatingPreviewPanel({
               )}
               {!filesLoading && !filesRecursive && filesPrefixes.map((p) => (
                 <div key={p}>
-                  <button type="button" onClick={() => setFilesPrefix(p)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <button type="button" onClick={() => setFilesPrefix(p)} style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }} onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                     <span style={{ color: "var(--accent)" }}>[dir]</span> {p}
                   </button>
                 </div>
@@ -1414,7 +1621,7 @@ export default function FloatingPreviewPanel({
                 };
                 return (
                   <div key={key} style={{ display: "flex", alignItems: "center", width: "100%" }} onMouseEnter={() => setHoveredFileKey(key)} onMouseLeave={() => setHoveredFileKey(null)}>
-                    <button type="button" onClick={() => isText ? openFileInCode(filesBucket, key) : openInView()} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: key === codeFilename ? "var(--bg-active, rgba(255,255,255,0.10))" : "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", opacity: isText || previewable ? 1 : 0.7 }} onMouseEnter={(e) => { if (isText || previewable) e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }} title={isText ? "Open in Code tab" : previewable ? "Preview in View tab" : "No preview"}>
+                    <button type="button" onClick={() => isText ? openFileInCode(filesBucket, key) : openInView()} style={{ flex: 1, display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "6px 8px", border: "none", borderRadius: "4px", background: key === codeFilename ? "var(--bg-active, color-mix(in srgb, var(--color-text) 10%, transparent))" : "transparent", color: "var(--text-primary)", fontSize: "12px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", opacity: isText || previewable ? 1 : 0.7 }} onMouseEnter={(e) => { if (isText || previewable) e.currentTarget.style.background = "color-mix(in srgb, var(--color-text) 6%, transparent)"; }} onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }} title={isText ? "Open in Code tab" : previewable ? "Preview in View tab" : "No preview"}>
                       {filesRecursive ? key : key.split("/").pop()}
                       {o.size != null && <span style={{ marginLeft: "auto", fontSize: "10px", color: "var(--text-muted)" }}>{(o.size / 1024).toFixed(1)} KB</span>}
                     </button>
@@ -1435,6 +1642,151 @@ export default function FloatingPreviewPanel({
 
         {/* CODE TAB -- Monaco */}
         <div style={{ flex: 1, display: activeTab === "code" ? "flex" : "none", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
+            {openTabs.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "stretch",
+                  flexShrink: 0,
+                  borderBottom: "1px solid var(--border)",
+                  overflowX: "auto",
+                  gap: 2,
+                  padding: "4px 6px 0",
+                  background: "color-mix(in srgb, var(--color-text) 4%, transparent)",
+                }}
+              >
+                {openTabs.map((t) => {
+                  const isAc = t.id === activeTabId;
+                  return (
+                    <div
+                      key={t.id}
+                      role="tab"
+                      aria-selected={isAc}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        flexShrink: 0,
+                        padding: "6px 10px",
+                        borderBottom: isAc ? "2px solid var(--color-accent)" : "2px solid transparent",
+                        cursor: "pointer",
+                        maxWidth: 200,
+                      }}
+                      onClick={() => {
+                        setActiveTabId(t.id);
+                        if (filenameControlled && onCodeFilenameChange) onCodeFilenameChange(t.filename);
+                        if (onCodeContentChange) onCodeContentChange(t.content);
+                      }}
+                    >
+                      <span
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          fontSize: 12,
+                          color: isAc ? "var(--color-accent)" : "var(--text-primary)",
+                        }}
+                        title={t.filename}
+                      >
+                        {t.filename.split("/").pop() || t.filename}
+                      </span>
+                      {t.dirty && (
+                        <span
+                          title="Unsaved"
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            background: "var(--color-accent)",
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        title="Close tab"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeTabById(t.id);
+                        }}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          cursor: "pointer",
+                          fontSize: 14,
+                          lineHeight: 1,
+                          padding: "0 2px",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        x
+                      </button>
+                    </div>
+                  );
+                })}
+                <div style={{ flex: 1, minWidth: 8 }} />
+                <button
+                  type="button"
+                  title={splitMode ? "Exit split view" : "Compare two tabs (split)"}
+                  onClick={() => {
+                    if (openTabs.length < 2) return;
+                    setSplitMode((s) => {
+                      if (s) {
+                        setSplitRightTabId(null);
+                        return false;
+                      }
+                      const other = openTabs.find((x) => x.id !== activeTabId);
+                      setSplitRightTabId(other ? other.id : null);
+                      return true;
+                    });
+                  }}
+                  disabled={openTabs.length < 2}
+                  style={{
+                    flexShrink: 0,
+                    alignSelf: "center",
+                    marginBottom: 4,
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: splitMode ? "var(--bg-elevated)" : "transparent",
+                    color: "var(--text-secondary)",
+                    cursor: openTabs.length < 2 ? "not-allowed" : "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Split
+                </button>
+                {splitMode && openTabs.length >= 2 && (
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginBottom: 4, fontSize: 11, color: "var(--text-muted)" }}>
+                    vs
+                    <select
+                      value={splitRightTabId || ""}
+                      onChange={(e) => setSplitRightTabId(e.target.value || null)}
+                      style={{
+                        maxWidth: 140,
+                        fontSize: 11,
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
+                        color: "var(--text-primary)",
+                        borderRadius: 4,
+                        padding: "2px 4px",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      {openTabs
+                        .filter((x) => x.id !== activeTabId)
+                        .map((x) => (
+                          <option key={x.id} value={x.id}>
+                            {x.filename.split("/").pop() || x.filename}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
             {hasRealDiffFromChat ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "12px 16px", borderBottom: "1px solid var(--color-border)", background: "var(--bg-elevated)", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1456,7 +1808,7 @@ export default function FloatingPreviewPanel({
                 )}
               </div>
             ) : diffMode && !monacoDiffFromChat ? (
-              <div style={{ height: 32, background: "rgba(234,179,8,0.10)", fontSize: 12, color: "var(--text-secondary)", padding: "0 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <div style={{ height: 32, background: "color-mix(in srgb, var(--color-warning) 10%, transparent)", fontSize: 12, color: "var(--text-secondary)", padding: "0 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{codeFilename.split("/").pop() || codeFilename}</span>
                 <span style={{ color: "var(--text-muted)" }}>|</span>
                 <span style={{ fontWeight: 600 }}>PROPOSED CHANGE</span>
@@ -1468,7 +1820,7 @@ export default function FloatingPreviewPanel({
               <div
                 style={{
                   height: 32,
-                  background: editMode ? "rgba(234,179,8,0.12)" : "rgba(0,0,0,0.06)",
+                  background: editMode ? "color-mix(in srgb, var(--color-warning) 12%, transparent)" : "color-mix(in srgb, var(--color-text) 6%, transparent)",
                   fontSize: 12,
                   color: "var(--text-secondary)",
                   padding: "0 12px",
@@ -1612,12 +1964,12 @@ export default function FloatingPreviewPanel({
                     if (monaco) {
                       const s = getComputedStyle(document.documentElement);
                       const get = (v) => s.getPropertyValue(v).trim() || undefined;
-                      const bg = safeHex(get("--bg-canvas"), "#1e1e1e");
-                      const fg = safeHex(get("--text-primary"), "#d4d4d4");
-                      const muted = safeHex(get("--text-muted"), "#858585");
-                      const accentDim = safeHex(get("--accent-dim"), "#264f78");
-                      const accent = safeHex(get("--accent"), "#aeafad");
-                      const elevated = safeHex(get("--bg-elevated"), "#2d2d2d");
+                      const bg = safeHex(get("--bg-canvas") || get("--bg-surface") || get("--color-code-bg"), safeHex(get("--color-code-bg") || get("--bg-surface"), ""));
+                      const fg = safeHex(get("--text-primary") || get("--color-text"), safeHex(get("--color-text"), ""));
+                      const muted = safeHex(get("--text-muted"), "");
+                      const accentDim = safeHex(get("--accent-dim") || get("--color-border"), safeHex(get("--color-border"), ""));
+                      const accent = safeHex(get("--accent") || get("--color-primary"), safeHex(get("--color-primary"), ""));
+                      const elevated = safeHex(get("--bg-elevated") || get("--bg-surface"), safeHex(get("--bg-surface"), ""));
                       if ([bg, fg, muted, accentDim, accent, elevated].every((c) => c && c.startsWith("#"))) {
                         monaco.editor.defineTheme("iam-custom", {
                           base: isDark ? "vs-dark" : "vs",
@@ -1639,23 +1991,73 @@ export default function FloatingPreviewPanel({
                 />
               </div>
               )}
-              <div style={{ display: !hasRealDiffFromChat && !diffMode ? "block" : "none", height: "100%", minHeight: 0 }}>
+              {splitMode && splitRightTab && !hasRealDiffFromChat && !diffMode && activeCodeTab && (
+              <div style={{ display: "block", height: "100%", minHeight: 0 }}>
+                <DiffEditor
+                  key={`split-${activeCodeTab.id}-${splitRightTab.id}`}
+                  original={activeCodeTab.content ?? ""}
+                  modified={splitRightTab.content ?? ""}
+                  language={getMonacoLanguage(activeCodeTab.filename || splitRightTab.filename)}
+                  theme="iam-custom"
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    lineNumbers: "on",
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    fontFamily: "'JetBrains Mono','Fira Code',Menlo,monospace",
+                  }}
+                  onMount={(_editors, monaco) => {
+                    if (monaco) {
+                      const s = getComputedStyle(document.documentElement);
+                      const get = (v) => s.getPropertyValue(v).trim() || undefined;
+                      const bg = safeHex(get("--bg-canvas") || get("--bg-surface") || get("--color-code-bg"), safeHex(get("--color-code-bg") || get("--bg-surface"), ""));
+                      const fg = safeHex(get("--text-primary") || get("--color-text"), safeHex(get("--color-text"), ""));
+                      const muted = safeHex(get("--text-muted"), "");
+                      const accentDim = safeHex(get("--accent-dim") || get("--color-border"), safeHex(get("--color-border"), ""));
+                      const accent = safeHex(get("--accent") || get("--color-primary"), safeHex(get("--color-primary"), ""));
+                      const elevated = safeHex(get("--bg-elevated") || get("--bg-surface"), safeHex(get("--bg-surface"), ""));
+                      if ([bg, fg, muted, accentDim, accent, elevated].every((c) => c && c.startsWith("#"))) {
+                        monaco.editor.defineTheme("iam-custom", {
+                          base: isDark ? "vs-dark" : "vs",
+                          inherit: true,
+                          rules: [],
+                          colors: {
+                            "editor.background": bg,
+                            "editor.foreground": fg,
+                            "editorLineNumber.foreground": muted,
+                            "editor.selectionBackground": accentDim,
+                            "editorCursor.foreground": accent,
+                            "editor.lineHighlightBackground": elevated,
+                          },
+                        });
+                        monaco.editor.setTheme("iam-custom");
+                      }
+                    }
+                  }}
+                />
+              </div>
+              )}
+              <div style={{ display: !hasRealDiffFromChat && !diffMode && !(splitMode && splitRightTab && activeCodeTab) ? "block" : "none", height: "100%", minHeight: 0 }}>
               <Editor
+                key={activeTabId ?? "editor-no-tab"}
                 height="100%"
                 language={getMonacoLanguage(codeFilename)}
                 value={codeContent}
-                onChange={(value) => { if (editMode && onCodeContentChange) onCodeContentChange(value ?? ""); }}
+                onChange={(value) => {
+                  if (editMode) updateActiveContent(value ?? "");
+                }}
                 theme="iam-custom"
                 onMount={(editor, monaco) => {
                   monacoEditorRef.current = editor;
                   const s = getComputedStyle(document.documentElement);
                   const get = (v) => s.getPropertyValue(v).trim() || undefined;
-                  const bg = safeHex(get("--bg-canvas"), "#1e1e1e");
-                  const fg = safeHex(get("--text-primary"), "#d4d4d4");
-                  const muted = safeHex(get("--text-muted"), "#858585");
-                  const accentDim = safeHex(get("--accent-dim"), "#264f78");
-                  const accent = safeHex(get("--accent"), "#aeafad");
-                  const elevated = safeHex(get("--bg-elevated"), "#2d2d2d");
+                  const bg = safeHex(get("--bg-canvas") || get("--bg-surface") || get("--color-code-bg"), safeHex(get("--color-code-bg") || get("--bg-surface"), ""));
+                  const fg = safeHex(get("--text-primary") || get("--color-text"), safeHex(get("--color-text"), ""));
+                  const muted = safeHex(get("--text-muted"), "");
+                  const accentDim = safeHex(get("--accent-dim") || get("--color-border"), safeHex(get("--color-border"), ""));
+                  const accent = safeHex(get("--accent") || get("--color-primary"), safeHex(get("--color-primary"), ""));
+                  const elevated = safeHex(get("--bg-elevated") || get("--bg-surface"), safeHex(get("--bg-surface"), ""));
                   if ([bg, fg, muted, accentDim, accent, elevated].every((c) => c && c.startsWith("#"))) {
                     monaco.editor.defineTheme("iam-custom", {
                       base: isDark ? "vs-dark" : "vs",
@@ -1690,58 +2092,6 @@ export default function FloatingPreviewPanel({
             </div>
           </div>
 
-        {/* TERMINAL TAB */}
-        {activeTab === "terminal" && (
-          <div className="agent-panel-terminal" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 10px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              {(terminalWsState === "disconnected" || terminalWsState === "error") && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    try {
-                      if (terminalWsRef.current) terminalWsRef.current.close();
-                    } catch (_) {}
-                    terminalWsRef.current = null;
-                    terminalSessionIdRef.current = null;
-                    setTerminalUserReconnect((n) => n + 1);
-                  }}
-                  style={{
-                    fontSize: "12px",
-                    padding: "4px 10px",
-                    cursor: "pointer",
-                    borderRadius: "4px",
-                    border: "1px solid var(--border)",
-                    background: "var(--bg-elevated)",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  Reconnect
-                </button>
-              )}
-              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Reconnect if the shell stops responding.</span>
-            </div>
-            <div ref={terminalOutputRef} style={{ flex: 1, overflow: "auto", padding: "10px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-              {terminalWsState === "connecting" && "Connecting to terminal..."}
-              {terminalWsState === "error" && "Connection error."}
-              {terminalOutput}
-            </div>
-            <div style={{ borderTop: "1px solid var(--border)", padding: "7px 10px", display: "flex", alignItems: "center", gap: "6px" }}>
-              <span style={{ color: "var(--accent)", fontSize: "12px" }}>[ sam@iam ~ ]$</span>
-              <input
-                ref={terminalInputRef}
-                type="text"
-                value={terminalInput}
-                onChange={e => setTerminalInput(e.target.value)}
-                onKeyDown={sendTerminalKey}
-                onClick={() => terminalInputRef.current?.focus()}
-                style={{ flex: 1, background: "transparent", border: "none", color: "var(--text-primary)", fontFamily: "inherit", fontSize: "13px", outline: "none" }}
-                autoComplete="off"
-                autoFocus
-              />
-              <span style={{ width: "7px", height: "13px", background: "var(--text-primary)", animation: "panelBlink 1s step-end infinite" }} />
-            </div>
-          </div>
-        )}
       </div>
 
       <style>{`

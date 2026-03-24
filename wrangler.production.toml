@@ -51,6 +51,10 @@ binding = "AUTORAG_BUCKET"
 bucket_name = "autorag"
 
 [[r2_buckets]]
+binding = "DOCS_BUCKET"
+bucket_name = "iam-docs"
+
+[[r2_buckets]]
 binding = "R2"
 bucket_name = "iam-platform"
 

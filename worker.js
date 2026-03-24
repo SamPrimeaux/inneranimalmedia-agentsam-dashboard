@@ -10,6 +10,37 @@ import { DurableObject } from "cloudflare:workers";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
+const DOCS_SCREENSHOTS_PUBLIC_BASE = 'https://docs.inneranimalmedia.com';
+const DASHBOARD_SCREENSHOTS_PUBLIC_BASE = 'https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev';
+
+/**
+ * Store agent/browser tool screenshots. Prefer env.DOCS_BUCKET (public: docs.inneranimalmedia.com).
+ * Fallback: env.DASHBOARD (legacy pub r2.dev), then env.R2 (legacy URL; pre-deploy safety).
+ */
+async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
+  const ct = contentType || 'image/png';
+  if (env.DOCS_BUCKET) {
+    const ts = Date.now();
+    const id = crypto.randomUUID();
+    const key = `screenshots/agent/${ts}-${id}.png`;
+    await env.DOCS_BUCKET.put(key, buf, { httpMetadata: { contentType: ct } });
+    return { screenshot_url: `${DOCS_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+  }
+  if (env.DASHBOARD) {
+    const id = crypto.randomUUID();
+    const key = `screenshots/${id}.png`;
+    await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: ct } });
+    return { screenshot_url: `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+  }
+  if (env.R2) {
+    const id = crypto.randomUUID();
+    const key = `screenshots/${id}.png`;
+    await env.R2.put(key, buf, { httpMetadata: { contentType: ct } });
+    return { screenshot_url: `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+  }
+  throw new Error('No R2 bucket for screenshots');
+}
+
 function normalizeThemeSlug(value) {
   if (!value || typeof value !== 'string') return null;
   return value.startsWith('theme-') ? value.substring(6) : value;
@@ -3924,7 +3955,14 @@ const worker = {
       try {
         const body = msg.body && typeof msg.body === 'object' ? msg.body : (typeof msg.body === 'string' ? JSON.parse(msg.body || '{}') : {});
         const { jobId, job_type, url } = body;
-        if (jobId && env.MYBROWSER && env.DASHBOARD && env.DB) {
+        if (jobId && env.MYBROWSER && env.DB && (env.DASHBOARD || env.DOCS_BUCKET)) {
+          if (job_type === 'render' && !env.DASHBOARD) {
+            try {
+              await env.DB.prepare(
+                "UPDATE playwright_jobs SET status='failed', error=? WHERE id=?"
+              ).bind('DASHBOARD bucket required for render jobs', jobId).run();
+            } catch (_) {}
+          } else if (job_type === 'screenshot' || job_type === 'render') {
           const { launch } = await import('@cloudflare/playwright');
           const browser = await launch(env.MYBROWSER);
           try {
@@ -3934,9 +3972,8 @@ const worker = {
             let resultUrl = null;
             if (job_type === 'screenshot') {
               const buf = await page.screenshot({ type: 'png', fullPage: true });
-              const key = `screenshots/${jobId}.png`;
-              await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: 'image/png' } });
-              resultUrl = `https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/${key}`;
+              const out = await putAgentBrowserScreenshotToR2(env, buf, 'image/png');
+              resultUrl = out.screenshot_url;
             } else if (job_type === 'render') {
               const html = await page.content();
               const key = `renders/${jobId}.html`;
@@ -3952,6 +3989,7 @@ const worker = {
             ).bind(String(err?.message || err), jobId).run();
           } finally {
             await browser.close();
+          }
           }
         }
       } catch (_) {}
@@ -5182,7 +5220,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
-      } else if ((toolName === 'playwright_screenshot' || toolName === 'browser_screenshot') && env.MYBROWSER && env.DASHBOARD) {
+      } else if ((toolName === 'playwright_screenshot' || toolName === 'browser_screenshot') && env.MYBROWSER && (env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
         try {
           const out = await runInternalPlaywrightTool(env, toolName, params);
           resultText = JSON.stringify(out);
@@ -10288,7 +10326,8 @@ async function handleMcpApi(req, u, e, ctx) {
           }
           // Internal Playwright/browser tools -- run in worker (MYBROWSER) for UI validation, screenshots, navigation
           const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
-          if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && e.MYBROWSER && e.DASHBOARD) {
+          const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
+          if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && e.MYBROWSER && (!needsScreenshotBucket || e.DOCS_BUCKET || e.DASHBOARD || e.R2)) {
             try {
               const out = await runInternalPlaywrightTool(e, tool_name, params);
               await recordMcpToolCall(e, {
@@ -10647,7 +10686,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     await recordMcpToolCall(env, o);
   };
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
-  if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && env.DASHBOARD) {
+  const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
+  if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && (!needsScreenshotBucket || env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
     try {
       const out = { result: await runInternalPlaywrightTool(env, tool_name, params) };
       await rec( { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
@@ -11558,11 +11598,8 @@ async function runInternalPlaywrightTool(env, toolName, params) {
     }
     if (toolName === 'playwright_screenshot' || toolName === 'browser_screenshot') {
       const buf = await page.screenshot({ type: 'png', fullPage: params.fullPage === true });
-      const id = crypto.randomUUID();
-      const key = `screenshots/${id}.png`;
-      await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: 'image/png' } });
-      const resultUrl = `https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/${key}`;
-      return { ok: true, screenshot_url: resultUrl, job_id: id };
+      const { screenshot_url, job_id } = await putAgentBrowserScreenshotToR2(env, buf, 'image/png');
+      return { ok: true, screenshot_url, job_id };
     }
     return { ok: false, error: 'Unknown tool' };
   } finally {
@@ -15308,11 +15345,22 @@ async function runOvernightCronStep(env) {
   }
 }
 
+/** After Google/GitHub OAuth login, bounce through sign-in HTML so the same globe exit animation runs. */
+function oauthPostLoginGlobeRedirectUrl(originBase, returnToFullUrl) {
+  let path = '/dashboard/overview';
+  try {
+    const u = new URL(returnToFullUrl);
+    path = u.pathname + (u.search || '');
+  } catch (_) {}
+  if (!path.startsWith('/') || path.startsWith('//')) path = '/dashboard/overview';
+  return `${originBase}/auth/signin?globe_exit=1&next=${encodeURIComponent(path)}`;
+}
+
 async function handleGoogleOAuthStart(request, url, env) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET || !env.SESSION_CACHE) {
     return new Response(JSON.stringify({ error: 'OAuth not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
   }
-  const returnTo = url.searchParams.get('return_to') || '';
+  const returnTo = url.searchParams.get('return_to') || url.searchParams.get('next') || '';
   const connectDrive = url.searchParams.get('connect') === 'drive' || (returnTo && returnTo.includes('agent'));
   const safeReturn = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':')) ? returnTo : '/dashboard/overview';
   const state = crypto.randomUUID();
@@ -15432,7 +15480,7 @@ async function handleGoogleOAuthCallback(request, url, env) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).bind(sessionId, userId, expiresAt, ip, ua).run();
-  const headers = new Headers({ Location: returnTo });
+  const headers = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
   const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
   headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
   return new Response(null, { status: 302, headers });
@@ -15442,7 +15490,7 @@ async function handleGitHubOAuthStart(request, url, env) {
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET || !env.SESSION_CACHE) {
     return new Response(JSON.stringify({ error: 'OAuth not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
   }
-  const returnTo = url.searchParams.get('return_to') || '';
+  const returnTo = url.searchParams.get('return_to') || url.searchParams.get('next') || '';
   const safeReturn = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':')) ? returnTo : '/dashboard/overview';
   const state = crypto.randomUUID();
   const redirectUri = `${origin(url)}/api/oauth/github/callback`;
@@ -15578,7 +15626,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
       console.error('[oauth/github/callback] user_oauth_tokens upsert failed:', e?.message ?? e);
     }
   }
-  const loginHeaders = new Headers({ Location: returnTo });
+  const loginHeaders = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
   const d = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
   loginHeaders.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${d}`);
   return new Response(null, { status: 302, headers: loginHeaders });

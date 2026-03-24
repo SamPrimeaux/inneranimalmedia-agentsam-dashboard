@@ -7725,3 +7725,141 @@ Build **root directory** not set to repo root (so `worker.js` absent in build cw
 ### Action for dashboard
 Set **Deploy command** to `npm run deploy:sandbox` and **Root directory** to repository root (empty). See `docs/SANDBOX_WORKERS_BUILDS.md`.
 
+## 2026-03-24 OAuth login — same globe exit transition as email/password
+
+### What was asked
+Match Google/GitHub OAuth post-login UX to the email/password flow (Three.js `runGlobeExitTransition`).
+
+### Files changed
+- `worker.js`: `oauthPostLoginGlobeRedirectUrl()`; Google + GitHub **login** success redirects to `/auth/signin?globe_exit=1&next=<path>` after `Set-Cookie` (connect-drive / connect-github popup flows unchanged). `handleGoogleOAuthStart` / `handleGitHubOAuthStart` accept `next` as alias for `return_to` (matches dashboard links).
+- `dashboard/auth-signin.html`: GitHub link passes `next`; CSS hides nav/card during `oauth-globe-exit`; script on `globe_exit=1` polls for `runGlobeExitTransition` then navigates to `next`.
+- `docs/cursor-session-log.md`: this entry.
+
+### Deploy status
+- Worker / R2: not deployed by agent; Sam deploy + upload `static/auth-signin.html` when ready.
+
+## 2026-03-24 OAuth globe — production deploy (Sam: deploy approved)
+
+### What was asked
+Ship OAuth globe exit + `auth-signin.html` to production after explicit deploy approval.
+
+### Files changed
+- **No code changes** in this step; only R2 upload + worker deploy.
+
+### Deploy status
+- Built: no (not applicable)
+- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cidi/static/auth-signin.html` (text/html, remote)
+- Worker deployed: yes — Version ID `590f7490-683a-4c38-9121-e861e649b512`; D1 `cloudflare_deployments` insert `last_row_id` **77**; `triggered_by=agent`, `DEPLOYMENT_NOTES='OAuth globe exit after Google/GitHub OAuth; auth-signin R2'`
+- Deploy approved by Sam: yes
+
+### What is live now
+Production worker `inneranimalmedia` serves OAuth redirects through `/auth/signin?globe_exit=1&next=...`; R2 `static/auth-signin.html` matches repo `dashboard/auth-signin.html` for the globe handoff script.
+
+### Known issues / next steps
+- None for this deploy.
+
+## 2026-03-24 Auth sign-in globe exit — reduce white flash / lag
+
+### What was asked
+Refine OAuth/email globe exit so the handoff feels seamless (less white screen, delay, lag).
+
+### Files changed
+- `dashboard/auth-signin.html`: `:root` / `html` background; `.transition-overlay` uses dark `--auth-exit-overlay` instead of white; WebGL `alpha: false` + `setClearColor(0x050508)`; shorter post-fade redirect delay (260ms); `oauth-globe-exit` raises `#globe-canvas` z-index and hides nav overlay/sidebar; OAuth `globe_exit` waits with `requestAnimationFrame` + double-rAF start instead of `setTimeout` polling.
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- `worker.js`: redirect URL unchanged.
+
+### Deploy status
+- R2 / worker: not deployed; upload `static/auth-signin.html` when ready for production.
+
+### What is live now
+Unchanged until R2 upload; repo has refined transition.
+
+### Known issues / next steps
+- Upload `dashboard/auth-signin.html` to R2 to ship.
+
+## 2026-03-24 Auth sign-in globe — R2 upload (Sam: deploy approved)
+
+### What was asked
+Ship refined `auth-signin.html` (dark exit overlay, WebGL clear, rAF OAuth handoff) to production R2.
+
+### Files changed
+- **None** (upload only).
+
+### Deploy status
+- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cidi/static/auth-signin.html` (text/html, remote)
+- Worker deployed: no (not required for this static page)
+- Deploy approved by Sam: yes
+
+### What is live now
+`/auth/signin` and sandbox auth flows serve the refined globe exit from R2.
+
+## 2026-03-24 DOCS_BUCKET + agent screenshots on docs.inneranimalmedia.com
+
+### What was asked
+Add `DOCS_BUCKET` / `iam-docs` to production and sandbox wrangler; store browser tool screenshots under `screenshots/agent/{timestamp}-{uuid}.png` with public URL `https://docs.inneranimalmedia.com/...`; fallback to DASHBOARD/R2 if `DOCS_BUCKET` unbound; no deploy in this step.
+
+### Files changed
+- `wrangler.production.toml`: `[[r2_buckets]]` `DOCS_BUCKET` -> `iam-docs` after `AUTORAG_BUCKET`.
+- `wrangler.jsonc`: same binding in `r2_buckets` array.
+- `worker.js`: `putAgentBrowserScreenshotToR2()`; `runInternalPlaywrightTool` uses it for `playwright_screenshot` / `browser_screenshot`; queue screenshot jobs use it; MCP invoke / builtin / `invokeMcpToolFromChat` require bucket only for screenshot tools (`DOCS_BUCKET` or `DASHBOARD` or `R2`); navigate/content work with `MYBROWSER` only.
+- `docs/cursor-session-log.md`: this entry.
+
+### Files NOT changed (and why)
+- No deploy; no R2 upload.
+
+### Deploy status
+- Worker deployed: no — next deploy is full worker after Sam approves.
+- Deploy approved by Sam: n/a (explicit no-deploy request).
+
+### What is live now
+Repo only; production still uses prior bindings until deploy.
+
+### Known issues / next steps
+- Deploy worker after binding `DOCS_BUCKET` in dashboard if needed; confirm `docs.inneranimalmedia.com` serves `iam-docs` at matching paths.
+
+## 2026-03-24 iam-docs bucket documentation + prod/sandbox deploy (Sam: deploy approved)
+
+### What was asked
+Create grounded markdown under `docs/iam-docs/`, upload all keys to R2 bucket **`iam-docs`**, deploy production + sandbox workers, D1 `deployments` insert, `post-deploy-record.sh`, session log, git commit/push.
+
+### Files changed
+- **`docs/iam-docs/**`:** 13 markdown files (`cursor/`, `platform/`, `clients/`, `autorag/`, `sessions/`, `screenshots/`) — deploy runbook, worker routing, R2 map, D1 overview, bindings, clients, RAG architecture, session summary, screenshot storage notes.
+- **`docs/cursor-session-log.md`:** this entry.
+
+### R2 uploads (remote `iam-docs` bucket)
+
+Keys (sizes bytes, local file):
+
+| Key | Size |
+|-----|------|
+| `cursor/IAM-CURSOR-CONTEXT.md` | 2685 |
+| `platform/deploy-runbook.md` | 4472 |
+| `platform/worker-routing.md` | 4272 |
+| `platform/r2-bucket-map.md` | 2886 |
+| `platform/d1-schema-overview.md` | 3506 |
+| `platform/bindings-reference.md` | 3111 |
+| `clients/README.md` | 1464 |
+| `clients/swamp-blood-gator/overview.md` | 595 |
+| `clients/pelican-peptides/overview.md` | 754 |
+| `autorag/architecture/how-rag-works.md` | 2984 |
+| `autorag/sessions/2026-03-23-full-session.md` | 3499 |
+| `sessions/README.md` | 976 |
+| `screenshots/README.md` | 1978 |
+
+**Note:** `wrangler r2 object list` is not available in Wrangler 4.76 CLI; sizes verified from local `wc -c`.
+
+### Deploy status
+- **Production worker** `inneranimalmedia`: Version ID **`924e4b04-ed79-477b-a97f-50de9cdda9d0`**; bindings include **`DOCS_BUCKET (iam-docs)`**, **`AUTORAG_BUCKET (autorag)`**.
+- **Sandbox worker** `inneranimal-dashboard`: Version ID **`5326db93-287a-4fe5-9c79-c66cdb8f8096`**.
+- **D1 `deployments`:** `post-deploy-record.sh` with `TRIGGERED_BY=docs-bucket-screenshot-routing`, `deploy_time_seconds=19`; meta **`last_row_id` = 78** (remote `inneranimalmedia-business`).
+- **Deploy approved by Sam:** yes (this batch).
+
+### What is live now
+Production and sandbox workers bind `DOCS_BUCKET` to `iam-docs`; agent screenshots use `putAgentBrowserScreenshotToR2` + `https://docs.inneranimalmedia.com/...` when DOCS is bound. Documentation objects live in bucket at keys above.
+
+### Known issues / next steps
+- Confirm R2 custom domain **`docs.inneranimalmedia.com`** serves **`iam-docs`** for public GET of docs and PNGs.
+- Optional: `wrangler r2` bucket listing via API/dashboard if full remote directory listing is required.
+

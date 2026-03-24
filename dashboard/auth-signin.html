@@ -9,6 +9,13 @@
         rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
+        :root {
+            --auth-bg: #050508;
+            --auth-exit-overlay: #030308;
+        }
+        html {
+            background-color: var(--auth-bg);
+        }
         * {
             margin: 0;
             padding: 0;
@@ -16,7 +23,7 @@
         }
 
         body {
-            background: #050508;
+            background: var(--auth-bg);
             color: #E2E8F0;
             font-family: 'Inter', sans-serif;
             min-height: 100vh;
@@ -218,6 +225,9 @@
             inset: 0;
             z-index: 0;
         }
+        body.oauth-globe-exit #globe-canvas {
+            z-index: 2;
+        }
 
         .auth-layout {
             position: fixed;
@@ -398,10 +408,10 @@
             position: fixed;
             inset: 0;
             z-index: 9999;
-            background: #fff;
+            background: var(--auth-exit-overlay);
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.5s ease-out;
+            transition: opacity 0.45s ease-out;
         }
         .transition-overlay.visible {
             opacity: 1;
@@ -409,6 +419,14 @@
         }
         .transition-overlay.animating {
             transition: none;
+        }
+        body.oauth-globe-exit .site-nav,
+        body.oauth-globe-exit .nav-overlay,
+        body.oauth-globe-exit .nav-sidebar,
+        body.oauth-globe-exit .auth-layout .login-card {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
         }
     </style>
 </head>
@@ -580,6 +598,10 @@
     if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && googleLink) {
         googleLink.href = '/api/oauth/google/start?next=' + encodeURIComponent(nextParam);
     }
+    var githubLink = document.getElementById('githubSignIn');
+    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && githubLink) {
+        githubLink.href = '/api/oauth/github/start?next=' + encodeURIComponent(nextParam);
+    }
 
     if (new URLSearchParams(window.location.search).get('registered') === '1') {
         var el = document.getElementById('registeredMsg');
@@ -735,7 +757,8 @@
         var camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
         camera.position.set(0, 0, 35);
 
-        var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
+        var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: false, antialias: true, powerPreference: 'high-performance' });
+        renderer.setClearColor(0x050508, 1);
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -831,7 +854,7 @@
                     }
                     setTimeout(function() {
                         window.location.href = redirectUrl;
-                    }, 400);
+                    }, 260);
                     return;
                 }
                 var ease = 1 - Math.pow(1 - t, 1.6);
@@ -861,6 +884,31 @@
     } else {
         window.runGlobeExitTransition = function(url) { window.location.href = url; };
     }
+})();
+</script>
+<script>
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('globe_exit') !== '1') return;
+    var next = params.get('next') || '/dashboard/overview';
+    if (!next.startsWith('/') || next.startsWith('//')) next = '/dashboard/overview';
+    document.body.classList.add('oauth-globe-exit');
+    var tries = 0;
+    var maxFrames = 180;
+    function run() {
+        if (typeof window.runGlobeExitTransition === 'function') {
+            window.runGlobeExitTransition(next);
+            return;
+        }
+        if (tries++ < maxFrames) {
+            requestAnimationFrame(run);
+            return;
+        }
+        window.location.href = next;
+    }
+    requestAnimationFrame(function() {
+        requestAnimationFrame(run);
+    });
 })();
 </script>
 </body>

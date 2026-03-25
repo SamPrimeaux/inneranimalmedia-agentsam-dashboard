@@ -11992,6 +11992,90 @@ async function handleMcpApi(req, u, e, ctx) {
             return jsonResponse({ ok: true, id });
           }
         }
+        // ----- /api/mcp/stream — SSE tool execution -----
+        if (pathLower === '/api/mcp/stream' && method === 'POST') {
+          const authUser = await getAuthUser(req, e);
+          if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+          let body = {};
+          try { body = await req.json(); } catch (_) {}
+          const tool_name = String(body.tool_name || '').trim();
+          const params = body.params && typeof body.params === 'object' ? body.params : {};
+          const session_id = body.session_id != null ? String(body.session_id) : null;
+
+          if (!tool_name) return jsonResponse({ error: 'tool_name required' }, 400);
+
+          const enc = new TextEncoder();
+          const emit = (obj, controller) => {
+            try {
+              controller.enqueue(enc.encode('data: ' + JSON.stringify(obj) + '\n\n'));
+            } catch (_) {}
+          };
+
+          let streamStarted = false;
+          const readable = new ReadableStream({
+            async pull(controller) {
+              if (streamStarted) return;
+              streamStarted = true;
+              try {
+                emit({ type: 'start', tool: tool_name, ts: Date.now() }, controller);
+                emit({ type: 'progress', tool: tool_name, status: 'calling' }, controller);
+
+                const out = await invokeMcpToolFromChat(e, tool_name, params, session_id || '', {
+                  allowRemoteMcp: true,
+                  skipApprovalCheck: false,
+                  suppressTelemetry: false,
+                  executionCtx: ctx,
+                  oauthUserId: authUser.email || authUser.id,
+                });
+
+                if (out.error) {
+                  emit({ type: 'error', tool: tool_name, error: out.error }, controller);
+                } else {
+                  // CDT screenshot — emit frame as base64 if screenshot_url present
+                  const result = out.result;
+                  if (tool_name === 'cdt_take_screenshot' && result?.screenshot_url) {
+                    emit({
+                      type: 'frame',
+                      tool: tool_name,
+                      data: result.screenshot_url,
+                      job_id: result.job_id || null,
+                    }, controller);
+                  }
+
+                  // Terminal — split output into lines
+                  if (tool_name === 'terminal_execute' || tool_name.startsWith('local_file_')) {
+                    const output = typeof result === 'string' ? result : result?.output || result?.result || JSON.stringify(result);
+                    const lines = String(output).split('\n');
+                    for (const line of lines) {
+                      if (line) emit({ type: 'line', tool: tool_name, data: line }, controller);
+                    }
+                  }
+
+                  emit({ type: 'result', tool: tool_name, data: result }, controller);
+                }
+
+                emit({ type: 'done', tool: tool_name, ts: Date.now() }, controller);
+              } catch (err) {
+                try {
+                  emit({ type: 'error', tool: tool_name, error: err?.message ?? String(err) }, controller);
+                } catch (_) {}
+              } finally {
+                controller.close();
+              }
+            },
+          });
+
+          return new Response(readable, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'X-Accel-Buffering': 'no',
+            },
+          });
+        }
+        // ----- end /api/mcp/stream -----
         if (pathLower === '/api/mcp/invoke' && method === 'POST') {
           let body = {};
           try { body = await req.json(); } catch (_) {}
@@ -12143,7 +12227,6 @@ async function handleMcpApi(req, u, e, ctx) {
         return jsonResponse({ error: String(err && err.message || err) }, 500);
       }
 }
-
 async function handleCidiApi(request, url, env, ctx) {
   const user = await getAuthUser(request, env);
   if (!user) return jsonResponse({ error: 'unauthorized' }, 401);

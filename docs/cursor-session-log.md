@@ -278,3 +278,40 @@ Minified name **`Ts`** was **`syncInputCaretOffset`** (`const Ts=u.useCallback(.
 ### R2
 Uploaded `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` after build.
 
+## 2026-03-24 End of Sprint — Close-out
+
+### Shipped / done
+- TDZ fix deployed (`syncInputCaretOffset` hook order before keyboard shortcuts `useEffect`).
+- Site restored with agent bundle cache bust **`v=141`**; git pushed (`main`).
+- R2 docs uploaded for **AutoRAG** (per Sam).
+- **D1:** sprint snapshot baseline seeded — **`snap_baseline_2026_03_25`** (migration `175_sprint_snapshots.sql`).
+
+### Next session (tomorrow)
+- Image gen fix (verify smoke).
+- Cursor Cloud Agents test (`cursor_run_agent` / get / list).
+- Welcome cards → viewer (UX).
+
+### Known issues / follow-ups
+1. **Image gen** — provider coercion deployed; smoke test still pending.
+2. **@ picker** — works; smoke test still pending.
+3. **Keyboard shortcuts** — loaded from D1; Settings UI toggles **not wired**.
+4. **`agentsam_agent_run`** — writes `in_progress` but **never writes completion**.
+5. **WorkflowLivePanel** — Output tab **not wired** to collab WebSocket.
+
+## 2026-03-24 Sprint Close-out
+
+### Site status: LIVE at v=141
+
+### Worker version: 028a01da
+
+### Tomorrow's first tasks (in order)
+1. Fix image generation — smoke test "generate a red circle PNG"
+2. Audit AutoRAG dual-index conflict — establish one-winner policy between AI Search, Vectorize, pgvector
+3. Wire keyboard shortcuts Settings UI toggles from D1
+4. Move welcome screen cards to viewer panel
+5. Test Cursor Cloud Agents — cursor_run_agent tool
+6. agentsam_agent_run completion write (tokens/cost on finish)
+
+### Known RAG debt
+Three parallel retrieval channels exist (AI Search iam-autorag, Vectorize, pgvector) with no guaranteed single source of truth. populate-autorag.sh is the manual indexing path. Full RAG audit needed before AutoRAG can be trusted for production retrieval.
+

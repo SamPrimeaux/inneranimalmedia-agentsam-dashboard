@@ -8924,10 +8924,11 @@ async function handleAgentApi(request, url, env, ctx) {
         } catch (_) {}
       }
       // Agent-based model override
+      let agentRow = null;
       if (agent_id) {
         try {
-          const agentRow = await env.DB.prepare(
-            'SELECT model_policy_json FROM agentsam_ai WHERE id = ?'
+          agentRow = await env.DB.prepare(
+            'SELECT model_policy_json, system_prompt, tool_invocation_style FROM agentsam_ai WHERE id = ?'
           ).bind(agent_id).first();
           if (agentRow?.model_policy_json) {
             const policy = typeof agentRow.model_policy_json === 'string'
@@ -9119,6 +9120,7 @@ async function handleAgentApi(request, url, env, ctx) {
 
       let compiledContext = null;
       let builtSections = null;
+      let agentSamSystemCore = null;
       if (bodyCompiledContextTrim) {
         compiledContext = bodyCompiledContextTrim;
       } else {
@@ -9200,7 +9202,7 @@ async function handleAgentApi(request, url, env, ctx) {
         }
       } catch (_) {}
 
-      const agentSamSystemCore = `You are Agent Sam, the AI assistant for Inner Animal Media. You run inside the IAM dashboard; the backend is already connected to D1, R2, Vectorize, and APIs.
+      agentSamSystemCore = `You are Agent Sam, the AI assistant for Inner Animal Media. You run inside the IAM dashboard; the backend is already connected to D1, R2, Vectorize, and APIs.
 
 - Identify only as Agent Sam. Do not say you are Cursor, Claude, GPT, or any other product.
 - LIVE DATA RULE: Never answer questions about current database state, record counts, table lists, active sessions, live metrics, or any real-time system state from compiled context alone. Always use d1_query, r2_list, r2_read, or appropriate tools for live data questions. Compiled context is baseline identity knowledge only — not a source of truth for current system state.
@@ -9290,7 +9292,33 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       } catch (e) {
         console.warn('[agent/chat] unified agent context', e?.message ?? e);
       }
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, resolvedSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb);
+      // DB-driven system prompt — overrides hardcoded core if set
+      const dbSystemPrompt = agentRow?.system_prompt
+        ? String(agentRow.system_prompt).trim()
+        : null;
+      const toolStyle = agentRow?.tool_invocation_style || 'balanced';
+      const toolStylePrefix = toolStyle === 'aggressive'
+        ? 'TOOL USE: Invoke tools immediately when asked. Do not explain before acting. Execute first.\n\n'
+        : toolStyle === 'conservative'
+          ? 'TOOL USE: Confirm with the user before invoking any tool.\n\n'
+          : '';
+      const coreBase = agentSamSystemCore ?? (resolvedSections && resolvedSections.core) ?? '';
+      const effectiveSystemCore = dbSystemPrompt
+        ? (toolStylePrefix + dbSystemPrompt)
+        : (toolStylePrefix + coreBase);
+      let modeSections = resolvedSections;
+      if (agent_id) {
+        const mem = resolvedSections?.memory ?? '';
+        const kb = resolvedSections?.kb ?? '';
+        const mcp = resolvedSections?.mcp ?? '';
+        const schema = resolvedSections?.schema ?? '';
+        const daily = resolvedSections?.daily ?? '';
+        const newFull = effectiveSystemCore + mem + kb + mcp + schema + daily;
+        modeSections = resolvedSections
+          ? { ...resolvedSections, core: effectiveSystemCore, full: newFull }
+          : { core: effectiveSystemCore, full: newFull, memory: mem, kb, mcp, schema, daily };
+      }
+      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb);
       let finalSystem = (unifiedAgentContextBlock ? unifiedAgentContextBlock + '\n\n' : '') + systemWithBlurb;
 
       if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS && env.R2) {

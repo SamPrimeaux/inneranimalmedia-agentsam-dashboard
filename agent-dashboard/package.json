@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "npx --yes madge --extensions js,jsx --circular src/main.jsx && vite build",
+    "build:debug": "npx --yes madge --extensions js,jsx --circular src/main.jsx && VITE_AGENT_DASHBOARD_DEBUG=1 vite build",
+    "build:vite-only": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

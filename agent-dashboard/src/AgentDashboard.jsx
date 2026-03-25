@@ -9,7 +9,8 @@ import {
   ViewerPanelToggleIcon,
   VIEWER_STRIP_TITLES,
 } from "./viewer-panel-strip-icons";
-import { ChatAtContextPicker, getActiveAtMention } from "./ChatAtContextPicker";
+import { getActiveAtMention } from "./chatAtContextMention.js";
+import { ChatAtContextPicker } from "./ChatAtContextPicker.jsx";
 
 const SpeechRecognitionAPI =
   typeof window !== "undefined"
@@ -1766,6 +1767,13 @@ export default function AgentDashboard() {
     return () => clearInterval(t);
   }, [fetchAgentNotifications]);
 
+  const syncInputCaretOffset = useCallback((value, caretPos) => {
+    const pos = typeof caretPos === "number" ? caretPos : value.length;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;
+    const col = Math.max(0, pos - lineStart);
+    setAtPickerOffset(Math.min(col * 7, 220));
+  }, []);
+
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
     function handleKeyboardShortcut(e) {
@@ -1906,13 +1914,6 @@ export default function AgentDashboard() {
     const m = getActiveAtMention(input, inputCaret);
     if (!m) setAtPickerSuppressed(false);
   }, [input, inputCaret]);
-
-  const syncInputCaretOffset = useCallback((value, caretPos) => {
-    const pos = typeof caretPos === "number" ? caretPos : value.length;
-    const lineStart = value.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;
-    const col = Math.max(0, pos - lineStart);
-    setAtPickerOffset(Math.min(col * 7, 220));
-  }, []);
 
   useEffect(() => {
     setSlashHighlightIndex(0);

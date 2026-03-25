@@ -184,3 +184,97 @@ Production worker includes Cursor Cloud Agents builtins: `cursor_run_agent` (app
 ### Wrong-repo test agent
 To stop agent `bc-d535452c` (or similar), use Cursor dashboard or Cloud Agents API `POST /v0/agents/{id}/stop` with the same Basic auth (not implemented as a tool here).
 
+## 2026-03-24 Incident report email + madge build gate
+
+### What was asked
+Send `notifySam`-equivalent incident email (Mar 24 outage, Resolution version filled); prevention item: madge in build pipeline.
+
+### What was done
+- **Email:** Sent via Resend API (same as worker `notifySam`: `agent@inneranimalmedia.com` to `sam@inneranimalmedia.com`, subject `[Agent Sam] INCIDENT REPORT: Production Outage — Mar 24 2026`). Body included resolution worker version **`9707c1c2-6c90-431f-9f2b-6134ae5edd9c`**. Resend response id: `2df44096-02d0-4dac-9ad3-2298ac2c9f79`. (Did not go through worker, so no `email_logs` row unless you backfill manually.)
+- **`agent-dashboard/package.json`:** `build` now runs `npx --yes madge --extensions js,jsx --circular src/main.jsx` then `vite build`; added **`build:vite-only`** to skip the cycle check if needed.
+
+### Files changed
+- `agent-dashboard/package.json` — scripts above.
+
+### Deploy status
+- Not deployed (package.json only). Commit/push when ready.
+
+### Deferred action items (from incident text)
+- Post-deploy smoke test script; ops runbook note; optional `rollup-plugin-visualizer` (bundle graph — does not replace madge for cycles).
+
+## 2026-03-25 .cursorrules — deploy queue cap + post-deploy verify
+
+### What was asked
+Add deploy rules: max 2 queue items per deploy; after every deploy verify `/dashboard/agent` (or current project URL) loads before approving next queue item.
+
+### Files changed
+- `.cursorrules`: new section **Deploy queue and post-deploy verification** after main worker deploy bullets.
+
+## 2026-03-25 R2 agent bundle refresh (post-outage)
+
+### What was asked
+Rebuild agent-dashboard and reupload `agent-dashboard.js`, `agent-dashboard.css`, and `agent.html` to R2 (worker-only deploy does not replace R2).
+
+### What was done
+- **Madge:** `agent-dashboard/src/main.jsx` — no circular deps. Plain `madge --circular agent-dashboard/src/` matches 0 files (needs `--extensions js,jsx` or entry file); `npm run build` already runs madge on `src/main.jsx`.
+- **Build:** `npm run build --prefix agent-dashboard` (868.54 kB JS).
+- **R2 (remote `agent-sam`):** `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`, `static/dashboard/agent.html` — upload complete.
+
+### Deploy status
+Worker: not redeployed this step. R2: yes.
+
+### What you should do
+Hard refresh `https://inneranimalmedia.com/dashboard/agent` (Cmd+Shift+R) and confirm console is clean.
+
+## 2026-03-25 TDZ / `Ts` outage — mention split, debug build, sprint_snapshots, R2 v139
+
+### What was asked
+Honest metrics picture + `sprint_snapshots` table/seed; madge missed TDZ; unminified build to find `Ts`; git history on `ChatAtContextPicker`; site down — fix and report.
+
+### Findings
+- **`git diff HEAD~3 -- ChatAtContextPicker.jsx`:** file was **added from `/dev/null`** in sprint commit `4fa3c93` (entire 694-line module). Reverting “previous version” means removing the picker integration from `AgentDashboard` (no prior file to restore).
+- **Madge:** still **no import cycles** (12 modules with `chatAtContextMention.js`). `Ts` is **esbuild minified** — not findable as a source name; unminified `dist-debug/agent-dashboard.js` shows **`getActiveAtMention`** at ~line 26227 (readable).
+- **Mitigation:** New **`agent-dashboard/src/chatAtContextMention.js`** holds `AT_CONTEXT_CATEGORIES` + `getActiveAtMention` so `AgentDashboard` does not depend on the `forwardRef` picker module for those bindings. **No `lazy()`** — keeps a **single** `agent-dashboard.js` for R2 (lazy had produced a second chunk `agent-dashboard-ChatAtContextPicker.js`).
+
+### Files changed
+- `agent-dashboard/src/chatAtContextMention.js` — new.
+- `agent-dashboard/src/ChatAtContextPicker.jsx` — import categories from mention module; re-export mention API.
+- `agent-dashboard/src/AgentDashboard.jsx` — import `getActiveAtMention` from mention module; import `ChatAtContextPicker` from picker.
+- `agent-dashboard/vite.config.js` — `VITE_AGENT_DASHBOARD_DEBUG=1` → `dist-debug/`, `minify: false`, `sourcemap: true`.
+- `agent-dashboard/package.json` — script `build:debug`.
+- `dashboard/agent.html` — cache buster **`?v=138` → `?v=139`**.
+- `migrations/175_sprint_snapshots.sql` — `CREATE TABLE sprint_snapshots` + baseline `INSERT OR IGNORE` (subqueries from `roadmap_steps`, `agentsam_agent_run`, `agent_telemetry`, `deployments`). **Not executed here** — run wrangler d1 when approved.
+- `.gitignore` — `agent-dashboard/dist-debug/`.
+
+### R2 / deploy
+- **R2 uploaded (remote):** `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` after production build.
+- Worker: not deployed this step.
+
+### What you should do
+Hard refresh `/dashboard/agent` (now **v=139**). If `Ts` error persists, open **`dist-debug/agent-dashboard.js`** + `.map` from `npm run build:debug` in `agent-dashboard` and map stack line to source. Approve **`migrations/175_sprint_snapshots.sql`** on D1 when ready; Sunday cron still to be implemented in `worker.js`.
+
+## 2026-03-25 `Ts` TDZ — root cause @xterm/xterm Browser export order
+
+### Root cause
+`ReferenceError: Cannot access 'Ts' before initialization` was **not** React / ChatAtContextPicker. In **`@xterm/xterm` `lib/xterm.mjs`**, the bundled block runs `Ll(tn,{ isChromeOS: ()=>Ts, ...})` **before** `var Mi=... Ts=/\bCrOS\b/.test(Pi)`. `Ll` is `Object.defineProperty` with getters; runtime/minifier ordering led to **`Ts` (minified `Nx`) read before init**. Same pattern in production: `lk(Ix,{ isChromeOS:()=>Nx,...})` before `Nx=/\bCrOS\b/...`.
+
+### Fix
+- **`agent-dashboard/vite-plugin-fix-xterm-browser-tdz.js`**: Vite `pre` transform moves `var tn={};Ll(tn,{...});` to **after** `Ts=/\bCrOS\b/.test(Pi);` in `@xterm` sources.
+- **`agent-dashboard/vite.config.js`**: register `fixXtermBrowserTdz()` before `@vitejs/plugin-react`.
+- **`dashboard/agent.html`**: cache bust **v=140**.
+
+### R2
+Uploaded `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` (remote) after rebuild.
+
+## 2026-03-25 `Ts` TDZ — real cause: `syncInputCaretOffset` after keyboard `useEffect`
+
+### Root cause
+Minified name **`Ts`** was **`syncInputCaretOffset`** (`const Ts=u.useCallback(...)`). The **keyboard shortcuts** `useEffect` (insert `@` on mod+p, etc.) **called** `syncInputCaretOffset` and listed it in the **dependency array** at **lines 1857–1864**, but **`syncInputCaretOffset` was declared at 1911** — classic **TDZ**: dependency array evaluates **`syncInputCaretOffset` before `const` init**. Same stack line/column as before because it was always this hook order, not xterm-only (xterm plugin remains a valid hardening).
+
+### Fix
+- **`AgentDashboard.jsx`:** moved **`syncInputCaretOffset`** `useCallback` to **immediately before** the keyboard shortcuts `useEffect` (~line 1770); removed duplicate later block.
+- **`dashboard/agent.html`:** **`?v=141`**.
+
+### R2
+Uploaded `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` after build.
+

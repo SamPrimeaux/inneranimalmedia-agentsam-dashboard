@@ -3320,6 +3320,10 @@ const worker = {
         return handleMcpApi(request, url, env, ctx);
       }
 
+      if (pathLower.startsWith('/api/cidi/')) {
+        return handleCidiApi(request, url, env, ctx);
+      }
+
       // ----- API: R2 DevOps (buckets, objects, sync, upload, stats, bulk-action) -----
       if (pathLower.startsWith('/api/r2/')) {
         return handleR2Api(request, url, env);
@@ -12138,6 +12142,251 @@ async function handleMcpApi(req, u, e, ctx) {
       } catch (err) {
         return jsonResponse({ error: String(err && err.message || err) }, 500);
       }
+}
+
+async function handleCidiApi(request, url, env, ctx) {
+  const user = await getAuthUser(request, env);
+  if (!user) return jsonResponse({ error: 'unauthorized' }, 401);
+
+  const pathLower = url.pathname.toLowerCase();
+  const method = request.method.toUpperCase();
+
+  // POST /api/cidi/run — execute smoke suite
+  if (pathLower === '/api/cidi/run' && method === 'POST') {
+    const runId = crypto.randomUUID();
+    const branch = 'main';
+    let body = {};
+    try { body = await request.json(); } catch (_) {}
+    const env_name = body.env === 'sandbox' ? 'sandbox' : 'production';
+
+    await env.DB.prepare(
+      `INSERT INTO cidi_pipeline_runs 
+       (run_id, env, status, branch, triggered_at) 
+       VALUES (?, ?, 'running', ?, datetime('now'))`
+    ).bind(runId, env_name, branch).run();
+
+    const sandboxBase = 'https://inneranimal-dashboard.inneranimalmedia.workers.dev';
+    const cookie = request.headers.get('cookie') || '';
+
+    // Production: call handleMcpApi in-process — HTTP fetch to this Worker returns 522 (recursive subrequest).
+    const cidiMcpStatus = async () => {
+      if (env_name === 'sandbox') {
+        const r = await fetch(`${sandboxBase}/api/mcp/status`);
+        const json = await r.json().catch(() => ({}));
+        return { r, json };
+      }
+      const u = new URL('https://inneranimalmedia.com/api/mcp/status');
+      const req = new Request(u.toString(), { method: 'GET' });
+      const r = await handleMcpApi(req, u, env, ctx);
+      const json = await r.json().catch(() => ({}));
+      return { r, json };
+    };
+    const cidiMcpInvoke = async (toolName, params = {}) => {
+      if (env_name === 'sandbox') {
+        const r = await fetch(`${sandboxBase}/api/mcp/invoke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'cookie': cookie },
+          body: JSON.stringify({ tool_name: toolName, params })
+        });
+        const json = await r.json().catch(() => ({}));
+        return { r, json };
+      }
+      const u = new URL('https://inneranimalmedia.com/api/mcp/invoke');
+      const req = new Request(u.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'cookie': cookie },
+        body: JSON.stringify({ tool_name: toolName, params })
+      });
+      const r = await handleMcpApi(req, u, env, ctx);
+      const json = await r.json().catch(() => ({}));
+      return { r, json };
+    };
+
+    const tests = [
+      {
+        tool_name: 'mcp_status',
+        test_type: 'route',
+        run: async () => {
+          const start = Date.now();
+          const { r, json } = await cidiMcpStatus();
+          return {
+            status: r.ok && json.ok === true ? 'pass' : 'fail',
+            latency_ms: Date.now() - start,
+            http_status: r.status,
+            response_preview: JSON.stringify(json).slice(0, 200),
+            error: r.ok && json.ok ? null : 'unexpected response'
+          };
+        }
+      },
+      {
+        tool_name: 'resend_list_domains',
+        test_type: 'invoke',
+        run: async () => {
+          const start = Date.now();
+          const { r, json } = await cidiMcpInvoke('resend_list_domains', {});
+          const pass = r.ok && !json.result?.error && json.result !== undefined;
+          return {
+            status: pass ? 'pass' : 'fail',
+            latency_ms: Date.now() - start,
+            http_status: r.status,
+            response_preview: JSON.stringify(json.result).slice(0, 200),
+            error: pass ? null : (json.result?.error || 'unexpected response')
+          };
+        }
+      },
+      {
+        tool_name: 'github_repos',
+        test_type: 'invoke',
+        run: async () => {
+          const start = Date.now();
+          const { r, json } = await cidiMcpInvoke('github_repos', {});
+          const pass = r.ok && !json.result?.error && json.result !== undefined;
+          return {
+            status: pass ? 'pass' : 'fail',
+            latency_ms: Date.now() - start,
+            http_status: r.status,
+            response_preview: JSON.stringify(json.result).slice(0, 200),
+            error: pass ? null : (json.result?.error || 'unexpected response')
+          };
+        }
+      },
+      {
+        tool_name: 'cf_images_list',
+        test_type: 'invoke',
+        run: async () => {
+          const start = Date.now();
+          const { r, json } = await cidiMcpInvoke('cf_images_list', {});
+          const pass = r.ok && !json.result?.error && json.result !== undefined;
+          return {
+            status: pass ? 'pass' : 'fail',
+            latency_ms: Date.now() - start,
+            http_status: r.status,
+            response_preview: JSON.stringify(json.result).slice(0, 200),
+            error: pass ? null : (json.result?.error || 'unexpected response')
+          };
+        }
+      },
+      {
+        tool_name: 'cdt_list_pages',
+        test_type: 'invoke',
+        run: async () => {
+          const start = Date.now();
+          const { r, json } = await cidiMcpInvoke('cdt_list_pages', {});
+          const pass = r.ok && !json.result?.error && json.result !== undefined;
+          return {
+            status: pass ? 'pass' : 'fail',
+            latency_ms: Date.now() - start,
+            http_status: r.status,
+            response_preview: JSON.stringify(json.result).slice(0, 200),
+            error: pass ? null : (json.result?.error || 'unexpected response')
+          };
+        }
+      },
+      {
+        tool_name: 'd1_deploy_record',
+        test_type: 'd1',
+        run: async () => {
+          const start = Date.now();
+          try {
+            const row = await env.DB.prepare(
+              `SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1`
+            ).first();
+            return {
+              status: row ? 'pass' : 'fail',
+              latency_ms: Date.now() - start,
+              http_status: 200,
+              response_preview: row ? `latest deploy: ${row.id}` : 'no rows',
+              error: row ? null : 'no deploy records found'
+            };
+          } catch (e) {
+            return {
+              status: 'fail',
+              latency_ms: Date.now() - start,
+              http_status: 500,
+              response_preview: null,
+              error: String(e.message)
+            };
+          }
+        }
+      }
+    ];
+
+    const results = [];
+    for (const test of tests) {
+      try {
+        const r = await test.run();
+        results.push({ tool_name: test.tool_name, test_type: test.test_type, ...r });
+      } catch (e) {
+        results.push({
+          tool_name: test.tool_name,
+          test_type: test.test_type,
+          status: 'fail',
+          latency_ms: 0,
+          http_status: 0,
+          error: String(e.message),
+          response_preview: null
+        });
+      }
+    }
+
+    // Write results to D1
+    const insertStmt = env.DB.prepare(
+      `INSERT INTO cidi_run_results 
+       (id, run_id, tool_name, test_type, status, latency_ms, 
+        http_status, error, response_preview, tested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+    );
+    await env.DB.batch(
+      results.map(r => insertStmt.bind(
+        crypto.randomUUID(), runId,
+        r.tool_name, r.test_type, r.status,
+        r.latency_ms, r.http_status,
+        r.error || null, r.response_preview || null
+      ))
+    );
+
+    const allPassed = results.every(r => r.status === 'pass');
+    await env.DB.prepare(
+      `UPDATE cidi_pipeline_runs 
+       SET status=?, completed_at=datetime('now') 
+       WHERE run_id=?`
+    ).bind(allPassed ? 'passed' : 'failed', runId).run();
+
+    return jsonResponse({ run_id: runId, status: allPassed ? 'passed' : 'failed', results }, 200);
+  }
+
+  // GET /api/cidi/runs — last 20 runs with results
+  if (pathLower === '/api/cidi/runs' && method === 'GET') {
+    const runs = await env.DB.prepare(
+      `SELECT run_id, env, status, branch, commit_hash, 
+              triggered_at, completed_at, notes
+       FROM cidi_pipeline_runs 
+       ORDER BY triggered_at DESC LIMIT 20`
+    ).all();
+
+    const runIds = (runs.results || []).map(r => r.run_id);
+    let results = [];
+    if (runIds.length > 0) {
+      const placeholders = runIds.map(() => '?').join(',');
+      const res = await env.DB.prepare(
+        `SELECT id, run_id, tool_name, test_type, status, 
+                latency_ms, http_status, error, tested_at
+         FROM cidi_run_results 
+         WHERE run_id IN (${placeholders})
+         ORDER BY tested_at ASC`
+      ).bind(...runIds).all();
+      results = res.results || [];
+    }
+
+    const grouped = (runs.results || []).map(run => ({
+      ...run,
+      tests: results.filter(r => r.run_id === run.run_id)
+    }));
+
+    return jsonResponse(grouped, 200);
+  }
+
+  return jsonResponse({ error: 'not found' }, 404);
 }
 
 /** Record MCP tool call to mcp_tool_calls, mcp_usage_log, and mcp_services. All DB writes in try/catch so missing tables/columns do not break flow. */

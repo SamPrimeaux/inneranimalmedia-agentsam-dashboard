@@ -314,6 +314,18 @@
         .ws-section-body.collapsed { display: none; }
         .ws-tool-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
         .ws-tool-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        .ws-tool-filter-wrap { margin-bottom: 10px; }
+        .ws-tool-search { width: 100%; padding: 7px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-canvas); color: var(--text-primary); font-family: inherit; outline: none; box-sizing: border-box; }
+        .ws-tool-search:focus { border-color: var(--accent); }
+        .ws-tool-group { margin-bottom: 12px; }
+        .ws-tool-group-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); margin-bottom: 6px; padding-left: 2px; }
+        .ws-tool-btn { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; margin: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-canvas); color: var(--text-primary); font-size: 12px; font-family: inherit; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+        .ws-tool-btn:hover { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+        .ws-tool-btn:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
+        .ws-tool-btn .ws-tool-dot { margin-top: 4px; }
+        .ws-tool-btn-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+        .ws-tool-btn-name { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 600; color: var(--text-primary); word-break: break-all; }
+        .ws-tool-btn-desc { font-size: 10px; color: var(--text-secondary); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .ws-kv { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); }
         .ws-kv span:last-child { color: var(--text-primary); font-family: monospace; }
 
@@ -551,6 +563,101 @@
             function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
             function escAttr(s) { return String(s||'').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
 
+            var WS_TOOL_CAT_ORDER = ['browser','a11y','accessibility','cdt','chrome_devtools','devtools','database','storage','gdrive','general','execute','read','write'];
+
+            function humanizeCategory(slug) {
+                var s = String(slug || 'general').toLowerCase().trim();
+                var map = { cdt: 'Chrome DevTools', chrome_devtools: 'Chrome DevTools', devtools: 'DevTools', a11y: 'Accessibility', accessibility: 'Accessibility', gdrive: 'Google Drive', browser: 'Browser', database: 'Database', storage: 'Storage', execute: 'General', general: 'General', read: 'Read', write: 'Write' };
+                if (map[s]) return map[s];
+                return s.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+            }
+
+            function sortCategoryKeys(keys) {
+                return keys.slice().sort(function(a, b) {
+                    var la = String(a).toLowerCase();
+                    var lb = String(b).toLowerCase();
+                    var ia = WS_TOOL_CAT_ORDER.indexOf(la);
+                    var ib = WS_TOOL_CAT_ORDER.indexOf(lb);
+                    if (ia === -1) ia = 999;
+                    if (ib === -1) ib = 999;
+                    if (ia !== ib) return ia - ib;
+                    return String(a).localeCompare(String(b));
+                });
+            }
+
+            function buildToolPrompt(name, desc) {
+                var n = (name || '').toLowerCase();
+                if (n.indexOf('screenshot') >= 0 || n === 'browser_screenshot') return 'screenshot https://';
+                if (desc && String(desc).length > 0 && String(desc).length < 220) return 'Use the `' + name + '` tool. ' + String(desc).trim();
+                return 'Use the `' + name + '` tool for this.';
+            }
+
+            function wireMcpToolsPanel(toolsEl) {
+                toolsEl.onclick = function(ev) {
+                    var btn = ev.target.closest('.ws-tool-btn');
+                    if (!btn) return;
+                    var name = btn.getAttribute('data-tool-name') || '';
+                    var desc = btn.getAttribute('data-tool-desc') || '';
+                    var input = document.getElementById('wsInput');
+                    input.value = buildToolPrompt(name, desc);
+                    input.focus();
+                    try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+                };
+                var filterEl = document.getElementById('wsToolFilter');
+                if (filterEl) {
+                    filterEl.oninput = function() {
+                        var q = (this.value || '').trim().toLowerCase();
+                        toolsEl.querySelectorAll('.ws-tool-group').forEach(function(g) {
+                            var any = false;
+                            g.querySelectorAll('.ws-tool-btn').forEach(function(b) {
+                                var n = (b.getAttribute('data-tool-name') || '').toLowerCase();
+                                var d = (b.getAttribute('data-tool-desc') || '').toLowerCase();
+                                var show = !q || n.indexOf(q) >= 0 || d.indexOf(q) >= 0;
+                                b.style.display = show ? '' : 'none';
+                                if (show) any = true;
+                            });
+                            g.style.display = any ? '' : 'none';
+                        });
+                    };
+                }
+            }
+
+            function renderWorkspaceTools(toolsEl, list, cfg) {
+                var dotColor = cfg.color || 'var(--accent)';
+                var byCat = {};
+                list.forEach(function(t) {
+                    var name = (typeof t === 'object' && t) ? (t.tool_name || t.name) : String(t);
+                    var desc = (typeof t === 'object' && t && t.description != null) ? String(t.description) : '';
+                    var cat = (typeof t === 'object' && t && t.category) ? String(t.category).toLowerCase().trim() : 'general';
+                    if (!cat) cat = 'general';
+                    if (!byCat[cat]) byCat[cat] = [];
+                    byCat[cat].push({ name: name, desc: desc });
+                });
+                var keys = sortCategoryKeys(Object.keys(byCat));
+                var html = '<div class="ws-tool-filter-wrap"><input type="search" class="ws-tool-search" id="wsToolFilter" placeholder="Filter tools…" autocomplete="off" /></div>';
+                keys.forEach(function(catKey) {
+                    var items = byCat[catKey];
+                    if (!items || items.length === 0) return;
+                    html += '<div class="ws-tool-group" data-cat="' + escAttr(catKey) + '"><div class="ws-tool-group-title">' + escHtml(humanizeCategory(catKey)) + '</div>';
+                    items.sort(function(a, b) { return String(a.name).localeCompare(String(b.name)); });
+                    items.forEach(function(item) {
+                        var name = item.name;
+                        var desc = item.desc || '';
+                        var shortDesc = desc.length > 120 ? desc.slice(0, 120) + '…' : desc;
+                        html += '<button type="button" class="ws-tool-btn" data-tool-name="' + escAttr(name) + '" data-tool-desc="' + escAttr(desc) + '"><span class="ws-tool-dot" style="background:' + dotColor + '"></span><span class="ws-tool-btn-inner"><span class="ws-tool-btn-name">' + escHtml(name) + '</span>';
+                        if (shortDesc) html += '<span class="ws-tool-btn-desc">' + escHtml(shortDesc) + '</span>';
+                        html += '</span></button>';
+                    });
+                    html += '</div>';
+                });
+                if (keys.length === 0) {
+                    toolsEl.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">No tools assigned</div>';
+                    return;
+                }
+                toolsEl.innerHTML = html;
+                wireMcpToolsPanel(toolsEl);
+            }
+
             function renderAgentGrid(agents) {
                 var grid = document.getElementById('agentGrid');
                 if (!grid) return;
@@ -616,33 +723,17 @@
                 document.getElementById('wsSend').style.background = cfg.color || 'var(--accent)';
                 var toolsEl = document.getElementById('wsTools');
                 toolsEl.innerHTML = '<div class="ws-msg thinking" style="margin:0;">Loading tools...</div>';
-                fetch(BASE + '/api/mcp/tools').then(function(r){ return r.ok ? r.json() : Promise.reject(); }).then(function(d) {
+                fetch(BASE + '/api/mcp/tools?agent_id=' + encodeURIComponent(agentId)).then(function(r){ return r.ok ? r.json() : Promise.reject(); }).then(function(d) {
                     var list = d.tools || d || [];
                     if (!Array.isArray(list) || list.length === 0) {
                         var merged = [];
                         AGENTS.forEach(function(a){ (a.tools||[]).forEach(function(t){ if (merged.indexOf(t)===-1) merged.push(t); }); });
-                        list = merged.map(function(t){ return { tool_name: t, category: /query|list|read/.test(t) ? 'read' : /write|deploy/.test(t) ? 'write' : 'execute' }; });
+                        list = merged.map(function(t){ return { tool_name: t, description: '', category: /query|list|read/.test(t) ? 'read' : /write|deploy/.test(t) ? 'write' : 'execute' }; });
                     }
-                    var byCat = { read: [], write: [], execute: [] };
-                    list.forEach(function(t) {
-                        var name = t.tool_name || t;
-                        var cat = (t.category || 'execute').toLowerCase();
-                        if (cat === 'read') byCat.read.push(name);
-                        else if (cat === 'write') byCat.write.push(name);
-                        else byCat.execute.push(name);
-                    });
-                    var html = '';
-                    ['read','write','execute'].forEach(function(cat) {
-                        var items = byCat[cat];
-                        if (items.length === 0) return;
-                        html += '<div style="margin-bottom:10px;"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px;">'+cat+'</div>';
-                        items.forEach(function(name){ html += '<div class="ws-tool-row"><div class="ws-tool-dot" style="background:'+(cfg.color||'var(--accent)')+'"></div><span>'+escHtml(name)+'</span></div>'; });
-                        html += '</div>';
-                    });
-                    toolsEl.innerHTML = html || '<div style="font-size:12px;color:var(--text-secondary);">No tools assigned</div>';
+                    renderWorkspaceTools(toolsEl, list, cfg);
                 }).catch(function() {
-                    var fallback = (cfg.tools || []).map(function(t){ return '<div class="ws-tool-row"><div class="ws-tool-dot" style="background:'+(cfg.color||'var(--accent)')+'"></div><span>'+escHtml(t)+'</span></div>'; }).join('');
-                    toolsEl.innerHTML = fallback || '<div style="font-size:12px;color:var(--text-secondary);">No tools assigned</div>';
+                    var fallback = (cfg.tools || []).map(function(t){ return { tool_name: t, description: '', category: /query|list|read/.test(t) ? 'read' : /write|deploy/.test(t) ? 'write' : 'execute' }; });
+                    renderWorkspaceTools(toolsEl, fallback, cfg);
                 });
                 var a = agentData[agentId] || {};
                 document.getElementById('wsSessionStatus').textContent = a.status || 'idle';
@@ -703,12 +794,35 @@
                     return;
                 }
                 var messages = wsConversation.map(function(m) { return { role: m.role, content: m.content }; });
-                var body = { messages: messages, model_id: 'claude-haiku-4-5-20251001', agent_id: activeWorkspaceId };
+                var body = { messages: messages, model_id: 'auto', agent_id: activeWorkspaceId };
                 if (wsSessionId) body.session_id = wsSessionId;
                 fetch(BASE + '/api/agent/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
-                    .then(function(r){ return r.json(); })
-                    .then(function(d) {
+                    .then(function(r) {
+                        return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+                    })
+                    .then(function(res) {
                         thinking.remove();
+                        var d = res.data;
+                        function pushErr(errText) {
+                            var errEl = document.createElement('div'); errEl.className = 'ws-msg assistant'; errEl.textContent = errText; errEl.style.whiteSpace = 'pre-wrap'; msgs.appendChild(errEl); msgs.scrollTop = msgs.scrollHeight;
+                            wsConversation.push({ role: 'assistant', content: errText });
+                        }
+                        if (!res.ok) {
+                            var errText = d && d.error != null ? String(d.error) : ('Request failed (' + res.status + ')');
+                            if (res.status === 429 || /too many requests/i.test(errText)) {
+                                errText = 'Rate limited (429) by the AI provider. Wait briefly and retry. This workspace uses the same /api/agent/chat route as the main Agent page; heavy tool use can hit provider limits.';
+                            }
+                            pushErr(errText);
+                            return;
+                        }
+                        if (d && d.error && !(d.content && d.content[0] && d.content[0].text) && d.response == null && d.message == null) {
+                            var et = String(d.error);
+                            if (/too many requests/i.test(et)) {
+                                et = 'Rate limited (429) by the AI provider. Wait briefly and retry. This workspace uses the same /api/agent/chat route as the main Agent page; heavy tool use can hit provider limits.';
+                            }
+                            pushErr(et);
+                            return;
+                        }
                         var reply = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text : (d.response || d.message || (d.content && typeof d.content === 'string' ? d.content : null) || (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || JSON.stringify(d));
                         if (d.conversation_id && !wsSessionId) wsSessionId = d.conversation_id;
                         var re = document.createElement('div'); re.className = 'ws-msg assistant'; re.textContent = reply; msgs.appendChild(re); msgs.scrollTop = msgs.scrollHeight;

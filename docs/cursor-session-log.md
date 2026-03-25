@@ -315,3 +315,16 @@ Uploaded `agent-dashboard.js`, `agent-dashboard.css`, `agent.html` after build.
 ### Known RAG debt
 Three parallel retrieval channels exist (AI Search iam-autorag, Vectorize, pgvector) with no guaranteed single source of truth. populate-autorag.sh is the manual indexing path. Full RAG audit needed before AutoRAG can be trusted for production retrieval.
 
+## 2026-03-25 Deep sprint overview + iam-docs R2
+
+### What was asked
+Detailed overview of wins/failures/standing, codebase context, gaps; upload to **iam-docs** R2.
+
+### Files
+- **`docs/iam-docs/sessions/2026-03-24-25-platform-sprint-overview.md`** — full narrative (TDZ, xterm plugin, Cursor agents, RAG debt, prioritized next steps).
+
+### R2
+- **Bucket:** `iam-docs`
+- **Key:** `sessions/2026-03-24-25-platform-sprint-overview.md`
+- **Content-Type:** `text/markdown`
+

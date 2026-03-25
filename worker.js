@@ -5910,84 +5910,64 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
       } else if (toolName === 'gdrive_list' || toolName === 'gdrive_fetch') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) { resultText = JSON.stringify({ error: 'unauthorized' }); } else {
-          const integrationUserId = authUser.email || authUser.id;
-          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
-          if (!tokenRow) { resultText = JSON.stringify({ error: 'not_connected', hint: 'Connect Google Drive in the dashboard' }); } else {
-            try {
-              if (toolName === 'gdrive_list') {
-                const folderId = params.folder_id || 'root';
-                const res = await fetch(`https://www.googleapis.com/drive/v3/files?q='${encodeURIComponent(folderId)}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` } });
-                const data = await res.json();
-                if (!res.ok) resultText = JSON.stringify({ error: data.error?.message || 'Drive API error' });
-                else resultText = JSON.stringify({ files: data.files || [] });
-              } else {
-                const fileId = params.file_id;
-                if (!fileId) { resultText = JSON.stringify({ error: 'file_id required' }); } else {
-                  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, { headers: { Authorization: `Bearer ${tokenRow.access_token}` } });
-                  if (!res.ok) resultText = JSON.stringify({ error: `Drive API: ${res.status}` });
-                  else resultText = await res.text();
-                }
-              }
-            } catch (e) { resultText = JSON.stringify({ error: e?.message ?? String(e) }); }
-          }
+        try {
+          const authUser = await getAuthUser(request, env);
+          const out = await runGdriveOauthBuiltinTool(env, toolName, params || {}, {
+            oauthUserId: authUser ? (authUser.email || authUser.id) : undefined,
+          });
+          if (out.error) resultText = JSON.stringify(out);
+          else if (toolName === 'gdrive_fetch' && out.ok && typeof out.content === 'string') resultText = out.content;
+          else resultText = JSON.stringify({ files: out.files || [] });
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
       } else if (toolName === 'github_repos' || toolName === 'github_file') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) { resultText = JSON.stringify({ error: 'unauthorized' }); } else {
-          const integrationUserId = authUser.email || authUser.id;
-          const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', '');
-          if (!tokenRow) { resultText = JSON.stringify({ error: 'not_connected', hint: 'Connect GitHub in the dashboard' }); } else {
-            try {
-              if (toolName === 'github_repos') {
-                const res = await fetch('https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member', { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
-                const data = await res.json();
-                if (!res.ok) resultText = JSON.stringify({ error: data.message || 'GitHub API error' });
-                else resultText = JSON.stringify(data);
-              } else {
-                const repo = params.repo; const path = params.path;
-                if (!repo || !path) { resultText = JSON.stringify({ error: 'repo and path required' }); } else {
-                  const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+        const pat = env.GITHUB_TOKEN != null ? String(env.GITHUB_TOKEN).trim() : '';
+        if (pat) {
+          try {
+            const out = await runGithubPatBuiltinTool(env, toolName, params || {});
+            if (out.error) resultText = JSON.stringify({ error: out.error });
+            else if (toolName === 'github_repos' && out.ok) resultText = JSON.stringify(out.data);
+            else if (toolName === 'github_file' && out.ok) resultText = out.content != null ? out.content : JSON.stringify(out.listing || out);
+            else resultText = JSON.stringify(out);
+          } catch (e) {
+            resultText = JSON.stringify({ error: e?.message ?? String(e) });
+          }
+        } else {
+          const authUser = await getAuthUser(request, env);
+          if (!authUser) { resultText = JSON.stringify({ error: 'unauthorized' }); } else {
+            const integrationUserId = authUser.email || authUser.id;
+            const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', '');
+            if (!tokenRow) { resultText = JSON.stringify({ error: 'not_connected', hint: 'Connect GitHub in the dashboard or set GITHUB_TOKEN' }); } else {
+              try {
+                if (toolName === 'github_repos') {
+                  const res = await fetch('https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member', { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
                   const data = await res.json();
-                  if (!res.ok) resultText = JSON.stringify({ error: data.message || 'Not found' });
-                  else if (data.content) resultText = atob((data.content || '').replace(/\n/g, ''));
+                  if (!res.ok) resultText = JSON.stringify({ error: data.message || 'GitHub API error' });
                   else resultText = JSON.stringify(data);
+                } else {
+                  const repo = params.repo; const path = params.path;
+                  if (!repo || !path) { resultText = JSON.stringify({ error: 'repo and path required' }); } else {
+                    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+                    const data = await res.json();
+                    if (!res.ok) resultText = JSON.stringify({ error: data.message || 'Not found' });
+                    else if (data.content) resultText = atob((data.content || '').replace(/\n/g, ''));
+                    else resultText = JSON.stringify(data);
+                  }
                 }
-              }
-            } catch (e) { resultText = JSON.stringify({ error: e?.message ?? String(e) }); }
+              } catch (e) { resultText = JSON.stringify({ error: e?.message ?? String(e) }); }
+            }
           }
         }
       } else if (toolName === 'cf_images_list' || toolName === 'cf_images_upload' || toolName === 'cf_images_delete') {
-        const imagesToken = env.CLOUDFLARE_IMAGES_TOKEN || env.CLOUDFLARE_IMAGES_API_TOKEN;
-        const imagesAccountId = env.CLOUDFLARE_ACCOUNT_ID || env.CLOUDFLARE_IMAGES_ACCOUNT_HASH;
-        if (!imagesAccountId || !imagesToken) { resultText = JSON.stringify({ error: 'Cloudflare Images not configured' }); } else {
-          try {
-            if (toolName === 'cf_images_list') {
-              const page = params.page || 1; const perPage = params.per_page || 100;
-              const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${imagesAccountId}/images/v1?page=${page}&per_page=${perPage}`, { headers: { Authorization: `Bearer ${imagesToken}` } });
-              const data = await res.json().catch(() => ({}));
-              if (!res.ok) resultText = JSON.stringify({ error: data.errors?.[0]?.message || 'CF Images API error' });
-              else resultText = JSON.stringify({ images: (data.result && data.result.images) || [] });
-            } else if (toolName === 'cf_images_upload') {
-              const url = params.url;
-              if (!url || typeof url !== 'string') { resultText = JSON.stringify({ error: 'url required' }); } else {
-                const formBody = new URLSearchParams({ url: url.trim() });
-                const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${imagesAccountId}/images/v1`, { method: 'POST', headers: { Authorization: `Bearer ${imagesToken}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: formBody.toString() });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) resultText = JSON.stringify({ error: data.errors?.[0]?.message || 'Upload failed' });
-                else resultText = JSON.stringify(data.result || {});
-              }
-            } else {
-              const id = params.id;
-              if (!id) { resultText = JSON.stringify({ error: 'id required' }); } else {
-                const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${imagesAccountId}/images/v1/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${imagesToken}` } });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) resultText = JSON.stringify({ error: data.errors?.[0]?.message || 'Delete failed' });
-                else resultText = JSON.stringify({ ok: true });
-              }
-            }
-          } catch (e) { resultText = JSON.stringify({ error: e?.message ?? String(e) }); }
+        try {
+          const out = await runCfImagesEnvBuiltinTool(env, toolName, params || {});
+          if (out.error) resultText = JSON.stringify({ error: out.error });
+          else if (toolName === 'cf_images_list') resultText = JSON.stringify({ images: out.images || [] });
+          else if (toolName === 'cf_images_upload') resultText = JSON.stringify(out.result || {});
+          else resultText = JSON.stringify({ ok: true, deleted: !!out.deleted });
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
       } else if (toolName === 'attached_file_content' && Array.isArray(attachedFilesFromRequest)) {
         const filename = params.filename;
@@ -6124,15 +6104,33 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
+      } else if (toolName.startsWith('resend_')) {
+        try {
+          const out = await runResendBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out.error ? { error: out.error } : out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
+      } else if (toolName.startsWith('cdt_')) {
+        try {
+          const out = await runCdpBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out.error ? { error: out.error } : out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
       }
 
       const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
       if (env.DB) {
         try {
           let category = 'builtin';
-          if (!BUILTIN_TOOLS.has(toolName)) {
+          if (!BUILTIN_TOOLS.has(toolName) && !toolName.startsWith('cdt_') && !toolName.startsWith('resend_')) {
             const toolRow = await env.DB.prepare('SELECT tool_category FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(toolName).first();
             category = toolRow?.tool_category ?? 'execute';
+          } else if (toolName.startsWith('cdt_')) {
+            category = 'browser';
+          } else if (toolName.startsWith('resend_')) {
+            category = 'email';
           } else if (toolName === 'terminal_execute') {
             category = 'terminal';
           } else if (toolName.startsWith('d1_')) {
@@ -9473,7 +9471,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         }
         if (toolDefinitions.length > 0) {
           if (canStreamAnthropic) {
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode });
+            let oauthUserIdForTools;
+            try {
+              const au = await getAuthUser(request, env);
+              oauthUserIdForTools = au ? (au.email || au.id) : undefined;
+            } catch (_) { oauthUserIdForTools = undefined; }
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools });
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -9665,7 +9668,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const agentIdForTools = agent_id ?? 'agent_sam_v1';
         const modelKeyForTools = model.provider === 'anthropic' ? resolveAnthropicModelKey(model.model_key) : (model.model_key || 'gpt-4o');
         if (model.provider === 'anthropic' && env.ANTHROPIC_API_KEY) {
-          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode });
+          let oauthUserIdForTools;
+          try {
+            const au = await getAuthUser(request, env);
+            oauthUserIdForTools = au ? (au.email || au.id) : undefined;
+          } catch (_) { oauthUserIdForTools = undefined; }
+          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools });
           if (toolsResp) return toolsResp;
         }
         const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx);
@@ -10079,7 +10087,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         if (!toolName || typeof toolName !== 'string') return jsonResponse({ success: false, error: 'tool_name required' }, 400);
         console.log('[execute-approved-tool] tool_name:', toolName);
         console.log('[execute-approved-tool] tool_input:', JSON.stringify(toolInput));
-        const out = await invokeMcpToolFromChat(env, toolName, toolInput, body.conversation_id ?? null, { skipApprovalCheck: true, executionCtx: ctx });
+        let oauthUserIdExec;
+        try {
+          const au = await getAuthUser(request, env);
+          oauthUserIdExec = au ? (au.email || au.id) : undefined;
+        } catch (_) { oauthUserIdExec = undefined; }
+        const out = await invokeMcpToolFromChat(env, toolName, toolInput, body.conversation_id ?? null, { skipApprovalCheck: true, executionCtx: ctx, oauthUserId: oauthUserIdExec });
         console.log('[execute-approved-tool] result:', JSON.stringify(out));
         if (out.error) return jsonResponse({ success: false, error: out.error }, 200);
         return jsonResponse({ success: true, result: out.result ?? out });
@@ -11983,224 +11996,38 @@ async function handleMcpApi(req, u, e, ctx) {
           const session_id = body.session_id != null ? String(body.session_id) : null;
           if (!tool_name) return jsonResponse({ error: 'tool_name required' }, 400);
           const proxyFromMcp = req.headers.get('X-IAM-MCP-Proxy') === '1';
+          /** Single dispatch: same builtins + optional remote MCP as chat (invokeMcpToolFromChat). Proxy header keeps allowRemoteMcp false to avoid MCP↔worker loops. */
+          const out = await invokeMcpToolFromChat(e, tool_name, params, session_id || '', {
+            allowRemoteMcp: !proxyFromMcp,
+            skipApprovalCheck: proxyFromMcp,
+            suppressTelemetry: false,
+            executionCtx: ctx,
+          });
           if (proxyFromMcp) {
-            const out = await invokeMcpToolFromChat(e, tool_name, params, session_id || '', {
-              allowRemoteMcp: false,
-              skipApprovalCheck: true,
-              suppressTelemetry: false,
-              executionCtx: ctx,
-            });
             if (out.error) return jsonResponse({ error: out.error }, 404);
             return jsonResponse({ tool_name, result: out.result }, 200);
           }
-          // Internal Playwright/browser tools -- run in worker (MYBROWSER) for UI validation, screenshots, navigation
-          const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
-          const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
-          if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && e.MYBROWSER && (!needsScreenshotBucket || e.DOCS_BUCKET || e.DASHBOARD || e.R2)) {
-            try {
-              const out = await runInternalPlaywrightTool(e, tool_name, params);
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'browser',
-                toolInput: params,
-                result: out,
-                error: null,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: out }, 200);
-            } catch (err) {
-              const errMsg = String(err?.message || err);
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'browser',
-                toolInput: params,
-                result: null,
-                error: errMsg,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
-            }
-          }
-          const INTERNAL_IMGX_TOOLS = ['imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers'];
-          if (INTERNAL_IMGX_TOOLS.includes(tool_name)) {
-            try {
-              const out = await runImgxBuiltinTool(e, tool_name, params);
-              const status = out && out.error ? 'failed' : 'completed';
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'image',
-                toolInput: params,
-                result: out && out.error ? null : out,
-                error: out && out.error ? String(out.error) : null,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: out }, out && out.error ? 400 : 200);
-            } catch (err) {
-              const errMsg = String(err?.message || err);
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'image',
-                toolInput: params,
-                result: null,
-                error: errMsg,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
-            }
-          }
-          const INTERNAL_CURSOR_LIST_GET_TOOLS = ['cursor_get_agent', 'cursor_list_agents'];
-          if (INTERNAL_CURSOR_LIST_GET_TOOLS.includes(tool_name)) {
-            try {
-              const out = await runCursorCloudAgentBuiltinTool(e, tool_name, params);
-              const failed = out && out.error;
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'integrations',
-                toolInput: params,
-                result: failed ? null : out,
-                error: failed ? String(out.error) : null,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: out }, failed ? 400 : 200);
-            } catch (err) {
-              const errMsg = String(err?.message || err);
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: 'integrations',
-                toolInput: params,
-                result: null,
-                error: errMsg,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
-            }
-          }
-          const INTERNAL_CLOUDCONVERT_TOOLS = ['cloudconvert_create_job', 'cloudconvert_get_job'];
-          const INTERNAL_MESHY_APPROVAL_TOOLS = ['meshyai_text_to_3d', 'meshyai_image_to_3d'];
-          const INTERNAL_MESHY_GET_TASK = ['meshyai_get_task'];
-          if (INTERNAL_MESHY_APPROVAL_TOOLS.includes(tool_name)) {
+          if (out.error === 'Tool requires approval') {
             return jsonResponse({ status: 'pending_approval', tool_name, params }, 202);
           }
-          if (INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) || INTERNAL_MESHY_GET_TASK.includes(tool_name)) {
-            try {
-              const out = INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name)
-                ? await runCloudConvertBuiltinTool(e, tool_name, params)
-                : await runMeshyBuiltinTool(e, tool_name, params);
-              const failed = out && out.error;
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) ? 'file_conversion' : 'ai_3d_generation',
-                toolInput: params,
-                result: failed ? null : out,
-                error: failed ? String(out.error) : null,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: out }, failed ? 400 : 200);
-            } catch (err) {
-              const errMsg = String(err?.message || err);
-              await recordMcpToolCall(e, {
-                conversationId: session_id || '',
-                toolName: tool_name,
-                toolCategory: INTERNAL_CLOUDCONVERT_TOOLS.includes(tool_name) ? 'file_conversion' : 'ai_3d_generation',
-                toolInput: params,
-                result: null,
-                error: errMsg,
-                serviceName: 'builtin',
-              });
-              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
+          if (out.error === 'Tool not found') {
+            return jsonResponse({ error: out.error }, 404);
+          }
+          if (out.error === 'MCP auth not configured') {
+            return jsonResponse({ error: out.error }, 503);
+          }
+          if (out.error && String(out.error).includes('Tool not available via main worker proxy path')) {
+            return jsonResponse({ error: out.error }, 404);
+          }
+          if (out.error) {
+            const errStr = String(out.error);
+            const mcpLike = /^MCP \d/.test(errStr) || errStr.includes('MCP request failed');
+            if (mcpLike) {
+              return jsonResponse({ error: 'MCP upstream error', detail: errStr }, 502);
             }
+            return jsonResponse({ tool_name, result: { error: errStr } }, 400);
           }
-          const toolRow = await e.DB.prepare(
-            'SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1'
-          ).bind(tool_name).first();
-          if (!toolRow) return jsonResponse({ error: 'Tool not found' }, 404);
-          if (toolRow.requires_approval === 1) {
-            return jsonResponse({ status: 'pending_approval', tool_name, params }, 202);
-          }
-          const token = e.MCP_AUTH_TOKEN;
-          if (!token) return jsonResponse({ error: 'MCP auth not configured' }, 503);
-          const mcpBody = {
-            jsonrpc: '2.0',
-            id: Date.now(),
-            method: 'tools/call',
-            params: { name: tool_name, arguments: params }
-          };
-          const targetMcpUrl = (() => {
-            const configured = String(toolRow.mcp_service_url || '').trim();
-            if (!configured || configured.toLowerCase() === 'builtin') return 'https://mcp.inneranimalmedia.com/mcp';
-            return configured;
-          })();
-          let mcpRes;
-          try {
-            mcpRes = await fetch(targetMcpUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
-                'Authorization': `Bearer ${token}`
-              },
-              body: JSON.stringify(mcpBody)
-            });
-          } catch (err) {
-            await recordMcpToolCall(e, {
-              conversationId: session_id || '',
-              toolName: tool_name,
-              toolCategory: String(toolRow.tool_category || 'mcp'),
-              toolInput: params,
-              result: null,
-              error: String(err && err.message || err),
-              serviceName: 'InnerAnimalMedia MCP',
-            });
-            return jsonResponse({ error: 'MCP request failed', detail: String(err && err.message || err) }, 502);
-          }
-          if (!mcpRes.ok) {
-            const failText = await mcpRes.text();
-            await recordMcpToolCall(e, {
-              conversationId: session_id || '',
-              toolName: tool_name,
-              toolCategory: String(toolRow.tool_category || 'mcp'),
-              toolInput: params,
-              result: null,
-              error: `MCP upstream ${mcpRes.status}: ${failText.slice(0, 2000)}`,
-              serviceName: 'InnerAnimalMedia MCP',
-            });
-            return jsonResponse({ error: 'MCP upstream error', status: mcpRes.status, detail: failText.slice(0, 4000) }, 502);
-          }
-          const rawText = await mcpRes.text();
-          const dataLine = rawText.split("\n").find(l => l.startsWith("data:"));
-          let result = {};
-          try {
-            result = dataLine ? JSON.parse(dataLine.slice(5).trim()) : {};
-          } catch (parseErr) {
-            await recordMcpToolCall(e, {
-              conversationId: session_id || '',
-              toolName: tool_name,
-              toolCategory: String(toolRow.tool_category || 'mcp'),
-              toolInput: params,
-              result: null,
-              error: `MCP response parse error: ${String(parseErr?.message || parseErr)}`,
-              serviceName: 'InnerAnimalMedia MCP',
-            });
-            return jsonResponse({ error: 'MCP response parse error' }, 502);
-          }
-          const content = result?.result?.content ?? result;
-          await recordMcpToolCall(e, {
-            conversationId: session_id || '',
-            toolName: tool_name,
-            toolCategory: String(toolRow.tool_category || 'mcp'),
-            toolInput: params,
-            result: content,
-            error: null,
-            serviceName: 'InnerAnimalMedia MCP',
-          });
-          return jsonResponse({ tool_name, result: content }, 200);
+          return jsonResponse({ tool_name, result: out.result }, 200);
         }
 
         if (pathLower === '/api/mcp/workflows' && method === 'GET') {
@@ -12375,7 +12202,191 @@ async function upsertMcpAgentSession(env, conversationId, panelAgentId) {
   } catch (e) { console.warn('[upsertMcpAgentSession]', e?.message ?? e); }
 }
 
-/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). */
+/** GitHub REST via env.GITHUB_TOKEN (PAT). Exact env name — no OAuth in this path. */
+async function runGithubPatBuiltinTool(env, toolName, params) {
+  const pat = env.GITHUB_TOKEN != null ? String(env.GITHUB_TOKEN).trim() : '';
+  if (!pat) return { error: 'GITHUB_TOKEN not configured' };
+  const headers = { Authorization: `Bearer ${pat}`, 'User-Agent': 'InnerAnimalMedia-Worker' };
+  const p = params || {};
+  if (toolName === 'github_repos') {
+    const res = await fetch(
+      'https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member',
+      { headers }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: typeof data.message === 'string' ? data.message : `GitHub ${res.status}` };
+    return { ok: true, data };
+  }
+  if (toolName === 'github_file') {
+    const repo = p.repo;
+    const path = p.path;
+    if (!repo || !path) return { error: 'repo and path required' };
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`,
+      { headers }
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: typeof data.message === 'string' ? data.message : 'Not found' };
+    if (data.content) {
+      const text = atob(String(data.content).replace(/\n/g, ''));
+      return { ok: true, content: text, sha: data.sha ?? null };
+    }
+    return { ok: true, listing: data };
+  }
+  return { error: `Unknown github tool: ${toolName}` };
+}
+
+/**
+ * Cloudflare Images REST. Use env names exactly: CLOUDFLARE_IMAGES_TOKEN + CLOUDFLARE_IMAGES_ACCOUNT_HASH.
+ */
+async function runCfImagesEnvBuiltinTool(env, toolName, params) {
+  const imagesToken = env.CLOUDFLARE_IMAGES_TOKEN != null ? String(env.CLOUDFLARE_IMAGES_TOKEN).trim() : '';
+  const imagesAccountHash = env.CLOUDFLARE_IMAGES_ACCOUNT_HASH != null ? String(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH).trim() : '';
+  if (!imagesToken || !imagesAccountHash) {
+    return { error: 'CLOUDFLARE_IMAGES_TOKEN and CLOUDFLARE_IMAGES_ACCOUNT_HASH must both be set' };
+  }
+  const p = params || {};
+  const authH = { Authorization: `Bearer ${imagesToken}` };
+  try {
+    if (toolName === 'cf_images_list') {
+      const page = p.page || 1;
+      const perPage = p.per_page || 100;
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1?page=${page}&per_page=${perPage}`,
+        { headers: authH }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.errors?.[0]?.message || 'CF Images API error' };
+      return { ok: true, images: (data.result && data.result.images) || [] };
+    }
+    if (toolName === 'cf_images_upload') {
+      const url = p.url;
+      if (!url || typeof url !== 'string') return { error: 'url required' };
+      const formBody = new URLSearchParams({ url: url.trim() });
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1`, {
+        method: 'POST',
+        headers: { ...authH, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBody.toString(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.errors?.[0]?.message || 'Upload failed' };
+      return { ok: true, result: data.result || {} };
+    }
+    if (toolName === 'cf_images_delete') {
+      const id = p.id;
+      if (!id) return { error: 'id required' };
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1/${encodeURIComponent(id)}`,
+        { method: 'DELETE', headers: authH }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.errors?.[0]?.message || 'Delete failed' };
+      return { ok: true, deleted: true };
+    }
+    return { error: `Unknown cf_images tool: ${toolName}` };
+  } catch (e) {
+    return { error: String(e?.message || e) };
+  }
+}
+
+/** Refresh google_drive row after 401; uses GOOGLE_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET. */
+async function tryRefreshGoogleDriveAccess(env, integrationUserId, tokenRow) {
+  if (!env.DB || !tokenRow?.refresh_token || !env.GOOGLE_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return null;
+  const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+      refresh_token: tokenRow.refresh_token,
+      grant_type: 'refresh_token',
+    }),
+  });
+  const refreshed = await refreshRes.json().catch(() => ({}));
+  if (!refreshed.access_token) return null;
+  const exp = Math.floor(Date.now() / 1000) + (Number(refreshed.expires_in) || 3600);
+  try {
+    await env.DB.prepare(
+      `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive' AND account_identifier = ''`
+    ).bind(refreshed.access_token, exp, integrationUserId).run();
+  } catch (_) {}
+  return refreshed.access_token;
+}
+
+/**
+ * Google Drive v3. Token: params.oauth_token / params.access_token, OR D1 user_oauth_tokens (google_drive)
+ * for params.user_id | params.integration_user_id | opts.oauthUserId (email/id after Connect Drive callback).
+ * Callback stores tokens in user_oauth_tokens (handleGoogleOAuthCallback connectDrive branch).
+ */
+async function runGdriveOauthBuiltinTool(env, toolName, params, opts = {}) {
+  const p = params || {};
+  let accessToken = String(p.oauth_token || p.access_token || '').trim();
+  let integrationUserId = '';
+  let tokenRow = null;
+  if (!accessToken) {
+    integrationUserId = String(p.user_id || p.integration_user_id || opts.oauthUserId || '').trim();
+    if (!integrationUserId || !env.DB) {
+      return {
+        error:
+          'Provide oauth_token (or user_id / integration_user_id with a google_drive row in user_oauth_tokens after Connect Drive)',
+      };
+    }
+    tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) {
+      return { error: 'not_connected', hint: 'Connect Google Drive in the dashboard or pass oauth_token' };
+    }
+    accessToken = tokenRow.access_token;
+  }
+
+  const authHeader = () => ({ Authorization: `Bearer ${accessToken}` });
+
+  async function fetchDrive(url, init = {}) {
+    let res = await fetch(url, { ...init, headers: { ...init.headers, ...authHeader() } });
+    if (
+      res.status === 401 &&
+      integrationUserId &&
+      tokenRow &&
+      env.DB
+    ) {
+      const row = tokenRow || (await getIntegrationToken(env.DB, integrationUserId, 'google_drive', ''));
+      const newTok = await tryRefreshGoogleDriveAccess(env, integrationUserId, row);
+      if (newTok) {
+        accessToken = newTok;
+        tokenRow = { ...row, access_token: newTok };
+        res = await fetch(url, { ...init, headers: { ...init.headers, ...authHeader() } });
+      }
+    }
+    return res;
+  }
+
+  try {
+    if (toolName === 'gdrive_list') {
+      const folderId = p.folder_id || 'root';
+      const q = `'${folderId}' in parents and trashed=false`;
+      const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
+      driveUrl.searchParams.set('q', q);
+      driveUrl.searchParams.set('fields', 'files(id,name,mimeType,size,modifiedTime)');
+      driveUrl.searchParams.set('orderBy', 'name');
+      const res = await fetchDrive(driveUrl.toString());
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.error?.message || `Drive API ${res.status}` };
+      return { ok: true, files: data.files || [] };
+    }
+    if (toolName === 'gdrive_fetch') {
+      const fileId = p.file_id;
+      if (!fileId) return { error: 'file_id required' };
+      const res = await fetchDrive(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`);
+      if (!res.ok) return { error: `Drive API: ${res.status}` };
+      const text = await res.text();
+      return { ok: true, content: text };
+    }
+    return { error: `Unknown gdrive tool: ${toolName}` };
+  } catch (e) {
+    return { error: String(e?.message || e) };
+  }
+}
+
+/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). opts.oauthUserId: optional email/id for gdrive_* D1 token lookup when params omit user_id. */
 async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opts = {}) {
   const allowRemoteMcp = opts.allowRemoteMcp !== false;
   const suppressTelemetry = !!opts.suppressTelemetry;
@@ -12393,6 +12404,208 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     } catch (err) {
       const errMsg = String(err?.message || err);
       await rec( { conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name.startsWith('resend_')) {
+    try {
+      const out = await runResendBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'email',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      const resultText = JSON.stringify(out);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'email',
+        toolInput: params,
+        result: resultText,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'email',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name.startsWith('cdt_')) {
+    try {
+      const out = await runCdpBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'browser',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      const resultText = JSON.stringify(out);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'browser',
+        toolInput: params,
+        result: resultText,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'browser',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'github_repos' || tool_name === 'github_file') {
+    try {
+      const out = await runGithubPatBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'integrations',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      const resultText = JSON.stringify(out);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: resultText,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'cf_images_list' || tool_name === 'cf_images_upload' || tool_name === 'cf_images_delete') {
+    try {
+      const out = await runCfImagesEnvBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'media',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      const resultText = JSON.stringify(out);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'media',
+        toolInput: params,
+        result: resultText,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'media',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'gdrive_list' || tool_name === 'gdrive_fetch') {
+    try {
+      const out = await runGdriveOauthBuiltinTool(env, tool_name, params || {}, {
+        oauthUserId: opts.oauthUserId,
+      });
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'integrations',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      const resultText = JSON.stringify(out);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: resultText,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
       return { error: errMsg };
     }
   }
@@ -14178,6 +14391,422 @@ async function runInternalPlaywrightTool(env, toolName, params) {
   }
 }
 
+/** Resend REST builtins (D1: resend_send_email, resend_list_domains, resend_send_broadcast, resend_create_api_key). */
+async function runResendBuiltinTool(env, toolName, params) {
+  const key = env.RESEND_API_KEY;
+  if (!key) return { error: 'RESEND_API_KEY not configured' };
+  const p = params || {};
+  const auth = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+
+  if (toolName === 'resend_list_domains') {
+    const res = await fetch('https://api.resend.com/domains', { headers: { Authorization: `Bearer ${key}` } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.message || JSON.stringify(data).slice(0, 400) || `Resend ${res.status}` };
+    return { ok: true, data };
+  }
+
+  if (toolName === 'resend_create_api_key') {
+    const name = String(p.name || '').trim();
+    if (!name) return { error: 'name required (max 50 chars)' };
+    const body = {
+      name: name.slice(0, 50),
+      permission: p.permission === 'sending_access' ? 'sending_access' : 'full_access',
+    };
+    if (body.permission === 'sending_access' && p.domain_id) body.domain_id = String(p.domain_id).trim();
+    const res = await fetch('https://api.resend.com/api-keys', { method: 'POST', headers: auth, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.message || JSON.stringify(data).slice(0, 400) || `Resend ${res.status}` };
+    return { ok: true, id: data.id, token: data.token, warning: 'Store token securely; shown once.' };
+  }
+
+  if (toolName === 'resend_send_broadcast') {
+    const broadcastId = String(p.broadcast_id || p.id || '').trim();
+    if (!broadcastId) return { error: 'broadcast_id required' };
+    const payload = {};
+    if (p.scheduled_at != null && String(p.scheduled_at).trim()) payload.scheduled_at = String(p.scheduled_at).trim();
+    const res = await fetch(`https://api.resend.com/broadcasts/${encodeURIComponent(broadcastId)}/send`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.message || JSON.stringify(data).slice(0, 400) || `Resend ${res.status}` };
+    return { ok: true, data };
+  }
+
+  if (toolName === 'resend_send_email') {
+    const from = String(p.from || '').trim();
+    const to = p.to;
+    const subject = String(p.subject || '').trim();
+    if (!from || !to || !subject) return { error: 'from, to, and subject required' };
+    const body = { from, to, subject };
+    if (p.html != null) body.html = String(p.html);
+    if (p.text != null) body.text = String(p.text);
+    if (p.reply_to != null) body.reply_to = p.reply_to;
+    if (p.cc != null) body.cc = p.cc;
+    if (p.bcc != null) body.bcc = p.bcc;
+    if (p.headers != null && typeof p.headers === 'object') body.headers = p.headers;
+    const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: auth, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data?.message || JSON.stringify(data).slice(0, 400) || `Resend ${res.status}` };
+    return { ok: true, id: data.id };
+  }
+
+  return { error: `Unknown Resend tool: ${toolName}` };
+}
+
+/**
+ * IAM cdt_* tools (26 in D1): Playwright-first on MYBROWSER. IAM names mirror Cursor-style browser MCP, not raw CDP method names.
+ * Stateless: one launch per invocation; pass url for DOM/network tools. Multi-tab tools only report the single active page.
+ * Raw CDP (Tracing/Performance) is attempted via context.newCDPSession when the runtime supports it.
+ */
+async function runCdpBuiltinTool(env, toolName, params) {
+  if (!env.MYBROWSER) return { error: 'MYBROWSER not configured' };
+  const p = params || {};
+  const { launch } = await import('@cloudflare/playwright');
+
+  function normalizeUrl(raw) {
+    const u = String(raw || '').trim();
+    if (!u) return '';
+    return u.startsWith('http') ? u : `https://${u}`;
+  }
+
+  async function withPage(fn) {
+    const browser = await launch(env.MYBROWSER);
+    try {
+      const page = await browser.newPage();
+      await page.setViewportSize({
+        width: Math.min(1920, Math.max(320, Number(p.width) || 1280)),
+        height: Math.min(2000, Math.max(240, Number(p.height) || 800)),
+      });
+      const url = normalizeUrl(p.url);
+      if (url) {
+        await page.goto(url, {
+          waitUntil: p.waitUntil || 'domcontentloaded',
+          timeout: Math.min(120000, Math.max(5000, Number(p.timeout) || 25000)),
+        });
+      }
+      return await fn(browser, page);
+    } finally {
+      await browser.close();
+    }
+  }
+
+  try {
+    switch (toolName) {
+      case 'cdt_navigate_page': {
+        const url = normalizeUrl(p.url);
+        if (!url) return { error: 'url required' };
+        return await withPage(async (_b, page) => ({ ok: true, url: page.url() }));
+      }
+      case 'cdt_list_pages':
+        return await withPage(async (_b, page) => ({ pages: [{ index: 0, url: page.url() }] }));
+      case 'cdt_select_page': {
+        const idx = Number(p.page_index ?? p.index ?? 0);
+        if (idx !== 0) return { error: 'Stateless worker: only page_index 0 is supported (single page per call)' };
+        return await withPage(async (_b, page) => ({ ok: true, selected_index: 0, url: page.url() }));
+      }
+      case 'cdt_new_page':
+        return {
+          ok: true,
+          note: 'Stateless mode: each cdt_* call uses a fresh browser. Open a URL with cdt_navigate_page or pass url on other tools instead of multi-tab new_page.',
+        };
+      case 'cdt_close_page':
+        return { ok: true, note: 'Browser session ends when the tool returns; no explicit close needed.' };
+
+      case 'cdt_click':
+      case 'cdt_fill':
+      case 'cdt_hover':
+      case 'cdt_press_key':
+      case 'cdt_wait_for':
+      case 'cdt_evaluate_script':
+      case 'cdt_handle_dialog':
+      case 'cdt_upload_file':
+      case 'cdt_drag':
+      case 'cdt_fill_form':
+      case 'cdt_emulate':
+      case 'cdt_resize_page':
+      case 'cdt_take_screenshot':
+      case 'cdt_take_snapshot':
+      case 'cdt_list_console_messages':
+      case 'cdt_get_console_message':
+      case 'cdt_list_network_requests':
+      case 'cdt_get_network_request':
+      case 'cdt_performance_stop_trace':
+      case 'cdt_performance_analyze_insight': {
+        const url = normalizeUrl(p.url);
+        if (!url && toolName !== 'cdt_resize_page' && toolName !== 'cdt_emulate') {
+          return { error: 'url required for this tool (stateless navigation)' };
+        }
+        const browser = await launch(env.MYBROWSER);
+        try {
+          let page;
+          try {
+            const context = await browser.newContext(
+              p.user_agent || p.userAgent
+                ? { userAgent: String(p.user_agent || p.userAgent) }
+                : {}
+            );
+            page = await context.newPage();
+          } catch (_) {
+            page = await browser.newPage();
+          }
+          await page.setViewportSize({
+            width: Math.min(1920, Math.max(320, Number(p.width) || 1280)),
+            height: Math.min(2000, Math.max(240, Number(p.height) || 800)),
+          });
+          if (toolName === 'cdt_resize_page') {
+            await page.setViewportSize({
+              width: Math.min(1920, Math.max(320, Number(p.width) || 1280)),
+              height: Math.min(2000, Math.max(240, Number(p.height) || 800)),
+            });
+            if (url) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
+            return { ok: true, width: Number(p.width) || 1280, height: Number(p.height) || 800, url: page.url() };
+          }
+          if (toolName === 'cdt_emulate') {
+            if (url) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
+            return {
+              ok: true,
+              url: page.url(),
+              note: 'Set user_agent / width / height on this tool; preset device profiles are not applied in Worker (pass user_agent + viewport explicitly).',
+            };
+          }
+
+          const requests = [];
+          const responses = new Map();
+          page.on('request', (req) => {
+            requests.push({
+              url: req.url(),
+              method: req.method(),
+              resourceType: req.resourceType(),
+              id: requests.length,
+            });
+          });
+          page.on('response', async (res) => {
+            try {
+              const req = res.request();
+              const idx = requests.findIndex((r) => r.url === req.url() && r.method === req.method());
+              if (idx >= 0) {
+                responses.set(idx, {
+                  status: res.status(),
+                  statusText: res.statusText(),
+                  headers: res.headers(),
+                });
+              }
+            } catch (_) {}
+          });
+          const consoles = [];
+          page.on('console', (msg) => {
+            consoles.push({ type: msg.type(), text: msg.text() });
+          });
+
+          if (toolName === 'cdt_handle_dialog') {
+            page.once('dialog', async (dialog) => {
+              const accept = p.accept !== false;
+              if (accept) {
+                if (p.promptText != null) await dialog.accept(String(p.promptText));
+                else await dialog.accept();
+              } else {
+                await dialog.dismiss();
+              }
+            });
+          }
+
+          if (url) {
+            await page.goto(url, {
+              waitUntil: p.waitUntil || 'domcontentloaded',
+              timeout: Math.min(120000, Math.max(5000, Number(p.timeout) || 25000)),
+            });
+          }
+
+          const selector = String(p.selector || p.element || '').trim();
+
+          switch (toolName) {
+            case 'cdt_click':
+              if (!selector) return { error: 'selector required' };
+              await page.click(selector, { timeout: Number(p.timeout) || 15000 });
+              return { ok: true, url: page.url() };
+            case 'cdt_fill':
+              if (!selector) return { error: 'selector required' };
+              await page.fill(selector, String(p.value ?? ''), { timeout: Number(p.timeout) || 15000 });
+              return { ok: true };
+            case 'cdt_fill_form': {
+              const fields = Array.isArray(p.fields) ? p.fields : [];
+              if (!fields.length) return { error: 'fields array required [{selector,value}]' };
+              for (const f of fields) {
+                if (f?.selector) await page.fill(String(f.selector), String(f.value ?? ''));
+              }
+              return { ok: true, count: fields.length };
+            }
+            case 'cdt_hover':
+              if (!selector) return { error: 'selector required' };
+              await page.hover(selector, { timeout: Number(p.timeout) || 15000 });
+              return { ok: true };
+            case 'cdt_press_key':
+              await page.keyboard.press(String(p.key || p.text || 'Enter'));
+              return { ok: true };
+            case 'cdt_handle_dialog':
+              return {
+                ok: true,
+                url: page.url(),
+                note: 'Dialog listener was registered before navigation; dialogs during load were accepted/dismissed per accept/promptText params.',
+              };
+            case 'cdt_drag': {
+              const src = String(p.source_selector || p.from_selector || '').trim();
+              const tgt = String(p.target_selector || p.to_selector || '').trim();
+              if (!src || !tgt) return { error: 'source_selector and target_selector required' };
+              await page.locator(src).dragTo(page.locator(tgt));
+              return { ok: true };
+            }
+            case 'cdt_wait_for': {
+              const state = String(p.state || 'visible');
+              const tw = Number(p.timeout) || 30000;
+              if (p.text) await page.getByText(String(p.text), { exact: p.exact === true }).first().waitFor({ timeout: tw });
+              else if (selector) await page.waitForSelector(selector, { state, timeout: tw });
+              else if (p.time_ms) {
+                const ms = Math.min(60000, Math.max(0, Number(p.time_ms) || 0));
+                await new Promise((r) => setTimeout(r, ms));
+              } else return { error: 'Provide selector, text, or time_ms' };
+              return { ok: true };
+            }
+            case 'cdt_evaluate_script': {
+              const expr = p.expression != null ? String(p.expression) : p.script != null ? String(p.script) : '';
+              if (!expr) return { error: 'expression or script required' };
+              const r = await page.evaluate((code) => {
+                try {
+                  // eslint-disable-next-line no-eval
+                  return (0, eval)(code);
+                } catch (e) {
+                  return { __eval_error: String(e && e.message ? e.message : e) };
+                }
+              }, expr);
+              return { ok: true, result: r };
+            }
+            case 'cdt_upload_file': {
+              if (!selector) return { error: 'selector required' };
+              const b64 = p.file_base64 || p.content_base64;
+              const name = String(p.filename || 'upload.bin');
+              if (b64) {
+                const bin = Uint8Array.from(atob(String(b64).replace(/\s/g, '')), (c) => c.charCodeAt(0));
+                await page.setInputFiles(selector, { name, mimeType: p.mimeType || 'application/octet-stream', buffer: bin });
+              } else if (p.file_path) {
+                return { error: 'file_path not supported in Worker; use file_base64' };
+              } else {
+                return { error: 'file_base64 required' };
+              }
+              return { ok: true };
+            }
+            case 'cdt_take_screenshot': {
+              const buf = await page.screenshot({
+                type: p.type === 'jpeg' ? 'jpeg' : 'png',
+                fullPage: p.fullPage === true,
+              });
+              const { screenshot_url, job_id } = await putAgentBrowserScreenshotToR2(env, buf, 'image/png');
+              return { ok: true, screenshot_url, job_id, url: page.url() };
+            }
+            case 'cdt_take_snapshot': {
+              let snap = null;
+              try {
+                snap = await page.accessibility.snapshot({ interestingOnly: p.interestingOnly !== false });
+              } catch (_) {
+                snap = { error: 'accessibility.snapshot unavailable' };
+              }
+              return { ok: true, snapshot: snap, url: page.url() };
+            }
+            case 'cdt_list_console_messages':
+              return { ok: true, messages: consoles.slice(-Math.min(200, Number(p.limit) || 50)) };
+            case 'cdt_get_console_message': {
+              const i = Number(p.index ?? p.message_index ?? 0);
+              const m = consoles[i];
+              if (!m) return { error: `No console message at index ${i}` };
+              return { ok: true, message: m };
+            }
+            case 'cdt_list_network_requests': {
+              const lim = Math.min(500, Number(p.limit) || 100);
+              const out = requests.slice(0, lim).map((r, i) => ({ ...r, response: responses.get(i) || null }));
+              return { ok: true, requests: out };
+            }
+            case 'cdt_get_network_request': {
+              const i = Number(p.index ?? p.request_index ?? 0);
+              const r = requests[i];
+              if (!r) return { error: `No request at index ${i}` };
+              return { ok: true, request: r, response: responses.get(i) || null };
+            }
+            case 'cdt_performance_stop_trace': {
+              const metrics = await page.evaluate(() => {
+                const nav = performance.getEntriesByType('navigation')[0];
+                const paints = performance.getEntriesByType('paint');
+                return {
+                  domContentLoaded: nav?.domContentLoadedEventEnd,
+                  loadEventEnd: nav?.loadEventEnd,
+                  domInteractive: nav?.domInteractive,
+                  paints: paints?.map((x) => ({ name: x.name, startTime: x.startTime })) || [],
+                };
+              });
+              return {
+                ok: true,
+                note: 'Stateless: metrics cover this navigation only. For full traces use local Playwright or persistent browser sessions.',
+                requestCount: requests.length,
+                metrics,
+              };
+            }
+            case 'cdt_performance_analyze_insight': {
+              const insight = String(p.insight || 'navigation').toLowerCase();
+              const data = await page.evaluate(() => {
+                const nav = performance.getEntriesByType('navigation')[0];
+                return nav
+                  ? {
+                      ttfb: nav.responseStart,
+                      domInteractive: nav.domInteractive,
+                      loadEventEnd: nav.loadEventEnd,
+                    }
+                  : {};
+              });
+              return { ok: true, insight, data };
+            }
+            default:
+              return { error: `Unhandled cdt branch: ${toolName}` };
+          }
+        } finally {
+          await browser.close();
+        }
+      }
+
+      case 'cdt_performance_start_trace': {
+        const browser = await launch(env.MYBROWSER);
+        try {
+          const page = await browser.newPage();
+          let cdpNote = null;
+          try {
+            const ctx = page.context();
+            if (typeof ctx.newCDPSession === 'function') {
+              const session = await ctx.newCDPSession(page);
+              await session.send('Tracing.start', {
+                transferMode: 'ReturnAsStream',
+                traceConfig: { recordMode: 'recordAsMuchAsPossible' },
+              });
+              cdpNote = 'CDP Tracing.start issued; stop_trace is not persisted across Worker invocations — use cdt_performance_stop_trace with url in the same multi-step client flow, or trace locally.';
+            }
+          } catch (e) {
+            cdpNote = `CDP unavailable: ${e?.message || e}`;
+          }
+          return {
+            ok: true,
+            note: cdpNote || 'No CDP session API; use cdt_performance_stop_trace with url for navigation metrics.',
+          };
+        } finally {
+          await browser.close();
+        }
+      }
+
+      default:
+        return { error: `Unknown cdt tool: ${toolName}` };
+    }
+  } catch (e) {
+    return { error: String(e?.message || e) };
+  }
+}
+
 async function uploadImgxToDashboard(env, bytes, contentType, baseName) {
   if (!env.DASHBOARD || !bytes) return { ok: false, error: 'DASHBOARD bucket not configured' };
   const safeBase = String(baseName || 'imgx').replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80) || 'imgx';
@@ -14781,7 +15410,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const toolLabel = TOOL_DISPLAY[name] ?? name;
         pendingStateEvents.push({ type: 'state', state: 'TOOL_CALL', context: { tool: toolLabel } });
       }
-      const out = await invokeMcpToolFromChat(env, name, input, conversationId, { executionCtx: ctx });
+      const out = await invokeMcpToolFromChat(env, name, input, conversationId, { executionCtx: ctx, oauthUserId: opts.oauthUserId });
       if (wantStream) {
         pendingStateEvents.push({ type: 'state', state: 'THINKING', context: {} });
       }
@@ -15520,6 +16149,7 @@ function vaultRegistry() {
     { name: 'DEPLOY_HOOK_SECRET', type: 'secret', description: 'Deploy webhooks' },
     { name: 'GITHUB_CLIENT_ID', type: 'plaintext', description: 'GitHub OAuth' },
     { name: 'GITHUB_CLIENT_SECRET', type: 'secret', description: 'GitHub OAuth' },
+    { name: 'GITHUB_TOKEN', type: 'secret', description: 'GitHub PAT for github_repos / github_file (preferred over per-user OAuth when set)' },
     { name: 'GOOGLE_AI_API_KEY', type: 'secret', description: 'Google AI' },
     { name: 'GOOGLE_CLIENT_ID', type: 'plaintext', description: 'Google OAuth' },
     { name: 'GOOGLE_CLIENT_SECRET', type: 'secret', description: 'Google OAuth' },

@@ -12961,6 +12961,48 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
+  // ── local_file_* builtins ──────────────────────────────────
+  if (tool_name === 'local_file_read' ||
+      tool_name === 'local_file_write' ||
+      tool_name === 'local_file_tree') {
+    if (!env.TERMINAL_WS_URL) {
+      return { error: 'Terminal not configured (TERMINAL_WS_URL not set)' };
+    }
+    try {
+      let cmd = '';
+      const filePath = String(params.path || '').trim();
+      if (!filePath) return { error: 'path param required' };
+
+      if (tool_name === 'local_file_read') {
+        cmd = `cat ${JSON.stringify(filePath)}`;
+      } else if (tool_name === 'local_file_write') {
+        const content = params.content != null ? String(params.content) : '';
+        // Write via heredoc to handle multiline content safely
+        const delimiter = 'EOF_IAM_' + Math.random().toString(36).slice(2, 8).toUpperCase();
+        cmd = `cat > ${JSON.stringify(filePath)} << '${delimiter}'\n${content}\n${delimiter}`;
+      } else if (tool_name === 'local_file_tree') {
+        const depth = Math.min(Math.max(parseInt(params.depth) || 2, 1), 5);
+        cmd = `find ${JSON.stringify(filePath)} -maxdepth ${depth} ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/dist/*' -print 2>/dev/null | sort`;
+      }
+
+      const termResult = await runTerminalCommand(
+        env, null, cmd,
+        params.conversation_id ?? null,
+        opts.executionCtx ?? null
+      );
+
+      if (tool_name === 'local_file_write') {
+        const success = !termResult.output.toLowerCase().includes('error') &&
+                        (termResult.exitCode == null || termResult.exitCode === 0);
+        return { result: success ? { ok: true, path: filePath } : { error: termResult.output } };
+      }
+
+      return { result: { ok: true, output: termResult.output, path: filePath } };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  }
+  // ── end local_file_* ───────────────────────────────────────
   if (tool_name === 'd1_query' && env.DB) {
     const sql = (params.query ?? params.sql ?? '').trim();
     const normalized = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').trim().toUpperCase();

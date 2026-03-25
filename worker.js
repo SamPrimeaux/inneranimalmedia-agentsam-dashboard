@@ -1778,10 +1778,28 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
       await env.DB.prepare(
         `INSERT INTO deployment_notifications (deployment_id, notification_type, recipient, subject, message, status) VALUES (?, ?, ?, ?, ?, 'pending')`
       ).bind(deploymentId, notifType, recipient, subject, message).run();
-      return { ok: true, result: { deployment_id: deploymentId } };
     } catch (e) {
       return { ok: false, error: String(e?.message || e) };
     }
+    const dashNotifId = crypto.randomUUID();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO notifications (id, recipient_id, channel, subject, message, status) VALUES (?, 'user_sam_primeaux', 'dashboard', ?, ?, 'pending')`
+      ).bind(dashNotifId, subject, message).run();
+    } catch (e) {
+      console.warn('[hooks] send_notification notifications INSERT', e?.message ?? e);
+    }
+    const pri = String(cfg.priority != null ? cfg.priority : '').toLowerCase();
+    if (pri === 'high') {
+      const notifyCtx =
+        ctx && typeof ctx.waitUntil === 'function' ? { waitUntil: ctx.waitUntil } : null;
+      notifySam(
+        env,
+        { subject, body: message, category: 'webhook', to: recipient },
+        notifyCtx
+      );
+    }
+    return { ok: true, result: { deployment_id: deploymentId, notification_id: dashNotifId } };
   }
 
   return { ok: false, error: `Unknown action_type: ${actionType}` };
@@ -2890,6 +2908,23 @@ const worker = {
         if (pathLower === '/api/admin/overnight/start') {
           ctx.waitUntil(handleOvernightStart(env, baseUrl));
           return jsonResponse({ ok: true, message: 'Pipeline started. Before screenshots and first email will use worker env (remote). Check inbox.' }, 202);
+        }
+      }
+
+      if (pathLower === '/api/admin/retention' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const session = await getSession(env, request);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const email = (session.email || session.user_id || '').toLowerCase();
+        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT * FROM data_retention_policies ORDER BY table_name ASC`
+          ).all();
+          return jsonResponse({ policies: results || [] });
+        } catch (e) {
+          console.warn('[api/admin/retention]', e?.message ?? e);
+          return jsonResponse({ error: String(e?.message || e) }, 500);
         }
       }
 
@@ -5969,9 +6004,27 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             });
           }
         }
+      } else if (toolName === 'cursor_run_agent') {
+        resultText = JSON.stringify({
+          error: 'Tool requires approval. Approve in the UI or call /api/agent/chat/execute-approved-tool with the same tool_name and params.',
+        });
+      } else if (toolName === 'cursor_get_agent' || toolName === 'cursor_list_agents') {
+        try {
+          const out = await runCursorCloudAgentBuiltinTool(env, toolName, params || {});
+          resultText = JSON.stringify(out);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
       } else if (toolName === 'imgx_generate_image' || toolName === 'imgx_edit_image' || toolName === 'imgx_list_providers') {
         try {
-          const out = await runImgxBuiltinTool(env, toolName, params || {});
+          let imgxParams = params || {};
+          if (toolName === 'imgx_edit_image') {
+            const p = String(imgxParams.provider || '').trim().toLowerCase();
+            if (!p || p !== 'openai') {
+              imgxParams = { ...imgxParams, provider: 'openai' };
+            }
+          }
+          const out = await runImgxBuiltinTool(env, toolName, imgxParams);
           resultText = JSON.stringify(out);
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
@@ -6073,7 +6126,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task']);
       if (env.DB) {
         try {
           let category = 'builtin';
@@ -6468,6 +6521,90 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
     },
   });
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
+}
+
+/** Default GitHub repo for Cursor Cloud Agents when `repo` / `repository` is omitted (tool cursor_run_agent). */
+const CURSOR_CLOUD_AGENTS_DEFAULT_REPO = 'https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard';
+
+/**
+ * Builtin MCP: Cursor Cloud Agents API (async coding agents).
+ * https://cursor.com/docs/cloud-agent/api/endpoints — Basic auth: btoa(CURSOR_API_KEY + ':').
+ */
+async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
+  const key = env.CURSOR_API_KEY;
+  if (!key) return { error: 'CURSOR_API_KEY not configured' };
+  const auth = `Basic ${btoa(`${key}:`)}`;
+
+  if (toolName === 'cursor_list_agents') {
+    const limit = Math.min(Math.max(1, Number(params?.limit) || 10), 100);
+    const res = await fetch(`https://api.cursor.com/v0/agents?limit=${limit}`, {
+      method: 'GET',
+      headers: { Authorization: auth },
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.message || data?.error || `Cursor API ${res.status}`;
+      return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
+    }
+    return data;
+  }
+
+  if (toolName === 'cursor_get_agent') {
+    const agentId = String(params?.agent_id ?? params?.id ?? '').trim();
+    if (!agentId) return { error: 'agent_id required' };
+    const res = await fetch(`https://api.cursor.com/v0/agents/${encodeURIComponent(agentId)}`, {
+      method: 'GET',
+      headers: { Authorization: auth },
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.message || data?.error || `Cursor API ${res.status}`;
+      return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
+    }
+    return data;
+  }
+
+  if (toolName === 'cursor_run_agent') {
+    const prompt = String(params?.prompt ?? '').trim();
+    if (!prompt) return { error: 'prompt required' };
+    const model = String(params?.model ?? 'claude-4.6-opus-high-thinking').trim();
+    const repository = String(params?.repo ?? params?.repository ?? CURSOR_CLOUD_AGENTS_DEFAULT_REPO).trim();
+    const ref = String(params?.ref ?? 'main').trim();
+    const body = {
+      model,
+      prompt: { text: prompt.slice(0, 100000) },
+      source: { repository, ref },
+    };
+    const res = await fetch('https://api.cursor.com/v0/agents', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: auth,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.message || data?.error || `Cursor API ${res.status}`;
+      return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
+    }
+    return {
+      agent_id: data.id,
+      status: data.status,
+      branch: data.target?.branchName,
+      url: data.target?.url,
+      created_at: data.createdAt,
+      target: data.target,
+      source: data.source,
+      name: data.name,
+      poll_hint: 'Poll cursor_get_agent with agent_id until status is FINISHED or FAILED; check target.prUrl for PR.',
+    };
+  }
+
+  return { error: `Unknown Cursor Cloud tool: ${toolName}` };
 }
 
 /**
@@ -7606,6 +7743,43 @@ async function handleAgentApi(request, url, env, ctx) {
         return jsonResponse({ ok: true, shortcut: updated });
       } catch (e) {
         console.warn('[api/agent/keyboard-shortcuts] PATCH', e?.message ?? e);
+        return jsonResponse({ error: 'Update failed', details: String(e?.message || e) }, 500);
+      }
+    }
+
+    if (pathLower === '/api/agent/notifications' && method === 'GET') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT id, subject, message, status, created_at FROM notifications
+           WHERE recipient_id = 'user_sam_primeaux' AND read_at IS NULL
+           ORDER BY created_at DESC LIMIT 20`
+        ).all();
+        return jsonResponse({ notifications: results || [] });
+      } catch (e) {
+        console.warn('[api/agent/notifications] GET', e?.message ?? e);
+        return jsonResponse({ error: 'Failed to load notifications', details: String(e?.message || e) }, 500);
+      }
+    }
+
+    const agentNotifReadMatch = pathLower.match(/^\/api\/agent\/notifications\/([^/]+)\/read$/);
+    if (agentNotifReadMatch && method === 'PATCH') {
+      const nid = decodeURIComponent(agentNotifReadMatch[1] || '').trim();
+      if (!nid || nid.includes('..')) return jsonResponse({ error: 'Invalid id' }, 400);
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const upd = await env.DB.prepare(
+          `UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND recipient_id = 'user_sam_primeaux'`
+        ).bind(nid).run();
+        const n = upd.meta?.changes ?? upd.changes ?? 0;
+        if (!n) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ ok: true, id: nid });
+      } catch (e) {
+        console.warn('[api/agent/notifications] PATCH read', e?.message ?? e);
         return jsonResponse({ error: 'Update failed', details: String(e?.message || e) }, 500);
       }
     }
@@ -8770,6 +8944,22 @@ async function handleAgentApi(request, url, env, ctx) {
         }
       }
       if (!model) return jsonResponse({ error: 'Model not found' }, 404);
+
+      const agentsamRunId = crypto.randomUUID();
+      const modelIdForRun =
+        model?.id != null ? String(model.id) : model?.model_key != null ? String(model.model_key) : null;
+      if (env.DB) {
+        const insRun = env.DB
+          .prepare(
+            `INSERT INTO agentsam_agent_run (id, user_id, status, trigger, model_id, input_tokens, output_tokens, cost_usd, started_at, created_at)
+             VALUES (?, ?, 'in_progress', 'chat', ?, NULL, NULL, NULL, datetime('now'), datetime('now'))`
+          )
+          .bind(agentsamRunId, chatUserId, modelIdForRun)
+          .run()
+          .catch((e) => console.warn('[agent/chat] agentsam_agent_run', e?.message ?? e));
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(insRun);
+        else await insRun;
+      }
 
       const images = Array.isArray(bodyImages) ? bodyImages : [];
       const attachedFiles = Array.isArray(bodyFiles) ? bodyFiles : [];
@@ -11862,6 +12052,35 @@ async function handleMcpApi(req, u, e, ctx) {
               return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
             }
           }
+          const INTERNAL_CURSOR_LIST_GET_TOOLS = ['cursor_get_agent', 'cursor_list_agents'];
+          if (INTERNAL_CURSOR_LIST_GET_TOOLS.includes(tool_name)) {
+            try {
+              const out = await runCursorCloudAgentBuiltinTool(e, tool_name, params);
+              const failed = out && out.error;
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'integrations',
+                toolInput: params,
+                result: failed ? null : out,
+                error: failed ? String(out.error) : null,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: out }, failed ? 400 : 200);
+            } catch (err) {
+              const errMsg = String(err?.message || err);
+              await recordMcpToolCall(e, {
+                conversationId: session_id || '',
+                toolName: tool_name,
+                toolCategory: 'integrations',
+                toolInput: params,
+                result: null,
+                error: errMsg,
+                serviceName: 'builtin',
+              });
+              return jsonResponse({ tool_name, result: { error: errMsg } }, 200);
+            }
+          }
           const INTERNAL_CLOUDCONVERT_TOOLS = ['cloudconvert_create_job', 'cloudconvert_get_job'];
           const INTERNAL_MESHY_APPROVAL_TOOLS = ['meshyai_text_to_3d', 'meshyai_image_to_3d'];
           const INTERNAL_MESHY_GET_TASK = ['meshyai_get_task'];
@@ -12367,17 +12586,24 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     }
   }
   if (tool_name === 'imgx_generate_image' || tool_name === 'imgx_edit_image' || tool_name === 'imgx_list_providers') {
+    let imgxParams = params || {};
+    if (tool_name === 'imgx_edit_image') {
+      const p = String(imgxParams.provider || '').trim().toLowerCase();
+      if (!p || p !== 'openai') {
+        imgxParams = { ...imgxParams, provider: 'openai' };
+      }
+    }
     try {
-      const out = await runImgxBuiltinTool(env, tool_name, params || {});
+      const out = await runImgxBuiltinTool(env, tool_name, imgxParams);
       if (out && out.error) {
-        await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: null, error: out.error, serviceName: 'builtin' });
+        await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: null, error: out.error, serviceName: 'builtin' });
         return { error: out.error };
       }
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: out, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: out, error: null, serviceName: 'builtin' });
       return { result: out };
     } catch (e) {
       const errMsg = String(e?.message || e);
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
   }
@@ -12843,6 +13069,59 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       const errStr = String(e?.message || e);
       await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errStr, serviceName: 'builtin' });
       return { error: errStr };
+    }
+  }
+
+  const INTERNAL_CURSOR_CLOUD_TOOLS_INVOKE = ['cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents'];
+  if (INTERNAL_CURSOR_CLOUD_TOOLS_INVOKE.includes(tool_name)) {
+    if (tool_name === 'cursor_run_agent' && !opts.skipApprovalCheck) {
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: null,
+        error: 'Tool requires approval',
+        serviceName: 'builtin',
+      });
+      return { error: 'Tool requires approval' };
+    }
+    try {
+      const out = await runCursorCloudAgentBuiltinTool(env, tool_name, params || {});
+      if (out && out.error) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'integrations',
+          toolInput: params,
+          result: null,
+          error: out.error,
+          serviceName: 'builtin',
+        });
+        return { error: out.error };
+      }
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: out,
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: out };
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'integrations',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+      });
+      return { error: errMsg };
     }
   }
 
@@ -13910,9 +14189,23 @@ async function uploadImgxToDashboard(env, bytes, contentType, baseName) {
 }
 
 function listImgxProviders(env) {
+  const openaiOk = !!env.OPENAI_API_KEY;
+  const googleOk = !!env.GOOGLE_AI_API_KEY;
   return [
-    { id: 'openai', available: !!env.OPENAI_API_KEY, models: ['gpt-image-1'] },
-    { id: 'gemini', available: !!env.GEMINI_API_KEY, models: ['gemini-2.0-flash-exp'] },
+    {
+      id: 'openai',
+      available: openaiOk,
+      models: ['gpt-image-1'],
+      supports_generate: true,
+      supports_edit: true,
+    },
+    {
+      id: 'gemini',
+      available: googleOk,
+      models: ['imagen-3.0-generate-002'],
+      supports_generate: true,
+      supports_edit: false,
+    },
   ];
 }
 
@@ -13921,17 +14214,80 @@ async function runImgxBuiltinTool(env, toolName, params) {
     return { providers: listImgxProviders(env) };
   }
 
-  const provider = String(params.provider || '').trim().toLowerCase() || (env.OPENAI_API_KEY ? 'openai' : (env.GEMINI_API_KEY ? 'gemini' : ''));
-  if (!provider) return { error: 'No provider configured. Set OPENAI_API_KEY and/or GEMINI_API_KEY.' };
-  if (provider !== 'openai') {
-    return { error: 'Provider not yet enabled in this remote build. Use provider=openai.' };
+  const hasOpenai = !!env.OPENAI_API_KEY;
+  const hasGoogleAi = !!env.GOOGLE_AI_API_KEY;
+  let provider = String(params.provider || '').trim().toLowerCase();
+  if (!provider) {
+    provider = hasOpenai ? 'openai' : (hasGoogleAi ? 'gemini' : '');
   }
-  if (!env.OPENAI_API_KEY) return { error: 'OPENAI_API_KEY not configured' };
+  if (!provider) {
+    return { error: 'No provider configured. Set OPENAI_API_KEY and/or GOOGLE_AI_API_KEY.' };
+  }
 
   const prompt = String(params.prompt || '').trim();
   if (!prompt) return { error: 'prompt required' };
   const filename = String(params.filename || 'imgx').trim() || 'imgx';
   const size = String(params.size || '1024x1024').trim() || '1024x1024';
+
+  if (toolName === 'imgx_edit_image' && provider === 'gemini') {
+    return { error: 'imgx_edit_image supports provider=openai only. Use imgx_generate_image with provider=gemini for Imagen text-to-image.' };
+  }
+
+  if (provider === 'gemini') {
+    if (toolName !== 'imgx_generate_image') {
+      return { error: `Unsupported IMGX tool for provider=gemini: ${toolName}` };
+    }
+    if (!hasGoogleAi) return { error: 'GOOGLE_AI_API_KEY not configured' };
+    const res = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.GOOGLE_AI_API_KEY,
+        },
+        body: JSON.stringify({
+          instances: [{ prompt }],
+          parameters: { sampleCount: 1 },
+        }),
+        signal: AbortSignal.timeout(45000),
+      },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const raw = data?.error?.message ?? data?.error;
+      const msg = typeof raw === 'string' ? raw : (raw ? JSON.stringify(raw) : `Imagen request failed (${res.status})`);
+      return { error: msg };
+    }
+    const pred = Array.isArray(data?.predictions) ? data.predictions[0] : null;
+    const b64 = pred && typeof pred === 'object'
+      ? (pred.bytesBase64Encoded || pred.bytes_base64_encoded)
+      : null;
+    if (!b64 || typeof b64 !== 'string') {
+      return { error: 'Imagen returned no image' };
+    }
+    let bytes = null;
+    try {
+      bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    } catch (_) {
+      bytes = null;
+    }
+    if (!bytes || !bytes.length) return { error: 'Imagen image decode failed' };
+    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename);
+    if (!stored.ok) return { error: stored.error || 'Image storage failed' };
+    return {
+      ok: true,
+      provider: 'gemini',
+      model: 'imagen-3.0-generate-002',
+      image_url: stored.url,
+      key: stored.key,
+    };
+  }
+
+  if (provider !== 'openai') {
+    return { error: `Unsupported provider "${provider}". Use openai or gemini (generate only).` };
+  }
+  if (!hasOpenai) return { error: 'OPENAI_API_KEY not configured' };
 
   if (toolName === 'imgx_generate_image') {
     const model = String(params.model || 'gpt-image-1');
@@ -13947,6 +14303,7 @@ async function runImgxBuiltinTool(env, toolName, params) {
         size,
         response_format: 'b64_json',
       }),
+      signal: AbortSignal.timeout(30000),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { error: data?.error?.message || 'OpenAI image generation failed' };
@@ -13992,6 +14349,7 @@ async function runImgxBuiltinTool(env, toolName, params) {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
       body: fd,
+      signal: AbortSignal.timeout(30000),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { error: data?.error?.message || 'OpenAI image edit failed' };
@@ -14579,6 +14937,132 @@ async function runFinancialCommandCron(env, ctx) {
   }
 }
 
+/**
+ * Allowlisted tables for D1 data_retention_policies purge (column + compare mode).
+ * compare: datetime | unix | date_col (TEXT YYYY-MM-DD day bucket: date(col) < date('now','-Nd'))
+ * Do NOT add config/registry tables here (mcp_registered_tools, mcp_services, mcp_workflows,
+ * mcp_server_allowlist, mcp_service_credentials, terminal_connections) — policies on those names are skipped.
+ */
+const RETENTION_PURGE_TABLE_CONFIG = {
+  github_webhook_events: { dateColumn: 'received_at', compare: 'datetime' },
+  webhook_events: { dateColumn: 'processed_at', compare: 'datetime' },
+  hook_executions: { dateColumn: 'completed_at', compare: 'datetime' },
+  worker_analytics_events: { dateColumn: 'timestamp', compare: 'unix' },
+  worker_analytics_errors: { dateColumn: 'created_at', compare: 'unix' },
+  notifications: { dateColumn: 'created_at', compare: 'datetime' },
+  deployment_notifications: { dateColumn: 'created_at', compare: 'datetime' },
+  terminal_history: { dateColumn: 'created_at', compare: 'unix' },
+  agent_costs: { dateColumn: 'created_at', compare: 'datetime' },
+  mcp_tool_calls: { dateColumn: 'created_at', compare: 'datetime' },
+  mcp_usage_log: { dateColumn: 'date', compare: 'date_col' },
+  mcp_audit_log: { dateColumn: 'created_at', compare: 'unix' },
+  mcp_agent_sessions: { dateColumn: 'created_at', compare: 'unix' },
+  mcp_tool_call_stats: { dateColumn: 'date', compare: 'date_col' },
+  mcp_workflow_runs: { dateColumn: 'created_at', compare: 'unix' },
+  mcp_command_suggestions: { dateColumn: 'created_at', compare: 'unix' },
+  terminal_sessions: { dateColumn: 'updated_at', compare: 'unix' },
+  cicd_runs: { dateColumn: 'created_at', compare: 'datetime' },
+  cidi_activity_log: { dateColumn: 'created_at', compare: 'datetime' },
+  agent_messages: { dateColumn: 'created_at', compare: 'datetime' },
+};
+
+function retentionConditionIsSafe(cond) {
+  const c = String(cond || '').trim();
+  if (!c) return true;
+  if (/[;]/.test(c)) return false;
+  if (/--|\/\*|\*\//.test(c)) return false;
+  if (/\b(attach|detach|pragma|vacuum)\b/i.test(c)) return false;
+  if (c.length > 2000) return false;
+  return true;
+}
+
+/**
+ * Midnight cron: batch-delete old rows per data_retention_policies (LIMIT 500 per table per run).
+ * Unknown table_name values are skipped. Optional policy.condition appended as AND (...); use D1 for e.g.
+ * agent_messages: session_id NOT IN (SELECT id FROM agent_sessions WHERE status = 'active')
+ */
+async function runRetentionPurge(env) {
+  if (!env?.DB) return;
+  let policies = [];
+  try {
+    const q = await env.DB.prepare(
+      `SELECT * FROM data_retention_policies WHERE COALESCE(is_active, 1) = 1`
+    ).all();
+    policies = q.results || [];
+  } catch (e) {
+    console.warn('[cron] retention policies load', e?.message ?? e);
+    await writeAuditLog(env, {
+      event_type: 'retention_purge',
+      message: 'Failed to load data_retention_policies',
+      metadata: { error: String(e?.message || e) },
+    });
+    return;
+  }
+  let grandTotal = 0;
+  const perTable = [];
+  for (const policy of policies) {
+    const table = policy.table_name != null ? String(policy.table_name).trim() : '';
+    const cfg = RETENTION_PURGE_TABLE_CONFIG[table];
+    if (!cfg) {
+      console.warn('[cron] retention skip unknown table:', table);
+      continue;
+    }
+    const days = Number(policy.retention_days);
+    if (!Number.isFinite(days) || days < 0) continue;
+    const dateCol = cfg.dateColumn;
+    const ageClause =
+      cfg.compare === 'unix'
+        ? `${dateCol} < unixepoch('now', '-${days} days')`
+        : cfg.compare === 'date_col'
+          ? `date(${dateCol}) < date('now', '-${days} days')`
+          : `${dateCol} < datetime('now', '-${days} days')`;
+    let condClause = '';
+    const rawCond = policy.condition != null ? String(policy.condition).trim() : '';
+    if (rawCond) {
+      if (!retentionConditionIsSafe(rawCond)) {
+        console.warn('[cron] retention skip unsafe condition for table:', table);
+        perTable.push({ table, deleted: 0, skipped: 'unsafe_condition' });
+        continue;
+      }
+      condClause = ` AND (${rawCond})`;
+    }
+    const delSql = `DELETE FROM ${table} WHERE ${ageClause}${condClause} LIMIT 500`;
+    let deleted = 0;
+    try {
+      const r = await env.DB.prepare(delSql).run();
+      deleted = r.meta?.changes ?? r.changes ?? 0;
+    } catch (e) {
+      console.warn('[cron] retention DELETE', table, e?.message ?? e);
+      perTable.push({ table, deleted: 0, error: String(e?.message || e) });
+      continue;
+    }
+    grandTotal += deleted;
+    perTable.push({ table, deleted, capped: deleted === 500 });
+    if (deleted === 500) {
+      console.log('[cron] retention deleted 500 rows from', table, '(more may remain until next cron)');
+    }
+    try {
+      const rid = policy.id != null ? String(policy.id).trim() : '';
+      if (rid) {
+        await env.DB.prepare(
+          `UPDATE data_retention_policies SET last_purged_at = datetime('now'), rows_purged_total = COALESCE(rows_purged_total, 0) + ? WHERE id = ?`
+        ).bind(deleted, rid).run();
+      } else {
+        await env.DB.prepare(
+          `UPDATE data_retention_policies SET last_purged_at = datetime('now'), rows_purged_total = COALESCE(rows_purged_total, 0) + ? WHERE table_name = ?`
+        ).bind(deleted, table).run();
+      }
+    } catch (e) {
+      console.warn('[cron] retention policy UPDATE', table, e?.message ?? e);
+    }
+  }
+  await writeAuditLog(env, {
+    event_type: 'retention_purge',
+    message: `Retention purge completed: ${grandTotal} rows deleted (batch max 500 per table)`,
+    metadata: { total: grandTotal, per_table: perTable },
+  });
+}
+
 async function runWebhookEventsMaintenanceCron(env) {
   if (!env.DB) return;
   try {
@@ -14630,6 +15114,8 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(runOvernightCronStep(env));
   }
   if (event.cron === '0 0 * * *') {
+    if (env?.DB) ctx.waitUntil(runRetentionPurge(env));
+    if (!env?.DB) return;
     const today = new Date().toISOString().slice(0, 10);
     const already = await env.DB.prepare(
       `SELECT id FROM email_logs

@@ -1117,6 +1117,9 @@ export default function AgentDashboard() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const sessionNameInputRef = useRef(null);
   const chatMenuRef = useRef(null);
+  const agentNotifWrapRef = useRef(null);
+  const [agentNotifList, setAgentNotifList] = useState([]);
+  const [agentNotifOpen, setAgentNotifOpen] = useState(false);
   const [loadingSaying] = useState(
     () => LOADING_SAYINGS[Math.floor(Math.random() * LOADING_SAYINGS.length)]
   );
@@ -1707,7 +1710,17 @@ export default function AgentDashboard() {
 
   // ── Close pickers on outside click ───────────────────────────────────────
   useEffect(() => {
-    if (!connectorPopupOpen && !costPopoverOpen && !modelPickerOpen && !agentPickerOpen && !showModeDropdown && !showModelDropdown && !showChatMenu) return;
+    if (
+      !connectorPopupOpen &&
+      !costPopoverOpen &&
+      !modelPickerOpen &&
+      !agentPickerOpen &&
+      !showModeDropdown &&
+      !showModelDropdown &&
+      !showChatMenu &&
+      !agentNotifOpen
+    )
+      return;
     const onDocClick = (e) => {
       if (connectorPopupRef.current && !connectorPopupRef.current.contains(e.target))
         setConnectorPopupOpen(false);
@@ -1723,10 +1736,35 @@ export default function AgentDashboard() {
         setShowModelDropdown(false);
       if (chatMenuRef.current && !chatMenuRef.current.contains(e.target))
         setShowChatMenu(false);
+      if (agentNotifWrapRef.current && !agentNotifWrapRef.current.contains(e.target))
+        setAgentNotifOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [connectorPopupOpen, costPopoverOpen, modelPickerOpen, agentPickerOpen, showModeDropdown, showModelDropdown, showChatMenu]);
+  }, [
+    connectorPopupOpen,
+    costPopoverOpen,
+    modelPickerOpen,
+    agentPickerOpen,
+    showModeDropdown,
+    showModelDropdown,
+    showChatMenu,
+    agentNotifOpen,
+  ]);
+
+  const fetchAgentNotifications = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agent/notifications", { credentials: "same-origin" });
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data.notifications)) setAgentNotifList(data.notifications);
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    fetchAgentNotifications();
+    const t = setInterval(fetchAgentNotifications, 60000);
+    return () => clearInterval(t);
+  }, [fetchAgentNotifications]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
@@ -3296,6 +3334,131 @@ export default function AgentDashboard() {
                 flexShrink: 0,
               }}
             >
+              <div ref={agentNotifWrapRef} style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+                <button
+                  type="button"
+                  title="Notifications"
+                  onClick={() => {
+                    setAgentNotifOpen((v) => !v);
+                    fetchAgentNotifications();
+                  }}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: agentNotifOpen ? "var(--bg-canvas)" : "transparent",
+                    border: "none",
+                    borderRadius: 4,
+                    color: agentNotifOpen ? "var(--accent)" : "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: 0,
+                    position: "relative",
+                  }}
+                  aria-label="Notifications"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.172V11a6 6 0 1 0-12 0v3.172a2 2 0 0 1-.586 1.414L4 17h5" />
+                    <path d="M9 21a3 3 0 0 0 6 0" />
+                  </svg>
+                  {agentNotifList.length > 0 ? (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        right: 4,
+                        minWidth: 14,
+                        height: 14,
+                        borderRadius: 999,
+                        background: "var(--color-primary)",
+                        color: "var(--bg-canvas)",
+                        fontSize: 10,
+                        lineHeight: "14px",
+                        textAlign: "center",
+                        padding: "0 3px",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {agentNotifList.length > 99 ? "99+" : agentNotifList.length}
+                    </span>
+                  ) : null}
+                </button>
+                {agentNotifOpen ? (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      right: 0,
+                      marginTop: 6,
+                      width: 320,
+                      maxHeight: 360,
+                      overflowY: "auto",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 8,
+                      boxShadow: "0 12px 32px color-mix(in srgb, var(--color-text) 18%, transparent)",
+                      zIndex: 250,
+                    }}
+                  >
+                    {agentNotifList.length === 0 ? (
+                      <div style={{ padding: "14px 16px", fontSize: 12, color: "var(--text-secondary)" }}>
+                        No unread notifications
+                      </div>
+                    ) : (
+                      agentNotifList.map((n) => (
+                        <button
+                          key={String(n.id)}
+                          type="button"
+                          onClick={async () => {
+                            const nid = n.id != null ? String(n.id) : "";
+                            if (!nid) return;
+                            try {
+                              const r = await fetch(
+                                `/api/agent/notifications/${encodeURIComponent(nid)}/read`,
+                                { method: "PATCH", credentials: "same-origin" }
+                              );
+                              if (r.ok) setAgentNotifList((prev) => prev.filter((x) => String(x.id) !== nid));
+                            } catch (_) {}
+                          }}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "10px 14px",
+                            border: "none",
+                            borderBottom: "1px solid var(--color-border)",
+                            background: "transparent",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: "var(--color-text)",
+                              marginBottom: 4,
+                            }}
+                          >
+                            {n.subject || "(no subject)"}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-secondary)",
+                              lineHeight: 1.35,
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {n.message || ""}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 title={previewOpen ? "Hide viewer panel" : "Show viewer panel"}
@@ -4560,7 +4723,35 @@ export default function AgentDashboard() {
                       color: "var(--agent-chat-input-text)",
                     }}
                   >
-                    <span>{selectedModel?.id === "auto" ? "Auto" : (selectedModel ? (MODEL_LABELS[selectedModel.model_key] ?? selectedModel.display_name) : (activeModel ? (MODEL_LABELS[activeModel.model_key] ?? activeModel.display_name) : "Auto"))}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {(String(selectedModel?.id || "").startsWith("cursor:") ||
+                        String(activeModel?.id || "").startsWith("cursor:") ||
+                        selectedModel?.provider === "cursor" ||
+                        activeModel?.provider === "cursor") && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            background: "var(--bg-elevated)",
+                            border: "1px solid var(--border)",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          Cursor
+                        </span>
+                      )}
+                      <span>
+                        {selectedModel?.id === "auto"
+                          ? "Auto"
+                          : selectedModel
+                            ? (MODEL_LABELS[selectedModel.model_key] ?? selectedModel.display_name)
+                            : activeModel
+                              ? (MODEL_LABELS[activeModel.model_key] ?? activeModel.display_name)
+                              : "Auto"}
+                      </span>
+                    </span>
                     <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
                       <path d="M5 7L1 3h8z" />
                     </svg>

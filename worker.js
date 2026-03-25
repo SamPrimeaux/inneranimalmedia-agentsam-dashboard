@@ -12242,6 +12242,7 @@ async function runGithubPatBuiltinTool(env, toolName, params) {
 async function runCfImagesEnvBuiltinTool(env, toolName, params) {
   const imagesToken = env.CLOUDFLARE_IMAGES_TOKEN != null ? String(env.CLOUDFLARE_IMAGES_TOKEN).trim() : '';
   const imagesAccountHash = env.CLOUDFLARE_IMAGES_ACCOUNT_HASH != null ? String(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH).trim() : '';
+  const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || '').trim();
   if (!imagesToken || !imagesAccountHash) {
     return { error: 'CLOUDFLARE_IMAGES_TOKEN and CLOUDFLARE_IMAGES_ACCOUNT_HASH must both be set' };
   }
@@ -12252,7 +12253,7 @@ async function runCfImagesEnvBuiltinTool(env, toolName, params) {
       const page = p.page || 1;
       const perPage = p.per_page || 100;
       const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1?page=${page}&per_page=${perPage}`,
+        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1?page=${page}&per_page=${perPage}`,
         { headers: authH }
       );
       const data = await res.json().catch(() => ({}));
@@ -12263,7 +12264,7 @@ async function runCfImagesEnvBuiltinTool(env, toolName, params) {
       const url = p.url;
       if (!url || typeof url !== 'string') return { error: 'url required' };
       const formBody = new URLSearchParams({ url: url.trim() });
-      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1`, {
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1`, {
         method: 'POST',
         headers: { ...authH, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formBody.toString(),
@@ -12276,7 +12277,7 @@ async function runCfImagesEnvBuiltinTool(env, toolName, params) {
       const id = p.id;
       if (!id) return { error: 'id required' };
       const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(imagesAccountHash)}/images/v1/${encodeURIComponent(id)}`,
+        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1/${encodeURIComponent(id)}`,
         { method: 'DELETE', headers: authH }
       );
       const data = await res.json().catch(() => ({}));

@@ -2604,59 +2604,148 @@ export default function AgentDashboard() {
     []
   );
 
+  const openImageInDrawPanel = useCallback((url) => {
+    if (!url || typeof url !== "string") return;
+    const u = url.trim();
+    pendingDrawImageRef.current = u;
+    setPendingDrawImage(u);
+    setActiveTab("draw");
+    setPreviewOpen(true);
+  }, [setActiveTab, setPreviewOpen]);
+
   const approveTool = useCallback(
     async (tool) => {
       if (!tool?.name) return;
       try {
-        const r = await fetch("/api/agent/chat/execute-approved-tool", {
+        const streamRes = await fetch("/api/mcp/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
           body: JSON.stringify({
             tool_name: tool.name,
-            tool_input: tool.parameters || {},
+            params: tool.parameters || {},
           }),
         });
-        const d = await r.json().catch(() => ({}));
+
+        const contentType = streamRes.headers.get("Content-Type") || "";
+        const isStream = contentType.includes("text/event-stream") && streamRes.ok;
+
         setPendingToolApproval(null);
-        const msgContent = r.ok && d.success
-          ? "Tool executed: " + tool.name + (d.result != null ? "\nResult: " + (typeof d.result === "string" ? d.result : JSON.stringify(d.result).slice(0, 500)) : "")
-          : "Tool " + tool.name + " failed: " + (d.error || (r.ok ? "Unknown" : "Request failed"));
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sys${Date.now()}`,
-            role: "assistant",
-            content: msgContent,
-            provider: "system",
-            created_at: Date.now(),
-          },
-        ]);
-        if (r.ok && d.success && tool.name === "r2_write") {
-          const key = tool.parameters?.key ?? tool.parameters?.path;
-          const bucket = "iam-platform";
-          if (key) {
-            setOpenFileKeyForPanel({ bucket, key });
-            setFileCreatedNotification({ bucket, key });
-            setPreviewOpen(true);
-            setActiveTab("code");
+
+        if (isStream && streamRes.body) {
+          const streamId = `tool${Date.now()}`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: streamId,
+              role: "assistant",
+              content: "",
+              provider: "tool",
+              created_at: Date.now(),
+            },
+          ]);
+
+          const reader = streamRes.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                if (evt.type === "line") {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamId
+                        ? { ...m, content: m.content + evt.data + "\n" }
+                        : m
+                    )
+                  );
+                } else if (evt.type === "frame") {
+                  // CDT screenshot — render inline image
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamId
+                        ? {
+                            ...m,
+                            content: m.content,
+                            screenshotUrl: evt.data,
+                          }
+                        : m
+                    )
+                  );
+                } else if (evt.type === "result") {
+                  const out = evt.data;
+                  const text =
+                    typeof out === "string"
+                      ? out
+                      : out?.output || out?.result ||
+                        JSON.stringify(out, null, 2).slice(0, 1000);
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamId
+                        ? { ...m, content: (m.content + "\n" + text).trim() }
+                        : m
+                    )
+                  );
+                  if (evt.data?.canvas_url) {
+                    openImageInDrawPanel(evt.data.canvas_url);
+                  }
+                } else if (evt.type === "error") {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamId
+                        ? { ...m, content: "Error: " + evt.error }
+                        : m
+                    )
+                  );
+                }
+              } catch (_) {}
+            }
           }
+        } else {
+          // Fallback JSON path
+          const d = await streamRes.json().catch(() => ({}));
+          const msgContent = streamRes.ok
+            ? "Tool executed: " + tool.name +
+              (d.result != null
+                ? "\nResult: " +
+                  (typeof d.result === "string"
+                    ? d.result
+                    : JSON.stringify(d.result).slice(0, 500))
+                : "")
+            : "Tool " + tool.name + " failed: " + (d.error || "Request failed");
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sys${Date.now()}`,
+              role: "assistant",
+              content: msgContent,
+              provider: "system",
+              created_at: Date.now(),
+            },
+          ]);
         }
-      } catch (_) {
-        setPendingToolApproval(null);
+      } catch (err) {
         setMessages((prev) => [
           ...prev,
           {
             id: `sys${Date.now()}`,
             role: "assistant",
-            content: "Tool " + (tool?.name || "request") + " failed: network or parse error",
+            content: "Tool error: " + (err?.message || String(err)),
             provider: "system",
             created_at: Date.now(),
           },
         ]);
       }
     },
-    []
+    [setPendingToolApproval, setMessages, openImageInDrawPanel]
   );
 
   const openInMonaco = useCallback(
@@ -2763,15 +2852,6 @@ export default function AgentDashboard() {
     };
     queueMicrotask(() => queueMicrotask(scrollVault));
   }, [setPreviewOpen, setActiveTab]);
-
-  const openImageInDrawPanel = useCallback((url) => {
-    if (!url || typeof url !== "string") return;
-    const u = url.trim();
-    pendingDrawImageRef.current = u;
-    setPendingDrawImage(u);
-    setActiveTab("draw");
-    setPreviewOpen(true);
-  }, [setActiveTab, setPreviewOpen]);
 
   // ── File attach (text vs binary) ───────────────────────────────────────────
   const IMAGE_SIZE_LIMIT = 10 * 1024 * 1024;
@@ -3842,15 +3922,33 @@ export default function AgentDashboard() {
                           }}
                         >
                           {msg.role === "assistant" ? (
-                            <AssistantFencedContent
-                              content={msg.content}
-                              setCodeContent={setCodeContent}
-                              setCodeFilename={setCodeFilename}
-                              setActiveTab={setActiveTab}
-                              setPreviewOpen={setPreviewOpen}
-                              setLightboxImage={setLightboxImage}
-                              openImageInDrawPanel={openImageInDrawPanel}
-                            />
+                            <>
+                              <AssistantFencedContent
+                                content={msg.content}
+                                setCodeContent={setCodeContent}
+                                setCodeFilename={setCodeFilename}
+                                setActiveTab={setActiveTab}
+                                setPreviewOpen={setPreviewOpen}
+                                setLightboxImage={setLightboxImage}
+                                openImageInDrawPanel={openImageInDrawPanel}
+                              />
+                              {msg.screenshotUrl && (
+                                <img
+                                  src={msg.screenshotUrl}
+                                  alt="Agent screenshot"
+                                  style={{
+                                    width: "100%",
+                                    maxHeight: "400px",
+                                    objectFit: "contain",
+                                    display: "block",
+                                    borderRadius: "6px",
+                                    marginTop: "8px",
+                                    border: "1px solid var(--border)",
+                                    background: "var(--bg-canvas)",
+                                  }}
+                                />
+                              )}
+                            </>
                           ) : (
                             msg.content
                           )}

@@ -13114,6 +13114,23 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     }
   }
   // ── end local_file_* ───────────────────────────────────────
+  if (tool_name === 'render_to_canvas') {
+    try {
+      const svg = String(params.svg || '').trim();
+      if (!svg) return { error: 'svg param required' };
+      if (!svg.startsWith('<svg')) return { error: 'svg must start with <svg' };
+      const filename = 'canvas/' + crypto.randomUUID() + '.svg';
+      const bucket = env.DASHBOARD || env.R2;
+      if (!bucket) return { error: 'No R2 bucket available' };
+      await bucket.put(filename, svg, {
+        httpMetadata: { contentType: 'image/svg+xml' },
+      });
+      const publicUrl = 'https://docs.inneranimalmedia.com/' + filename;
+      return { result: { ok: true, canvas_url: publicUrl, filename } };
+    } catch (e) {
+      return { error: String(e.message || e) };
+    }
+  }
   if (tool_name === 'd1_query' && env.DB) {
     const sql = (params.query ?? params.sql ?? '').trim();
     const normalized = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').trim().toUpperCase();

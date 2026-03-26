@@ -328,3 +328,48 @@ Detailed overview of wins/failures/standing, codebase context, gaps; upload to *
 - **Key:** `sessions/2026-03-24-25-platform-sprint-overview.md`
 - **Content-Type:** `text/markdown`
 
+## 2026-03-26 VECTORIZE_DOCS + docs search routes
+
+### What was asked
+Add `VECTORIZE_DOCS` binding to `wrangler.production.toml` (index `ai-search-iam-docs-search`), verify index dimensions via API, then add `POST /api/search/docs` (auth) and `POST /api/search/docs/index` (admin, async 202) in `worker.js` matching `vectorizeRagSearch` embedding and Vectorize query patterns.
+
+### Files changed
+- `wrangler.production.toml` lines 79-82: new `[[vectorize]]` block `VECTORIZE_DOCS` / `ai-search-iam-docs-search`.
+- `worker.js` after `vectorizeRagSearch` (~16932): `DOCS_VECTOR_CHUNK_*` constants, `performDocsBucketVectorizeIndex` (list `.md` from `DOCS_BUCKET`, skip `screenshots/`, chunk 1000/100 overlap, embed batch 32, upsert with `metadata: { key, chunk_index, source: 'r2' }`, ids `${slug}#${i}`).
+- `worker.js` after `/api/search/debug` block (~3875): routes `POST /api/search/docs` (session + `VECTORIZE_DOCS.query` + `DOCS_BUCKET.get`) and `POST /api/search/docs/index` (superadmin + `ctx.waitUntil(performDocsBucketVectorizeIndex)`).
+
+### Files NOT changed (and why)
+- OAuth handlers, `agent.html`, `FloatingPreviewPanel.jsx`: not in scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until production deploy; binding only in repo config.
+
+### Known issues / next steps
+- After deploy, run `POST /api/search/docs/index` (superadmin) once to populate `VECTORIZE_DOCS`; the 202 response uses `files: null, chunks: null` (counts are logged when the background job finishes).
+
+## 2026-03-26 Queue auto-reindex + docs_index_log
+
+### What was asked
+Wire R2 event notifications (`iam-docs`) into the existing queue consumer; optional `keyFilter` for `performDocsBucketVectorizeIndex`; D1 `docs_index_log`; `GET /api/search/docs/status`; delete vectors on object delete.
+
+### Files changed
+- `worker.js` ~4558 `queue`: branch for `bucket === 'iam-docs'` (R2 body shape: `action`, `object.key`); Put/Copy/CompleteMultipart -> `performDocsBucketVectorizeIndex(env, key)`; Delete/LifecycleDeletion -> `deleteVectorsForDocKey` + D1 soft-delete row.
+- `worker.js` ~16994: `deleteVectorsForDocKey`, `performDocsBucketVectorizeIndex(env, keyFilter)` with D1 `INSERT OR REPLACE` after upsert; `GET /api/search/docs/status` near other `/api/search/docs` routes.
+- `scripts/d1-migration-docs-index-log-20260326.sql`: migration SQL (not executed by agent).
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### Notes
+- `docs_index_log.key` is `UNIQUE` so `INSERT OR REPLACE` upserts one row per key.
+- If metadata-filter `deleteVectorsForDocKey` fallback is needed without D1 `chunk_count`, ensure Vectorize metadata index on `key` exists (see Cloudflare Vectorize metadata filtering).
+

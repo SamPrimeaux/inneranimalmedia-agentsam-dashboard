@@ -47,7 +47,8 @@ autorag/
 │   │   └── architecture-plan-template.md
 │   └── executed/
 │       ├── token-efficiency-2026-03-18.md
-│       └── phase-2-monaco-2026-03-16.md
+│       ├── phase-2-monaco-2026-03-16.md
+│       └── TOMORROW-2026-03-25-mcp-builtins-finish.md
 └── context/
     ├── active-priorities.md
     ├── technical-debt.md

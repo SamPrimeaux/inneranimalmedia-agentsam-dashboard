@@ -4,7 +4,7 @@ Source: remote D1 `inneranimalmedia-business`, `sqlite_master`.
 
 Filter: `sqlite_master` tables excluding `sqlite_%` and `_cf_%`, including prefixes `agent_%`, `agentsam_%`, `ai_%`, `mcp_%`, `cursor_%`, `workflow_%`, `terminal_%`, `tool_%`, `command_%`, `project_memory%`, `prompt_%`, `iam_%`, `kanban_%`, `task%`, `dev_workflow%`, `memory_%`, `execution_%`, `hook_%`, `work_session%`, `brainstorm_%`.
 
-Total tables: **140**.
+Total tables: **142**.
 
 Each `##` section is one ingest chunk.
 
@@ -234,7 +234,7 @@ CREATE TABLE agent_commands (
   updated_at INTEGER NOT NULL
   -- Note: Foreign keys commented out - tenants table may not exist yet
   -- FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-)
+, use_count INTEGER DEFAULT 0, context_tags TEXT)
 ```
 
 ## agent_configs
@@ -422,6 +422,24 @@ CREATE TABLE agent_messages (
   file_url TEXT,
   created_at INTEGER NOT NULL, thinking_time_seconds INTEGER DEFAULT 0, thinking_content TEXT, message_type TEXT DEFAULT 'message', metadata_json TEXT DEFAULT '{}', token_count INTEGER DEFAULT 0, is_compaction_marker INTEGER DEFAULT 0,
   FOREIGN KEY (conversation_id) REFERENCES agent_conversations(id) ON DELETE CASCADE
+)
+```
+
+## agent_mode_configs
+
+```sql
+CREATE TABLE agent_mode_configs (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  color_var TEXT NOT NULL,
+  color_hex TEXT NOT NULL,
+  color_hex_dark TEXT NOT NULL,
+  icon TEXT,
+  is_active INTEGER DEFAULT 1,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
 )
 ```
 
@@ -861,7 +879,9 @@ CREATE TABLE agentsam_ai (
   created_by TEXT NOT NULL DEFAULT 'sam_primeaux',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-)
+, system_prompt TEXT, tool_invocation_style TEXT
+  DEFAULT 'balanced'
+  CHECK(tool_invocation_style IN ('aggressive', 'balanced', 'conservative')))
 ```
 
 ## agentsam_browser_trusted_origin
@@ -1057,7 +1077,7 @@ CREATE TABLE agentsam_subagent_profile (
   default_model_id TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')), personality_tone TEXT DEFAULT 'professional', personality_traits TEXT, personality_rules TEXT,
   UNIQUE (user_id, workspace_id, slug)
 )
 ```
@@ -2598,6 +2618,24 @@ CREATE TABLE tasks (
     created_by TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+)
+```
+
+## terminal_connections
+
+```sql
+CREATE TABLE terminal_connections (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT DEFAULT 'pty',
+  ws_url TEXT NOT NULL,
+  auth_token_secret_name TEXT,
+  host TEXT,
+  username TEXT,
+  is_default INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 1,
+  last_connected_at INTEGER,
+  created_at INTEGER DEFAULT (unixepoch())
 )
 ```
 

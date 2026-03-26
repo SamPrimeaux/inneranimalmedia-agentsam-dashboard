@@ -10,6 +10,9 @@
 # Agent documentation: When an agent runs the deploy, set TRIGGERED_BY=agent and optionally
 # DEPLOYMENT_NOTES='brief description' so deployments.triggered_by / notes reflect the agent.
 # Example: TRIGGERED_BY=agent DEPLOYMENT_NOTES='AI Gateway + R2 upload' npm run deploy
+#
+# Timestamp: uses deploy machine local wall clock (date), not D1 UTC datetime('now').
+# Override: DEPLOY_TIMESTAMP='2026-03-24 21:36:00'
 
 set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,6 +51,9 @@ DBY_ESC="${DEPLOYED_BY//\'/\'\'}"
 TB_ESC="${TRIGGERED_BY//\'/\'\'}"
 DN_ESC="${DEPLOYMENT_NOTES//\'/\'\'}"
 
-echo "Recording deploy in D1 (deployments.id=$VERSION_ID, deploy_time_seconds=$DEPLOY_SECONDS, triggered_by=$TRIGGERED_BY)"
-npx wrangler d1 execute inneranimalmedia-business --remote --config "$CONFIG" --command "INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES ('$VID_ESC', datetime('now'), '$VS_ESC', '$GH_ESC', '$DESC_ESC', 'success', '$DBY_ESC', 'production', $DEPLOY_SECONDS, 'inneranimalmedia', '$TB_ESC', '$DN_ESC')"
+DEPLOY_TIMESTAMP="${DEPLOY_TIMESTAMP:-$(date '+%Y-%m-%d %H:%M:%S')}"
+TS_ESC="${DEPLOY_TIMESTAMP//\'/\'\'}"
+
+echo "Recording deploy in D1 (deployments.id=$VERSION_ID, timestamp=$DEPLOY_TIMESTAMP local, deploy_time_seconds=$DEPLOY_SECONDS, triggered_by=$TRIGGERED_BY)"
+npx wrangler d1 execute inneranimalmedia-business --remote --config "$CONFIG" --command "INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES ('$VID_ESC', '$TS_ESC', '$VS_ESC', '$GH_ESC', '$DESC_ESC', 'success', '$DBY_ESC', 'production', $DEPLOY_SECONDS, 'inneranimalmedia', '$TB_ESC', '$DN_ESC')"
 echo "Done. Overview / deployment tracking will show this deploy."

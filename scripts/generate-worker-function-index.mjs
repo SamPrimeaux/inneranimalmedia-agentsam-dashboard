@@ -1,6 +1,6 @@
 /**
- * AST scan of a JS file -> JSON function index.
- * Run from repo root: node scripts/generate-worker-function-index.mjs [--input <path>] [--output <path>] [--project <name>] [--upload]
+ * AST scan of a JS file -> JSON or Markdown function index.
+ * Run from repo root: node scripts/generate-worker-function-index.mjs [--input <path>] [--output <path>] [--project <name>] [--format json|md] [--upload]
  */
 import fs from "fs";
 import path from "path";
@@ -20,8 +20,17 @@ const getArg = (flag) => {
 const root = path.join(__dirname, "..");
 const workerPath = getArg("--input") || path.join(root, "worker.js");
 const projectName = getArg("--project") || "inneranimalmedia";
-const outPath = getArg("--output") || path.join(root, "docs", projectName + "-function-index.json");
+const formatArg = (getArg("--format") || "json").toLowerCase();
+const format = formatArg === "md" ? "md" : "json";
+const defaultExt = format === "md" ? ".md" : ".json";
+const outPath =
+  getArg("--output") || path.join(root, "docs", projectName + "-function-index" + defaultExt);
 const shouldUpload = args.includes("--upload");
+
+/** Single-line text for Markdown bullets (avoid breaking list structure). */
+function mdInline(s) {
+  return String(s).replace(/\r?\n/g, " ").trim();
+}
 
 const code = fs.readFileSync(workerPath, "utf8");
 const lines = code.split(/\n/);
@@ -320,19 +329,43 @@ const output = entries
   });
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
-const json = JSON.stringify(output, null, 2) + "\n";
-fs.writeFileSync(outPath, json, "utf8");
-console.error("Indexed", output.length, "functions ->", outPath, `(${json.length} bytes)`);
+let body;
+let byteNote;
+if (format === "md") {
+  const title = `# Worker Function Index — ${projectName}`;
+  const joinOrNone = (arr) => (Array.isArray(arr) && arr.length ? arr.join(", ") : "none");
+  const blocks = output.map((row) => {
+    const p = row.project ?? projectName;
+    return [
+      `## ${row.name}`,
+      `- **Line:** ${row.line}`,
+      `- **Project:** ${p}  `,
+      `- **Purpose:** ${mdInline(row.purpose)}`,
+      `- **Params:** ${joinOrNone(row.params)}`,
+      `- **Calls:** ${joinOrNone(row.calls)}`,
+      `- **Tags:** ${joinOrNone(row.tags)}`,
+    ].join("\n");
+  });
+  body = [title, "", blocks.join("\n\n"), ""].join("\n");
+  byteNote = `${Buffer.byteLength(body, "utf8")} bytes`;
+} else {
+  body = JSON.stringify(output, null, 2) + "\n";
+  byteNote = `${body.length} bytes`;
+}
+fs.writeFileSync(outPath, body, "utf8");
+console.error("Indexed", output.length, "functions ->", outPath, `(${byteNote})`);
 
 if (shouldUpload) {
   const { execSync } = await import("child_process");
-  const r2Key = "code/" + projectName + "-function-index.json";
+  const r2Key = "code/" + projectName + "-function-index" + (format === "md" ? ".md" : ".json");
+  const contentType = format === "md" ? "text/markdown" : "application/json";
   execSync(
     "./scripts/with-cloudflare-env.sh npx wrangler r2 object put autorag/" +
       r2Key +
       " --file=" +
       outPath +
-      " --content-type=application/json" +
+      " --content-type=" +
+      contentType +
       " --config wrangler.production.toml --remote",
     { stdio: "inherit", cwd: root }
   );

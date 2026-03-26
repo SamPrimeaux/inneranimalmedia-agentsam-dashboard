@@ -76,6 +76,10 @@ index_name = "ai-search-inneranimalmedia-aisearch"
 binding = "VECTORIZE_INDEX"
 index_name = "ai-search-iam-autorag"
 
+[[vectorize]]
+binding = "VECTORIZE_DOCS"
+index_name = "ai-search-iam-docs-search"
+
 [[kv_namespaces]]
 binding = "KV"
 id = "09438d5e4f664bf78467a15af7743c44"

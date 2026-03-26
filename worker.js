@@ -3872,6 +3872,91 @@ const worker = {
         }
       }
 
+      // ----- API: Docs search (VECTORIZE_DOCS + DOCS_BUCKET) -----
+      if (url.pathname === '/api/search/docs' && request.method === 'POST') {
+        const session = await getSession(env, request);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.VECTORIZE_DOCS) return jsonResponse({ error: 'docs index not configured' }, 503);
+        if (!env.AI || !env.DOCS_BUCKET) return jsonResponse({ error: 'AI or DOCS_BUCKET not configured' }, 503);
+        let body = {};
+        try {
+          body = await request.json();
+        } catch (_) {}
+        const q = (body?.query || '').toString().trim();
+        if (!q) return jsonResponse({ error: 'query required' }, 400);
+        const limit = Math.min(20, Math.max(1, Number(body?.limit) || 5));
+        try {
+          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [q] });
+          const data = modelResp?.data ?? modelResp;
+          const vector = (Array.isArray(data) ? data : data?.data)?.[0];
+          if (!vector || !Array.isArray(vector)) return jsonResponse({ error: 'embedding failed' }, 502);
+          const vectorMatches = await env.VECTORIZE_DOCS.query(vector, { topK: limit, returnMetadata: 'all' });
+          const matches = vectorMatches?.matches ?? vectorMatches ?? [];
+          const results = [];
+          for (const m of matches) {
+            const key = m?.metadata?.key;
+            let text = '';
+            if (key && env.DOCS_BUCKET) {
+              try {
+                const obj = await env.DOCS_BUCKET.get(key);
+                if (obj) text = await obj.text();
+              } catch (_) {}
+            }
+            results.push({
+              key: key ?? null,
+              score: m?.score ?? 0,
+              text,
+              metadata: m?.metadata ?? {},
+            });
+          }
+          return jsonResponse({ results });
+        } catch (e) {
+          console.warn('[api/search/docs]', e?.message ?? e);
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
+      // ----- API: Docs index status (D1 docs_index_log) -----
+      if (url.pathname === '/api/search/docs/status' && request.method === 'GET') {
+        const session = await getSession(env, request);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const totalRow = await env.DB.prepare(
+            `SELECT COUNT(*) AS cnt, COALESCE(SUM(chunk_count), 0) AS chunks, MAX(indexed_at) AS last_at
+             FROM docs_index_log WHERE deleted_at IS NULL AND (status = 'indexed' OR status IS NULL)`
+          ).first();
+          const list = await env.DB.prepare(
+            `SELECT key, chunk_count, indexed_at, status FROM docs_index_log WHERE deleted_at IS NULL ORDER BY indexed_at DESC LIMIT 50`
+          ).all();
+          return jsonResponse({
+            total_docs: totalRow?.cnt ?? 0,
+            total_chunks: totalRow?.chunks ?? 0,
+            last_indexed_at: totalRow?.last_at ?? null,
+            docs: list.results || [],
+          });
+        } catch (e) {
+          console.warn('[api/search/docs/status]', e?.message ?? e);
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
+      // ----- API: Docs index (admin: embed DOCS_BUCKET .md into VECTORIZE_DOCS) -----
+      if (url.pathname === '/api/search/docs/index' && request.method === 'POST') {
+        const session = await getSession(env, request);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const email = (session.email || session.user_id || '').toLowerCase();
+        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!env.VECTORIZE_DOCS) return jsonResponse({ error: 'docs index not configured' }, 503);
+        if (!env.AI || !env.DOCS_BUCKET) return jsonResponse({ error: 'AI or DOCS_BUCKET not configured' }, 503);
+        ctx.waitUntil(
+          performDocsBucketVectorizeIndex(env).catch((err) => {
+            console.warn('[api/search/docs/index]', err?.message ?? err);
+          })
+        );
+        return jsonResponse({ ok: true, files: null, chunks: null, message: 'Docs index job started' }, 202);
+      }
+
       // ----- API: Search (pgvector via Hyperdrive when configured, else Vectorize RAG + history) -----
       if (url.pathname === '/api/search') {
         let body = {};
@@ -4499,6 +4584,37 @@ const worker = {
     for (const msg of batch.messages) {
       try {
         const body = msg.body && typeof msg.body === 'object' ? msg.body : (typeof msg.body === 'string' ? JSON.parse(msg.body || '{}') : {});
+        const r2SourceOk = body.source === 'r2' || body.source == null || body.source === undefined;
+        const objectKey = body.object && typeof body.object.key === 'string' ? body.object.key : null;
+        const bucketName = body.bucket;
+        const action = body.action;
+        if (r2SourceOk && bucketName === 'iam-docs' && objectKey) {
+          if (objectKey.endsWith('.md')) {
+            const putActions = new Set(['PutObject', 'CopyObject', 'CompleteMultipartUpload']);
+            const delActions = new Set(['DeleteObject', 'LifecycleDeletion']);
+            try {
+              if (putActions.has(action)) {
+                if (!objectKey.startsWith('screenshots/') && !objectKey.includes('/screenshots/')) {
+                  await performDocsBucketVectorizeIndex(env, objectKey);
+                }
+              } else if (delActions.has(action)) {
+                await deleteVectorsForDocKey(env, objectKey);
+                if (env.DB) {
+                  await env.DB.prepare(
+                    `UPDATE docs_index_log SET deleted_at = datetime('now'), status = 'deleted' WHERE key = ?`
+                  )
+                    .bind(objectKey)
+                    .run()
+                    .catch(() => {});
+                }
+              }
+            } catch (e) {
+              console.warn('[queue iam-docs]', e?.message ?? e);
+            }
+          }
+          msg.ack();
+          continue;
+        }
         const { jobId, job_type, url } = body;
         if (jobId && env.MYBROWSER && env.DB && (env.DASHBOARD || env.DOCS_BUCKET)) {
           if (job_type === 'render' && !env.DASHBOARD) {
@@ -16928,6 +17044,164 @@ async function vectorizeRagSearch(env, query, opts = {}) {
   } catch (e) {
     console.warn('[vectorizeRagSearch]', e?.message ?? e);
     return { results: [], data: [], _debug: { ...debug, error: String(e?.message || e) } };
+  }
+}
+
+const DOCS_VECTOR_CHUNK_SIZE = 1000;
+const DOCS_VECTOR_CHUNK_OVERLAP = 100;
+const DOCS_EMBED_DIM = 1024;
+
+/**
+ * Remove all VECTORIZE_DOCS vectors for one R2 object key (deterministic ids + D1 chunk_count, else metadata filter query).
+ */
+async function deleteVectorsForDocKey(env, objectKey) {
+  if (!env.VECTORIZE_DOCS?.deleteByIds || !objectKey) return;
+  const slug = objectKey.replace(/\//g, '_').replace(/\./g, '_');
+  let n = null;
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare(
+        'SELECT chunk_count FROM docs_index_log WHERE key = ? AND deleted_at IS NULL ORDER BY indexed_at DESC LIMIT 1'
+      )
+        .bind(objectKey)
+        .first();
+      n = row?.chunk_count;
+    } catch (_) {}
+  }
+  if (n != null && n > 0) {
+    const ids = [];
+    for (let i = 0; i < n; i++) ids.push(`${slug}#${i}`);
+    for (let o = 0; o < ids.length; o += 100) {
+      await env.VECTORIZE_DOCS.deleteByIds(ids.slice(o, o + 100));
+    }
+    return;
+  }
+  const zeroVec = new Array(DOCS_EMBED_DIM).fill(0);
+  let safety = 0;
+  while (safety++ < 200) {
+    let matches;
+    try {
+      const res = await env.VECTORIZE_DOCS.query(zeroVec, {
+        topK: 100,
+        returnMetadata: 'all',
+        filter: { key: { $eq: objectKey } },
+      });
+      matches = res?.matches ?? [];
+    } catch (e) {
+      console.warn('[deleteVectorsForDocKey] filter query failed', objectKey, e?.message ?? e);
+      break;
+    }
+    if (!matches.length) break;
+    const delIds = matches.map((m) => m.id).filter(Boolean);
+    if (!delIds.length) break;
+    await env.VECTORIZE_DOCS.deleteByIds(delIds);
+  }
+}
+
+/**
+ * Embed .md objects from DOCS_BUCKET into VECTORIZE_DOCS.
+ * @param {string} [keyFilter] — if set, only index this key (queue / single-file updates).
+ * Chunks: 1000 chars, stride 900 (100 overlap). Batches of 32 embeddings per Workers AI call.
+ */
+async function performDocsBucketVectorizeIndex(env, keyFilter) {
+  let files = 0;
+  let chunks = 0;
+  try {
+    if (!env.DOCS_BUCKET || !env.AI || !env.VECTORIZE_DOCS?.upsert) {
+      console.warn('[docs-vector-index] missing DOCS_BUCKET, AI, or VECTORIZE_DOCS.upsert');
+      return { files: 0, chunks: 0 };
+    }
+    const keys = [];
+    if (keyFilter && typeof keyFilter === 'string') {
+      const k = keyFilter.trim();
+      if (!k.endsWith('.md')) return { files: 0, chunks: 0 };
+      if (k.startsWith('screenshots/') || k.includes('/screenshots/')) return { files: 0, chunks: 0 };
+      keys.push(k);
+    } else {
+      let listCursor;
+      do {
+        const list = await env.DOCS_BUCKET.list({ cursor: listCursor, limit: 1000 });
+        for (const o of list.objects || []) {
+          const key = o.key;
+          if (!key || !key.endsWith('.md')) continue;
+          if (key.startsWith('screenshots/') || key.includes('/screenshots/')) continue;
+          keys.push(key);
+        }
+        listCursor = list.truncated ? list.cursor : undefined;
+      } while (listCursor);
+    }
+
+    for (const key of keys) {
+      await deleteVectorsForDocKey(env, key);
+      const obj = await env.DOCS_BUCKET.get(key);
+      if (!obj) continue;
+      const text = await obj.text();
+      if (!text.trim()) {
+        if (env.DB) {
+          await env.DB.prepare('DELETE FROM docs_index_log WHERE key = ?')
+            .bind(key)
+            .run()
+            .catch(() => {});
+        }
+        continue;
+      }
+      const parts = chunkTextForCodebaseReindex(text, DOCS_VECTOR_CHUNK_SIZE, DOCS_VECTOR_CHUNK_OVERLAP);
+      if (!parts.length) {
+        if (env.DB) {
+          await env.DB.prepare('DELETE FROM docs_index_log WHERE key = ?')
+            .bind(key)
+            .run()
+            .catch(() => {});
+        }
+        continue;
+      }
+      files += 1;
+      const slug = key.replace(/\//g, '_').replace(/\./g, '_');
+      let chunkCountForKey = 0;
+      for (let i = 0; i < parts.length; i += RAG_EMBED_BATCH_SIZE) {
+        const batchParts = parts.slice(i, i + RAG_EMBED_BATCH_SIZE);
+        const texts = batchParts.map((c) => c);
+        let data;
+        try {
+          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
+          data = modelResp?.data || modelResp;
+        } catch (e) {
+          console.warn('[docs-vector-index] embed batch failed', key, e?.message ?? e);
+          continue;
+        }
+        const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
+        const vectors = [];
+        batchParts.forEach((_, j) => {
+          const chunkIndex = i + j;
+          const vec = values[j];
+          if (vec && Array.isArray(vec)) {
+            vectors.push({
+              id: `${slug}#${chunkIndex}`,
+              values: vec,
+              metadata: { key, chunk_index: chunkIndex, source: 'r2' },
+            });
+          }
+        });
+        if (vectors.length) {
+          await env.VECTORIZE_DOCS.upsert(vectors);
+          chunkCountForKey += vectors.length;
+        }
+      }
+      chunks += chunkCountForKey;
+      if (env.DB && chunkCountForKey > 0) {
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO docs_index_log (key, chunk_count, indexed_at, deleted_at, source, status) VALUES (?, ?, datetime('now'), NULL, 'r2', 'indexed')`
+        )
+          .bind(key, chunkCountForKey)
+          .run()
+          .catch((e) => console.warn('[docs_index_log]', e?.message ?? e));
+      }
+    }
+    console.log('[docs-vector-index] done', { files, chunks, keyFilter: keyFilter || null });
+    return { files, chunks };
+  } catch (e) {
+    console.warn('[docs-vector-index]', e?.message ?? e);
+    throw e;
   }
 }
 

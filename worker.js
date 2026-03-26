@@ -15239,19 +15239,19 @@ async function uploadImgxToDashboard(env, bytes, contentType, baseName) {
 
 function listImgxProviders(env) {
   const openaiOk = !!env.OPENAI_API_KEY;
-  const googleOk = !!env.GOOGLE_AI_API_KEY;
+  const workersAiOk = !!env.AI;
   return [
     {
       id: 'openai',
       available: openaiOk,
-      models: ['gpt-image-1'],
+      models: ['dall-e-3'],
       supports_generate: true,
       supports_edit: true,
     },
     {
       id: 'gemini',
-      available: googleOk,
-      models: ['imagen-3.0-generate-002'],
+      available: workersAiOk,
+      models: ['@cf/stabilityai/stable-diffusion-xl-base-1.0'],
       supports_generate: true,
       supports_edit: false,
     },
@@ -15264,13 +15264,12 @@ async function runImgxBuiltinTool(env, toolName, params) {
   }
 
   const hasOpenai = !!env.OPENAI_API_KEY;
-  const hasGoogleAi = !!env.GOOGLE_AI_API_KEY;
   let provider = String(params.provider || '').trim().toLowerCase();
   if (!provider) {
-    provider = hasOpenai ? 'openai' : (hasGoogleAi ? 'gemini' : '');
+    provider = hasOpenai ? 'openai' : (env.AI ? 'cf' : '');
   }
   if (!provider) {
-    return { error: 'No provider configured. Set OPENAI_API_KEY and/or GOOGLE_AI_API_KEY.' };
+    return { error: 'No provider configured. Set OPENAI_API_KEY or use Workers AI (AI binding).' };
   }
 
   const prompt = String(params.prompt || '').trim();
@@ -15278,68 +15277,63 @@ async function runImgxBuiltinTool(env, toolName, params) {
   const filename = String(params.filename || 'imgx').trim() || 'imgx';
   const size = String(params.size || '1024x1024').trim() || '1024x1024';
 
-  if (toolName === 'imgx_edit_image' && provider === 'gemini') {
-    return { error: 'imgx_edit_image supports provider=openai only. Use imgx_generate_image with provider=gemini for Imagen text-to-image.' };
+  const workersAiProvider =
+    provider === 'gemini' || provider === 'google' || provider === 'imagen' || provider === 'cf';
+  if (toolName === 'imgx_edit_image' && workersAiProvider) {
+    return { error: 'imgx_edit_image supports provider=openai only. Use imgx_generate_image with provider=gemini, google, imagen, or cf for Workers AI text-to-image.' };
   }
 
-  if (provider === 'gemini') {
-    if (toolName !== 'imgx_generate_image') {
-      return { error: `Unsupported IMGX tool for provider=gemini: ${toolName}` };
-    }
-    if (!hasGoogleAi) return { error: 'GOOGLE_AI_API_KEY not configured' };
-    const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': env.GOOGLE_AI_API_KEY,
-        },
-        body: JSON.stringify({
-          instances: [{ prompt }],
-          parameters: { sampleCount: 1 },
-        }),
-        signal: AbortSignal.timeout(45000),
-      },
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const raw = data?.error?.message ?? data?.error;
-      const msg = typeof raw === 'string' ? raw : (raw ? JSON.stringify(raw) : `Imagen request failed (${res.status})`);
-      return { error: msg };
-    }
-    const pred = Array.isArray(data?.predictions) ? data.predictions[0] : null;
-    const b64 = pred && typeof pred === 'object'
-      ? (pred.bytesBase64Encoded || pred.bytes_base64_encoded)
-      : null;
-    if (!b64 || typeof b64 !== 'string') {
-      return { error: 'Imagen returned no image' };
-    }
-    let bytes = null;
+  if (workersAiProvider) {
     try {
-      bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-    } catch (_) {
-      bytes = null;
+      if (toolName !== 'imgx_generate_image') {
+        return { error: `Unsupported IMGX tool for provider=${provider}: ${toolName}` };
+      }
+      if (!env.AI) return { error: 'Workers AI binding (AI) not configured' };
+      const result = await env.AI.run(
+        '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+        { prompt: String(params.prompt || '').trim() },
+      );
+      let imageData = null;
+      if (result instanceof ReadableStream) {
+        imageData = await new Response(result).arrayBuffer();
+      } else if (result && typeof result === 'object' && result.image != null) {
+        const img = result.image;
+        if (img instanceof ArrayBuffer) imageData = img;
+        else if (img instanceof Uint8Array) {
+          imageData = img.buffer.slice(img.byteOffset, img.byteOffset + img.byteLength);
+        }
+      } else if (result instanceof Uint8Array) {
+        imageData = result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+      } else if (result instanceof ArrayBuffer) {
+        imageData = result;
+      }
+      if (!imageData || imageData.byteLength === 0) {
+        return { error: 'Workers AI image generation failed' };
+      }
+      const key = 'generated/imgx/imgx-' + crypto.randomUUID() + '.png';
+      const bucket = env.DOCS_BUCKET || env.DASHBOARD;
+      if (!bucket) return { error: 'No R2 bucket for image storage' };
+      await bucket.put(key, imageData, { httpMetadata: { contentType: 'image/png' } });
+      const image_url = 'https://docs.inneranimalmedia.com/' + key;
+      return {
+        ok: true,
+        image_url,
+        key,
+        model: 'stable-diffusion-xl-base-1.0',
+        provider: 'cloudflare',
+      };
+    } catch (e) {
+      return { error: String(e.message || e) };
     }
-    if (!bytes || !bytes.length) return { error: 'Imagen image decode failed' };
-    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename);
-    if (!stored.ok) return { error: stored.error || 'Image storage failed' };
-    return {
-      ok: true,
-      provider: 'gemini',
-      model: 'imagen-3.0-generate-002',
-      image_url: stored.url,
-      key: stored.key,
-    };
   }
 
   if (provider !== 'openai') {
-    return { error: `Unsupported provider "${provider}". Use openai or gemini (generate only).` };
+    return { error: `Unsupported provider "${provider}". Use openai or gemini/google/imagen/cf (Workers AI, generate only).` };
   }
   if (!hasOpenai) return { error: 'OPENAI_API_KEY not configured' };
 
   if (toolName === 'imgx_generate_image') {
-    const model = String(params.model || 'gpt-image-1');
+    const model = String(params.model || 'dall-e-3');
     const res = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
@@ -15350,23 +15344,14 @@ async function runImgxBuiltinTool(env, toolName, params) {
         model,
         prompt,
         size,
-        response_format: 'b64_json',
       }),
       signal: AbortSignal.timeout(30000),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { error: data?.error?.message || 'OpenAI image generation failed' };
-    let b64 = data?.data?.[0]?.b64_json;
-    let bytes = null;
-    if (b64) {
-      try {
-        bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      } catch (_) {
-        bytes = null;
-      }
-    }
     const imageUrl = typeof data?.data?.[0]?.url === 'string' ? data.data[0].url.trim() : '';
-    if ((!bytes || !bytes.length) && imageUrl) {
+    let bytes = null;
+    if (imageUrl) {
       try {
         const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(60000) });
         if (imgRes.ok) {
@@ -15375,10 +15360,20 @@ async function runImgxBuiltinTool(env, toolName, params) {
         }
       } catch (_) {}
     }
+    if (!bytes || !bytes.length) {
+      const b64 = data?.data?.[0]?.b64_json;
+      if (b64 && typeof b64 === 'string') {
+        try {
+          bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        } catch (_) {
+          bytes = null;
+        }
+      }
+    }
     if (!bytes || !bytes.length) return { error: 'No image data returned by provider' };
     const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename);
     if (!stored.ok) return { error: stored.error || 'Image storage failed' };
-    return { ok: true, provider: 'openai', model: String(params.model || 'gpt-image-1'), image_url: stored.url, key: stored.key };
+    return { ok: true, provider: 'openai', model: String(params.model || 'dall-e-3'), image_url: stored.url, key: stored.key };
   }
 
   if (toolName === 'imgx_edit_image') {
@@ -15389,7 +15384,7 @@ async function runImgxBuiltinTool(env, toolName, params) {
     const sourceBytes = await source.arrayBuffer();
     const sourceType = source.headers.get('content-type') || 'image/png';
     const fd = new FormData();
-    fd.append('model', String(params.model || 'gpt-image-1'));
+    fd.append('model', String(params.model || 'dall-e-3'));
     fd.append('prompt', prompt);
     fd.append('size', size);
     fd.append('response_format', 'b64_json');
@@ -15424,7 +15419,7 @@ async function runImgxBuiltinTool(env, toolName, params) {
     if (!bytes || !bytes.length) return { error: 'No edited image data returned by provider' };
     const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename + '-edit');
     if (!stored.ok) return { error: stored.error || 'Image storage failed' };
-    return { ok: true, provider: 'openai', model: String(params.model || 'gpt-image-1'), image_url: stored.url, key: stored.key };
+    return { ok: true, provider: 'openai', model: String(params.model || 'dall-e-3'), image_url: stored.url, key: stored.key };
   }
 
   return { error: `Unsupported IMGX tool: ${toolName}` };

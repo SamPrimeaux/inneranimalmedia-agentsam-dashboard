@@ -27,6 +27,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
+    "acorn": "^8.16.0",
+    "acorn-walk": "^8.3.5",
     "wrangler": "^4.75.0"
   },
   "type": "module"

@@ -126,6 +126,7 @@ else
     ./scripts/with-cloudflare-env.sh npx wrangler r2 object put "agent-sam/source/${file}" --file="${file}" --content-type="text/markdown" --config wrangler.production.toml --remote
   done
 fi
+node scripts/generate-worker-function-index.mjs --upload --project inneranimalmedia
 # Trigger async indexing (fire and forget)
 curl -s -X POST https://inneranimalmedia.com/api/admin/reindex-codebase -H "Content-Type: application/json" -d '{"async":true}' > /dev/null 2>&1 || true
 echo "Source files uploaded; reindex triggered"

@@ -1,27 +1,92 @@
 /**
- * AST scan of worker.js -> docs/worker-function-index.json
- * Run from repo root: node scripts/generate-worker-function-index.mjs
+ * AST scan of a JS file -> JSON function index.
+ * Run from repo root: node scripts/generate-worker-function-index.mjs [--input <path>] [--output <path>] [--project <name>] [--upload]
  */
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { parse } from "acorn";
+import { parse, Parser } from "acorn";
 import { simple as walk, base } from "acorn-walk";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+const getArg = (flag) => {
+  const i = args.indexOf(flag);
+  return i !== -1 ? args[i + 1] : null;
+};
 const root = path.join(__dirname, "..");
-const workerPath = path.join(root, "worker.js");
-const outPath = path.join(root, "docs", "worker-function-index.json");
+const workerPath = getArg("--input") || path.join(root, "worker.js");
+const projectName = getArg("--project") || "inneranimalmedia";
+const outPath = getArg("--output") || path.join(root, "docs", projectName + "-function-index.json");
+const shouldUpload = args.includes("--upload");
 
 const code = fs.readFileSync(workerPath, "utf8");
 const lines = code.split(/\n/);
 
-const ast = parse(code, {
-  ecmaVersion: 2023,
-  sourceType: "module",
-  locations: true,
-  allowAwaitOutsideFunction: true,
-});
+const isJsx = workerPath.endsWith(".jsx") || workerPath.endsWith(".tsx");
+const parseOptions = { ecmaVersion: "latest", sourceType: "module", locations: true, allowAwaitOutsideFunction: true };
+let ast;
+if (isJsx) {
+  const acornJsx = require("acorn-jsx");
+  const JsxParser = Parser.extend(acornJsx());
+  ast = JsxParser.parse(code, parseOptions);
+} else {
+  ast = parse(code, parseOptions);
+}
+
+/** acorn-walk has no built-in JSX visitors; extend base so full-tree and shallow walks do not throw. */
+function extendWalkBaseWithJsx(b) {
+  return {
+    ...b,
+    JSXElement(node, st, c) {
+      c(node.openingElement, st);
+      for (const ch of node.children) c(ch, st);
+      if (node.closingElement) c(node.closingElement, st);
+    },
+    JSXFragment(node, st, c) {
+      c(node.openingFragment, st);
+      for (const ch of node.children) c(ch, st);
+      c(node.closingFragment, st);
+    },
+    JSXOpeningElement(node, st, c) {
+      c(node.name, st);
+      for (const attr of node.attributes) c(attr, st);
+    },
+    JSXClosingElement(node, st, c) {
+      c(node.name, st);
+    },
+    JSXOpeningFragment() {},
+    JSXClosingFragment() {},
+    JSXAttribute(node, st, c) {
+      if (node.value) c(node.value, st);
+    },
+    JSXSpreadAttribute(node, st, c) {
+      c(node.argument, st);
+    },
+    JSXExpressionContainer(node, st, c) {
+      c(node.expression, st);
+    },
+    JSXSpreadChild(node, st, c) {
+      c(node.expression, st);
+    },
+    JSXText() {},
+    JSXEmptyExpression() {},
+    JSXIdentifier() {},
+    JSXNamespacedName(node, st, c) {
+      c(node.namespace, st);
+      c(node.name, st);
+    },
+    JSXMemberExpression(node, st, c) {
+      c(node.object, st);
+      c(node.property, st);
+    },
+  };
+}
+
+const walkBase = isJsx ? extendWalkBaseWithJsx(base) : base;
 
 const builtins = new Set([
   "parseInt",
@@ -211,12 +276,13 @@ walk(ast, {
     if (fn.type !== "FunctionExpression" && fn.type !== "ArrowFunctionExpression") return;
     pushEntry(node.key.name, fn, fn.loc.start.line);
   },
-});
+},
+walkBase);
 
 const definedNames = new Set(entries.map((e) => e.name.split(".").pop()));
 
 /** Walk statement tree but do not descend into nested function bodies (call graph stays top-level per entry). */
-const shallowBase = { ...base };
+const shallowBase = { ...walkBase };
 for (const k of ["FunctionExpression", "FunctionDeclaration", "ArrowFunctionExpression"]) {
   shallowBase[k] = (node, st, c) => {
     if (node.type === "ArrowFunctionExpression" && node.body.type !== "BlockStatement") return;
@@ -238,13 +304,14 @@ const output = entries
             if (n && !builtins.has(n) && definedNames.has(n)) calls.add(n);
           },
         },
-        shallowBase
+        shallowBase,
       );
     }
 
     return {
       name: e.name,
       line: e.line,
+      project: projectName,
       purpose: purposeFromJSDoc(e.line),
       params: e.params,
       calls: [...calls].sort(),
@@ -256,3 +323,18 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 const json = JSON.stringify(output, null, 2) + "\n";
 fs.writeFileSync(outPath, json, "utf8");
 console.error("Indexed", output.length, "functions ->", outPath, `(${json.length} bytes)`);
+
+if (shouldUpload) {
+  const { execSync } = await import("child_process");
+  const r2Key = "code/" + projectName + "-function-index.json";
+  execSync(
+    "./scripts/with-cloudflare-env.sh npx wrangler r2 object put autorag/" +
+      r2Key +
+      " --file=" +
+      outPath +
+      " --content-type=application/json" +
+      " --config wrangler.production.toml --remote",
+    { stdio: "inherit", cwd: root }
+  );
+  console.log("Uploaded to AutoRAG: " + r2Key);
+}

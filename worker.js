@@ -8040,58 +8040,33 @@ async function handleAgentApi(request, url, env, ctx) {
       }
     }
 
-    /** Agent dashboard status bar: local git (via http-exec) + D1 sync/workspace/agent. */
+    /** Agent dashboard status bar: D1-backed git/deploy status. */
     if (pathLower === '/api/agent/git/status' && method === 'GET') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-      const repoPathRaw = (env.AGENT_GIT_REPO_PATH || '/Users/samprimeaux/Downloads/march1st-inneranimalmedia').trim();
-      const repoPath = repoPathRaw.replace(/'/g, "'\\''");
-      const workerName = (env.WORKER_NAME || 'inneranimalmedia').trim();
-      const cdCmd = `cd '${repoPath}' && `;
-      const branchRun = await runTerminalCommandViaHttpExec(env, `${cdCmd}git branch --show-current`);
-      const statusRun = await runTerminalCommandViaHttpExec(env, `${cdCmd}git status --short`);
-      const branch = branchRun.ok ? String(branchRun.text || '').trim().split(/\r?\n/)[0] || null : null;
-      const statusShort = statusRun.ok ? String(statusRun.text || '').trim() : '';
-      const dirty = statusShort.length > 0;
-      let syncLastAt = null;
-      let workspaceLabel = 'Sam Primeaux Workspace';
-      let activeAgentName = null;
-      if (env.DB) {
-        try {
-          const wr = await env.DB.prepare(
-            `SELECT completed_at FROM workflow_runs
-             WHERE workflow_id = 'wf_github_sync' OR workflow_name = 'wf_github_sync' OR workflow_name LIKE '%github%sync%'
-             ORDER BY datetime(COALESCE(completed_at, updated_at, created_at)) DESC LIMIT 1`
-          ).first();
-          if (wr?.completed_at != null) syncLastAt = String(wr.completed_at);
-        } catch (e) {
-          console.warn('[api/agent/git/status] workflow_runs', e?.message ?? e);
-        }
-        try {
-          const uid = authUser.email || authUser.id;
-          const ws = await env.DB.prepare(
-            `SELECT brand FROM user_workspace_settings WHERE user_id = ? AND workspace_id = 'ws_samprimeaux' LIMIT 1`
-          ).bind(uid).first();
-          if (ws?.brand && String(ws.brand).trim()) {
-            workspaceLabel = `${String(ws.brand).trim()} workspace`;
-          }
-        } catch (_) {}
-        const agentId = url.searchParams.get('agent_id');
-        if (agentId) {
-          try {
-            const ag = await env.DB.prepare('SELECT name FROM agentsam_ai WHERE id = ? LIMIT 1').bind(agentId).first();
-            if (ag?.name) activeAgentName = String(ag.name);
-          } catch (_) {}
-        }
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const workerName = 'inneranimalmedia';
+      let row = null;
+      try {
+        row = await env.DB.prepare(
+          `SELECT d.git_hash, d.version, d.timestamp, g.repo_full_name, g.default_branch
+           FROM deployments d
+           LEFT JOIN github_repositories g ON g.cloudflare_worker_name = ?
+           WHERE d.worker_name = ? AND d.status = 'success'
+           ORDER BY d.timestamp DESC
+           LIMIT 1`
+        ).bind(workerName, workerName).first();
+      } catch (e) {
+        console.warn('[api/agent/git/status] query', e?.message ?? e);
+        return jsonResponse({ error: e?.message || String(e) }, 500);
       }
       return jsonResponse({
-        branch,
-        dirty,
-        status_short: statusShort,
-        sync_last_at: syncLastAt,
+        branch: row?.default_branch || 'main',
+        git_hash: row?.git_hash || null,
         worker_name: workerName,
-        workspace_label: workspaceLabel,
-        active_agent_name: activeAgentName,
+        repo_full_name: row?.repo_full_name || null,
+        dirty: false,
+        sync_last_at: row?.timestamp || null,
       });
     }
 
@@ -11356,13 +11331,18 @@ async function handleAgentsamApi(request, url, env) {
 
     if (pathLower === '/api/agentsam/skills' && method === 'GET') {
       const includeInactive = url.searchParams.get('include_inactive') === '1';
-      const ws = workspaceId;
-      let sql = `SELECT * FROM agentsam_skill WHERE user_id = ? AND (
-        workspace_id IS NULL OR TRIM(COALESCE(workspace_id, '')) = '' OR workspace_id = ?
-      )`;
+      const ws = String(workspaceId || '').trim();
+      let sql = `SELECT * FROM agentsam_skill WHERE user_id = ?`;
+      const bindVals = [userKey];
+      if (ws) {
+        sql += ` AND (
+          workspace_id IS NULL OR TRIM(COALESCE(workspace_id, '')) = '' OR workspace_id = ?
+        )`;
+        bindVals.push(ws);
+      }
       if (!includeInactive) sql += ' AND is_active = 1';
       sql += ' ORDER BY name COLLATE NOCASE';
-      const { results } = await env.DB.prepare(sql).bind(userKey, ws).all();
+      const { results } = await env.DB.prepare(sql).bind(...bindVals).all();
       return jsonResponse(results || []);
     }
 

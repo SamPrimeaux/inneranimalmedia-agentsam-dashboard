@@ -96,8 +96,8 @@ Total route patterns: **282**.
 
 ## varies /api/agent/boot
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8145
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8120
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -105,8 +105,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/bootstrap
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10584
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10559
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -114,8 +114,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/chat
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~9002
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8977
 - **Auth:** usually session (see handler)
 - **Description:** Main Agent Sam chat. JSON body: messages, model_id, mode, stream, tools. Runs AutoRAG (AI Search) when enabled; prepends pgvector `match_documents` context when HYPERDRIVE is bound.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -123,8 +123,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/chat/execute-approved-tool
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10230
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10205
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -132,8 +132,8 @@ Total route patterns: **282**.
 
 ## varies /api/agent/cidi
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10043
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10018
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -150,7 +150,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/context-picker/catalog
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7906
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -159,8 +159,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/context/bootstrap
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10562
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10537
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -168,8 +168,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/conversations/search
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8207
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8182
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -177,7 +177,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/db/tables
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7999
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -186,7 +186,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/git/status
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~8044
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -195,8 +195,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/git/sync
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8098
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8073
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -204,7 +204,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/keyboard-shortcuts
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7816
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -213,8 +213,8 @@ Total route patterns: **282**.
 
 ## varies /api/agent/mcp
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10036
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10011
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE, KV
@@ -222,7 +222,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/memory/list
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7974
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -231,7 +231,7 @@ Total route patterns: **282**.
 
 ## POST /api/agent/memory/sync
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~8015
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -240,8 +240,8 @@ Total route patterns: **282**.
 
 ## varies /api/agent/models
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8644
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8619
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -249,7 +249,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/modes
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7747
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -258,7 +258,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/notifications
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7868
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -267,8 +267,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/plan/approve
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10196
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10171
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -276,8 +276,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/plan/reject
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10213
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10188
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -285,8 +285,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/playwright
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10022
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~9997
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE, MYBROWSER
@@ -294,7 +294,7 @@ Total route patterns: **282**.
 
 ## GET /api/agent/problems
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~7760
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -303,8 +303,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/proposals/pending
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8917
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8892
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -312,8 +312,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/propose
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8819
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8794
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -321,8 +321,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/queue
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10127
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10102
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -330,8 +330,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/queue/status
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10152
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10127
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -339,8 +339,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/r2-save
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10643
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10618
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DASHBOARD, DB, HYPERDRIVE
@@ -348,8 +348,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/rag/compact-chats
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10107
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10082
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -357,8 +357,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/rag/index-memory
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10094
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10069
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -366,8 +366,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/rag/query
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10065
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10040
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -375,8 +375,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/rag/status
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10084
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10059
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -384,7 +384,7 @@ Total route patterns: **282**.
 
 ## POST /api/agent/reindex-codebase
 
-- **Handler:** handleAgentApi (lines 7742-10688)
+- **Handler:** handleAgentApi (lines 7742-10663)
 - **Line:** ~8028
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
@@ -402,8 +402,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/sessions
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8672
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8647
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -411,8 +411,8 @@ Total route patterns: **282**.
 
 ## varies /api/agent/telemetry
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10054
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10029
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -420,8 +420,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/terminal/complete
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8429
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8404
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -429,8 +429,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/terminal/config-status
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8313
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8288
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -438,8 +438,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/terminal/run
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8408
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8383
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -447,8 +447,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/terminal/socket-url
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8298
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8273
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -456,8 +456,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/terminal/ws
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8324
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8299
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -465,8 +465,8 @@ Total route patterns: **282**.
 
 ## GET /api/agent/today-todo
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10511
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10486
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -474,8 +474,8 @@ Total route patterns: **282**.
 
 ## PUT /api/agent/today-todo
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10537
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10512
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -483,8 +483,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/workers-ai/image
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8732
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8707
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -492,8 +492,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/workers-ai/stt
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8789
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8764
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -501,8 +501,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/workers-ai/tts
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8758
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8733
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -510,8 +510,8 @@ Total route patterns: **282**.
 
 ## POST /api/agent/workflows/trigger
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8930
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8905
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -537,8 +537,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/ai
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11755
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11735
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -546,8 +546,8 @@ Total route patterns: **282**.
 
 ## DELETE /api/agentsam/autorag/files
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11690
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11670
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -555,8 +555,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/autorag/files
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11645
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11625
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -564,8 +564,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/autorag/search
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11714
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11694
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -573,8 +573,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/autorag/stats
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11628
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11608
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -582,8 +582,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/autorag/sync
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11666
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11646
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -591,8 +591,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/autorag/upload
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11699
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11679
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -600,8 +600,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/cmd-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10934
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10909
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -609,8 +609,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/cmd-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10948
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10923
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -618,8 +618,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/command-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10934
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10909
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -627,8 +627,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/command-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10948
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10923
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -636,8 +636,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/feature-flags
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11182
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11157
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -645,8 +645,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/fetch-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11091
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11066
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -654,8 +654,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/fetch-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11105
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11080
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -663,8 +663,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/fetch-domains
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11037
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11012
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -672,8 +672,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/fetch-domains
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11051
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11026
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -681,8 +681,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/hooks
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10826
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10801
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -690,8 +690,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/hooks
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10864
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10839
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -699,8 +699,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/ignore-patterns
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11527
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11507
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -708,8 +708,8 @@ Total route patterns: **282**.
 
 ## PATCH /api/agentsam/ignore-patterns
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11537
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11517
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -717,8 +717,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/ignore-patterns
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11504
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11484
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -726,8 +726,8 @@ Total route patterns: **282**.
 
 ## PATCH /api/agentsam/ignore-patterns/reorder
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11435
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11415
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -735,8 +735,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/index-status
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11566
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11546
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -744,8 +744,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/indexing-summary
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11587
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11567
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -753,8 +753,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/mcp-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10982
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10957
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE, KV
@@ -762,8 +762,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/mcp-allowlist
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10996
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10971
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE, KV
@@ -771,8 +771,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/rules
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11264
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11239
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -780,8 +780,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/rules
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11274
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11249
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -789,8 +789,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/runs
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11742
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11722
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -798,8 +798,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/skills
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11357
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11332
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -807,8 +807,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/skills
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11369
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11349
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -816,8 +816,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/subagents
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11288
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11263
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -825,8 +825,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/subagents
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11299
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11274
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -834,8 +834,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/tools-registry
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11017
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10992
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -843,8 +843,8 @@ Total route patterns: **282**.
 
 ## DELETE /api/agentsam/trusted-origins
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11171
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11146
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -852,8 +852,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/trusted-origins
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11145
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11120
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -861,8 +861,8 @@ Total route patterns: **282**.
 
 ## POST /api/agentsam/trusted-origins
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~11155
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~11130
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -870,8 +870,8 @@ Total route patterns: **282**.
 
 ## GET /api/agentsam/user-policy
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10794
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10769
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -879,8 +879,8 @@ Total route patterns: **282**.
 
 ## PATCH /api/agentsam/user-policy
 
-- **Handler:** handleAgentsamApi (lines 10742-11799)
-- **Line:** ~10804
+- **Handler:** handleAgentsamApi (lines 10717-11779)
+- **Line:** ~10779
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
@@ -1068,8 +1068,8 @@ Total route patterns: **282**.
 
 ## POST /api/cidi/run
 
-- **Handler:** handleCidiApi (lines 12374-12619)
-- **Line:** ~12382
+- **Handler:** handleCidiApi (lines 12354-12599)
+- **Line:** ~12362
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1077,8 +1077,8 @@ Total route patterns: **282**.
 
 ## GET /api/cidi/runs
 
-- **Handler:** handleCidiApi (lines 12374-12619)
-- **Line:** ~12586
+- **Handler:** handleCidiApi (lines 12354-12599)
+- **Line:** ~12566
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1419,8 +1419,8 @@ Total route patterns: **282**.
 
 ## GET /api/images
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10407
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10382
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1428,8 +1428,8 @@ Total route patterns: **282**.
 
 ## POST /api/images
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10437
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10412
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1446,8 +1446,8 @@ Total route patterns: **282**.
 
 ## prefix /api/images/*
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10484
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10459
 - **Auth:** usually session (see handler)
 - **Description:** Path prefix. Sub-routes resolved inside handleAgentApi.
 - **Bindings (typical):** DB
@@ -1455,8 +1455,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/drive/list
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10253
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10228
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1464,8 +1464,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/gdrive/file
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10272
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10247
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1473,8 +1473,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/gdrive/files
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10260
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10235
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1482,8 +1482,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/github/file
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10310
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10285
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1491,8 +1491,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/github/files
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10296
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10271
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1500,8 +1500,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/github/list
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10256
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10231
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1509,8 +1509,8 @@ Total route patterns: **282**.
 
 ## GET /api/integrations/github/repos
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10284
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10259
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1581,8 +1581,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/a11y
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11929
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11909
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1590,8 +1590,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/agents
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11843
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11823
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** AI, DB, HYPERDRIVE, KV
@@ -1599,8 +1599,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/audit
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11822
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11802
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1608,8 +1608,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/commands
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11882
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11862
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1617,8 +1617,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/credentials
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11814
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11794
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1626,8 +1626,8 @@ Total route patterns: **282**.
 
 ## POST /api/mcp/dispatch
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11890
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11870
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1635,8 +1635,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/imgx
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11972
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11952
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1644,8 +1644,8 @@ Total route patterns: **282**.
 
 ## POST /api/mcp/invoke
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~12223
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~12203
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1653,8 +1653,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/server-allowlist
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11806
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11786
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1662,8 +1662,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/services
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~12116
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~12096
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1671,8 +1671,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/services/health
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11987
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11967
 - **Auth:** public
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1680,8 +1680,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/stats
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11831
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11811
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1689,8 +1689,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/status
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11840
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11820
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1698,8 +1698,8 @@ Total route patterns: **282**.
 
 ## POST /api/mcp/stream
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~12140
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~12120
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1707,8 +1707,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/tools
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~11866
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~11846
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1716,8 +1716,8 @@ Total route patterns: **282**.
 
 ## GET /api/mcp/workflows
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~12265
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~12245
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1725,8 +1725,8 @@ Total route patterns: **282**.
 
 ## POST /api/mcp/workflows
 
-- **Handler:** handleMcpApi (lines 11800-12373)
-- **Line:** ~12275
+- **Handler:** handleMcpApi (lines 11780-12353)
+- **Line:** ~12255
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, KV
@@ -1824,8 +1824,8 @@ Total route patterns: **282**.
 
 ## POST /api/playwright/screenshot
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8555
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8530
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB, MYBROWSER
@@ -1941,8 +1941,8 @@ Total route patterns: **282**.
 
 ## DELETE /api/screenshots
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10389
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10364
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1950,8 +1950,8 @@ Total route patterns: **282**.
 
 ## GET /api/screenshots
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10326
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10301
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -1968,8 +1968,8 @@ Total route patterns: **282**.
 
 ## GET /api/screenshots/asset
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~10363
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~10338
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -2265,8 +2265,8 @@ Total route patterns: **282**.
 
 ## POST /api/terminal/session/register
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8217
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8192
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
@@ -2274,8 +2274,8 @@ Total route patterns: **282**.
 
 ## GET /api/terminal/session/resume
 
-- **Handler:** handleAgentApi (lines 7742-10688)
-- **Line:** ~8259
+- **Handler:** handleAgentApi (lines 7742-10663)
+- **Line:** ~8234
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB

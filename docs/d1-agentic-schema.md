@@ -4,7 +4,7 @@ Source: remote D1 `inneranimalmedia-business`, `sqlite_master`.
 
 Filter: `sqlite_master` tables excluding `sqlite_%` and `_cf_%`, including prefixes `agent_%`, `agentsam_%`, `ai_%`, `mcp_%`, `cursor_%`, `workflow_%`, `terminal_%`, `tool_%`, `command_%`, `project_memory%`, `prompt_%`, `iam_%`, `kanban_%`, `task%`, `dev_workflow%`, `memory_%`, `execution_%`, `hook_%`, `work_session%`, `brainstorm_%`.
 
-Total tables: **142**.
+Total tables: **144**.
 
 Each `##` section is one ingest chunk.
 
@@ -881,7 +881,7 @@ CREATE TABLE agentsam_ai (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 , system_prompt TEXT, tool_invocation_style TEXT
   DEFAULT 'balanced'
-  CHECK(tool_invocation_style IN ('aggressive', 'balanced', 'conservative')))
+  CHECK(tool_invocation_style IN ('aggressive', 'balanced', 'conservative')), icon TEXT NOT NULL DEFAULT '', access_mode TEXT NOT NULL DEFAULT 'read_write' CHECK(access_mode IN ('read_only','read_write')), sort_order INTEGER NOT NULL DEFAULT 0)
 ```
 
 ## agentsam_browser_trusted_origin
@@ -1060,6 +1060,46 @@ CREATE TABLE agentsam_skill (
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
+, icon TEXT NOT NULL DEFAULT '', access_mode TEXT NOT NULL DEFAULT 'read_write'
+  CHECK(access_mode IN ('read_only','read_write')), default_model_id TEXT, sort_order INTEGER NOT NULL DEFAULT 0, slash_trigger TEXT, globs TEXT, always_apply INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, tags TEXT)
+```
+
+## agentsam_skill_invocation
+
+```sql
+CREATE TABLE agentsam_skill_invocation (
+  id              TEXT PRIMARY KEY DEFAULT ('skillinv_' || lower(hex(randomblob(8)))),
+  skill_id        TEXT NOT NULL,
+  user_id         TEXT NOT NULL DEFAULT 'sam_primeaux',
+  workspace_id    TEXT NOT NULL DEFAULT '',
+  conversation_id TEXT,
+  trigger_method  TEXT NOT NULL DEFAULT 'slash'
+    CHECK(trigger_method IN ('slash','at','auto','api')),
+  input_summary   TEXT,
+  success         INTEGER NOT NULL DEFAULT 1,
+  error_message   TEXT,
+  duration_ms     INTEGER,
+  model_used      TEXT,
+  tokens_in       INTEGER DEFAULT 0,
+  tokens_out      INTEGER DEFAULT 0,
+  cost_usd        REAL DEFAULT 0.0,
+  invoked_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (skill_id) REFERENCES agentsam_skill(id) ON DELETE CASCADE
+)
+```
+
+## agentsam_skill_revision
+
+```sql
+CREATE TABLE agentsam_skill_revision (
+  id           TEXT PRIMARY KEY DEFAULT ('skillrev_' || lower(hex(randomblob(8)))),
+  skill_id     TEXT NOT NULL,
+  content_markdown TEXT NOT NULL,
+  version      INTEGER NOT NULL,
+  changed_by   TEXT NOT NULL DEFAULT 'sam_primeaux',
+  change_note  TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (skill_id) REFERENCES agentsam_skill(id) ON DELETE CASCADE
 )
 ```
 
@@ -1077,7 +1117,7 @@ CREATE TABLE agentsam_subagent_profile (
   default_model_id TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')), personality_tone TEXT DEFAULT 'professional', personality_traits TEXT, personality_rules TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')), personality_tone TEXT DEFAULT 'professional', personality_traits TEXT, personality_rules TEXT, description TEXT NOT NULL DEFAULT '', icon TEXT NOT NULL DEFAULT '', access_mode TEXT NOT NULL DEFAULT 'read_write' CHECK(access_mode IN ('read_only','read_write')), run_in_background INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE (user_id, workspace_id, slug)
 )
 ```

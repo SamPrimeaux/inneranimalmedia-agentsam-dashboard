@@ -93,6 +93,7 @@ const GIT_PANEL_REPO = "/Users/samprimeaux/Downloads/march1st-inneranimalmedia";
 
 function GitPanel({ runCommandRunnerRef }) {
   const [commitMsg, setCommitMsg] = useState("");
+  const [gitStatus, setGitStatus] = useState({ branch: "main", repo: "inneranimalmedia", hash: "" });
 
   function run(cmd) {
     runCommandRunnerRef?.current?.runCommandInTerminal?.(cmd, { focusTerminal: false });
@@ -100,6 +101,17 @@ function GitPanel({ runCommandRunnerRef }) {
 
   useEffect(() => {
     run(`cd ${GIT_PANEL_REPO} && git status --short && echo "---GITLOG---" && git log --oneline -8`);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/agent/git/status", { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((d) => setGitStatus({
+        branch: d.branch ?? "main",
+        repo: d.repo_full_name?.split("/")?.[1] ?? d.worker_name ?? "inneranimalmedia",
+        hash: d.git_hash ?? "",
+      }))
+      .catch(() => {});
   }, []);
 
   const quickActions = [
@@ -116,7 +128,7 @@ function GitPanel({ runCommandRunnerRef }) {
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: 16 }}>
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "monospace", background: "var(--bg-canvas)", padding: "6px 10px", borderRadius: 4, border: "1px solid var(--border)", marginBottom: 10 }}>
-          repo: march1st-inneranimalmedia · branch: <span style={{ color: "var(--accent)" }}>main</span>
+          {`repo: ${gitStatus.repo} · branch: ${gitStatus.branch}${gitStatus.hash ? " · " + gitStatus.hash.slice(0, 7) : ""}`}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
           {quickActions.map((a) => (

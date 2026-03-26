@@ -1767,6 +1767,40 @@ export default function AgentDashboard() {
     return () => clearInterval(t);
   }, [fetchAgentNotifications]);
 
+  useEffect(() => {
+    const handler = () => setAgentNotifOpen(true);
+    window.addEventListener("iam_open_notifications", handler);
+    return () => window.removeEventListener("iam_open_notifications", handler);
+  }, []);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("iam_status_update", {
+      detail: {
+        model: selectedModel?.display_name
+          ?? (selectedModel?.id ? (MODEL_LABELS[selectedModel.model_key] ?? selectedModel.id) : "Auto"),
+        mode: mode ? (mode.charAt(0).toUpperCase() + mode.slice(1)) : "Ask",
+        agent: "Agent Sam",
+        workspace: "Sam Primeaux Workspace",
+      }
+    }));
+  }, [selectedModel, mode]);
+
+  useEffect(() => {
+    const handler = () => {
+      setPreviewOpen((prev) => {
+        if (!prev) {
+          setActiveTab("terminal");
+          return true;
+        }
+        if (activeTab === "terminal") return false;
+        setActiveTab("terminal");
+        return true;
+      });
+    };
+    window.addEventListener("iam_toggle_terminal", handler);
+    return () => window.removeEventListener("iam_toggle_terminal", handler);
+  }, [activeTab]);
+
   const syncInputCaretOffset = useCallback((value, caretPos) => {
     const pos = typeof caretPos === "number" ? caretPos : value.length;
     const lineStart = value.lastIndexOf("\n", Math.max(0, pos - 1)) + 1;

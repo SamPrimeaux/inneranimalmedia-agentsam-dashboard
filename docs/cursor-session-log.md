@@ -373,3 +373,109 @@ Wire R2 event notifications (`iam-docs`) into the existing queue consumer; optio
 - `docs_index_log.key` is `UNIQUE` so `INSERT OR REPLACE` upserts one row per key.
 - If metadata-filter `deleteVectorsForDocKey` fallback is needed without D1 `chunk_count`, ensure Vectorize metadata index on `key` exists (see Cloudflare Vectorize metadata filtering).
 
+## 2026-03-26 ui-ux-design-agent Cursor subagent + D1 readiness
+
+### What was asked
+Create a `ui-ux-design-agent` Cursor subagent (refine later; future `agentsam_subagent_profile` row). Check whether D1 `inneranimalmedia-business` is prepared for it.
+
+### Files changed
+- `.cursor/agents/ui-ux-design-agent.md`: new project subagent (YAML frontmatter + system prompt for UI/UX, a11y, IAM CSS-var constraints, output format).
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`, `worker.js`, D1 data: no deploy or schema change requested.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### D1 check (remote `inneranimalmedia-business`, id `cf87b717-d4e2-4cf8-bab0-a81268e32d49`)
+- Binding matches repo `wrangler.production.toml` (`DB` / same `database_id`).
+- `agentsam_subagent_profile` exists and has active rows (`explore`, `shell`, `code-reviewer`, `d1-audit`, `cidi-lane`, `recall`, `toolbox`). **No `ui-ux-design` (or similar) slug yet** — not loaded for Agent Sam dashboard until an INSERT/UPSERT row is added (after approval).
+
+### What is live now
+- Cursor can use `.cursor/agents/ui-ux-design-agent.md` locally. Dashboard Agent Sam subagents unchanged until D1 seed/API adds a profile.
+
+### Known issues / next steps
+- After prompt is stable: add `agentsam_subagent_profile` row (slug e.g. `ui-ux-design`) and align `allowed_tool_globs` with how Agent Sam invokes subagents.
+
+## 2026-03-26 agentsam_skill parity migration (177)
+
+### What was asked
+Capture the full D1 migration plan: columns on `agentsam_skill`, `agentsam_skill_revision`, `agentsam_skill_invocation`, slash backfill for seven skills, v1 content snapshot.
+
+### Files changed
+- `migrations/177_agentsam_skill_parity.sql`: new file — Steps 1–5 in order; Step 5 uses `NOT EXISTS` so re-run does not duplicate v1 revision rows; `CREATE INDEX` uses `IF NOT EXISTS` for Step 2/3 indexes.
+
+### Files NOT changed (and why)
+- `worker.js`: no INSERT into `agentsam_skill_invocation` yet (requires separate approved change).
+- `docs/d1-agentic-schema.md`: not updated until migration is applied and schema is canonical.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- D1 migration executed: no (await Sam approval)
+- Deploy approved by Sam: n/a
+
+### What is live now
+- Migration file only; production D1 unchanged until `wrangler d1 execute` runs with approval.
+
+### Known issues / next steps
+- Run migration on `inneranimalmedia-business` after confirming skill `id` values match Step 4.
+- Wire skill invocations to `agentsam_skill_invocation`; on skill content update, append `agentsam_skill_revision` and bump `agentsam_skill.version`.
+
+## 2026-03-26 Fix skills list workspace filter
+
+### What was asked
+In `worker.js` GET `/api/agentsam/skills`, if `workspace_id` query param is empty/missing return all skills for the user; only apply workspace filtering when a non-empty `workspace_id` is provided.
+
+### Files changed
+- `worker.js` lines 11357-11369: make `workspace_id` filter conditional; keep `include_inactive` behavior; fix SQL binds accordingly.
+
+### Files NOT changed (and why)
+- Dashboard UI (`agent-dashboard/src/SettingsPanel.jsx` etc.): not part of this approved change.
+- D1 schema/migrations: not part of this approved change.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+- Code change only in repo; production unchanged until a deploy is run.
+
+### Known issues / next steps
+- If you want “workspace_id empty ⇒ treat as `tenant_sam_primeaux`” instead of “all skills”, that would be a different behavior change.
+
+## 2026-03-26 Topbar shell controls + git status source update
+
+### What was asked
+Apply three surgical fixes: move notifications bell to topbar shell and wire shell events, dispatch status updates from AgentDashboard model/mode changes, and switch git status display/API to real D1-backed branch/hash/repo data.
+
+### Files changed
+- `dashboard/agent.html` lines 874-901, 1104-1113 removed, 1390-1408, 1450-1502: topbar icon order `[bell][sidebar][terminal][gear]`, remove sidenav bell, shell event wiring (`iam_open_notifications`, `iam_toggle_terminal`, Cmd+B/Cmd+J), and status bar branch/repo rendering with hash.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 1769-1804: add listeners for `iam_open_notifications` + `iam_toggle_terminal`, and emit `iam_status_update` on `[selectedModel, mode]`.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx` lines 95-113 and 119: replace hardcoded git repo/branch text with `/api/agent/git/status` fetch state.
+- `worker.js` lines 8044-8079: replace `/api/agent/git/status` local git exec path with D1 query against `deployments` + `github_repositories`; return `branch`, `git_hash`, `repo_full_name`, `worker_name`, `dirty`, `sync_last_at`.
+- `docs/route-map.md`: auto-regenerated by `npm run deploy`.
+- `docs/d1-agentic-schema.md`: auto-regenerated by `npm run deploy`.
+
+### Files NOT changed (and why)
+- `agent-dashboard/src/SettingsPanel.jsx`: not in approved scope.
+- OAuth handlers in `worker.js`: not touched per locked auth rules.
+
+### Deploy status
+- Built: yes (`npm run deploy`)
+- R2 uploaded: yes — files: `agent-sam/static/dashboard/agent.html` (manual pre-deploy upload)
+- Worker deployed: yes — version ID: `d48683e4-a70d-4816-956a-112b0f591a61`
+- Deploy approved by Sam: yes
+
+### What is live now
+- Topbar bell/sidebar/terminal controls are wired from shell to React panel behavior, and git status panels now read branch/hash/repo from D1-backed deployment metadata instead of local git execution.
+
+### Known issues / next steps
+- `npm run deploy` regenerates docs files by design; keep/commit those generated updates or switch to a worker-only deploy flow in a future task.
+

@@ -1196,7 +1196,36 @@ export default function AgentDashboard() {
 
   // ── Panel / split resize ──────────────────────────────────────────────────
   const [previewOpen, setPreviewOpen] = useState(false);
+
+
+
   const [activeTab, setActiveTab] = useState("terminal");
+
+  // Connect directly to draw DO room on mount — receives ui.panel.open before iframe exists
+  useEffect(() => {
+    let ws;
+    let reconnectTimer;
+    let dead = false;
+    function connect() {
+      if (dead) return;
+      const wsUrl = window.location.origin.replace('https://', 'wss://').replace('http://', 'ws://') + '/api/collab/draw';
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => ws.send('ready');
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'ui.panel.open') {
+            setPreviewOpen(true);
+            setActiveTab('draw');
+          }
+        } catch(_) {}
+      };
+      ws.onclose = () => { if (!dead) reconnectTimer = setTimeout(connect, 3000); };
+      ws.onerror = () => ws.close();
+    }
+    connect();
+    return () => { dead = true; clearTimeout(reconnectTimer); ws?.close(); };
+  }, []);
   const [availableCommands, setAvailableCommands] = useState([]);
   const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
   const [slashPickerSuppressed, setSlashPickerSuppressed] = useState(false);
@@ -1472,6 +1501,11 @@ export default function AgentDashboard() {
     const onIamDrawMessage = (event) => {
       if (event.origin !== window.location.origin) return;
       if (!event.data) return;
+      if (event.data.type === "iam_panel_open" && event.data.panel === "draw") {
+        setPreviewOpen(true);
+        setActiveTab("draw");
+        return;
+      }
       if (event.data.type === "draw_ready") {
         const url = pendingDrawImageRef.current;
         if (url) postLoadImageToDrawFrame(url, 0);
@@ -2352,6 +2386,11 @@ export default function AgentDashboard() {
                 const data = JSON.parse(raw);
                 if (data.type === "state" && data.state != null) {
                   setAgentState(data.state);
+                  // Auto-open draw panel when excalidraw tool detected
+                  if (data.state === "TOOL_CALL" && data.context?.tool?.toLowerCase?.().includes("excalidraw")) {
+                    setPreviewOpen(true);
+                    setActiveTab("draw");
+                  }
                   if (data.tool != null || data.file != null || data.current != null || data.total != null || data.position != null) {
                     setAgentStateContext({
                       tool: data.tool,
@@ -2420,6 +2459,15 @@ export default function AgentDashboard() {
                         : m
                     )
                   );
+                } else if (data.type === "open_panel" && data.panel === "draw") {
+                  setPreviewOpen(true);
+                  setActiveTab("draw");
+                } else if (data.type === "tool_start" && data.tool?.startsWith?.("excalidraw")) {
+                  setPreviewOpen(true);
+                  setActiveTab("draw");
+                } else if (data.type === "state" && data.context?.tool?.toLowerCase?.().includes("excalidraw")) {
+                  setPreviewOpen(true);
+                  setActiveTab("draw");
                 } else if (data.type === "tool_result" && data.result) {
                   try {
                     const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
@@ -2461,6 +2509,7 @@ export default function AgentDashboard() {
         );
         if (convId && convId !== currentSessionId) {
           setCurrentSessionId(convId);
+
           window.history.replaceState(null, "", `?session=${convId}`);
         }
         return;

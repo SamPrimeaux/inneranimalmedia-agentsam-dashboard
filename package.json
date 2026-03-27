@@ -8,12 +8,14 @@
     "test:headed": "playwright test --headed",
     "test:report-upload": "playwright test && ./scripts/upload-playwright-report-to-r2.sh",
     "start": "node server.js",
-    "deploy": "npm run generate:route-map && npm run generate:d1-schema-doc && npm run ingest:docs && npm run ingest:d1-memory && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
+    "deploy": "./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
     "deploy:sandbox": "npx wrangler deploy ./worker.js -c ./wrangler.jsonc",
     "generate:route-map": "node scripts/generate-route-map.js",
     "generate:d1-schema-doc": "node scripts/generate-d1-agentic-schema.js",
     "ingest:docs": "./scripts/with-cloudflare-env.sh node scripts/ingest-docs.js",
-    "ingest:d1-memory": "./scripts/with-cloudflare-env.sh node scripts/ingest-d1-memory.js"
+    "ingest:d1-memory": "./scripts/with-cloudflare-env.sh node scripts/ingest-d1-memory.js",
+    "deploy:full": "cd agent-dashboard && npm run build && cd .. && ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file agent-dashboard/dist/agent-dashboard.js --content-type application/javascript -c wrangler.production.toml --remote && ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file agent-dashboard/dist/agent-dashboard.css --content-type text/css -c wrangler.production.toml --remote && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
+    "deploy:ingest": "npm run generate:route-map && npm run generate:d1-schema-doc && npm run ingest:docs && npm run ingest:d1-memory && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml"
   },
   "keywords": [],
   "author": "",

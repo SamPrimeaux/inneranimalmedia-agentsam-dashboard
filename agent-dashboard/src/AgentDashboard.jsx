@@ -1216,7 +1216,12 @@ export default function AgentDashboard() {
           const msg = JSON.parse(e.data);
           if (msg.type === 'ui.panel.open') {
             setPreviewOpen(true);
-            setActiveTab('draw');
+            if (msg.payload?.panel_type === 'browser') {
+              setActiveTab('browser');
+              if (msg.payload?.url) setBrowserUrl(msg.payload.url);
+            } else {
+              setActiveTab('draw');
+            }
           }
         } catch(_) {}
       };

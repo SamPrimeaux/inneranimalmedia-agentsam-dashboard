@@ -29,7 +29,7 @@ binding = "AI"
 
 [[ai_search]]
 binding = "AI_SEARCH"
-search_name = "iam-autorag"
+instance_name = "iam-autorag"
 
 [browser]
 binding = "MYBROWSER"
@@ -57,6 +57,10 @@ bucket_name = "iam-docs"
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "iam-platform"
+
+[[r2_buckets]]
+binding = "TOOLS"
+bucket_name = "tools"
 
 [[d1_databases]]
 binding = "DB"

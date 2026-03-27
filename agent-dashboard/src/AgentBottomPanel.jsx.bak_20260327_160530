@@ -266,7 +266,7 @@ export default function AgentBottomPanel({
     const style = getComputedStyle(document.documentElement);
     const term = new Terminal({
       termName: "xterm-256color",
-      disableStdin: false,
+      disableStdin: true,
       fontFamily: "monospace",
       fontSize: 13,
       cursorBlink: true,
@@ -285,16 +285,7 @@ export default function AgentBottomPanel({
     term.loadAddon(webLinksAddon);
     term.open(container);
     fitAddon.fit();
-    term.focus();
     terminalXtermRef.current = term;
-
-    // Wire every keystroke directly to PTY WebSocket
-    term.onData((data) => {
-      const ws = terminalWsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: "input", data })); } catch (_) {}
-      }
-    });
 
     const ro = new ResizeObserver(() => {
       try {
@@ -1178,8 +1169,7 @@ export default function AgentBottomPanel({
                 >
                   <div
                     ref={xtermContainerRef}
-                    style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", padding: "10px", cursor: "text" }}
-                    onClick={() => { terminalXtermRef.current?.focus(); terminalInputRef.current?.focus(); }}
+                    style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", padding: "10px" }}
                   />
                   {(terminalWsState === "connecting" || terminalWsState === "error") && (
                     <div
@@ -1203,8 +1193,7 @@ export default function AgentBottomPanel({
                     <div style={{ flex: "1 1 50%", minHeight: 0, display: "flex", flexDirection: "column" }}>
                       <div
                         ref={xtermContainer2Ref}
-                        style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", padding: "10px", cursor: "text" }}
-                        onClick={() => terminalInputRef.current?.focus()}
+                        style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", padding: "10px" }}
                       />
                     </div>
                   </>

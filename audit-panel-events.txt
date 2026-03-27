@@ -1,0 +1,8 @@
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/worker.js:13318:        // Broadcast both ui.panel.open AND draw command to the draw room
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/worker.js:13319:        // draw.html forwards ui.panel.open to parent window
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/worker.js:13323:          body: JSON.stringify({ type: 'ui.panel.open', payload: { panel_type: 'excalidraw' } }),
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/worker.js:15387:      // Broadcast ui.panel.open to draw room so AgentDashboard opens browser panel
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/worker.js:15393:            body: JSON.stringify({ type: 'ui.panel.open', payload: { panel_type: 'browser', url: fullUrl } }),
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1204:  // Connect directly to draw DO room on mount — receives ui.panel.open before iframe exists
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1217:          if (msg.type === 'ui.panel.open') {
+/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1509:      if (event.data.type === "iam_panel_open" && event.data.panel === "draw") {

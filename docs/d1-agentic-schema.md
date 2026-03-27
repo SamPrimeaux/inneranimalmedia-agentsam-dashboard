@@ -420,7 +420,7 @@ CREATE TABLE agent_messages (
   content TEXT NOT NULL,
   provider TEXT,
   file_url TEXT,
-  created_at INTEGER NOT NULL, thinking_time_seconds INTEGER DEFAULT 0, thinking_content TEXT, message_type TEXT DEFAULT 'message', metadata_json TEXT DEFAULT '{}', token_count INTEGER DEFAULT 0, is_compaction_marker INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL, thinking_time_seconds INTEGER DEFAULT 0, thinking_content TEXT, message_type TEXT DEFAULT 'message', metadata_json TEXT DEFAULT '{}', token_count INTEGER DEFAULT 0, is_compaction_marker INTEGER DEFAULT 0, telemetry_id TEXT,
   FOREIGN KEY (conversation_id) REFERENCES agent_conversations(id) ON DELETE CASCADE
 )
 ```

@@ -1346,6 +1346,7 @@ export default function FloatingPreviewPanel({
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
             {drawPageSrc?.trim() ? (
               <iframe
+                id="draw-panel-iframe"
                 key={drawPageSrc}
                 src={drawPageSrc.trim().startsWith("/") || drawPageSrc.trim().startsWith("http") ? drawPageSrc.trim() : `https://${drawPageSrc.trim()}`}
                 title="Draw"

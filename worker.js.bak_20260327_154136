@@ -2546,23 +2546,6 @@ const worker = {
       prevIAmResponseLog = __iamResponseLog;
       __iamResponseLog = { env, ctx, request, path, method: methodUpper };
 
-      // /api/tools-proxy/* — proxy TOOLS R2 through authenticated domain (avoids CF Access on tools subdomain)
-      if (pathLower.startsWith('/api/tools-proxy/') && env.TOOLS) {
-        const proxyKey = path.slice('/api/tools-proxy/'.length);
-        if (proxyKey) {
-          const obj = await env.TOOLS.get(proxyKey);
-          if (obj) {
-            const ct = obj.httpMetadata?.contentType || 'application/octet-stream';
-            return new Response(obj.body, { headers: {
-              'Content-Type': ct,
-              'Access-Control-Allow-Origin': '*',
-              'Cache-Control': 'public, max-age=3600',
-            }});
-          }
-        }
-        return new Response('Not found', { status: 404 });
-      }
-
       // tools.inneranimalmedia.com — serve TOOLS R2 bucket publicly
       if (url.hostname === 'tools.inneranimalmedia.com' && env.TOOLS) {
         if (methodUpper === 'OPTIONS') {

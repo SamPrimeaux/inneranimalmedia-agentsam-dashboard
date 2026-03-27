@@ -2546,23 +2546,6 @@ const worker = {
       prevIAmResponseLog = __iamResponseLog;
       __iamResponseLog = { env, ctx, request, path, method: methodUpper };
 
-      // /api/tools-proxy/* — proxy TOOLS R2 through authenticated domain (avoids CF Access on tools subdomain)
-      if (pathLower.startsWith('/api/tools-proxy/') && env.TOOLS) {
-        const proxyKey = path.slice('/api/tools-proxy/'.length);
-        if (proxyKey) {
-          const obj = await env.TOOLS.get(proxyKey);
-          if (obj) {
-            const ct = obj.httpMetadata?.contentType || 'application/octet-stream';
-            return new Response(obj.body, { headers: {
-              'Content-Type': ct,
-              'Access-Control-Allow-Origin': '*',
-              'Cache-Control': 'public, max-age=3600',
-            }});
-          }
-        }
-        return new Response('Not found', { status: 404 });
-      }
-
       // tools.inneranimalmedia.com — serve TOOLS R2 bucket publicly
       if (url.hostname === 'tools.inneranimalmedia.com' && env.TOOLS) {
         if (methodUpper === 'OPTIONS') {
@@ -7845,25 +7828,26 @@ async function handleDrawApi(request, url, env) {
       const projectId = String(body.projectId || body.project_id || 'default').trim() || 'default';
       const canvasData = body.canvasData;
       const generationType = body.generation_type != null ? String(body.generation_type).slice(0, 64) : null;
-      if (canvasData && typeof canvasData === 'string') {
-        const parsed = parseDataUrlToBytes(canvasData);
-        if (!parsed) return jsonResponse({ error: 'canvasData must be a data URL' }, 400);
-        const fileKey = crypto.randomUUID();
-        const safeProj = projectId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) || 'default';
-        const r2Key = `draw/exports/${safeProj}/${fileKey}.png`;
-        await env.DASHBOARD.put(r2Key, parsed.bytes, {
-          httpMetadata: { contentType: parsed.contentType || 'image/png' },
-        });
-        try {
-          const ins = await env.DB.prepare(
-            `INSERT INTO project_draws (project_id, r2_key, generation_type, created_at) VALUES (?, ?, ?, datetime('now'))`
-          ).bind(projectId, r2Key, generationType).run();
-          const newId = ins?.meta?.last_row_id;
-          return jsonResponse({ ok: true, id: newId, project_id: projectId, r2_key: r2Key, generation_type: generationType });
-        } catch (e) {
-          console.error('[draw/save] D1 insert failed', e?.message);
-          return jsonResponse({ error: 'Failed to record draw', detail: e?.message }, 500);
-        }
+      if (!canvasData || typeof canvasData !== 'string') {
+        return jsonResponse({ error: 'canvasData required' }, 400);
+      }
+      const parsed = parseDataUrlToBytes(canvasData);
+      if (!parsed) return jsonResponse({ error: 'canvasData must be a data URL' }, 400);
+      const fileKey = crypto.randomUUID();
+      const safeProj = projectId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) || 'default';
+      const r2Key = `draw/exports/${safeProj}/${fileKey}.png`;
+      await env.DASHBOARD.put(r2Key, parsed.bytes, {
+        httpMetadata: { contentType: parsed.contentType || 'image/png' },
+      });
+      try {
+        const ins = await env.DB.prepare(
+          `INSERT INTO project_draws (project_id, r2_key, generation_type, created_at) VALUES (?, ?, ?, datetime('now'))`
+        ).bind(projectId, r2Key, generationType).run();
+        const newId = ins?.meta?.last_row_id;
+        return jsonResponse({ ok: true, id: newId, project_id: projectId, r2_key: r2Key, generation_type: generationType });
+      } catch (e) {
+        console.error('[draw/save] D1 insert failed', e?.message);
+        return jsonResponse({ error: 'Failed to record draw', detail: e?.message }, 500);
       }
     }
 
@@ -7884,211 +7868,6 @@ async function handleDrawApi(request, url, env) {
       ).bind(drawId).first();
       if (!row) return jsonResponse({ error: 'Not found' }, 404);
       return jsonResponse(row);
-    }
-
-    // ── GET /api/draw/libraries ──────────────────────────────────────
-    if (pathLower === '/api/draw/libraries' && method === 'GET') {
-      const libRows = await env.DB.prepare(
-        `SELECT slug, name, filename, category, icon, public_url, r2_dev_url,
-                auto_load, agent_tags, description, item_count
-         FROM draw_libraries WHERE is_active = 1
-         ORDER BY category ASC, sort_order ASC, name ASC`
-      ).all();
-      return jsonResponse({ libraries: libRows?.results ?? [] });
-    }
-
-    // ── GET /api/draw/load ───────────────────────────────────────────
-    if (pathLower === '/api/draw/load' && method === 'GET') {
-      const uid = authUser?.id || authUser?.user_id || 'sam_primeaux';
-      const sceneRow = await env.DB.prepare(
-        `SELECT r2_key FROM project_draws
-         WHERE project_id = ? AND generation_type = 'json_scene'
-         ORDER BY created_at DESC LIMIT 1`
-      ).bind(uid).first();
-      if (!sceneRow) return jsonResponse({ scene: null });
-      const obj = await env.DASHBOARD.get(sceneRow.r2_key);
-      if (!obj) return jsonResponse({ scene: null });
-      try {
-        return jsonResponse({ scene: JSON.parse(await obj.text()), r2_key: sceneRow.r2_key });
-      } catch(_) { return jsonResponse({ scene: null }); }
-    }
-
-    // ── POST /api/draw/save (scene JSON — falls through from PNG handler above) ──
-    if (pathLower === '/api/draw/save' && method === 'POST') {
-      const body2 = await request.json().catch(() => ({}));
-      const scene = body2.scene;
-      if (!scene || typeof scene !== 'object') {
-        return jsonResponse({ error: 'scene or canvasData required' }, 400);
-      }
-      const uid2 = authUser?.id || authUser?.user_id || 'sam_primeaux';
-      const sceneKey = crypto.randomUUID();
-      const r2Key2 = `draw/scenes/${uid2}/${sceneKey}.json`;
-      await env.DASHBOARD.put(r2Key2, JSON.stringify(scene), {
-        httpMetadata: { contentType: 'application/json' },
-      });
-      try {
-        const ins2 = await env.DB.prepare(
-          `INSERT INTO project_draws (project_id, r2_key, generation_type, created_at)
-           VALUES (?, ?, 'json_scene', datetime('now'))`
-        ).bind(uid2, r2Key2).run();
-        return jsonResponse({ ok: true, id: ins2?.meta?.last_row_id, key: r2Key2 });
-      } catch(e) {
-        return jsonResponse({ error: 'Failed to save scene', detail: e?.message }, 500);
-      }
-    }
-
-    // ── GET /api/artifacts/:id/content ──────────────────────────────
-    const artifactMatch = pathLower.match(/^\/api\/artifacts\/([^/]+)\/content$/);
-    if (artifactMatch && method === 'GET') {
-      const artRow = await env.DB.prepare(
-        `SELECT r2_key, mime_type FROM workflow_artifacts WHERE id = ? LIMIT 1`
-      ).bind(artifactMatch[1]).first();
-      if (!artRow) return new Response('Not found', { status: 404 });
-      const artObj = await env.DASHBOARD.get(artRow.r2_key);
-      if (!artObj) return new Response('Missing R2 object', { status: 404 });
-      return new Response(artObj.body, {
-        headers: {
-          'content-type': artRow.mime_type || 'application/octet-stream',
-          'cache-control': 'public, max-age=31536000, immutable',
-        },
-      });
-    }
-
-    // ── POST /api/tools/image/generate ──────────────────────────────
-    if (pathLower === '/api/tools/image/generate' && method === 'POST') {
-      const imgBody   = await request.json().catch(() => ({}));
-      const toolName  = imgBody.tool_name || 'openai.image.generate';
-      const provider  = imgBody.provider || (toolName.includes('workers') ? 'workers-ai' : 'openai');
-      const model     = imgBody.model || (provider === 'workers-ai'
-        ? '@cf/stabilityai/stable-diffusion-xl-base-1.0' : 'dall-e-3');
-      const prompt    = String(imgBody.prompt_text || '').trim();
-      const sessionId = String(imgBody.session_id || '').trim();
-      const tenantId  = String(imgBody.tenant_id || 'tenant_sam_primeaux').trim();
-      const size      = imgBody.size || '1024x1024';
-
-      if (!prompt)    return jsonResponse({ error: 'prompt_text required' }, 400);
-      if (!sessionId) return jsonResponse({ error: 'session_id required' }, 400);
-
-      const jobId  = crypto.randomUUID();
-      const nowIso = new Date().toISOString();
-
-      await env.DB.prepare(
-        `INSERT INTO image_generation_jobs
-           (id, session_id, conversation_id, run_id, provider, model,
-            prompt_text, status, progress, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`
-      ).bind(jobId, sessionId, imgBody.conversation_id || null, imgBody.run_id || null,
-             provider, model, prompt, nowIso, nowIso).run();
-
-      const broadcastImg = async (action, params) => {
-        if (!env.IAM_COLLAB) return;
-        const s = env.IAM_COLLAB.get(env.IAM_COLLAB.idFromName('draw'));
-        await s.fetch(new Request('https://internal/broadcast', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ type: 'iam_image', action, params }),
-        })).catch(() => {});
-      };
-
-      await broadcastImg('progress', { job_id: jobId, session_id: sessionId,
-        status: 'queued', progress: 0, provider, model, prompt_text: prompt });
-
-      (async () => {
-        try {
-          await env.DB.prepare(
-            `UPDATE image_generation_jobs SET status='running', progress=0.05, updated_at=? WHERE id=?`
-          ).bind(new Date().toISOString(), jobId).run();
-          await broadcastImg('progress', { job_id: jobId, session_id: sessionId,
-            status: 'running', progress: 0.05 });
-
-          let imageBytes;
-          const [, ws, hs] = size.match(/^(\d+)x(\d+)$/) || ['','1024','1024'];
-          const [iw, ih]   = [parseInt(ws), parseInt(hs)];
-
-          if (provider === 'workers-ai' && env.AI) {
-            const r = await env.AI.run(model, { prompt, width: iw, height: ih });
-            if (r instanceof ArrayBuffer) imageBytes = new Uint8Array(r);
-            else if (r instanceof Uint8Array) imageBytes = r;
-            else if (r?.image) {
-              const bin = atob(r.image); imageBytes = new Uint8Array(bin.length);
-              for (let i = 0; i < bin.length; i++) imageBytes[i] = bin.charCodeAt(i);
-            }
-          } else {
-            if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY missing');
-            const res = await fetch('https://api.openai.com/v1/images/generations', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json',
-                         'authorization': `Bearer ${env.OPENAI_API_KEY}` },
-              body: JSON.stringify({ model, prompt, size, n: 1, response_format: 'b64_json' }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data?.error?.message || `OpenAI ${res.status}`);
-            const b64 = data?.data?.[0]?.b64_json;
-            if (!b64) throw new Error('No image returned');
-            const bin = atob(b64); imageBytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) imageBytes[i] = bin.charCodeAt(i);
-          }
-
-          if (!imageBytes) throw new Error('No image bytes');
-
-          const artId  = crypto.randomUUID();
-          const artKey = `__draw__/${sessionId}/${artId}.png`;
-          await env.DASHBOARD.put(artKey, imageBytes, {
-            httpMetadata: { contentType: 'image/png' } });
-
-          const pubUrl = `/api/artifacts/${artId}/content`;
-          await env.DB.prepare(
-            `INSERT INTO workflow_artifacts
-               (id, tenant_id, session_id, artifact_type, r2_key, public_url,
-                mime_type, file_size, metadata_json, status, created_at)
-             VALUES (?, ?, ?, 'image_final', ?, ?, 'image/png', ?, ?, 'ready', datetime('now'))`
-          ).bind(artId, tenantId, sessionId, artKey, pubUrl, imageBytes.byteLength,
-                 JSON.stringify({ job_id: jobId, provider, model, prompt_text: prompt })).run();
-
-          await env.DB.prepare(
-            `INSERT INTO image_generation_variants
-               (id, job_id, artifact_id, variant_type, sort_order, created_at)
-             VALUES (?, ?, ?, 'final', 999, datetime('now'))`
-          ).bind(crypto.randomUUID(), jobId, artId).run();
-
-          await env.DB.prepare(
-            `UPDATE image_generation_jobs
-             SET status='completed', progress=1, final_artifact_id=?,
-                 current_preview_artifact_id=?, updated_at=? WHERE id=?`
-          ).bind(artId, artId, new Date().toISOString(), jobId).run();
-
-          await broadcastImg('final_ready', { job_id: jobId, session_id: sessionId,
-            artifact_id: artId, public_url: pubUrl, mime_type: 'image/png',
-            status: 'completed', progress: 1 });
-
-        } catch(err) {
-          const msg = err?.message || String(err);
-          await env.DB.prepare(
-            `UPDATE image_generation_jobs SET status='failed', error_text=?, progress=1, updated_at=? WHERE id=?`
-          ).bind(msg, new Date().toISOString(), jobId).run().catch(() => {});
-          await broadcastImg('error', { job_id: jobId, session_id: sessionId,
-            status: 'failed', progress: 1, error_text: msg });
-        }
-      })();
-
-      return jsonResponse({ ok: true, job_id: jobId, provider, model });
-    }
-
-    // ── GET /api/image/jobs/:id ──────────────────────────────────────
-    const imgJobMatch = pathLower.match(/^\/api\/image\/jobs\/([^/]+)$/);
-    if (imgJobMatch && method === 'GET') {
-      const job = await env.DB.prepare(
-        `SELECT * FROM image_generation_jobs WHERE id = ? LIMIT 1`
-      ).bind(imgJobMatch[1]).first();
-      if (!job) return jsonResponse({ ok: false, error: 'not_found' }, 404);
-      const vars = await env.DB.prepare(
-        `SELECT v.id, v.job_id, v.artifact_id, v.variant_type, v.sort_order,
-                a.public_url, a.mime_type, a.file_size
-         FROM image_generation_variants v
-         JOIN workflow_artifacts a ON a.id = v.artifact_id
-         WHERE v.job_id = ? ORDER BY v.sort_order ASC`
-      ).bind(imgJobMatch[1]).all();
-      return jsonResponse({ ok: true, job, variants: vars?.results ?? [] });
     }
 
     return jsonResponse({ error: 'Not found' }, 404);

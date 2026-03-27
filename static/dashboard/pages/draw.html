@@ -558,6 +558,13 @@
       ws.onmessage = function(e) {
         try {
           var msg = JSON.parse(e.data);
+          if (msg.type === 'ui.panel.open') {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({ type: 'iam_panel_open', panel: 'draw' }, window.location.origin);
+            }
+            return;
+          }
+          var msg = JSON.parse(e.data);
           if (msg.type === 'iam_excalidraw') {
             // Use existing tryExcalidraw handler by dispatching as postMessage
             window.dispatchEvent(new MessageEvent('message', {

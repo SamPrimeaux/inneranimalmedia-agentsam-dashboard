@@ -30,13 +30,13 @@ body {
   --color-accent: var(--accent);
   --color-error: var(--color-danger, var(--text-muted));
   --color-warning: var(--text-muted);
-  /* Burnished bronze — status bar + chat composer (exact hues from design) */
-  --agent-status-bar-bg: #261a08;
-  --agent-status-bar-text: #8a7a5a;
-  --agent-chat-input-bg: #261a08;
-  --agent-chat-input-text: #8a7a5a;
-  --agent-chat-placeholder: #5a4a2a;
-  --agent-chat-border: #3a2a10;
+  /* Theme-driven status/composer tokens from cms_themes (with safe fallbacks) */
+  --agent-status-bar-bg: var(--status-bar-bg, var(--bg-nav, var(--bg-elevated)));
+  --agent-status-bar-text: var(--status-bar-text, var(--text-secondary, var(--text-primary)));
+  --agent-chat-input-bg: var(--bg-chat-agent, var(--bg-elevated));
+  --agent-chat-input-text: var(--color-chat-user-text, var(--text-secondary, var(--text-primary)));
+  --agent-chat-placeholder: color-mix(in srgb, var(--agent-chat-input-text) 65%, transparent);
+  --agent-chat-border: var(--border, var(--color-border));
 }
 
 /* Mode colors (Ask, Debug, Plan, Agent) - use var(--mode-*) in components */

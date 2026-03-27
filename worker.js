@@ -5250,9 +5250,9 @@ async function logContextSearch(db, { queryText, scope, searchTerm, contextIds }
     const count = Array.isArray(contextIds) ? contextIds.length : 0;
     await db.prepare(
       `INSERT INTO context_search_log
-       (id, searched_at, query_snippet, scope, search_term, context_ids_used, result_count, was_helpful)
-       VALUES (?, unixepoch(), ?, ?, ?, ?, ?, NULL)`
-    ).bind(id, snippet, scopeParam, term, idsJson, count).run();
+       (id, searched_at, query, query_snippet, scope, search_term, context_ids_used, result_count, was_helpful)
+       VALUES (?, unixepoch(), ?, ?, ?, ?, ?, ?, NULL)`
+    ).bind(id, snippet, snippet, scopeParam, term, idsJson, count).run();
   } catch (e) {
     console.warn('[context_index] logContextSearch', e?.message ?? e);
   }
@@ -5364,7 +5364,15 @@ function filterToolsByMode(mode, toolDefinitions) {
     const debugToolNames = new Set(['terminal_execute', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search']);
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
   }
-  return toolDefinitions;
+  if (mode === 'ask') {
+    const askToolNames = new Set(['d1_query', 'r2_read', 'r2_list', 'knowledge_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
+    return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
+  }
+  if (mode === 'agent') {
+    const agentToolNames = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary']);
+    return toolDefinitions.filter((t) => t && agentToolNames.has(t.name));
+  }
+  return toolDefinitions.slice(0, 20);
 }
 
 /** Per-panel tool categories for /dashboard/mcp (request body agent_id). Agent Sam / unknown ids: no filter. */
@@ -6591,8 +6599,25 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
   });
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
-    return jsonResponse(errData, resp.status);
+    const errMsg = errData?.error?.message ?? errData?.message ?? `Google API error ${resp.status}`;
+    const enc = new TextEncoder();
+    const errStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}
+
+`));
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: `[Google API error: ${errMsg}]` })}
+
+`));
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: 0, output_tokens: 0, cost_usd: 0 })}
+
+`));
+        controller.close();
+      }
+    });
+    return new Response(errStream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
   }
+  console.log('[streamGoogle] resp.ok:', resp.ok, 'status:', resp.status);
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -6728,6 +6753,157 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
 /**
  * Google (Gemini) streaming: streamGenerateContent, same SSE contract.
  */
+async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, opts = {}) {
+  const mode = opts.mode || 'agent';
+  const modelKey = modelRow.model_key || 'gemini-2.5-flash';
+  const enc = new TextEncoder();
+
+  // Load tools in Google format
+  let toolDeclarations = [];
+  try {
+    const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1').all();
+    const filtered = filterToolRowsByPanel(agent_id, r.results || []);
+    const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
+    const modeNames = new Set(modeFiltered.map(t => t.tool_name || t.name));
+    toolDeclarations = filtered.filter(t => modeNames.has(t.tool_name)).map(t => {
+      let schema = {};
+      try { schema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
+      return {
+        name: t.tool_name,
+        description: (t.description || t.tool_name).slice(0, 500),
+        parameters: (() => {
+        const s = schema.type === 'object' ? schema : { type: 'object', properties: {}, required: [] };
+        const clean = JSON.parse(JSON.stringify(s));
+        delete clean.additionalProperties;
+        if (clean.properties) {
+          for (const k of Object.keys(clean.properties)) {
+            delete clean.properties[k].additionalProperties;
+          }
+        }
+        return clean;
+      })()
+      };
+    });
+  } catch (e) {
+    console.error('[chatWithToolsGoogle] tool load failed:', e?.message);
+  }
+
+  console.log('[chatWithToolsGoogle] tools loaded:', toolDeclarations.length);
+
+  const googleContents = apiMessages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }]
+  }));
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+
+  (async () => {
+    let fullText = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let messages = [...googleContents];
+    const MAX_ITER = 5;
+
+    try {
+      for (let iter = 0; iter < MAX_ITER; iter++) {
+        const body = {
+          systemInstruction: { parts: [{ text: systemWithBlurb }] },
+          contents: messages,
+          tools: toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined,
+        };
+
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
+            body: JSON.stringify(body),
+          }
+        );
+
+        console.log('[chatWithToolsGoogle] iter:', iter, 'status:', resp.status);
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          const errMsg = err?.error?.message ?? `Google error ${resp.status}`;
+          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}
+
+`));
+          break;
+        }
+
+        const data = await resp.json();
+        const candidate = data.candidates?.[0];
+        const parts = candidate?.content?.parts || [];
+        const usage = data.usageMetadata;
+        if (usage) {
+          inputTokens += usage.promptTokenCount ?? 0;
+          outputTokens += usage.candidatesTokenCount ?? 0;
+        }
+
+        // Collect text parts
+        for (const part of parts) {
+          if (part.text) {
+            fullText += part.text;
+            await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}
+
+`));
+          }
+        }
+
+        // Check for function calls
+        const fnCalls = parts.filter(p => p.functionCall);
+        if (fnCalls.length === 0) break;
+
+        // Execute tools
+        const toolResults = [];
+        for (const part of fnCalls) {
+          const { name, args } = part.functionCall;
+          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'tool_start', tool: name })}
+
+`));
+          let result = {};
+          try {
+            const out = await invokeMcpToolFromChat(env, name, args || {}, conversationId, { agent_id });
+            result = out?.result ?? out ?? {};
+          } catch (e) {
+            result = { error: e?.message ?? String(e) };
+          }
+          const resultStr = JSON.stringify(result).slice(0, 2000);
+          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'tool_result', tool: name, result: resultStr })}
+
+`));
+          toolResults.push({ functionResponse: { name, response: { content: resultStr } } });
+        }
+
+        // Add model response + tool results to messages
+        messages.push({ role: 'model', parts });
+        messages.push({ role: 'user', parts: toolResults });
+
+        // Cap message history
+        if (messages.length > 12) messages = [messages[0], ...messages.slice(-11)];
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
+      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId })}
+
+`));
+    } catch (e) {
+      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'error', error: e?.message ?? String(e) })}
+
+`));
+    } finally {
+      await writer.close().catch(() => {});
+    }
+  })();
+
+  return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
+}
+
+
 async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx) {
   const modelKey = modelRow.model_key || 'gemini-2.5-flash';
   const googleContents = apiMessages.map((m, i) => {
@@ -6735,7 +6911,15 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
     const parts = isLastUser ? buildGoogleParts(m.content, images) : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }];
     return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent`;
+  // Strip tool-related system instructions for Google — toolConfig NONE prevents calls but system prompt still triggers attempts
+  const googleSystem = systemWithBlurb
+    .replace(/- Terminal commands must use terminal_execute[^\n]*/g, '')
+    .replace(/- Never tell the user to run commands[^\n]*/g, '')
+    .replace(/- For worker\.js edits[^\n]*/g, '')
+    .replace(/- For D1 operations[^\n]*/g, '')
+    .replace(/CODE DELIVERY RULES[\s\S]*?(?=\n\n)/g, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
+  console.log('[streamGoogle] calling url:', url, 'key set:', !!env.GOOGLE_AI_API_KEY);
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -6743,64 +6927,61 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
       'x-goog-api-key': env.GOOGLE_AI_API_KEY,
     },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemWithBlurb }] },
+      systemInstruction: { parts: [{ text: googleSystem }] },
       contents: googleContents,
+      toolConfig: { functionCallingConfig: { mode: "NONE" } },
     }),
   });
+  console.log('[streamGoogle] resp.ok:', resp.ok, 'status:', resp.status);
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
     return jsonResponse(errData, resp.status);
   }
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullText = '';
-  let inputTokens = 0;
-  let outputTokens = 0;
-  const readable = new ReadableStream({
-    async pull(controller) {
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split(/\n|\r\n/);
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            let data;
-            if (line.startsWith('data: ')) {
-              try {
-                data = JSON.parse(line.slice(6).trim());
-              } catch (_) { continue; }
-            } else if (line.trim()) {
-              try {
-                data = JSON.parse(line);
-              } catch (_) { continue; }
-            } else continue;
-            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (typeof text === 'string' && text) {
-              fullText += text;
-              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`));
-            }
-            const usage = data.usageMetadata;
-            if (usage) {
-              inputTokens = usage.promptTokenCount ?? 0;
-              outputTokens = usage.candidatesTokenCount ?? 0;
-            }
+  const { readable, writable } = new TransformStream();
+  const enc = new TextEncoder();
+  const writer = writable.getWriter();
+  (async () => {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\n|\r\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === '[' || trimmed === ']' || trimmed === ',') continue;
+          let data;
+          try { data = JSON.parse(trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.replace(/^,/, '')); } catch (_) { continue; }
+          console.log('[streamGoogle] chunk:', JSON.stringify(data).slice(0, 200));
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (typeof text === 'string' && text) {
+            fullText += text;
+            await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text }) + '\n\n'));
+          }
+          const usage = data.usageMetadata;
+          if (usage) {
+            inputTokens = usage.promptTokenCount ?? 0;
+            outputTokens = usage.candidatesTokenCount ?? 0;
           }
         }
-        const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
-        emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}\n\n`));
-      } catch (e) {
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'error', error: e?.message ?? String(e) })}\n\n`));
-      } finally {
-        reader.releaseLock();
       }
-      controller.close();
-    },
-  });
+      const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
+      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name }) + '\n\n'));
+    } catch (e) {
+      await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
+    } finally {
+      reader.releaseLock();
+      await writer.close().catch(() => {});
+    }
+  })();
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
@@ -9412,7 +9593,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb);
       let finalSystem = (unifiedAgentContextBlock ? unifiedAgentContextBlock + '\n\n' : '') + systemWithBlurb;
 
-      if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS && env.R2) {
+      if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS) {
         try {
           const sumObj = await env.R2.get('knowledge/conversations/' + session_id + '-summary.md');
           if (sumObj) {
@@ -9586,8 +9767,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         if (canStreamOpenAI) {
           return streamOpenAI(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
         }
+        console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {
-          return streamGoogle(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
+          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode });
         }
         if (canStreamWorkersAI) {
           return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx);
@@ -9814,7 +9996,23 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           auditReport.latency_ms = Date.now() - chatStartTime;
           toolLoopRes.audit = auditReport;
         }
-        return jsonResponse(toolLoopRes);
+        // Stream the response as SSE so the frontend parser receives type:text events
+        const sseText = finalText || '';
+        const enc = new TextEncoder();
+        const sseBody = new ReadableStream({
+          start(controller) {
+            if (sseText) {
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: sseText })}
+
+`));
+            }
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', conversation_id: conversationId, input_tokens: 0, output_tokens: charsToTokens(sseText.length), cost_usd: 0 })}
+
+`));
+            controller.close();
+          }
+        });
+        return new Response(sseBody, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
       }
 
       let result;
@@ -14772,6 +14970,7 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
     let totalCost = 0;
     let failed = false;
     const startMs = Date.now();
+    const stepOutputs = []; // accumulate step results for injection
 
     for (const step of steps) {
       const tool_name = step.tool_name || step.tool;
@@ -14780,9 +14979,13 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
         lastError = 'step missing tool_name';
         break;
       }
-      const input_template =
+      let input_template =
         (step.input_template && typeof step.input_template === 'object' ? step.input_template : null) ||
         (step.params && typeof step.params === 'object' ? step.params : {});
+      // Inject accumulated step outputs if requested
+      if (input_template.inject_step_results === true && stepOutputs.length > 0) {
+        input_template = { ...input_template, step_results: JSON.stringify(stepOutputs).slice(0, 8000) };
+      }
       const retry_max = Math.max(1, Number(step.retry_max) || 1);
       let attempt = 0;
       let stepStatus = 'failed';
@@ -14838,6 +15041,9 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       }
 
       stepResults.push({ tool_name, status: callStatus, tool_call_id: tcId });
+      if (stepStatus === 'completed' && output && output !== '(no output)') {
+        stepOutputs.push({ step: step.name || tool_name, output: output.slice(0, 1000) });
+      }
 
       if (callStatus === 'failed') {
         failed = true;
@@ -15735,7 +15941,11 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   try {
     const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
     const filtered = filterToolRowsByPanel(agent_id, r.results || []);
-    tools = filtered.map((t) => {
+    // Apply mode-based tool filter to cap tokens per LLM call
+    const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
+    const modeFilteredNames = new Set(modeFiltered.map(t => t.tool_name || t.name));
+    const filteredByMode = filtered.filter(t => modeFilteredNames.has(t.tool_name));
+    tools = filteredByMode.map((t) => {
       let rawSchema = {};
       try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
       let input_schema;
@@ -15932,12 +16142,16 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         error: out.error,
       });
       const resultText = out.error ? JSON.stringify({ error: out.error }) : (typeof out.result === 'string' ? out.result : JSON.stringify(out.result || {}));
-      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: resultText.slice(0, 50000) });
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: resultText.slice(0, 2000) });
       allToolCalls.push({ id: block.id, name, input, result: resultText.slice(0, 500) });
     }
     messages.push({ role: 'assistant', content });
     messages.push({ role: 'user', content: toolResults });
     console.log('[chatWithToolsAnthropic] Tool results added to messages, sending follow-up request to Claude', { tool_results_count: toolResults.length });
+    // Cap messages to last 12 entries to prevent context blowout
+    if (messages.length > 12) messages = [messages[0], ...messages.slice(-11)];
+    // Delay between iterations to avoid TPM rate limit
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   if (iter >= MCP_CHAT_TOOL_LOOP_MAX && (!lastContent || lastContent.trim().length < 10)) {

@@ -1773,7 +1773,7 @@ export default function AgentDashboard() {
     return () => window.removeEventListener("iam_open_notifications", handler);
   }, []);
 
-  useEffect(() => {
+  const emitStatusUpdate = useCallback(() => {
     window.dispatchEvent(new CustomEvent("iam_status_update", {
       detail: {
         model: selectedModel?.display_name
@@ -1784,6 +1784,16 @@ export default function AgentDashboard() {
       }
     }));
   }, [selectedModel, mode]);
+
+  useEffect(() => {
+    emitStatusUpdate();
+  }, [emitStatusUpdate]);
+
+  useEffect(() => {
+    const handler = () => emitStatusUpdate();
+    window.addEventListener("iam_status_request", handler);
+    return () => window.removeEventListener("iam_status_request", handler);
+  }, [emitStatusUpdate]);
 
   useEffect(() => {
     const handler = () => {
@@ -3049,10 +3059,10 @@ export default function AgentDashboard() {
   const chatPaneIsWide = !previewOpen || (100 - panelWidthPct) > 60;
   const placeholderText =
     messages.length === 0
-      ? "How can I help?"
+      ? "Plan, @ for context, / for commands"
       : isLoading || agentState !== AGENT_STATES.IDLE
         ? "Add a follow up..."
-        : "Reply";
+        : "Plan, @ for context, / for commands";
   // ── Provider bubble color ─────────────────────────────────────────────────
   const providerBorderColor = (provider) => {
     if (!provider || provider === "system") return "var(--color-border)";

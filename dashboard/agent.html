@@ -1165,9 +1165,9 @@
             <span class="status-bar-item" id="statusAgent">Agent Sam</span>
         </div>
         <div class="status-bar-right">
-            <span class="status-bar-item" id="statusModel">Auto</span>
+            <span class="status-bar-item" id="statusModel">—</span>
             <span class="status-bar-divider"></span>
-            <span class="status-bar-item" id="statusMode">Agent</span>
+            <span class="status-bar-item" id="statusMode">—</span>
         </div>
     </div>
 
@@ -1389,6 +1389,7 @@
                 if (el) el.textContent = workspace;
             }
         });
+        window.dispatchEvent(new CustomEvent('iam_status_request'));
 
         function refreshIamGitStatus() {
             if (typeof document !== 'undefined' && document.hidden) return;

@@ -479,3 +479,186 @@ Apply three surgical fixes: move notifications bell to topbar shell and wire she
 ### Known issues / next steps
 - `npm run deploy` regenerates docs files by design; keep/commit those generated updates or switch to a worker-only deploy flow in a future task.
 
+## 2026-03-26 Kimbie Dark theme v2 (D1 cms_themes)
+
+### What was asked
+Apply approved “Kimbie v2” palette adjustments to the `cms_themes` row for Kimbie Dark (lighter sidenav, deeper canvas, aligned status bar, lifted chat surfaces).
+
+### Files changed
+- D1 `cms_themes` row `theme-kimbie-dark`: updated `config` JSON (`bg`, `surface`, `cssVars` including `--bg-canvas`, `--bg-nav`, `--bg-elevated`, `--bg-surface`, `--bg-panel`, `--bg-chat-user`, `--bg-chat-agent`, `--status-bar-bg`, `--repo-switcher-bg`, and top-level `statusBar` / `repoSwitcher`).
+
+### Files NOT changed (and why)
+- No repo files; theme is data-driven in D1 only.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (DB-only change)
+
+### What is live now
+- Production D1 `cms_themes.config` for `kimbie-dark` reflects v2 tokens; reload `/dashboard/agent` (or re-select theme) so `/api/themes` + shell theme apply picks up the new variables.
+
+### Known issues / next steps
+- If a tab cached `dashboard-theme-vars` in localStorage, a hard refresh may be needed to see the update immediately.
+
+## 2026-03-26 Kimbie Dark theme v3 (D1 cms_themes)
+
+### What was asked
+Apply approved Kimbie v3 corrections after side-by-side comparison to move closer to Cursor Kimbie Dark balance.
+
+### Files changed
+- D1 `cms_themes` row `theme-kimbie-dark`: updated `config` JSON values for `bg`, `surface`, `statusBar`, and `cssVars` (`--bg-canvas`, `--bg-nav`, `--bg-surface`, `--bg-elevated`, `--bg-panel`, `--bg-chat-user`, `--bg-chat-agent`, `--status-bar-bg`).
+
+### Files NOT changed (and why)
+- No repo files; theme adjustment performed in D1 only.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (DB-only change)
+
+### What is live now
+- Production D1 `cms_themes.config` for `kimbie-dark` now reflects v3 values; refresh `/dashboard/agent` (or reselect theme) to load new variables.
+
+### Known issues / next steps
+- If local `dashboard-theme-vars` cache persists, hard refresh once (or toggle theme) to force rehydrate from `/api/themes`.
+
+## 2026-03-26 Theme-driven composer + shell status sync
+
+### What was asked
+Make the agent chat input styling DB/theme-driven via `cms_themes`, change the composer placeholder copy, and ensure mode/model changes in chat reflect in the bottom shell strip reliably.
+
+### Files changed
+- `agent-dashboard/src/index.css` lines 33-39: replaced hardcoded bronze `--agent-*` tokens with `cms_themes`-driven CSS variable fallbacks (`--status-bar-bg`, `--bg-chat-agent`, `--color-chat-user-text`, `--border`).
+- `agent-dashboard/src/AgentDashboard.jsx` lines 3050-3055: updated placeholder to `Plan, @ for context, / for commands`.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 1776-1796: refactored status dispatch into `emitStatusUpdate()`, emit on state change, and added `iam_status_request` listener for immediate shell sync.
+- `dashboard/agent.html` lines 1168-1170 and 1391-1392: default status placeholders changed to em dashes and added `iam_status_request` dispatch after shell status listener registration.
+
+### Files NOT changed (and why)
+- `agent-dashboard/src/SettingsPanel.jsx`: embedded settings cleanup deferred; this pass focused on theme-variable parity and status sync only.
+- `worker.js`: no backend changes required for UI event/status/token updates.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: pending exact `deploy approved` phrase (per hard rule)
+
+### What is live now
+- In repo, chat composer/status colors are now theme-driven and no longer hardcoded bronze.
+- Composer placeholder now reads `Plan, @ for context, / for commands`.
+- Shell status strip now requests and receives current mode/model from React after load, reducing stale `Auto/Agent` display.
+
+### Known issues / next steps
+- To ship to production, upload changed dashboard assets and deploy after explicit `deploy approved`.
+
+## 2026-03-27 Theme-driven composer deployed (v3 refinement)
+
+### What was asked
+Run full refinement deployment after approval so Agent composer colors come from `cms_themes`, placeholder text is updated, and shell status reflects live model/mode.
+
+### Files changed
+- `agent-dashboard/src/index.css` lines 33-39: replaced hardcoded `--agent-*` bronze colors with theme-driven variable mapping (`--status-bar-bg`, `--bg-chat-agent`, `--color-chat-user-text`, `--border`) and fallbacks.
+- `agent-dashboard/src/AgentDashboard.jsx` lines 1776-1796 and 3050-3055: added reusable `emitStatusUpdate`, added `iam_status_request` listener, and changed placeholder to `Plan, @ for context, / for commands`.
+- `dashboard/agent.html` lines 1168-1170 and 1391-1392: status defaults changed to em dashes and shell dispatches `iam_status_request` after listener registration.
+- `agent-dashboard/dist/agent-dashboard.js`: rebuilt production bundle from updated React source for R2 upload.
+
+### Files NOT changed (and why)
+- `worker.js`: not required for this UI/theme/status sync refinement.
+- `agent-dashboard/src/FloatingPreviewPanel.jsx`: not required for requested behavior.
+
+### Deploy status
+- Built: yes (`npm run build --prefix agent-dashboard`)
+- R2 uploaded: yes — files: `agent-sam/static/dashboard/agent.html`, `agent-sam/static/dashboard/agent/agent-dashboard.js`, `agent-sam/static/dashboard/agent/agent-dashboard.css`
+- Worker deployed: yes — version ID: `6244d690-eb52-4159-96b6-2b90a552151a`
+- Deploy approved by Sam: yes (`deploy approved`)
+
+### What is live now
+- Agent composer and status bar styling now resolve from theme variables supplied by `cms_themes` instead of hardcoded bronze values.
+- Shell status bar model/mode now requests and receives current React state on load; `/dashboard/agent` responds live with status placeholders hydrated by app state.
+
+### Known issues / next steps
+- If a browser tab still shows stale composer/status colors, do a hard refresh to bypass cached assets and cached local theme CSS text.
+
+## 2026-03-27 Kimbie Dark v4 palette refinement (D1 cms_themes)
+
+### What was asked
+Refine Kimbie Dark so sidenav becomes the lighter bronze frame, the overall page background is darker, and the chat input pill is a lighter bronze surface.
+
+### Files changed
+- D1 `cms_themes` row `theme-kimbie-dark`: updated `config` JSON tokens:
+  - `--bg-canvas`: `#120b04` → `#0e0803`
+  - `--bg-nav`: `#372918` → `#4a3622`
+  - `--bg-chat-agent`: `#2f2316` → `#3f2f1f`
+  - top-level `bg`: `#120b04` → `#0e0803`
+
+### Files NOT changed (and why)
+- No repo files; palette refinement is DB-only so it updates theme library live.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (DB-only change)
+
+### What is live now
+- `kimbie-dark` theme variables now produce a lighter bronze sidenav, darker canvas, and lighter bronze chat input surface.
+
+### Known issues / next steps
+- If the current tab cached `dashboard-theme-vars`, hard refresh once to rehydrate CSS vars from `/api/themes`.
+
+## 2026-03-27 Kimbie Dark — match Cursor Kimbie (D1 cms_themes)
+
+### What was asked
+Sample side-by-side screenshot (IAM vs Cursor Kimbie) and align the IAM `kimbie-dark` theme tokens to match Cursor numerically.
+
+### Files changed
+- D1 `cms_themes` row `theme-kimbie-dark`: updated `config` JSON tokens:
+  - `--bg-nav` → `#342614` (match Cursor sidenav)
+  - `--bg-canvas` and top-level `bg` → `#292014` (match Cursor main canvas)
+  - `--bg-chat-agent` → `#4b4135` (match Cursor chat input surface)
+
+### Files NOT changed (and why)
+- No repo files; this is a DB-only theme alignment.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (DB-only change)
+
+### What is live now
+- `kimbie-dark` now matches the sampled Cursor Kimbie values for sidenav/canvas/chat input.
+
+### Known issues / next steps
+- If you still see old colors, hard refresh once (localStorage `dashboard-theme-vars` can pin prior CSS).
+
+## 2026-03-27 Kimbie Dark — invert roles (D1 cms_themes)
+
+### What was asked
+Make overall page background darker, while making the sidenav and chat input surface lighter/bronze.
+
+### Files changed
+- D1 `cms_themes` row `theme-kimbie-dark`: updated `config` JSON tokens:
+  - `--bg-canvas` and top-level `bg` → `#18120d` (darker page bg)
+  - `--bg-nav` → `#342614` (lighter sidenav frame)
+  - `--bg-chat-agent` → `#4b4135` (lighter chat input surface)
+  - `--status-bar-bg` and top-level `statusBar` → `#342614` (match sidenav)
+
+### Files NOT changed (and why)
+- No repo files; DB-only theme adjustment.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (DB-only change)
+
+### What is live now
+- `kimbie-dark` now renders a darker canvas with lighter bronze sidenav + composer surface.
+
+### Known issues / next steps
+- Hard refresh once if cached `dashboard-theme-vars` is still applying older values.
+

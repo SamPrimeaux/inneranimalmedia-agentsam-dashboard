@@ -554,7 +554,7 @@
     var ws;
     function connect() {
       ws = new WebSocket(wsUrl);
-      ws.onopen = function() { console.log('[draw DO] connected'); };
+      ws.onopen = function() { console.log('[draw DO] connected'); ws.send('ready'); };
       ws.onmessage = function(e) {
         try {
           var msg = JSON.parse(e.data);

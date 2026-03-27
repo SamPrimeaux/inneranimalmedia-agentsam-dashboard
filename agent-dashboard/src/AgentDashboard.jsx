@@ -1475,6 +1475,16 @@ export default function AgentDashboard() {
       if (event.data.type === "draw_ready") {
         const url = pendingDrawImageRef.current;
         if (url) postLoadImageToDrawFrame(url, 0);
+        // Flush any queued excalidraw commands
+        if (window.__pendingExcalidrawCmds?.length) {
+          const drawFrame = document.getElementById('draw-panel-iframe');
+          if (drawFrame) {
+            window.__pendingExcalidrawCmds.forEach(cmd => {
+              drawFrame.contentWindow?.postMessage(cmd, window.location.origin);
+            });
+          }
+          window.__pendingExcalidrawCmds = [];
+        }
         return;
       }
       if (event.data.type !== "iam_draw_request") return;
@@ -2410,6 +2420,17 @@ export default function AgentDashboard() {
                         : m
                     )
                   );
+                } else if (data.type === "tool_result" && data.result) {
+                  try {
+                    const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+                    const uiEvent = parsed?.ui_event || parsed?.result?.ui_event;
+                    const isBroadcast = parsed?.broadcast === true && parsed?.action;
+                    if (uiEvent?.type === 'excalidraw' || isBroadcast) {
+                      // Open panel so draw.html loads and connects to DO WebSocket
+                      setPreviewOpen(true);
+                      setActiveTab("draw");
+                    }
+                  } catch (_) {}
                 }
               } catch (_) { /* ignore parse errors */ }
             }

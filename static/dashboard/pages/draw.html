@@ -917,6 +917,48 @@
 
   window.addEventListener('message', function (e) {
     if (e.origin !== window.location.origin) return;
+
+    // Agent Sam excalidraw tool commands
+    if (e.data && e.data.type === 'iam_excalidraw') {
+      var action = e.data.action;
+      var params = e.data.params || {};
+      function tryExcalidraw(attempt) {
+        var api = window.__excalidrawApi;
+        if (!api) {
+          if (attempt < 40) setTimeout(function() { tryExcalidraw(attempt + 1); }, 50);
+          return;
+        }
+        if (action === 'open') {
+          // Canvas is already open, just scroll to content
+          if (typeof api.scrollToContent === 'function') api.scrollToContent(api.getSceneElements());
+        } else if (action === 'add_elements') {
+          try {
+            var els = typeof params.elements === 'string' ? JSON.parse(params.elements) : params.elements;
+            if (Array.isArray(els)) {
+              var existing = api.getSceneElements();
+              var newEls = els.map(function(el) {
+                return Object.assign({
+                  id: 'agent_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+                  angle: 0, strokeColor: '#1e1e2e', backgroundColor: 'transparent',
+                  fillStyle: 'solid', strokeWidth: 2, strokeStyle: 'solid',
+                  roughness: 1, opacity: 100, groupIds: [], frameId: null,
+                  roundness: null, boundElements: null,
+                  seed: Math.floor(Math.random() * 1e9), version: 1,
+                  versionNonce: Math.floor(Math.random() * 1e9), isDeleted: false
+                }, el);
+              });
+              api.updateScene({ elements: existing.concat(newEls) });
+              if (typeof api.scrollToContent === 'function') api.scrollToContent(api.getSceneElements());
+            }
+          } catch(err) { console.error('[iam_excalidraw] add_elements error:', err); }
+        } else if (action === 'clear') {
+          api.updateScene({ elements: [] });
+        }
+      }
+      tryExcalidraw(0);
+      return;
+    }
+
     if (!e.data || e.data.type !== 'load_image_background' || !e.data.url) return;
     var url = String(e.data.url).trim();
     if (!url) return;

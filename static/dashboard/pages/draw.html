@@ -925,7 +925,7 @@
       function tryExcalidraw(attempt) {
         var api = window.__excalidrawApi;
         if (!api) {
-          if (attempt < 40) setTimeout(function() { tryExcalidraw(attempt + 1); }, 50);
+          if (attempt < 200) setTimeout(function() { tryExcalidraw(attempt + 1); }, 50);
           return;
         }
         if (action === 'open') {

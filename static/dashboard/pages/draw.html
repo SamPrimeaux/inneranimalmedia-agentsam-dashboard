@@ -546,7 +546,31 @@
      ========================================================= -->
 <script type="module" nonce="MTM2MzQ4Nzk5MSwxMDgxNzAzOTI4">
 (function () {
-  var LIBRARIES_BASE = (location.origin || '') + '/static/dashboard/draw-libraries';
+  var LIBRARIES_BASE = 'https://tools.inneranimalmedia.com/draw';
+
+  // Connect to IAMCollaborationSession DO for real-time agent commands
+  (function connectDrawDO() {
+    var wsUrl = location.origin.replace('https://', 'wss://').replace('http://', 'ws://') + '/api/collab/draw';
+    var ws;
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onopen = function() { console.log('[draw DO] connected'); };
+      ws.onmessage = function(e) {
+        try {
+          var msg = JSON.parse(e.data);
+          if (msg.type === 'iam_excalidraw') {
+            // Use existing tryExcalidraw handler by dispatching as postMessage
+            window.dispatchEvent(new MessageEvent('message', {
+              data: msg, origin: location.origin
+            }));
+          }
+        } catch(_) {}
+      };
+      ws.onclose = function() { setTimeout(connect, 3000); };
+      ws.onerror = function() { ws.close(); };
+    }
+    connect();
+  })();
 
 
   // Watchdog: if Excalidraw hasn't mounted in 8s, show error

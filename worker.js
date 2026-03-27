@@ -5771,7 +5771,7 @@ function ensureAgentMemoryIndexInsertDefaults(sql) {
 }
 
 /** Multi-provider tool loop (non-streaming). Supports anthropic, openai, google. Returns final assistant text. */
-async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest, executionCtx) {
+async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest, executionCtx, images = []) {
   let messages = [...apiMessages];
   let finalText = '';
   let totalInputTokens = 0;
@@ -5822,11 +5822,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         'x-api-key': env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       };
+      const anthropicMessages = messages.map((m, idx) => {
+        const isLastUser = idx === messages.length - 1 && m.role === 'user' && images && images.length > 0;
+        if (!isLastUser) return m;
+        return { role: 'user', content: buildAnthropicBlocks(m.content, images) };
+      });
       reqBody = {
         model: modelKey,
         max_tokens: 4096,
         system: systemWithBlurb,
-        messages,
+        messages: anthropicMessages,
         tools: toolDefinitions.map(t => ({
           name: t.name,
           description: t.description,
@@ -10050,7 +10055,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
           if (canStreamOpenAI || canStreamGoogle) {
-            const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles, ctx);
+            const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles, ctx, images);
             return toolLoopResult;
           }
         }
@@ -10245,7 +10250,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools });
           if (toolsResp) return toolsResp;
         }
-        const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx);
+        const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
         const finalText = typeof toolLoopResult === 'string' ? toolLoopResult : (toolLoopResult?.content?.[0]?.text ?? '');
         try {
           await streamDoneDbWrites(env, conversationId, model, finalText, 0, 0, 0, agentIdForTools, ctx, lastUserContent || '');

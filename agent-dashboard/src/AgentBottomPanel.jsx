@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 
-const BOTTOM_TABS = ["terminal", "output", "problems", "debug", "ports", "mcp", "quick"];
+const BOTTOM_TABS = ["terminal", "output", "problems", "debug", "ports", "quick"];
 
 /** Normalize GET /api/agent/terminal/socket-url `url` to wss:// or ws:// (trim, https→wss). */
 function normalizePtyWebSocketUrl(raw) {
@@ -168,6 +168,7 @@ export default function AgentBottomPanel({
       if (!tt) return;
       try {
         tt.write(s);
+        terminalXterm2Ref.current?.write(s);
       } catch (_) {}
     });
   }, []);
@@ -326,7 +327,7 @@ export default function AgentBottomPanel({
     const style = getComputedStyle(document.documentElement);
     const term = new Terminal({
       termName: "xterm-256color",
-      disableStdin: true,
+      disableStdin: false,
       fontFamily: "monospace",
       fontSize: 13,
       cursorBlink: true,
@@ -346,6 +347,14 @@ export default function AgentBottomPanel({
     term.open(container);
     fitAddon.fit();
     terminalXterm2Ref.current = term;
+
+    // Mirror input to shared PTY WebSocket (same session as pane 1)
+    term.onData((data) => {
+      const ws = terminalWsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'input', data })); } catch (_) {}
+      }
+    });
 
     const ro = new ResizeObserver(() => {
       try {
@@ -699,19 +708,6 @@ export default function AgentBottomPanel({
     }
   }, [markQuick]);
 
-  useEffect(() => {
-    if (activeTab !== "mcp" || !open) return;
-    setMcpLoading(true);
-    fetch("/api/mcp/services/health", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((d) => setMcpHealth(d))
-      .catch(() => setMcpHealth({ error: "Failed to load" }))
-      .finally(() => setMcpLoading(false));
-  }, [activeTab, open]);
-
-  useEffect(() => {
-    if (activeTab !== "mcp") setMcpExpandedId(null);
-  }, [activeTab]);
 
   const loadProblems = useCallback(async () => {
     setProblemsState((s) => ({ ...s, loading: s.data == null && s.error == null }));
@@ -947,9 +943,7 @@ export default function AgentBottomPanel({
                   textTransform: "capitalize",
                 }}
               >
-                {tab === "mcp"
-                  ? "MCP"
-                  : tab === "quick"
+                  {tab === "quick"
                     ? "Quick Actions"
                     : tab === "debug"
                       ? "Debug Console"
@@ -1443,135 +1437,6 @@ export default function AgentBottomPanel({
             ) : null}
           </div>
         )}
-        {activeTab === "mcp" && (
-          <div
-            ref={(el) => persistScroll("mcp", el)}
-            onScroll={onScrollPane("mcp")}
-            style={{ height: "100%", overflow: "auto", padding: 12, fontSize: 12 }}
-          >
-            {mcpLoading && <div style={{ color: "var(--text-muted)" }}>Loading MCP status...</div>}
-            {!mcpLoading && mcpHealth && mcpHealth.error && (
-              <div style={{ color: "var(--color-error)" }}>{String(mcpHealth.error)}</div>
-            )}
-            {!mcpLoading && mcpHealth && !mcpHealth.error && Array.isArray(mcpHealth.services) && mcpHealth.services.length === 0 && (
-              <div style={{ color: "var(--text-muted)" }}>No active MCP services in D1.</div>
-            )}
-            {!mcpLoading && mcpHealth && !mcpHealth.error && Array.isArray(mcpHealth.services) && mcpHealth.services.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {mcpHealth.checked_at ? (
-                  <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Checked {String(mcpHealth.checked_at)}</div>
-                ) : null}
-                {mcpHealth.services.map((svc) => {
-                  const sid = svc.id != null ? String(svc.id) : "";
-                  const name = svc.service_name || sid || "MCP";
-                  const live = String(svc.live_status || svc.health_status || "unknown");
-                  const dotColor =
-                    live === "healthy" || live === "skip"
-                      ? "var(--color-primary)"
-                      : live === "degraded"
-                        ? "var(--text-muted)"
-                        : "var(--color-error)";
-                  const expanded = mcpExpandedId === sid;
-                  const pingKey = sid ? `mcp_ping_${sid}` : "";
-                  return (
-                    <div
-                      key={sid || name}
-                      style={{
-                        border: "1px solid var(--border)",
-                        borderRadius: 8,
-                        overflow: "hidden",
-                        background: "var(--bg-canvas)",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setMcpExpandedId((id) => (id === sid ? null : sid))}
-                        style={{
-                          width: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 10,
-                          padding: "8px 12px",
-                          border: "none",
-                          background: expanded ? "var(--bg-elevated)" : "transparent",
-                          cursor: "pointer",
-                          fontFamily: "inherit",
-                          textAlign: "left",
-                        }}
-                      >
-                        <span
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: dotColor,
-                            flexShrink: 0,
-                          }}
-                          title={live}
-                          aria-hidden
-                        />
-                        <span style={{ flex: 1, fontWeight: 500, color: "var(--text-primary)", fontSize: 13 }}>{name}</span>
-                        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{expanded ? "Hide" : "Details"}</span>
-                      </button>
-                      {expanded && (
-                        <div
-                          style={{
-                            padding: "10px 12px 12px",
-                            fontSize: 11,
-                            color: "var(--text-secondary)",
-                            borderTop: "1px solid var(--border)",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                          }}
-                        >
-                          <div>
-                            <span style={{ color: "var(--text-muted)" }}>Status: </span>
-                            {live}
-                          </div>
-                          {svc.endpoint_url ? (
-                            <div style={{ wordBreak: "break-all" }}>
-                              <span style={{ color: "var(--text-muted)" }}>Endpoint: </span>
-                              {String(svc.endpoint_url)}
-                            </div>
-                          ) : null}
-                          <div>
-                            <span style={{ color: "var(--text-muted)" }}>Tools: </span>
-                            {Number(svc.tool_count) || 0}
-                          </div>
-                          {sid ? (
-                            <button
-                              type="button"
-                              disabled={quickBusy === pingKey}
-                              onClick={() => runMcpServiceReconnect(sid)}
-                              style={{
-                                alignSelf: "flex-start",
-                                padding: "4px 12px",
-                                fontSize: 11,
-                                borderRadius: 4,
-                                border: "1px solid var(--border)",
-                                background: "var(--accent)",
-                                color: "var(--bg-canvas)",
-                                cursor: quickBusy === pingKey ? "wait" : "pointer",
-                                fontFamily: "inherit",
-                                opacity: quickBusy === pingKey ? 0.7 : 1,
-                              }}
-                            >
-                              {quickBusy === pingKey ? "…" : "Ping / refresh"}
-                            </button>
-                          ) : null}
-                          {svc.error ? (
-                            <div style={{ color: "var(--color-error)", wordBreak: "break-word" }}>{String(svc.error)}</div>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
         {activeTab === "quick" && (
           <div
             style={{
@@ -1617,63 +1482,6 @@ export default function AgentBottomPanel({
                 busy={quickBusy === "git_sync"}
                 onRun={runQuickGitSync}
                 hint="Creates an approval proposal; does not auto-push."
-              />
-            </QuickSection>
-            <QuickSection title="MCP">
-              {mcpQuickServices.length === 0 ? (
-                <div style={{ color: "var(--text-muted)", fontSize: 11 }}>No active MCP services in config, or still loading.</div>
-              ) : (
-                mcpQuickServices.map((svc) => {
-                  const sid = svc.id != null ? String(svc.id) : "";
-                  const key = `mcp_ping_${sid}`;
-                  return (
-                    <div
-                      key={sid || svc.service_name}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        flexWrap: "wrap",
-                        padding: "8px 10px",
-                        border: "1px solid var(--border)",
-                        borderRadius: 6,
-                        background: "var(--bg-canvas)",
-                      }}
-                    >
-                      <span style={{ flex: 1, minWidth: 120, fontWeight: 600, color: "var(--text-primary)" }}>
-                        {svc.service_name || sid || "MCP"}
-                      </span>
-                      <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>
-                        {svc.live_status || svc.health_status || "—"}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={!sid || quickBusy === key}
-                        onClick={() => runMcpServiceReconnect(sid)}
-                        style={{
-                          padding: "4px 10px",
-                          fontSize: 11,
-                          borderRadius: 4,
-                          border: "1px solid var(--border)",
-                          background: "var(--bg-elevated)",
-                          color: "var(--text-secondary)",
-                          cursor: sid ? "pointer" : "not-allowed",
-                          fontFamily: "inherit",
-                        }}
-                      >
-                        {quickBusy === key ? "…" : "Reconnect"}
-                      </button>
-                      <QuickRunMeta meta={quickRun[key]} />
-                    </div>
-                  );
-                })
-              )}
-              <QuickActionRow
-                label="Restart MCP Worker"
-                last={quickRun.mcp_worker_restart}
-                busy={quickBusy === "mcp_worker_restart"}
-                onRun={runQuickMcpWorkerProposal}
-                hint="Creates a deploy proposal; does not auto-run."
               />
             </QuickSection>
             <QuickSection title="Auth / Secrets">

@@ -35,3 +35,5 @@ agent-dashboard/dist-debug/
 # Local marker: last git HEAD used for incremental doc uploads in deploy-with-record.sh
 .deploy-docs-baseline
 *.tmp
+*.bak*
+audit-*.txt

@@ -991,23 +991,21 @@ function AssistantFencedContent({
                 {(part.lang || "text")} · {part.code.split("\n").length} lines
               </span>
             </summary>
-            <pre
-              style={{
+            <SyntaxHighlighter
+              language={part.lang || "text"}
+              style={oneDark}
+              customStyle={{
                 fontSize: 12,
-                fontFamily: "monospace",
-                overflowX: "auto",
-                maxWidth: "100%",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                background: "var(--bg-canvas)",
-                padding: "0 10px 10px",
                 margin: 0,
-                color: "var(--color-text)",
+                borderRadius: 0,
                 borderTop: "1px solid var(--border)",
+                maxWidth: "100%",
+                overflowX: "auto",
               }}
+              wrapLongLines
             >
-              <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{part.code}</code>
-            </pre>
+              {part.code}
+            </SyntaxHighlighter>
             <div style={{ display: "flex", gap: 8, padding: "0 10px 10px" }}>
               <button
                 type="button"
@@ -1033,24 +1031,20 @@ function AssistantFencedContent({
           </details>
         ) : (
           <div key={i} style={{ marginBottom: "8px" }}>
-            <pre
-              style={{
+            <SyntaxHighlighter
+              language={part.lang || "text"}
+              style={oneDark}
+              customStyle={{
                 fontSize: 13,
-                fontFamily: "monospace",
-                overflowX: "auto",
-                overflowY: "auto",
-                maxWidth: "100%",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                background: "var(--bg-elevated)",
-                padding: 12,
                 borderRadius: 6,
                 margin: 0,
-                color: "var(--color-text)",
+                maxWidth: "100%",
+                overflowX: "auto",
               }}
+              wrapLongLines
             >
-              <code style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{part.code}</code>
-            </pre>
+              {part.code}
+            </SyntaxHighlighter>
             <div
               style={{
                 display: "flex",
@@ -4069,7 +4063,29 @@ export default function AgentDashboard() {
                               )}
                             </>
                           ) : (
-                            msg.content
+                            <>
+                              {msg.attachedImagePreviews?.length > 0 && (
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                                  {msg.attachedImagePreviews.map((url, idx) => (
+                                    <img
+                                      key={idx}
+                                      src={url}
+                                      alt="attached"
+                                      onClick={() => setLightboxImage(url)}
+                                      style={{
+                                        width: 80,
+                                        height: 80,
+                                        objectFit: "cover",
+                                        borderRadius: 6,
+                                        border: "1px solid var(--border)",
+                                        cursor: "zoom-in",
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                              {msg.content}
+                            </>
                           )}
                         </div>
                       )}

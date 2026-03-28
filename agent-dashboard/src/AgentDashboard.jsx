@@ -2424,7 +2424,7 @@ export default function AgentDashboard() {
                         : m
                     )
                   );
-                } else if (data.type === "text" && data.text) {
+                } else if (data.type === "text" && data.text && String(data.text).trim()) {
                   fullContent += data.text;
                   const openMatch = fullContent.match(/OPEN_IN_PREVIEW:\s*(https?:\/\/[^\s\n]+)/);
                   if (openMatch) setBrowserUrl(openMatch[1]);

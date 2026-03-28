@@ -5415,7 +5415,9 @@ function buildPlanContext(sections, ragContext, fileContext, model, indexedConte
 }
 
 function buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob, indexedContext) {
-  const full = (sections && typeof sections.full === 'string') ? sections.full : (compiledContextBlob && typeof compiledContextBlob === 'string') ? compiledContextBlob : (sections ? [sections.core, sections.memory, sections.kb, sections.mcp, sections.schema, sections.daily].filter(Boolean).join('') : '');
+  const rawFull = (sections && typeof sections.full === 'string') ? sections.full : (compiledContextBlob && typeof compiledContextBlob === 'string') ? compiledContextBlob : (sections ? [sections.core, sections.memory, sections.kb, sections.mcp, sections.schema, sections.daily].filter(Boolean).join('') : '');
+  // Apply provider-aware cap — Google/OpenAI get trimmed compiled context
+  const full = capForProvider(rawFull, model?.provider, 'COMPILED_CONTEXT_MAX_CHARS') || rawFull;
   let out = full;
   const prefixParts = [];
   if (indexedContext) prefixParts.push('[Context index — matched docs]\n' + capWithMarker(indexedContext, PROMPT_CAPS.CONTEXT_INDEX_MAX_CHARS));
@@ -5442,13 +5444,19 @@ function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileC
   // Intent-aware context filtering — shell needs no memory blob, question uses ask context
   if (intent === 'shell') return fileContext || '';
   if (intent === 'question') return buildAskContext(sections, ragContext, fileContext, model, indexedContext);
-  // For action/mixed/sql: cap the compiled context blob — provider-aware
-  const compiledCap = getProviderCap(model?.provider, 'COMPILED_CONTEXT_MAX_CHARS');
+  // Intent + provider aware context cap
+  // sql/question/shell get minimal context regardless of provider
+  const isSimpleIntent = (intent === 'sql' || intent === 'question' || intent === 'shell');
+  const compiledCap = isSimpleIntent
+    ? 1200  // ~300 tokens max for simple intents on any provider
+    : getProviderCap(model?.provider, 'COMPILED_CONTEXT_MAX_CHARS');
   const cappedBlob = compiledContextBlob
     ? (compiledCap === 0 ? '' : compiledContextBlob.slice(0, compiledCap))
     : null;
-  // Cap ragContext per provider
-  const cappedRag = ragContext ? capForProvider(ragContext, model?.provider, 'RAG_CONTEXT_MAX_CHARS') : ragContext;
+  const ragCap = isSimpleIntent ? 400 : null;
+  const cappedRag = ragContext
+    ? (ragCap ? ragContext.slice(0, ragCap) : capForProvider(ragContext, model?.provider, 'RAG_CONTEXT_MAX_CHARS'))
+    : ragContext;
   return buildAgentContext(sections, cappedRag, fileContext, model, cappedBlob, indexedContext);
 }
 
@@ -9698,7 +9706,8 @@ async function handleAgentApi(request, url, env, ctx) {
       }
 
       let pgMatchRows = [];
-      if (env.HYPERDRIVE?.connectionString && lastUserContent && String(lastUserContent).trim()) {
+      const _skipPgVector = (model?._intent === 'shell' || model?._intent === 'question' || model?._intent === 'sql');
+      if (!_skipPgVector && env.HYPERDRIVE?.connectionString && lastUserContent && String(lastUserContent).trim()) {
         try {
           const pgProj = typeof body.pg_project_id === 'string' ? body.pg_project_id : undefined;
           const pgRes = await pgMatchDocuments(env, lastUserContent, {
@@ -9879,6 +9888,8 @@ async function handleAgentApi(request, url, env, ctx) {
 
 CRITICAL: Never simulate, roleplay, or fabricate tool calls or their results. If you cannot call a real tool, say so plainly. Never invent data or pretend to execute queries.
 
+Do not use emoji in any response unless the user explicitly requests them.
+
 `;
       let fileBlock = '';
       if (bodyFileContext?.filename && bodyFileContext?.content != null) {
@@ -10014,12 +10025,21 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         } catch (_) {}
       }
       toolDefinitions = filterToolsByMode(chatMode, toolDefinitions);
-      // Shell intent post-filter: after mode filter, cap to terminal_execute only
-      if (typeof _agentIntent !== 'undefined' && _agentIntent === 'shell' && chatMode === 'agent') {
-        const hasTerminal = toolDefinitions.some((t) => t && t.name === 'terminal_execute');
-        if (hasTerminal) {
-          toolDefinitions = toolDefinitions.filter((t) => t && t.name === 'terminal_execute');
+      // Intent-based post-filter — reduces tool schemas sent to LLM
+      if (typeof _agentIntent !== 'undefined' && chatMode === 'agent') {
+        if (_agentIntent === 'shell') {
+          const hasTerminal = toolDefinitions.some((t) => t && t.name === 'terminal_execute');
+          if (hasTerminal) toolDefinitions = toolDefinitions.filter((t) => t && t.name === 'terminal_execute');
+        } else if (_agentIntent === 'sql') {
+          const sqlTools = new Set(['d1_query', 'd1_write', 'platform_info']);
+          const hasSql = toolDefinitions.some((t) => t && sqlTools.has(t.name));
+          if (hasSql) toolDefinitions = toolDefinitions.filter((t) => t && sqlTools.has(t.name));
+        } else if (_agentIntent === 'question') {
+          const qTools = new Set(['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list']);
+          const hasQ = toolDefinitions.some((t) => t && qTools.has(t.name));
+          if (hasQ) toolDefinitions = toolDefinitions.filter((t) => t && qTools.has(t.name));
         }
+        // mixed/action: keep full mode-filtered set
       }
       const binaryAttachments = (attachedFiles || []).filter((f) => f.encoding === 'base64');
       if (binaryAttachments.length > 0) {
@@ -10137,7 +10157,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
               const au = await getAuthUser(request, env);
               oauthUserIdForTools = au ? (au.email || au.id) : undefined;
             } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools });
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools }, toolDefinitions);
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -16370,11 +16390,26 @@ function toolApprovalPreview(toolName, params) {
 }
 
 /** Anthropic chat with tools; runs tool_use loop. When opts.stream is true, returns SSE stream with tool_start/tool_result/text/done. */
-async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, conversationId, agent_id, ctx, opts = {}) {
+async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, conversationId, agent_id, ctx, opts = {}, preFilteredTools = null) {
   const wantStream = opts.stream === true;
   const mode = opts.mode || 'agent';
   let tools = [];
   try {
+    // Use pre-filtered tools from router if provided — avoids reloading all 36 tools
+    if (preFilteredTools && Array.isArray(preFilteredTools) && preFilteredTools.length > 0) {
+      tools = preFilteredTools.map(t => {
+        let rawSchema = t.input_schema || {};
+        if (typeof rawSchema === 'string') { try { rawSchema = JSON.parse(rawSchema); } catch(_) { rawSchema = {}; } }
+        let input_schema;
+        if (rawSchema && rawSchema.type === 'object' && rawSchema.properties) {
+          input_schema = rawSchema;
+        } else {
+          input_schema = { type: 'object', properties: {}, required: [] };
+        }
+        return { name: t.name || t.tool_name, description: (t.description || t.name || '').slice(0, 500), input_schema };
+      });
+      console.log('[chatWithToolsAnthropic] Using pre-filtered tools:', tools.length);
+    } else {
     const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
     const filtered = filterToolRowsByPanel(agent_id, r.results || []);
     // Apply mode-based tool filter to cap tokens per LLM call
@@ -16408,10 +16443,11 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         input_schema,
       };
     });
+    } // end preFilteredTools else
   } catch (e) {
     console.error('[chatWithToolsAnthropic] tool load failed:', e?.message ?? e);
   }
-  if (tools.length === 0) return null;
+  if (tools.length === 0 && !preFilteredTools) return null;
   console.log('[chatWithToolsAnthropic] Loaded tools:', tools.length);
   const modelKey = resolveAnthropicModelKey(model.model_key);
   const allToolCalls = [];
@@ -16575,6 +16611,12 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const input = block.input || {};
       if (wantStream) {
         const toolLabel = TOOL_DISPLAY[name] ?? name;
+        // Emit tool_start immediately via opts.streamWriter if available
+        if (opts.streamWriter && opts.streamEnc) {
+          try {
+            await opts.streamWriter.write(opts.streamEnc.encode('data: ' + JSON.stringify({ type: 'tool_start', tool: name, label: toolLabel }) + '\n\n'));
+          } catch (_) {}
+        }
         pendingStateEvents.push({ type: 'state', state: 'TOOL_CALL', context: { tool: toolLabel } });
       }
       const out = await invokeMcpToolFromChat(env, name, input, conversationId, { executionCtx: ctx, oauthUserId: opts.oauthUserId });

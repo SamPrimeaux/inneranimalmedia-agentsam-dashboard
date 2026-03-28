@@ -5482,6 +5482,60 @@ function filterToolsByMode(mode, toolDefinitions) {
   return toolDefinitions.slice(0, 20);
 }
 
+/** Intent-aware + keyword-boosted tool filter — replaces static mode sets */
+function filterToolsByIntent(intent, message, toolDefinitions) {
+  const msg = (message || '').toLowerCase();
+  const INTENT_MAP = {
+    shell:    ['terminal_execute'],
+    sql:      ['d1_query', 'd1_write', 'platform_info'],
+    question: ['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list'],
+    plan:     ['generate_execution_plan', 'context_search', 'knowledge_search', 'd1_query', 'platform_info'],
+  };
+  const KEYWORD_GROUPS = [
+    { keys: ['screenshot','browser','navigate','click','fill','devtools','a11y','accessibility','audit','performance','trace'],
+      tools: ['cdt_take_screenshot','cdt_navigate_page','cdt_click','cdt_fill','cdt_fill_form','cdt_list_console_messages','cdt_list_network_requests','cdt_list_pages','cdt_wait_for','cdt_evaluate_script','cdt_take_snapshot','browser_screenshot','playwright_screenshot','a11y_audit_webpage','a11y_get_summary','cdt_performance_start_trace','cdt_performance_stop_trace','cdt_performance_analyze_insight'] },
+    { keys: ['deploy','worker','wrangler','production','sandbox','promote','rollback'],
+      tools: ['worker_deploy','list_workers','terminal_execute','d1_query','get_deploy_command','get_worker_services'] },
+    { keys: ['github','repo','branch','commit','pull request','git'],
+      tools: ['github_repos','github_file','terminal_execute'] },
+    { keys: ['email','send','resend','broadcast'],
+      tools: ['resend_send_email','resend_send_broadcast','resend_list_domains','resend_create_api_key','generate_daily_summary_email','human_context_list'] },
+    { keys: ['r2','bucket','file','upload','download','storage'],
+      tools: ['r2_read','r2_write','r2_list','r2_search','r2_bucket_summary'] },
+    { keys: ['image','generate image','edit image','cf images','cloudflare images'],
+      tools: ['imgx_generate_image','imgx_edit_image','imgx_list_providers','r2_write','cf_images_upload','cf_images_list','cf_images_delete'] },
+    { keys: ['3d','model','glb','meshy'],
+      tools: ['meshyai_text_to_3d','meshyai_image_to_3d','meshyai_get_task','r2_write'] },
+    { keys: ['excalidraw','diagram','canvas','whiteboard'],
+      tools: ['excalidraw_open','excalidraw_add_elements','excalidraw_clear','excalidraw_export','excalidraw_load_library'] },
+    { keys: ['convert','pdf','docx','cloudconvert'],
+      tools: ['cloudconvert_create_job','cloudconvert_get_job'] },
+    { keys: ['cursor','coding task','cursor agent'],
+      tools: ['cursor_run_agent','cursor_get_agent','cursor_list_agents'] },
+    { keys: ['google drive','gdrive','drive doc'],
+      tools: ['gdrive_list','gdrive_fetch'] },
+    { keys: ['context','optimize','chunk','summarize'],
+      tools: ['context_search','context_chunk','context_optimize','context_extract_structure','context_summarize_code'] },
+    { keys: ['telemetry','event','analytics'],
+      tools: ['telemetry_log','telemetry_query','telemetry_stats'] },
+    { keys: ['client','pelican','shinshu','pawlove','anything floors','new iberia'],
+      tools: ['list_clients','d1_query','human_context_list'] },
+    { keys: ['memory','remember','store fact','save fact'],
+      tools: ['human_context_add','human_context_list','d1_write'] },
+  ];
+  let allowed = new Set(INTENT_MAP[intent] || []);
+  for (const group of KEYWORD_GROUPS) {
+    if (group.keys.some(k => msg.includes(k))) {
+      group.tools.forEach(t => allowed.add(t));
+    }
+  }
+  if (allowed.size === 0) {
+    allowed = new Set(['d1_query', 'context_search', 'knowledge_search', 'platform_info', 'human_context_list']);
+  }
+  const result = toolDefinitions.filter(t => t && allowed.has(t.name));
+  return result.slice(0, 15); // hard cap
+}
+
 /** Per-panel tool categories for /dashboard/mcp (request body agent_id). Agent Sam / unknown ids: no filter. */
 const PANEL_TOOL_POLICY = {
   mcp_agent_architect: ['context', 'query', 'database'],
@@ -10024,22 +10078,13 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           });
         } catch (_) {}
       }
-      toolDefinitions = filterToolsByMode(chatMode, toolDefinitions);
-      // Intent-based post-filter — reduces tool schemas sent to LLM
-      if (typeof _agentIntent !== 'undefined' && chatMode === 'agent') {
-        if (_agentIntent === 'shell') {
-          const hasTerminal = toolDefinitions.some((t) => t && t.name === 'terminal_execute');
-          if (hasTerminal) toolDefinitions = toolDefinitions.filter((t) => t && t.name === 'terminal_execute');
-        } else if (_agentIntent === 'sql') {
-          const sqlTools = new Set(['d1_query', 'd1_write', 'platform_info']);
-          const hasSql = toolDefinitions.some((t) => t && sqlTools.has(t.name));
-          if (hasSql) toolDefinitions = toolDefinitions.filter((t) => t && sqlTools.has(t.name));
-        } else if (_agentIntent === 'question') {
-          const qTools = new Set(['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list']);
-          const hasQ = toolDefinitions.some((t) => t && qTools.has(t.name));
-          if (hasQ) toolDefinitions = toolDefinitions.filter((t) => t && qTools.has(t.name));
-        }
-        // mixed/action: keep full mode-filtered set
+      // Intent-aware tool selection — keyword-boosted, hard cap 15
+      const _intentForFilter = _agentIntent || (chatMode !== 'agent' ? chatMode : 'mixed');
+      const _msgForFilter = getLatestUserPlainText(msgList) || '';
+      if (chatMode === 'agent' || chatMode === 'ask') {
+        toolDefinitions = filterToolsByIntent(_intentForFilter, _msgForFilter, toolDefinitions);
+      } else {
+        toolDefinitions = filterToolsByMode(chatMode, toolDefinitions); // plan/debug keep existing
       }
       const binaryAttachments = (attachedFiles || []).filter((f) => f.encoding === 'base64');
       if (binaryAttachments.length > 0) {

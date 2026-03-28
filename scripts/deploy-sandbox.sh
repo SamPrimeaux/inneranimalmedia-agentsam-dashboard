@@ -42,14 +42,8 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   # Auto-increment v= in agent.html before upload (python3 for macOS reliability)
   CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html | head -1 | grep -o '[0-9]*' || echo "0")
   NEXT_V=$((CURRENT_V + 1))
-  python3 -c "
-p = 'dashboard/agent.html'
-t = open(p).read()
-t2 = t.replace('?v=' + '${CURRENT_V}', '?v=' + '${NEXT_V}')
-open(p,'w').write(t2)
-"
-  echo "  Cache version: v=\${CURRENT_V} → v=\${NEXT_V}"
-  CURRENT_V=\$NEXT_V
+  python3 scripts/vbump.py "$CURRENT_V" "$NEXT_V" dashboard/agent.html
+  CURRENT_V=$NEXT_V
 
   JS_PATH="agent-dashboard/dist/agent-dashboard.js"
   CSS_PATH="agent-dashboard/dist/agent-dashboard.css"

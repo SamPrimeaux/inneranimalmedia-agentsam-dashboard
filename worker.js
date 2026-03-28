@@ -5133,6 +5133,44 @@ function capWithMarker(text, maxChars) {
   return text.slice(0, maxChars) + PROMPT_CAPS.TRUNCATION_MARKER;
 }
 
+/** Provider-aware system prompt caps — Google/OpenAI get trimmed context to reduce token burn */
+const PROVIDER_PROMPT_CAPS = {
+  anthropic: null, // no override — use PROMPT_CAPS defaults
+  google: {
+    COMPILED_CONTEXT_MAX_CHARS: 800,
+    RAG_CONTEXT_MAX_CHARS: 600,
+    SCHEMA_BLURB_MAX_CHARS: 0,       // skip schema entirely
+    KNOWLEDGE_BLURB_MAX_CHARS: 400,
+    DAILY_MEMORY_MAX_CHARS: 400,
+    MCP_BLURB_MAX_CHARS: 400,
+    AGENT_CONTEXT_MAX_CHARS: 1200,
+  },
+  openai: {
+    COMPILED_CONTEXT_MAX_CHARS: 1200,
+    RAG_CONTEXT_MAX_CHARS: 800,
+    SCHEMA_BLURB_MAX_CHARS: 0,
+    KNOWLEDGE_BLURB_MAX_CHARS: 600,
+    DAILY_MEMORY_MAX_CHARS: 600,
+    MCP_BLURB_MAX_CHARS: 400,
+    AGENT_CONTEXT_MAX_CHARS: 1600,
+  },
+};
+
+function getProviderCap(provider, capKey) {
+  const override = PROVIDER_PROMPT_CAPS[provider];
+  if (!override) return PROMPT_CAPS[capKey] ?? Infinity;
+  return override[capKey] ?? PROMPT_CAPS[capKey] ?? Infinity;
+}
+
+function capForProvider(text, provider, capKey) {
+  if (!text) return text;
+  const max = getProviderCap(provider, capKey);
+  if (max === 0) return '';
+  if (text.length <= max) return text;
+  return text.slice(0, max) + PROMPT_CAPS.TRUNCATION_MARKER;
+}
+
+/** Provider-aware system prompt caps — Google/OpenAI get trimmed context to reduce token burn */
 /**
  * pgvector + D1 memory: merge, sort by score DESC, drop D1 rows whose key/value text appears in pgvector blob, cap total chars.
  */
@@ -5404,9 +5442,14 @@ function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileC
   // Intent-aware context filtering — shell needs no memory blob, question uses ask context
   if (intent === 'shell') return fileContext || '';
   if (intent === 'question') return buildAskContext(sections, ragContext, fileContext, model, indexedContext);
-  // For action/mixed/sql: cap the compiled context blob to reduce token burn
-  const cappedBlob = compiledContextBlob ? compiledContextBlob.slice(0, 4000) : null;
-  return buildAgentContext(sections, ragContext, fileContext, model, cappedBlob, indexedContext);
+  // For action/mixed/sql: cap the compiled context blob — provider-aware
+  const compiledCap = getProviderCap(model?.provider, 'COMPILED_CONTEXT_MAX_CHARS');
+  const cappedBlob = compiledContextBlob
+    ? (compiledCap === 0 ? '' : compiledContextBlob.slice(0, compiledCap))
+    : null;
+  // Cap ragContext per provider
+  const cappedRag = ragContext ? capForProvider(ragContext, model?.provider, 'RAG_CONTEXT_MAX_CHARS') : ragContext;
+  return buildAgentContext(sections, cappedRag, fileContext, model, cappedBlob, indexedContext);
 }
 
 /** Filter tools by mode: Plan mode has no tools; Ask and Agent get all (subject to panel policy); Debug gets only terminal/log/read tools. */
@@ -9744,7 +9787,7 @@ async function handleAgentApi(request, url, env, ctx) {
       const dailyMemoryRaw = (dailyLog || yesterdayLog)
         ? '\n\n[Daily memory - authoritative for "what did we do today" and "what are next priorities"; prefer this over generic roadmap or old D1 counts]:\n' + (dailyLog || '(none for today)') + (yesterdayLog ? '\n\n[Yesterday]:\n' + yesterdayLog : '')
         : '';
-      const dailyMemoryBlurb = capWithMarker(dailyMemoryRaw, PROMPT_CAPS.DAILY_MEMORY_MAX_CHARS);
+      const dailyMemoryBlurb = capForProvider(dailyMemoryRaw, model?.provider, 'DAILY_MEMORY_MAX_CHARS');
 
       const memoryIndexBlurb = '';
 
@@ -9756,7 +9799,7 @@ async function handleAgentApi(request, url, env, ctx) {
         if (kbRows?.length) {
           const parts = kbRows.map((r) => `[${r.title || r.category || 'Doc'}]: ${(r.content || '').slice(0, 1500)}`).filter((s) => s.length > 10);
           const raw = parts.length ? `\n\n[Domain knowledge base]:\n${parts.join('\n\n')}` : '';
-          knowledgeBlurb = capWithMarker(raw, PROMPT_CAPS.KNOWLEDGE_BLURB_MAX_CHARS);
+          knowledgeBlurb = capForProvider(raw, model?.provider, 'KNOWLEDGE_BLURB_MAX_CHARS');
         }
       } catch (_) {}
 
@@ -9767,7 +9810,7 @@ async function handleAgentApi(request, url, env, ctx) {
         ).all();
         if (mcpRows?.length) {
           const raw = `\n\n[Active MCP services (tools available)]:\n${mcpRows.map((r) => `- ${r.service_name} (${r.endpoint_url})`).join('\n')}`;
-          mcpBlurb = capWithMarker(raw, PROMPT_CAPS.MCP_BLURB_MAX_CHARS);
+          mcpBlurb = capForProvider(raw, model?.provider, 'MCP_BLURB_MAX_CHARS');
         }
       } catch (_) {}
 
@@ -9787,7 +9830,7 @@ async function handleAgentApi(request, url, env, ctx) {
 - Runnable wrangler/bash (for Run in terminal): Suggest commands in \`\`\`bash blocks. Examples the user can run from chat: wrangler whoami; wrangler d1 list -c wrangler.production.toml; wrangler r2 bucket list; wrangler r2 object list BUCKET --remote -c wrangler.production.toml; wrangler kv namespace list; wrangler secret list; wrangler tail -c wrangler.production.toml; wrangler deploy -c wrangler.production.toml; npm run build; git status. User can also type /run <command> to run immediately. Use -c wrangler.production.toml and --remote for production.
 - Code generation: Output code in markdown fenced blocks (\`\`\`language filename). Do NOT use r2_write tool for code - users will save via the Monaco editor. Only use r2_write for non-code files or when explicitly asked to write directly to R2.`;
       const schemaBlurbRaw = schemaMemory ? `\n\n[Schema and records memory - use for backfill, cost tracking, and table consolidation; suggest then wait for user approval before executing D1/SQL]:\n${schemaMemory}` : '';
-      const schemaBlurb = capWithMarker(schemaBlurbRaw, PROMPT_CAPS.SCHEMA_BLURB_MAX_CHARS);
+      const schemaBlurb = capForProvider(schemaBlurbRaw, model?.provider, 'SCHEMA_BLURB_MAX_CHARS');
       const fullBlob = agentSamSystemCore + memoryIndexBlurb + knowledgeBlurb + mcpBlurb + schemaBlurb + dailyMemoryBlurb;
       compiledContext = fullBlob;
       builtSections = { core: agentSamSystemCore, memory: memoryIndexBlurb, kb: knowledgeBlurb, mcp: mcpBlurb, schema: schemaBlurb, daily: dailyMemoryBlurb, full: fullBlob };

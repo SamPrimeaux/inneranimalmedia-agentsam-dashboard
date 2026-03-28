@@ -122,15 +122,7 @@ export default function AgentBottomPanel({
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalUserReconnect, setTerminalUserReconnect] = useState(0);
   const SHELL_PREF_KEY = "agent-terminal-shell-preference";
-  const [shellMode, setShellMode] = useState(() => {
-    if (typeof window === "undefined") return "remote";
-    try {
-      const v = localStorage.getItem(SHELL_PREF_KEY);
-      return v === "local" ? "local" : "remote";
-    } catch (_) {
-      return "remote";
-    }
-  });
+  const [shellMode] = useState("remote"); // Local mode removed — single PTY session via tunnel
   const terminalWsRef = useRef(null);
   const xtermContainerRef = useRef(null);
   const xtermContainer2Ref = useRef(null);
@@ -144,8 +136,6 @@ export default function AgentBottomPanel({
   const openRef = useRef(open);
   const activeTabRef = useRef(activeTab);
   const [mcpHealth, setMcpHealth] = useState(null);
-  const [mcpLoading, setMcpLoading] = useState(false);
-  const [mcpExpandedId, setMcpExpandedId] = useState(null);
   const [outputLog, setOutputLog] = useState([]);
   const [problemsState, setProblemsState] = useState({
     loading: false,
@@ -574,21 +564,7 @@ export default function AgentBottomPanel({
     setQuickRun((prev) => ({ ...prev, [key]: { at: new Date().toISOString(), ok: !!ok } }));
   }, []);
 
-  useEffect(() => {
-    if (activeTab !== "quick" || !open) return;
-    let cancelled = false;
-    fetch("/api/mcp/services/health", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((d) => {
-        if (!cancelled) setMcpQuickServices(Array.isArray(d.services) ? d.services : []);
-      })
-      .catch(() => {
-        if (!cancelled) setMcpQuickServices([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, open]);
+
 
   const runQuickWranglerLogin = useCallback(async () => {
     setQuickBusy("wrangler_login");
@@ -697,10 +673,6 @@ export default function AgentBottomPanel({
       });
       const j = await res.json().catch(() => ({}));
       markQuick(key, res.ok && j && (j.health_status === "healthy" || j.health_status === "degraded"));
-      const r2 = await fetch("/api/mcp/services/health", { credentials: "same-origin" });
-      const d = await r2.json().catch(() => ({}));
-      setMcpQuickServices(Array.isArray(d.services) ? d.services : []);
-      setMcpHealth(d);
     } catch (_) {
       markQuick(key, false);
     } finally {
@@ -1023,7 +995,6 @@ export default function AgentBottomPanel({
             >
               {[
                 { id: "remote", label: "VPS Remote", mode: "remote" },
-                { id: "local", label: "Local", mode: "local" },
               ].map((c) => {
                 const selected = shellMode === c.mode;
                 const dotColor = selected
@@ -1151,6 +1122,43 @@ export default function AgentBottomPanel({
                 </button>
               )}
             </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "5px 10px", borderBottom: "1px solid var(--border)", background: "var(--bg-elevated)" }}>
+              {[
+                { label: "cd build", cmd: "cd ~/Downloads/march1st-inneranimalmedia" },
+                { label: "git status", cmd: "git status" },
+                { label: "git log", cmd: "git log --oneline -6" },
+                { label: "build", cmd: "cd ~/Downloads/march1st-inneranimalmedia && cd agent-dashboard && npm run build:vite-only && cd .." },
+                { label: "deploy", cmd: "cd ~/Downloads/march1st-inneranimalmedia && npm run deploy" },
+                { label: "iam-pty health", cmd: "curl -s http://127.0.0.1:3099/health" },
+                { label: "pwd", cmd: "pwd" },
+                { label: "ls", cmd: "ls" },
+              ].map(({ label, cmd }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    const ws = terminalWsRef.current;
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      ws.send(JSON.stringify({ type: "input", data: cmd + "\n" }));
+                      terminalXtermRef.current?.focus();
+                    }
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-canvas)",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    fontFamily: "monospace",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" }}>
               <div
                 style={{
@@ -1173,7 +1181,7 @@ export default function AgentBottomPanel({
                   <div
                     ref={xtermContainerRef}
                     style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", padding: "10px", cursor: "text" }}
-                    onClick={() => { terminalXtermRef.current?.focus(); terminalInputRef.current?.focus(); }}
+                    onClick={() => { terminalXtermRef.current?.focus(); }}
                   />
                   {(terminalWsState === "connecting" || terminalWsState === "error") && (
                     <div

@@ -263,7 +263,7 @@
   },
   {
     "name": "IAMCollaborationSession.webSocketClose",
-    "line": 384,
+    "line": 385,
     "project": "inneranimalmedia",
     "purpose": "@param {WebSocket} ws",
     "params": [
@@ -274,7 +274,7 @@
   },
   {
     "name": "IAMSession.fetch",
-    "line": 392,
+    "line": 393,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -287,7 +287,7 @@
   },
   {
     "name": "MeauxSession.fetch",
-    "line": 400,
+    "line": 401,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -300,7 +300,7 @@
   },
   {
     "name": "ChessRoom.fetch",
-    "line": 408,
+    "line": 409,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -311,7 +311,7 @@
   },
   {
     "name": "selectAutoModel",
-    "line": 489,
+    "line": 490,
     "project": "inneranimalmedia",
     "purpose": "Select best model for Auto mode based on intent and cost",
     "params": [
@@ -327,7 +327,7 @@
   },
   {
     "name": "syntheticWorkersAiChatModelRow",
-    "line": 567,
+    "line": 568,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -338,7 +338,7 @@
   },
   {
     "name": "extractWorkersAiImageBytes",
-    "line": 583,
+    "line": 584,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -349,7 +349,7 @@
   },
   {
     "name": "handleDeploymentLog",
-    "line": 619,
+    "line": 620,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -370,7 +370,7 @@
   },
   {
     "name": "handleDeploymentsRecent",
-    "line": 707,
+    "line": 708,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -386,7 +386,7 @@
   },
   {
     "name": "normalizeUnifiedSpendTs",
-    "line": 727,
+    "line": 728,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -397,7 +397,7 @@
   },
   {
     "name": "unifiedSpendDayUTC",
-    "line": 739,
+    "line": 740,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -410,7 +410,7 @@
   },
   {
     "name": "fetchUnifiedSpendGrouped",
-    "line": 749,
+    "line": 750,
     "project": "inneranimalmedia",
     "purpose": "Unified spend: parallel reads from five tables, merge rows, group by provider | model | day. * periodDays 0 = all time (no time filter).",
     "params": [
@@ -427,7 +427,7 @@
   },
   {
     "name": "getVaultSecrets",
-    "line": 1017,
+    "line": 1018,
     "project": "inneranimalmedia",
     "purpose": "(Crypto matches /api/env/* _vaultDecrypt; defined at module scope so fetch can call it.)",
     "params": [
@@ -442,7 +442,7 @@
   },
   {
     "name": "importKey",
-    "line": 1020,
+    "line": 1021,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -455,7 +455,7 @@
   },
   {
     "name": "decryptRow",
-    "line": 1024,
+    "line": 1025,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -470,7 +470,7 @@
   },
   {
     "name": "timingSafeEqualUtf8",
-    "line": 1054,
+    "line": 1055,
     "project": "inneranimalmedia",
     "purpose": "hook_subscriptions (is_active, run_order), hook_executions (subscription_id first, error_message, status, TEXT datetimes), deployment_tracking (full deploy row).",
     "params": [
@@ -482,7 +482,7 @@
   },
   {
     "name": "hmacSha256HexFromUtf8Key",
-    "line": 1061,
+    "line": 1062,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -496,7 +496,7 @@
   },
   {
     "name": "hmacSha256HexFromRawKey",
-    "line": 1073,
+    "line": 1074,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -510,7 +510,7 @@
   },
   {
     "name": "decodeStripeSigningSecret",
-    "line": 1079,
+    "line": 1080,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -521,7 +521,7 @@
   },
   {
     "name": "verifyGithubHubSignature256",
-    "line": 1092,
+    "line": 1093,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -537,7 +537,7 @@
   },
   {
     "name": "verifySha256EqualsSecretHmac",
-    "line": 1099,
+    "line": 1100,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -553,7 +553,7 @@
   },
   {
     "name": "verifyStripeSignatureHeader",
-    "line": 1108,
+    "line": 1109,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -571,7 +571,7 @@
   },
   {
     "name": "base64FromArrayBuffer",
-    "line": 1135,
+    "line": 1136,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -582,7 +582,7 @@
   },
   {
     "name": "verifySvixResendSignature",
-    "line": 1142,
+    "line": 1143,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -602,7 +602,7 @@
   },
   {
     "name": "verifySupabaseWebhookSignature",
-    "line": 1168,
+    "line": 1169,
     "project": "inneranimalmedia",
     "purpose": "Supabase / Edge Function webhooks: header `x-supabase-signature: sha256=<hex>` (lowercase hex). * Must match HMAC-SHA256 of the raw request body using secret as UTF-8 key (aligns with pgcrypto HMAC on same bytes). * Secret: wrangler `SUPABASE_WEBHOOK_SECRET` (or vault); see verif",
     "params": [
@@ -618,7 +618,7 @@
   },
   {
     "name": "normalizeWebhookRequestPath",
-    "line": 1177,
+    "line": 1178,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -629,7 +629,7 @@
   },
   {
     "name": "webhookCaptureHeaders",
-    "line": 1192,
+    "line": 1193,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -640,7 +640,7 @@
   },
   {
     "name": "webhookResolveEventType",
-    "line": 1217,
+    "line": 1218,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -653,7 +653,7 @@
   },
   {
     "name": "verifyWebhookSignature",
-    "line": 1270,
+    "line": 1271,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -675,7 +675,7 @@
   },
   {
     "name": "webhookPayloadGetByPath",
-    "line": 1339,
+    "line": 1340,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -687,7 +687,7 @@
   },
   {
     "name": "resolveWebhookEndpoint",
-    "line": 1352,
+    "line": 1353,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -704,7 +704,7 @@
   },
   {
     "name": "extractWebhookDeliveryContext",
-    "line": 1371,
+    "line": 1372,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -718,7 +718,7 @@
   },
   {
     "name": "githubActorFromWebhookPayload",
-    "line": 1414,
+    "line": 1415,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -729,7 +729,7 @@
   },
   {
     "name": "githubCommitMessageFromWebhookPayload",
-    "line": 1429,
+    "line": 1430,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -740,7 +740,7 @@
   },
   {
     "name": "recordGithubCicdFollowups",
-    "line": 1442,
+    "line": 1443,
     "project": "inneranimalmedia",
     "purpose": "After a successful cicd_runs row insert: mirror to deployments + optional cidi_activity_log. * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.",
     "params": [
@@ -759,7 +759,7 @@
   },
   {
     "name": "runWriteD1MapInsert",
-    "line": 1524,
+    "line": 1525,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -778,7 +778,7 @@
   },
   {
     "name": "runWriteD1GithubRaw",
-    "line": 1578,
+    "line": 1579,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -795,7 +795,7 @@
   },
   {
     "name": "executeHookSubscriptionAction",
-    "line": 1598,
+    "line": 1599,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -818,7 +818,7 @@
   },
   {
     "name": "hookSubscriptionMatchesEventFilter",
-    "line": 1808,
+    "line": 1809,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -830,7 +830,7 @@
   },
   {
     "name": "handleHooksHealth",
-    "line": 1817,
+    "line": 1818,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -845,7 +845,7 @@
   },
   {
     "name": "handleInboundWebhook",
-    "line": 1836,
+    "line": 1837,
     "project": "inneranimalmedia",
     "purpose": "opts: { verifyKind, source, endpointPath } * verifyKind: github | stripe | cursor | resend | supabase | cloudflare | internal | none",
     "params": [
@@ -875,7 +875,7 @@
   },
   {
     "name": "handlePhase1PlatformD1Routes",
-    "line": 1991,
+    "line": 1992,
     "project": "inneranimalmedia",
     "purpose": "Phase 1 SettingsPanel D1 routes (auth). Returns Response if handled, else null.",
     "params": [
@@ -903,7 +903,7 @@
   },
   {
     "name": "fetch",
-    "line": 2535,
+    "line": 2536,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -970,6 +970,7 @@
       "jsonResponse",
       "normalizeThemeSlug",
       "notFound",
+      "performDocsBucketVectorizeIndex",
       "pgMatchDocuments",
       "push",
       "randomCode",
@@ -1000,7 +1001,7 @@
   },
   {
     "name": "secret",
-    "line": 2540,
+    "line": 2541,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1011,7 +1012,7 @@
   },
   {
     "name": "_vaultImportKey",
-    "line": 3632,
+    "line": 3666,
     "project": "inneranimalmedia",
     "purpose": "── Crypto helpers (Web Crypto API — works in Workers runtime) ──",
     "params": [
@@ -1024,7 +1025,7 @@
   },
   {
     "name": "_vaultEncrypt",
-    "line": 3636,
+    "line": 3670,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1038,7 +1039,7 @@
   },
   {
     "name": "_vaultDecrypt",
-    "line": 3649,
+    "line": 3683,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1053,7 +1054,7 @@
   },
   {
     "name": "_vaultAudit",
-    "line": 3658,
+    "line": 3692,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1071,7 +1072,7 @@
   },
   {
     "name": "sha256Hex",
-    "line": 4112,
+    "line": 4231,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1082,7 +1083,7 @@
   },
   {
     "name": "randomCode",
-    "line": 4116,
+    "line": 4235,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -1091,7 +1092,7 @@
   },
   {
     "name": "queue",
-    "line": 4498,
+    "line": 4627,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1100,18 +1101,21 @@
       "ctx"
     ],
     "calls": [
+      "deleteVectorsForDocKey",
+      "performDocsBucketVectorizeIndex",
       "putAgentBrowserScreenshotToR2",
       "run"
     ],
     "tags": [
       "browser",
       "d1",
-      "r2"
+      "r2",
+      "vectorize"
     ]
   },
   {
     "name": "respondWithDashboardHtml",
-    "line": 4546,
+    "line": 4706,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1128,7 +1132,7 @@
   },
   {
     "name": "respondWithR2Object",
-    "line": 4564,
+    "line": 4724,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1141,7 +1145,7 @@
   },
   {
     "name": "contentType",
-    "line": 4577,
+    "line": 4737,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1152,7 +1156,7 @@
   },
   {
     "name": "notFound",
-    "line": 4591,
+    "line": 4751,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1163,7 +1167,7 @@
   },
   {
     "name": "handleBrowserRequest",
-    "line": 4599,
+    "line": 4759,
     "project": "inneranimalmedia",
     "purpose": "Playwright (Cloudflare Browser Rendering): health + metrics + GET screenshot. Only runs when env.MYBROWSER is set.",
     "params": [
@@ -1181,7 +1185,7 @@
   },
   {
     "name": "resolveAnthropicModelKey",
-    "line": 4696,
+    "line": 4856,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1192,7 +1196,7 @@
   },
   {
     "name": "calculateCost",
-    "line": 4706,
+    "line": 4866,
     "project": "inneranimalmedia",
     "purpose": "Compute cost from ai_models row (D1). Never use a hardcoded map.",
     "params": [
@@ -1205,7 +1209,7 @@
   },
   {
     "name": "getGatewayModel",
-    "line": 4716,
+    "line": 4876,
     "project": "inneranimalmedia",
     "purpose": "AI Gateway compat: model string for gateway (provider/model). Used only when AI_GATEWAY_BASE_URL is set.",
     "params": [
@@ -1219,7 +1223,7 @@
   },
   {
     "name": "getSpendRates",
-    "line": 4724,
+    "line": 4884,
     "project": "inneranimalmedia",
     "purpose": "Per-token rates (USD) for spend_ledger. Used when ai_models row lacks input_rate_per_mtok.",
     "params": [
@@ -1231,7 +1235,7 @@
   },
   {
     "name": "writeAuditLog",
-    "line": 4746,
+    "line": 4906,
     "project": "inneranimalmedia",
     "purpose": "Write one row to agent_audit_log. Fire-and-forget; never throw.",
     "params": [
@@ -1247,7 +1251,7 @@
   },
   {
     "name": "recordWorkerAnalyticsError",
-    "line": 4762,
+    "line": 4922,
     "project": "inneranimalmedia",
     "purpose": "INSERT worker_analytics_errors (best-effort; table from migrations/167_worker_analytics_errors.sql).",
     "params": [
@@ -1263,7 +1267,7 @@
   },
   {
     "name": "generateConversationName",
-    "line": 4780,
+    "line": 4940,
     "project": "inneranimalmedia",
     "purpose": "Use Workers AI to generate a short conversation name and UPDATE agent_conversations. Call from waitUntil so chat response is not blocked.",
     "params": [
@@ -1281,7 +1285,7 @@
   },
   {
     "name": "persistAgentMemoryHyperdrive",
-    "line": 4799,
+    "line": 4959,
     "project": "inneranimalmedia",
     "purpose": "Persist user + assistant turns to Supabase agent_memory (Hyperdrive pg + Workers AI embed). Never throws.",
     "params": [
@@ -1299,7 +1303,7 @@
   },
   {
     "name": "streamDoneDbWrites",
-    "line": 4847,
+    "line": 5007,
     "project": "inneranimalmedia",
     "purpose": "Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger.",
     "params": [
@@ -1328,7 +1332,7 @@
   },
   {
     "name": "spendAndUsage",
-    "line": 4871,
+    "line": 5031,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -1342,7 +1346,7 @@
   },
   {
     "name": "getLastUserMessageText",
-    "line": 4937,
+    "line": 5097,
     "project": "inneranimalmedia",
     "purpose": "Return the text of the last user message in apiMessages (for intent classification).",
     "params": [
@@ -1353,7 +1357,7 @@
   },
   {
     "name": "capWithMarker",
-    "line": 4970,
+    "line": 5130,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1365,7 +1369,7 @@
   },
   {
     "name": "buildUnifiedAgentContextBlock",
-    "line": 4978,
+    "line": 5138,
     "project": "inneranimalmedia",
     "purpose": "pgvector + D1 memory: merge, sort by score DESC, drop D1 rows whose key/value text appears in pgvector blob, cap total chars.",
     "params": [
@@ -1380,7 +1384,7 @@
   },
   {
     "name": "getContextIndexSearchTerm",
-    "line": 5016,
+    "line": 5176,
     "project": "inneranimalmedia",
     "purpose": "Up to 3 terms (length > 3) joined for context_index LIKE search; empty if none.",
     "params": [
@@ -1391,7 +1395,7 @@
   },
   {
     "name": "fetchContextIndex",
-    "line": 5026,
+    "line": 5186,
     "project": "inneranimalmedia",
     "purpose": "Keyword search on context_index (no vectors). Returns [] if table missing or no terms. * scope: tenant or bucket scope; rows match scope = 'global' OR scope = ?",
     "params": [
@@ -1408,7 +1412,7 @@
   },
   {
     "name": "contextIndexWarrantsR2FullFetch",
-    "line": 5061,
+    "line": 5224,
     "project": "inneranimalmedia",
     "purpose": "When true, load full R2 body for this hit; otherwise summary-only (or short fallback).",
     "params": [
@@ -1420,7 +1424,7 @@
   },
   {
     "name": "buildContextIndexPromptBlock",
-    "line": 5077,
+    "line": 5240,
     "project": "inneranimalmedia",
     "purpose": "Build prompt text from context_index rows: inline_content verbatim (capped); R2 = summary unless warrant full fetch. * @returns {{ text: string, ids: string[] }}",
     "params": [
@@ -1438,7 +1442,7 @@
   },
   {
     "name": "logContextSearch",
-    "line": 5126,
+    "line": 5289,
     "project": "inneranimalmedia",
     "purpose": "Expects table context_search_log(id, searched_at, query_snippet, scope, search_term, context_ids_used, result_count, was_helpful). * No-op if table missing.",
     "params": [
@@ -1454,7 +1458,7 @@
   },
   {
     "name": "charsToTokens",
-    "line": 5146,
+    "line": 5309,
     "project": "inneranimalmedia",
     "purpose": "Approximate token count from character length (for prompt telemetry).",
     "params": [
@@ -1465,7 +1469,7 @@
   },
   {
     "name": "logPromptTelemetry",
-    "line": 5152,
+    "line": 5315,
     "project": "inneranimalmedia",
     "purpose": "Log section-level prompt telemetry for /api/agent/chat. Logs approximate chars/tokens per section, mode, provider, stream, tool count, message count.",
     "params": [
@@ -1481,7 +1485,7 @@
   },
   {
     "name": "buildAskContext",
-    "line": 5190,
+    "line": 5353,
     "project": "inneranimalmedia",
     "purpose": "Mode-specific prompt builders. Sections: { core, memory, kb, mcp, schema, daily, full }. Each section is a string (may be empty). Do not share full payload by default.",
     "params": [
@@ -1498,7 +1502,7 @@
   },
   {
     "name": "buildPlanContext",
-    "line": 5202,
+    "line": 5365,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1515,7 +1519,7 @@
   },
   {
     "name": "buildAgentContext",
-    "line": 5215,
+    "line": 5378,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1536,7 +1540,7 @@
   },
   {
     "name": "buildDebugContext",
-    "line": 5226,
+    "line": 5389,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1553,7 +1557,7 @@
   },
   {
     "name": "buildModeContext",
-    "line": 5236,
+    "line": 5399,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1575,7 +1579,7 @@
   },
   {
     "name": "filterToolsByMode",
-    "line": 5244,
+    "line": 5407,
     "project": "inneranimalmedia",
     "purpose": "Filter tools by mode: Plan mode has no tools; Ask and Agent get all (subject to panel policy); Debug gets only terminal/log/read tools.",
     "params": [
@@ -1584,13 +1588,14 @@
     ],
     "calls": [],
     "tags": [
+      "browser",
       "d1",
       "r2"
     ]
   },
   {
     "name": "panelColumnFromRequestAgentId",
-    "line": 5263,
+    "line": 5437,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1603,7 +1608,7 @@
   },
   {
     "name": "filterToolRowsByPanel",
-    "line": 5271,
+    "line": 5445,
     "project": "inneranimalmedia",
     "purpose": "@param {string|null|undefined} requestAgentId @param {any[]} rows from mcp_registered_tools",
     "params": [
@@ -1617,7 +1622,7 @@
   },
   {
     "name": "classifyIntent",
-    "line": 5285,
+    "line": 5459,
     "project": "inneranimalmedia",
     "purpose": "Use Haiku to classify intent of the last user message. Returns { intent: 'sql'|'shell'|'question'|'mixed', tasks?: [{ type, content }] }.",
     "params": [
@@ -1635,7 +1640,7 @@
   },
   {
     "name": "singleRoundNoTools",
-    "line": 5332,
+    "line": 5506,
     "project": "inneranimalmedia",
     "purpose": "One round with the main model, no tools. Used for \"question\" intent and for aggregate step of mixed.",
     "params": [
@@ -1656,7 +1661,7 @@
   },
   {
     "name": "toParts",
-    "line": 5377,
+    "line": 5551,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1667,7 +1672,7 @@
   },
   {
     "name": "runMixedTasks",
-    "line": 5427,
+    "line": 5601,
     "project": "inneranimalmedia",
     "purpose": "Execute mixed tasks in order, persist to agent_tasks, aggregate results and return one response.",
     "params": [
@@ -1695,7 +1700,7 @@
   },
   {
     "name": "stripAdditionalProperties",
-    "line": 5491,
+    "line": 5665,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1708,7 +1713,7 @@
   },
   {
     "name": "splitTopLevelCommaListSql",
-    "line": 5503,
+    "line": 5677,
     "project": "inneranimalmedia",
     "purpose": "Split SQL parenthesized list at top-level commas; respects single-quoted strings (including '').",
     "params": [
@@ -1721,7 +1726,7 @@
   },
   {
     "name": "ensureAgentMemoryIndexInsertDefaults",
-    "line": 5539,
+    "line": 5713,
     "project": "inneranimalmedia",
     "purpose": "d1_write guard: INSERT INTO agent_memory_index without agent_config_id / tenant_id gets canonical defaults. * Does not alter other statements or tables.",
     "params": [
@@ -1735,7 +1740,7 @@
   },
   {
     "name": "runToolLoop",
-    "line": 5603,
+    "line": 5777,
     "project": "inneranimalmedia",
     "purpose": "Multi-provider tool loop (non-streaming). Supports anthropic, openai, google. Returns final assistant text.",
     "params": [
@@ -1750,7 +1755,8 @@
       "agent_id",
       "conversationId",
       "attachedFilesFromRequest",
-      "executionCtx"
+      "executionCtx",
+      "images"
     ],
     "calls": [
       "aiSearchIsConfigured",
@@ -1786,12 +1792,13 @@
       "d1",
       "http-client",
       "mcp",
-      "r2"
+      "r2",
+      "streaming"
     ]
   },
   {
     "name": "toParts",
-    "line": 5687,
+    "line": 5866,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1802,7 +1809,7 @@
   },
   {
     "name": "aggregateTerminalRunOutput",
-    "line": 6214,
+    "line": 6406,
     "project": "inneranimalmedia",
     "purpose": "Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8 (onData sends raw strings).",
     "params": [
@@ -1815,7 +1822,7 @@
   },
   {
     "name": "terminalExecHttpUrlFromEnv",
-    "line": 6250,
+    "line": 6442,
     "project": "inneranimalmedia",
     "purpose": "Same host as TERMINAL_WS_URL: POST /exec (iam-pty server.js). Workers often receive zero WS frames on outbound fetch() upgrades; HTTP is reliable.",
     "params": [
@@ -1826,7 +1833,7 @@
   },
   {
     "name": "runTerminalCommandViaHttpExec",
-    "line": 6265,
+    "line": 6457,
     "project": "inneranimalmedia",
     "purpose": "Returns { ok: true, text } on 200 JSON from /exec; { ok: false } to fall back to WebSocket.",
     "params": [
@@ -1843,7 +1850,7 @@
   },
   {
     "name": "pushTok",
-    "line": 6269,
+    "line": 6461,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1856,7 +1863,7 @@
   },
   {
     "name": "runTerminalCommand",
-    "line": 6324,
+    "line": 6516,
     "project": "inneranimalmedia",
     "purpose": "Run a command: prefer POST /exec on the terminal host (reliable from Workers), else PTY WebSocket run. * Used by POST /api/agent/terminal/run and runToolLoop (terminal_execute). * Returns { output, command, exitCode }. Throws on connect/error so callers can try/catch.",
     "params": [
@@ -1879,7 +1886,7 @@
   },
   {
     "name": "finish",
-    "line": 6365,
+    "line": 6557,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -1890,7 +1897,7 @@
   },
   {
     "name": "emitCodeBlocksFromText",
-    "line": 6441,
+    "line": 6633,
     "project": "inneranimalmedia",
     "purpose": "Parse first markdown fenced code block from fullText and emit one SSE code event via send(obj). * Format: ```language optional_filename\\ncode\\n``` * send(obj) is called once with { type: 'code', code, filename, language } or not at all.",
     "params": [
@@ -1902,7 +1909,7 @@
   },
   {
     "name": "streamOpenAI",
-    "line": 6457,
+    "line": 6649,
     "project": "inneranimalmedia",
     "purpose": "OpenAI streaming: same SSE contract as Anthropic. * POST to chat/completions with stream: true, stream_options: { include_usage: true }.",
     "params": [
@@ -1915,9 +1922,7 @@
       "agent_id",
       "ctx"
     ],
-    "calls": [
-      "jsonResponse"
-    ],
+    "calls": [],
     "tags": [
       "auth",
       "cron",
@@ -1926,8 +1931,23 @@
     ]
   },
   {
+    "name": "start",
+    "line": 6673,
+    "project": "inneranimalmedia",
+    "purpose": "Worker helper or handler.",
+    "params": [
+      "controller"
+    ],
+    "calls": [
+      "enqueue"
+    ],
+    "tags": [
+      "cron"
+    ]
+  },
+  {
     "name": "pull",
-    "line": 6487,
+    "line": 6696,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -1946,7 +1966,7 @@
   },
   {
     "name": "runCursorCloudAgentBuiltinTool",
-    "line": 6535,
+    "line": 6744,
     "project": "inneranimalmedia",
     "purpose": "Builtin MCP: Cursor Cloud Agents API (async coding agents). * https://cursor.com/docs/cloud-agent/api/endpoints — Basic auth: btoa(CURSOR_API_KEY + ':').",
     "params": [
@@ -1960,10 +1980,36 @@
     ]
   },
   {
-    "name": "streamGoogle",
-    "line": 6615,
+    "name": "chatWithToolsGoogle",
+    "line": 6824,
     "project": "inneranimalmedia",
     "purpose": "Google (Gemini) streaming: streamGenerateContent, same SSE contract.",
+    "params": [
+      "env",
+      "systemWithBlurb",
+      "apiMessages",
+      "modelRow",
+      "conversationId",
+      "agent_id",
+      "ctx",
+      "opts"
+    ],
+    "calls": [
+      "filterToolRowsByPanel",
+      "filterToolsByMode"
+    ],
+    "tags": [
+      "d1",
+      "http-client",
+      "mcp",
+      "streaming"
+    ]
+  },
+  {
+    "name": "streamGoogle",
+    "line": 6975,
+    "project": "inneranimalmedia",
+    "purpose": "Worker helper or handler.",
     "params": [
       "env",
       "systemWithBlurb",
@@ -1978,32 +2024,12 @@
       "jsonResponse"
     ],
     "tags": [
-      "cron",
       "streaming"
     ]
   },
   {
-    "name": "pull",
-    "line": 6645,
-    "project": "inneranimalmedia",
-    "purpose": "Worker helper or handler.",
-    "params": [
-      "controller"
-    ],
-    "calls": [
-      "calculateCost",
-      "emitCodeBlocksFromText",
-      "enqueue",
-      "getLastUserMessageText",
-      "streamDoneDbWrites"
-    ],
-    "tags": [
-      "cron"
-    ]
-  },
-  {
     "name": "streamWorkersAI",
-    "line": 6695,
+    "line": 7060,
     "project": "inneranimalmedia",
     "purpose": "Cloudflare Workers AI streaming: env.AI.run(model_key, { messages, stream: true }). * Same SSE contract; cost_usd: 0 (neurons). Handle all chunk shapes; null-coerce before D1.",
     "params": [
@@ -2027,7 +2053,7 @@
   },
   {
     "name": "pull",
-    "line": 6711,
+    "line": 7076,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2045,7 +2071,7 @@
   },
   {
     "name": "parseDataUrl",
-    "line": 6758,
+    "line": 7123,
     "project": "inneranimalmedia",
     "purpose": "Parse data URL to { mediaType, base64 } for vision APIs",
     "params": [
@@ -2056,7 +2082,7 @@
   },
   {
     "name": "buildAnthropicContent",
-    "line": 6766,
+    "line": 7131,
     "project": "inneranimalmedia",
     "purpose": "Build last user message content with images for Anthropic (content block array)",
     "params": [
@@ -2071,7 +2097,7 @@
   },
   {
     "name": "buildOpenAIContent",
-    "line": 6778,
+    "line": 7143,
     "project": "inneranimalmedia",
     "purpose": "Build last user message content with images for OpenAI (content array)",
     "params": [
@@ -2085,7 +2111,7 @@
   },
   {
     "name": "buildGoogleParts",
-    "line": 6789,
+    "line": 7154,
     "project": "inneranimalmedia",
     "purpose": "Build last user message parts for Google (parts array)",
     "params": [
@@ -2100,7 +2126,7 @@
   },
   {
     "name": "callGatewayChat",
-    "line": 6803,
+    "line": 7168,
     "project": "inneranimalmedia",
     "purpose": "Call Cloudflare AI Gateway OpenAI-compat endpoint. Returns { ok, status, data } (data is OpenAI-format). *  OpenAI URL must be: https://gateway.ai.cloudflare.com/v1/{account_id}/inneranimalmedia/openai/chat/completions *  (set AI_GATEWAY_OPENAI_BASE_URL or AI_GATEWAY_BASE_URL end",
     "params": [
@@ -2117,7 +2143,7 @@
   },
   {
     "name": "getR2Binding",
-    "line": 6854,
+    "line": 7219,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2132,7 +2158,7 @@
   },
   {
     "name": "getContentTypeFromKey",
-    "line": 6864,
+    "line": 7229,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2143,7 +2169,7 @@
   },
   {
     "name": "sha256hex",
-    "line": 6880,
+    "line": 7245,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2154,7 +2180,7 @@
   },
   {
     "name": "hmacHex",
-    "line": 6885,
+    "line": 7250,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2168,7 +2194,7 @@
   },
   {
     "name": "hmacBytes",
-    "line": 6891,
+    "line": 7256,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2182,7 +2208,7 @@
   },
   {
     "name": "getSigningKey",
-    "line": 6903,
+    "line": 7268,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2198,7 +2224,7 @@
   },
   {
     "name": "signR2Request",
-    "line": 6910,
+    "line": 7275,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2217,7 +2243,7 @@
   },
   {
     "name": "parseListObjectsV2Xml",
-    "line": 6945,
+    "line": 7310,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2230,7 +2256,7 @@
   },
   {
     "name": "buildR2Query",
-    "line": 6980,
+    "line": 7345,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2241,7 +2267,7 @@
   },
   {
     "name": "handleR2Api",
-    "line": 6986,
+    "line": 7351,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2267,7 +2293,7 @@
   },
   {
     "name": "parseDataUrlToBytes",
-    "line": 7463,
+    "line": 7828,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2278,7 +2304,7 @@
   },
   {
     "name": "handleDrawApi",
-    "line": 7477,
+    "line": 7842,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2287,6 +2313,7 @@
       "env"
     ],
     "calls": [
+      "broadcastImg",
       "getAuthUser",
       "jsonResponse",
       "parseDataUrlToBytes",
@@ -2295,12 +2322,26 @@
     "tags": [
       "auth",
       "d1",
-      "r2"
+      "http-client",
+      "r2",
+      "workers-ai"
     ]
   },
   {
+    "name": "broadcastImg",
+    "line": 7991,
+    "project": "inneranimalmedia",
+    "purpose": "Worker helper or handler.",
+    "params": [
+      "action",
+      "params"
+    ],
+    "calls": [],
+    "tags": []
+  },
+  {
     "name": "riskLevelFromCommandProposalText",
-    "line": 7540,
+    "line": 8109,
     "project": "inneranimalmedia",
     "purpose": "Risk tier for agent_command_proposals from raw command text.",
     "params": [
@@ -2311,7 +2352,7 @@
   },
   {
     "name": "chunkTextForCodebaseReindex",
-    "line": 7554,
+    "line": 8123,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2326,7 +2367,7 @@
   },
   {
     "name": "reindexCodebaseFromDocsBucket",
-    "line": 7568,
+    "line": 8137,
     "project": "inneranimalmedia",
     "purpose": "List iam-docs (DOCS_BUCKET), chunk, embed, upsert Supabase documents (Hyperdrive). source = codebase:{key}",
     "params": [
@@ -2346,7 +2387,7 @@
   },
   {
     "name": "handleAgentApi",
-    "line": 7626,
+    "line": 8195,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2364,6 +2405,7 @@
       "capWithMarker",
       "charsToTokens",
       "chatWithToolsAnthropic",
+      "chatWithToolsGoogle",
       "compactAgentChatsToR2",
       "ensureWorkSessionAndSignal",
       "executeAgentWorkflowSteps",
@@ -2401,7 +2443,6 @@
       "runToolLoop",
       "selectAutoModel",
       "streamDoneDbWrites",
-      "streamGoogle",
       "streamOpenAI",
       "streamWorkersAI",
       "syntheticWorkersAiChatModelRow",
@@ -2424,7 +2465,7 @@
   },
   {
     "name": "normalize",
-    "line": 8111,
+    "line": 8655,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2435,7 +2476,7 @@
   },
   {
     "name": "logClose",
-    "line": 8256,
+    "line": 8800,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2446,7 +2487,7 @@
   },
   {
     "name": "closeFromBrowserLeg",
-    "line": 8263,
+    "line": 8807,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -2457,7 +2498,7 @@
   },
   {
     "name": "closeFromUpstreamLeg",
-    "line": 8269,
+    "line": 8813,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -2468,7 +2509,7 @@
   },
   {
     "name": "done",
-    "line": 8281,
+    "line": 8825,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -2477,7 +2518,7 @@
   },
   {
     "name": "messageContentChars",
-    "line": 9405,
+    "line": 9949,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2488,7 +2529,7 @@
   },
   {
     "name": "pull",
-    "line": 9558,
+    "line": 10103,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2509,8 +2550,25 @@
     ]
   },
   {
+    "name": "start",
+    "line": 10275,
+    "project": "inneranimalmedia",
+    "purpose": "Worker helper or handler.",
+    "params": [
+      "controller"
+    ],
+    "calls": [
+      "charsToTokens",
+      "enqueue"
+    ],
+    "tags": [
+      "cron",
+      "streaming"
+    ]
+  },
+  {
     "name": "triggerWorkflowRun",
-    "line": 10573,
+    "line": 11134,
     "project": "inneranimalmedia",
     "purpose": "Start an MCP minion workflow run or return a dry-run preview. Shared by POST /api/mcp/workflows/:id/run * and the Agent Sam /workflow slash builtin (avoids Worker self-fetch, which can fail with 522).",
     "params": [
@@ -2533,7 +2591,7 @@
   },
   {
     "name": "handleAgentsamApi",
-    "line": 10626,
+    "line": 11187,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2567,7 +2625,7 @@
   },
   {
     "name": "readBody",
-    "line": 10638,
+    "line": 11199,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -2576,7 +2634,7 @@
   },
   {
     "name": "normalizeFetchHost",
-    "line": 10646,
+    "line": 11207,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2587,7 +2645,7 @@
   },
   {
     "name": "mergeFetchDomainAllowlistWithBuiltin",
-    "line": 10655,
+    "line": 11216,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2600,7 +2658,7 @@
   },
   {
     "name": "handleMcpApi",
-    "line": 11684,
+    "line": 12250,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2630,7 +2688,7 @@
   },
   {
     "name": "emit",
-    "line": 12037,
+    "line": 12603,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2646,7 +2704,7 @@
   },
   {
     "name": "pull",
-    "line": 12045,
+    "line": 12611,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2663,7 +2721,7 @@
   },
   {
     "name": "handleCidiApi",
-    "line": 12258,
+    "line": 12824,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2687,7 +2745,7 @@
   },
   {
     "name": "cidiMcpStatus",
-    "line": 12283,
+    "line": 12849,
     "project": "inneranimalmedia",
     "purpose": "Production: call handleMcpApi in-process — HTTP fetch to this Worker returns 522 (recursive subrequest).",
     "params": [],
@@ -2700,7 +2758,7 @@
   },
   {
     "name": "cidiMcpInvoke",
-    "line": 12295,
+    "line": 12861,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2717,7 +2775,7 @@
   },
   {
     "name": "recordMcpToolCall",
-    "line": 12504,
+    "line": 13070,
     "project": "inneranimalmedia",
     "purpose": "Record MCP tool call to mcp_tool_calls, mcp_usage_log, and mcp_services. All DB writes in try/catch so missing tables/columns do not break flow.",
     "params": [
@@ -2735,7 +2793,7 @@
   },
   {
     "name": "upsertMcpAgentSession",
-    "line": 12545,
+    "line": 13111,
     "project": "inneranimalmedia",
     "purpose": "Create or update MCP agent session at chat start. Uses conversation_id (migration 135). panel from request agent_id (migration 162). No-op if columns missing.",
     "params": [
@@ -2755,7 +2813,7 @@
   },
   {
     "name": "runGithubPatBuiltinTool",
-    "line": 12566,
+    "line": 13132,
     "project": "inneranimalmedia",
     "purpose": "GitHub REST via env.GITHUB_TOKEN (PAT). Exact env name — no OAuth in this path.",
     "params": [
@@ -2771,7 +2829,7 @@
   },
   {
     "name": "runCfImagesEnvBuiltinTool",
-    "line": 12602,
+    "line": 13168,
     "project": "inneranimalmedia",
     "purpose": "Cloudflare Images REST. Use env names exactly: CLOUDFLARE_IMAGES_TOKEN + CLOUDFLARE_IMAGES_ACCOUNT_HASH.",
     "params": [
@@ -2787,7 +2845,7 @@
   },
   {
     "name": "tryRefreshGoogleDriveAccess",
-    "line": 12654,
+    "line": 13220,
     "project": "inneranimalmedia",
     "purpose": "Refresh google_drive row after 401; uses GOOGLE_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET.",
     "params": [
@@ -2806,7 +2864,7 @@
   },
   {
     "name": "runGdriveOauthBuiltinTool",
-    "line": 12682,
+    "line": 13248,
     "project": "inneranimalmedia",
     "purpose": "Google Drive v3. Token: params.oauth_token / params.access_token, OR D1 user_oauth_tokens (google_drive) * for params.user_id | params.integration_user_id | opts.oauthUserId (email/id after Connect Drive callback). * Callback stores tokens in user_oauth_tokens (handleGoogleOAuthC",
     "params": [
@@ -2826,7 +2884,7 @@
   },
   {
     "name": "authHeader",
-    "line": 12702,
+    "line": 13268,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -2837,7 +2895,7 @@
   },
   {
     "name": "fetchDrive",
-    "line": 12704,
+    "line": 13270,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2855,7 +2913,7 @@
   },
   {
     "name": "invokeMcpToolFromChat",
-    "line": 12751,
+    "line": 13317,
     "project": "inneranimalmedia",
     "purpose": "Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its ow",
     "params": [
@@ -2893,6 +2951,7 @@
       "auth",
       "browser",
       "d1",
+      "durable-objects",
       "http-client",
       "mcp",
       "r2",
@@ -2901,7 +2960,7 @@
   },
   {
     "name": "rec",
-    "line": 12754,
+    "line": 13320,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2916,7 +2975,7 @@
   },
   {
     "name": "safeAll",
-    "line": 13572,
+    "line": 14179,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2927,7 +2986,7 @@
   },
   {
     "name": "workflowSleep",
-    "line": 13834,
+    "line": 14441,
     "project": "inneranimalmedia",
     "purpose": "Sleep for agent workflow polling; prefers runtime scheduler (Workers) over setTimeout.",
     "params": [
@@ -2938,7 +2997,7 @@
   },
   {
     "name": "broadcastAgentWorkflowEvent",
-    "line": 13848,
+    "line": 14455,
     "project": "inneranimalmedia",
     "purpose": "Broadcast JSON to IAM_COLLAB room `workflow:<runId>` (Durable Object POST /broadcast).",
     "params": [
@@ -2953,7 +3012,7 @@
   },
   {
     "name": "waitForAgentProposalResolution",
-    "line": 13870,
+    "line": 14477,
     "project": "inneranimalmedia",
     "purpose": "Poll agent_command_proposals until approved, denied, or 1h max (720 x 5s). * @returns {'approved'|'denied'|'timeout'}",
     "params": [
@@ -2969,7 +3028,7 @@
   },
   {
     "name": "getLatestUserPlainText",
-    "line": 13885,
+    "line": 14492,
     "project": "inneranimalmedia",
     "purpose": "Most recent user message text only (skip trailing assistant / tool entries in `messages`).",
     "params": [
@@ -2980,7 +3039,7 @@
   },
   {
     "name": "appendAttachedFilesToUserText",
-    "line": 13896,
+    "line": 14503,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -2992,7 +3051,7 @@
   },
   {
     "name": "matchWorkerHealthWorkflowIntent",
-    "line": 13913,
+    "line": 14520,
     "project": "inneranimalmedia",
     "purpose": "Worker health workflow: avoid matching pasted assistant copy like \"Worker Health Check\" or * \"Starting Worker Health Check\" (bare \\\\bhealth\\\\s+check\\\\b matched inside those strings).",
     "params": [
@@ -3003,7 +3062,7 @@
   },
   {
     "name": "matchAgentChatWorkflowIntent",
-    "line": 13930,
+    "line": 14537,
     "project": "inneranimalmedia",
     "purpose": "Map last user text to agent workflow (workflow_runs.workflow_name / AGENT_BUILTIN_WORKFLOW_STEPS). * Returns null if no intent matched.",
     "params": [
@@ -3016,7 +3075,7 @@
   },
   {
     "name": "runWorkflowHttpHealthStep",
-    "line": 14025,
+    "line": 14632,
     "project": "inneranimalmedia",
     "purpose": "GET JSON health endpoint; ok when HTTP ok and body JSON has ok === true.",
     "params": [
@@ -3028,7 +3087,7 @@
   },
   {
     "name": "runWorkflowGithubDiffReviewStep",
-    "line": 14049,
+    "line": 14656,
     "project": "inneranimalmedia",
     "purpose": "Heuristic diff summary for /review (no LLM — Architect role is static analysis only).",
     "params": [
@@ -3048,7 +3107,7 @@
   },
   {
     "name": "agentWorkflowRecordStepSuccess",
-    "line": 14136,
+    "line": 14743,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3070,7 +3129,7 @@
   },
   {
     "name": "executeAgentWorkflowSteps",
-    "line": 14175,
+    "line": 14782,
     "project": "inneranimalmedia",
     "purpose": "Agent `workflow_runs` executor (separate from MCP `executeWorkflowSteps` at ~9788 and ~12625). * Runs inside ctx.waitUntil only — HTTP response has already returned.",
     "params": [
@@ -3097,7 +3156,7 @@
   },
   {
     "name": "dispatchMcpTool",
-    "line": 14647,
+    "line": 15254,
     "project": "inneranimalmedia",
     "purpose": "Delegate MCP tool execution for workflow steps (skips approval; telemetry recorded per step by executeWorkflowSteps).",
     "params": [
@@ -3116,7 +3175,7 @@
   },
   {
     "name": "executeWorkflowSteps",
-    "line": 14659,
+    "line": 15266,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3138,7 +3197,7 @@
   },
   {
     "name": "runInternalPlaywrightTool",
-    "line": 14787,
+    "line": 15402,
     "project": "inneranimalmedia",
     "purpose": "Run Playwright/browser tools internally (MCP invoke). Used for UI validation, screenshots, and live page content.",
     "params": [
@@ -3155,7 +3214,7 @@
   },
   {
     "name": "runResendBuiltinTool",
-    "line": 14815,
+    "line": 15441,
     "project": "inneranimalmedia",
     "purpose": "Resend REST builtins (D1: resend_send_email, resend_list_domains, resend_send_broadcast, resend_create_api_key).",
     "params": [
@@ -3172,7 +3231,7 @@
   },
   {
     "name": "runCdpBuiltinTool",
-    "line": 14883,
+    "line": 15509,
     "project": "inneranimalmedia",
     "purpose": "IAM cdt_* tools (26 in D1): Playwright-first on MYBROWSER. IAM names mirror Cursor-style browser MCP, not raw CDP method names. * Stateless: one launch per invocation; pass url for DOM/network tools. Multi-tab tools only report the single active page. * Raw CDP (Tracing/Performan",
     "params": [
@@ -3193,7 +3252,7 @@
   },
   {
     "name": "normalizeUrl",
-    "line": 14888,
+    "line": 15514,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3204,7 +3263,7 @@
   },
   {
     "name": "withPage",
-    "line": 14894,
+    "line": 15520,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3219,7 +3278,7 @@
   },
   {
     "name": "uploadImgxToDashboard",
-    "line": 15230,
+    "line": 15856,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3235,7 +3294,7 @@
   },
   {
     "name": "listImgxProviders",
-    "line": 15240,
+    "line": 15866,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3248,7 +3307,7 @@
   },
   {
     "name": "runImgxBuiltinTool",
-    "line": 15261,
+    "line": 15887,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3271,7 +3330,7 @@
   },
   {
     "name": "cloudconvertCollectTasksFromJob",
-    "line": 15428,
+    "line": 16054,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3282,7 +3341,7 @@
   },
   {
     "name": "cloudconvertExtractExportFromJob",
-    "line": 15435,
+    "line": 16061,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3295,7 +3354,7 @@
   },
   {
     "name": "runCloudConvertBuiltinTool",
-    "line": 15447,
+    "line": 16073,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3314,7 +3373,7 @@
   },
   {
     "name": "runMeshyBuiltinTool",
-    "line": 15531,
+    "line": 16157,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3332,7 +3391,7 @@
   },
   {
     "name": "isActionTool",
-    "line": 15621,
+    "line": 16247,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3343,7 +3402,7 @@
   },
   {
     "name": "toolApprovalPreview",
-    "line": 15624,
+    "line": 16250,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3357,7 +3416,7 @@
   },
   {
     "name": "chatWithToolsAnthropic",
-    "line": 15635,
+    "line": 16261,
     "project": "inneranimalmedia",
     "purpose": "Anthropic chat with tools; runs tool_use loop. When opts.stream is true, returns SSE stream with tool_start/tool_result/text/done.",
     "params": [
@@ -3373,6 +3432,7 @@
     "calls": [
       "calculateCost",
       "filterToolRowsByPanel",
+      "filterToolsByMode",
       "find",
       "getLastUserMessageText",
       "invokeMcpToolFromChat",
@@ -3394,7 +3454,7 @@
   },
   {
     "name": "enqueue",
-    "line": 15682,
+    "line": 16312,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3410,7 +3470,7 @@
   },
   {
     "name": "flushPendingToolStates",
-    "line": 15700,
+    "line": 16336,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3425,7 +3485,7 @@
   },
   {
     "name": "start",
-    "line": 15751,
+    "line": 16387,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3442,7 +3502,7 @@
   },
   {
     "name": "start",
-    "line": 15786,
+    "line": 16422,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3459,16 +3519,14 @@
   },
   {
     "name": "start",
-    "line": 15875,
+    "line": 16488,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
       "controller"
     ],
     "calls": [
-      "emitCodeBlocksFromText",
-      "enqueue",
-      "flushPendingToolStates"
+      "enqueue"
     ],
     "tags": [
       "cron"
@@ -3476,7 +3534,7 @@
   },
   {
     "name": "processQueues",
-    "line": 15893,
+    "line": 16565,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3492,7 +3550,7 @@
   },
   {
     "name": "runAgentMemoryDecay",
-    "line": 15923,
+    "line": 16595,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3509,7 +3567,7 @@
   },
   {
     "name": "runFinancialCommandCron",
-    "line": 15941,
+    "line": 16613,
     "project": "inneranimalmedia",
     "purpose": "Daily 09:00 UTC: compare spend_ledger today vs ai_guardrails metadata daily budget; email if over.",
     "params": [
@@ -3526,7 +3584,7 @@
   },
   {
     "name": "retentionConditionIsSafe",
-    "line": 16013,
+    "line": 16685,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3537,7 +3595,7 @@
   },
   {
     "name": "runRetentionPurge",
-    "line": 16028,
+    "line": 16700,
     "project": "inneranimalmedia",
     "purpose": "Midnight cron: batch-delete old rows per data_retention_policies (LIMIT 500 per table per run). * Unknown table_name values are skipped. Optional policy.condition appended as AND (...); use D1 for e.g. * agent_messages: session_id NOT IN (SELECT id FROM agent_sessions WHERE statu",
     "params": [
@@ -3556,7 +3614,7 @@
   },
   {
     "name": "runWebhookEventsMaintenanceCron",
-    "line": 16110,
+    "line": 16782,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3573,7 +3631,7 @@
   },
   {
     "name": "origin",
-    "line": 16206,
+    "line": 16878,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3584,7 +3642,7 @@
   },
   {
     "name": "jsonResponse",
-    "line": 16208,
+    "line": 16880,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3598,7 +3656,7 @@
   },
   {
     "name": "handleFederatedSearch",
-    "line": 16239,
+    "line": 16911,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3618,7 +3676,7 @@
   },
   {
     "name": "ensureWorkSessionAndSignal",
-    "line": 16334,
+    "line": 17006,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3639,7 +3697,7 @@
   },
   {
     "name": "getSession",
-    "line": 16352,
+    "line": 17024,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3656,7 +3714,7 @@
   },
   {
     "name": "getAuthUser",
-    "line": 16368,
+    "line": 17040,
     "project": "inneranimalmedia",
     "purpose": "Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email).",
     "params": [
@@ -3672,7 +3730,7 @@
   },
   {
     "name": "vaultGetKey",
-    "line": 16378,
+    "line": 17050,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3685,7 +3743,7 @@
   },
   {
     "name": "vaultEncrypt",
-    "line": 16383,
+    "line": 17055,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3699,7 +3757,7 @@
   },
   {
     "name": "vaultDecrypt",
-    "line": 16394,
+    "line": 17066,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3713,7 +3771,7 @@
   },
   {
     "name": "vaultLast4",
-    "line": 16403,
+    "line": 17075,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3724,7 +3782,7 @@
   },
   {
     "name": "vaultNewId",
-    "line": 16407,
+    "line": 17079,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3735,7 +3793,7 @@
   },
   {
     "name": "vaultWriteAudit",
-    "line": 16411,
+    "line": 17083,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3751,7 +3809,7 @@
   },
   {
     "name": "vaultJson",
-    "line": 16421,
+    "line": 17093,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3763,7 +3821,7 @@
   },
   {
     "name": "vaultErr",
-    "line": 16425,
+    "line": 17097,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3777,7 +3835,7 @@
   },
   {
     "name": "vaultCreateSecret",
-    "line": 16429,
+    "line": 17101,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3799,7 +3857,7 @@
   },
   {
     "name": "vaultListSecrets",
-    "line": 16445,
+    "line": 17117,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3816,7 +3874,7 @@
   },
   {
     "name": "vaultGetSecret",
-    "line": 16456,
+    "line": 17128,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3833,7 +3891,7 @@
   },
   {
     "name": "vaultRevealSecret",
-    "line": 16464,
+    "line": 17136,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3855,7 +3913,7 @@
   },
   {
     "name": "vaultEditSecret",
-    "line": 16478,
+    "line": 17150,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3875,7 +3933,7 @@
   },
   {
     "name": "vaultRotateSecret",
-    "line": 16490,
+    "line": 17162,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3898,7 +3956,7 @@
   },
   {
     "name": "vaultRevokeSecret",
-    "line": 16509,
+    "line": 17181,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3918,7 +3976,7 @@
   },
   {
     "name": "vaultGetSecretAudit",
-    "line": 16517,
+    "line": 17189,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3934,7 +3992,7 @@
   },
   {
     "name": "vaultListProjects",
-    "line": 16522,
+    "line": 17194,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3949,7 +4007,7 @@
   },
   {
     "name": "vaultFullAudit",
-    "line": 16529,
+    "line": 17201,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -3966,7 +4024,7 @@
   },
   {
     "name": "vaultRegistry",
-    "line": 16553,
+    "line": 17225,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [],
@@ -3980,7 +4038,7 @@
   },
   {
     "name": "handleVaultRequest",
-    "line": 16597,
+    "line": 17269,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4005,7 +4063,7 @@
   },
   {
     "name": "getIntegrationToken",
-    "line": 16629,
+    "line": 17301,
     "project": "inneranimalmedia",
     "purpose": "Returns { access_token, refresh_token, expires_at } from user_oauth_tokens for the given user, provider, and optional account_identifier. For github with accountId empty, returns first row.",
     "params": [
@@ -4022,7 +4080,7 @@
   },
   {
     "name": "aiSearchIsConfigured",
-    "line": 16646,
+    "line": 17318,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4033,7 +4091,7 @@
   },
   {
     "name": "normKbTitle",
-    "line": 16651,
+    "line": 17323,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4044,7 +4102,7 @@
   },
   {
     "name": "d1KbRowToHit",
-    "line": 16655,
+    "line": 17327,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4055,7 +4113,7 @@
   },
   {
     "name": "parseAutoragHits",
-    "line": 16667,
+    "line": 17339,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4066,7 +4124,7 @@
   },
   {
     "name": "push",
-    "line": 16669,
+    "line": 17341,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4079,7 +4137,7 @@
   },
   {
     "name": "autoragAiSearchQuery",
-    "line": 16714,
+    "line": 17386,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4097,7 +4155,7 @@
   },
   {
     "name": "mergeD1AndAiKbHits",
-    "line": 16756,
+    "line": 17428,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4113,7 +4171,7 @@
   },
   {
     "name": "runKnowledgeSearchMerged",
-    "line": 16783,
+    "line": 17455,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4131,7 +4189,7 @@
   },
   {
     "name": "ensureRagSearchToolRegistered",
-    "line": 16800,
+    "line": 17472,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4147,7 +4205,7 @@
   },
   {
     "name": "pgMatchDocuments",
-    "line": 16837,
+    "line": 17509,
     "project": "inneranimalmedia",
     "purpose": "Embed query with Workers AI, then call Supabase match_documents via Hyperdrive (raw pg). * Expects DB function: match_documents(vector, float, int, text). Embedding dims must match the DB (bge-large-en-v1.5 = 1024).",
     "params": [
@@ -4166,7 +4224,7 @@
   },
   {
     "name": "fail",
-    "line": 16838,
+    "line": 17510,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4179,7 +4237,7 @@
   },
   {
     "name": "formatPgvectorRowsForPrompt",
-    "line": 16873,
+    "line": 17545,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4190,7 +4248,7 @@
   },
   {
     "name": "vectorizeRagSearch",
-    "line": 16894,
+    "line": 17566,
     "project": "inneranimalmedia",
     "purpose": "RAG search using Vectorize index (VECTORIZE_INDEX or VECTORIZE). Embeds query, runs vector search, resolves content from metadata or R2. * Returns { results, data } for compatibility with code that expected AI.autorag().search().",
     "params": [
@@ -4209,8 +4267,47 @@
     ]
   },
   {
+    "name": "deleteVectorsForDocKey",
+    "line": 17613,
+    "project": "inneranimalmedia",
+    "purpose": "Remove all VECTORIZE_DOCS vectors for one R2 object key (deterministic ids + D1 chunk_count, else metadata filter query).",
+    "params": [
+      "env",
+      "objectKey"
+    ],
+    "calls": [
+      "push"
+    ],
+    "tags": [
+      "d1",
+      "vectorize"
+    ]
+  },
+  {
+    "name": "performDocsBucketVectorizeIndex",
+    "line": 17662,
+    "project": "inneranimalmedia",
+    "purpose": "Embed .md objects from DOCS_BUCKET into VECTORIZE_DOCS. * @param {string} [keyFilter] — if set, only index this key (queue / single-file updates). * Chunks: 1000 chars, stride 900 (100 overlap). Batches of 32 embeddings per Workers AI call.",
+    "params": [
+      "env",
+      "keyFilter"
+    ],
+    "calls": [
+      "chunkTextForCodebaseReindex",
+      "deleteVectorsForDocKey",
+      "push",
+      "run"
+    ],
+    "tags": [
+      "d1",
+      "r2",
+      "vectorize",
+      "workers-ai"
+    ]
+  },
+  {
     "name": "chunkByTokenApprox",
-    "line": 16935,
+    "line": 17765,
     "project": "inneranimalmedia",
     "purpose": "Chunk markdown text into overlapping segments for embedding.",
     "params": [
@@ -4225,7 +4322,7 @@
   },
   {
     "name": "chunkMarkdown",
-    "line": 16953,
+    "line": 17783,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4240,7 +4337,7 @@
   },
   {
     "name": "extractSchema",
-    "line": 16979,
+    "line": 17809,
     "project": "inneranimalmedia",
     "purpose": "D1-compatible schema extraction: use sql from sqlite_master (no PRAGMA).",
     "params": [
@@ -4253,7 +4350,7 @@
   },
   {
     "name": "writeKnowledgePostDeploy",
-    "line": 16993,
+    "line": 17823,
     "project": "inneranimalmedia",
     "purpose": "Post-deploy: write worker structure, D1 schema, and optional cursor rules to R2 knowledge/. * Call from deploy script: curl -X POST .../api/internal/post-deploy -H \"X-Internal-Secret: $INTERNAL_API_SECRET\" [-d '{\"cursor_rules_md\":\"...\"}'] * Returns array of R2 keys written.",
     "params": [
@@ -4274,7 +4371,7 @@
   },
   {
     "name": "runKnowledgeDailySync",
-    "line": 17041,
+    "line": 17871,
     "project": "inneranimalmedia",
     "purpose": "Daily knowledge sync: write agent_memory_index (score >= 7) and active roadmap_steps to R2 knowledge/. * Called from cron 0 6 * * *.",
     "params": [
@@ -4288,7 +4385,7 @@
   },
   {
     "name": "compactConversationToKnowledge",
-    "line": 17079,
+    "line": 17909,
     "project": "inneranimalmedia",
     "purpose": "Auto-compact: when a conversation has > 50 messages, summarize with AI, save to R2 knowledge/conversations/{id}-summary.md, then delete oldest messages (keep last 50).",
     "params": [
@@ -4308,7 +4405,7 @@
   },
   {
     "name": "compactAgentChatsToR2",
-    "line": 17155,
+    "line": 17985,
     "project": "inneranimalmedia",
     "purpose": "Compact recent agent_messages from D1 into a single markdown file and upload to R2. * Used so RAG can search over recent chat context without manual sync. Writes to memory/compacted-chats/YYYY-MM-DD.md. * Returns { conversations: number, messages: number, key: string, error?: str",
     "params": [
@@ -4326,7 +4423,7 @@
   },
   {
     "name": "indexMemoryMarkdownToVectorize",
-    "line": 17236,
+    "line": 18091,
     "project": "inneranimalmedia",
     "purpose": "Index R2 memory markdown (memory/daily/*.md, memory/schema-and-records.md) into Vectorize. * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-docs-search). * Returns { indexed: number of ke",
     "params": [
@@ -4345,7 +4442,7 @@
   },
   {
     "name": "chunkCodeFile",
-    "line": 17315,
+    "line": 18170,
     "project": "inneranimalmedia",
     "purpose": "Chunk a code/markdown file by lines for embedding (overlapping windows).",
     "params": [
@@ -4359,7 +4456,7 @@
   },
   {
     "name": "generateVectorId",
-    "line": 17335,
+    "line": 18190,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4372,7 +4469,7 @@
   },
   {
     "name": "performCodebaseIndexing",
-    "line": 17348,
+    "line": 18203,
     "project": "inneranimalmedia",
     "purpose": "Index R2 DASHBOARD bucket source/ (worker.js, agent-dashboard, mcp-server, docs) into Vectorize for code search.",
     "params": [
@@ -4391,7 +4488,7 @@
   },
   {
     "name": "handleReindexCodebase",
-    "line": 17414,
+    "line": 18269,
     "project": "inneranimalmedia",
     "purpose": "Handle POST /api/admin/reindex-codebase — sync or async codebase indexing into Vectorize.",
     "params": [
@@ -4406,7 +4503,7 @@
   },
   {
     "name": "sendDailyDigest",
-    "line": 17430,
+    "line": 18285,
     "project": "inneranimalmedia",
     "purpose": "Daily digest: pull DB data, have Claude write summary, send email. Cron 0 0 * * * (6pm CST = midnight UTC).",
     "params": [
@@ -4426,7 +4523,7 @@
   },
   {
     "name": "safe",
-    "line": 17431,
+    "line": 18286,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4437,9 +4534,9 @@
   },
   {
     "name": "sendDailyPlanEmail",
-    "line": 17564,
+    "line": 18419,
     "project": "inneranimalmedia",
-    "purpose": "8:30am CST (13:30 UTC) daily plan: D1 context + Workers AI + Resend. Cron 30 13 * * *",
+    "purpose": "8:30am CST (13:30 UTC) daily plan: LIVE D1 queries + Claude Haiku + Resend. Cron 30 13 * * *",
     "params": [
       "env"
     ],
@@ -4451,13 +4548,12 @@
       "cron",
       "d1",
       "http-client",
-      "vectorize",
       "workers-ai"
     ]
   },
   {
     "name": "overviewStatsPayload",
-    "line": 17643,
+    "line": 18527,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4468,7 +4564,7 @@
   },
   {
     "name": "handleOverviewStats",
-    "line": 17662,
+    "line": 18546,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4489,7 +4585,7 @@
   },
   {
     "name": "safe",
-    "line": 17664,
+    "line": 18548,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4500,7 +4596,7 @@
   },
   {
     "name": "num",
-    "line": 17665,
+    "line": 18549,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4512,7 +4608,7 @@
   },
   {
     "name": "sum",
-    "line": 17666,
+    "line": 18550,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4524,7 +4620,7 @@
   },
   {
     "name": "handleRecentActivity",
-    "line": 17725,
+    "line": 18609,
     "project": "inneranimalmedia",
     "purpose": "Recent activity for overview card: last 48 hours, simple English.",
     "params": [
@@ -4543,7 +4639,7 @@
   },
   {
     "name": "safe",
-    "line": 17728,
+    "line": 18612,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4554,7 +4650,7 @@
   },
   {
     "name": "handleOverviewActivityStrip",
-    "line": 17784,
+    "line": 18668,
     "project": "inneranimalmedia",
     "purpose": "GET /api/overview/activity-strip -- session required. Returns weekly_activity, recent_activity, worked_this_week, projects.",
     "params": [
@@ -4576,7 +4672,7 @@
   },
   {
     "name": "safe",
-    "line": 17798,
+    "line": 18682,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4587,7 +4683,7 @@
   },
   {
     "name": "num",
-    "line": 17799,
+    "line": 18683,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4599,7 +4695,7 @@
   },
   {
     "name": "handleOverviewDeployments",
-    "line": 17949,
+    "line": 18833,
     "project": "inneranimalmedia",
     "purpose": "GET /api/overview/deployments -- session required. Returns deployments[] (20) and cicd_runs (10).",
     "params": [
@@ -4618,7 +4714,7 @@
   },
   {
     "name": "handleOverviewCheckpoints",
-    "line": 18007,
+    "line": 18891,
     "project": "inneranimalmedia",
     "purpose": "Workflow checkpoints: list (GET) or create/update (POST). Used for realtime alignment and reducing backtracking.",
     "params": [
@@ -4638,7 +4734,7 @@
   },
   {
     "name": "handleTimeTrackManual",
-    "line": 18065,
+    "line": 18949,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4654,7 +4750,7 @@
   },
   {
     "name": "handleTimeTrackHeartbeat",
-    "line": 18094,
+    "line": 18978,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4669,7 +4765,7 @@
   },
   {
     "name": "handleTimeTrack",
-    "line": 18180,
+    "line": 19064,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4692,7 +4788,7 @@
   },
   {
     "name": "pathToSegments",
-    "line": 18261,
+    "line": 19145,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4703,7 +4799,7 @@
   },
   {
     "name": "handleColorsAll",
-    "line": 18265,
+    "line": 19149,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4717,7 +4813,7 @@
   },
   {
     "name": "safeQuery",
-    "line": 18285,
+    "line": 19169,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4731,7 +4827,7 @@
   },
   {
     "name": "handleFinance",
-    "line": 18290,
+    "line": 19174,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4759,7 +4855,7 @@
   },
   {
     "name": "handleFinanceSummary",
-    "line": 18332,
+    "line": 19216,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4776,7 +4872,7 @@
   },
   {
     "name": "safe",
-    "line": 18334,
+    "line": 19218,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4787,7 +4883,7 @@
   },
   {
     "name": "handleFinanceHealth",
-    "line": 18434,
+    "line": 19318,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4803,7 +4899,7 @@
   },
   {
     "name": "safe",
-    "line": 18435,
+    "line": 19319,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4814,7 +4910,7 @@
   },
   {
     "name": "handleFinanceBreakdown",
-    "line": 18457,
+    "line": 19341,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4831,7 +4927,7 @@
   },
   {
     "name": "safe",
-    "line": 18459,
+    "line": 19343,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4842,7 +4938,7 @@
   },
   {
     "name": "handleFinanceCategories",
-    "line": 18474,
+    "line": 19358,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4858,7 +4954,7 @@
   },
   {
     "name": "safe",
-    "line": 18475,
+    "line": 19359,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4869,7 +4965,7 @@
   },
   {
     "name": "handleFinanceAccounts",
-    "line": 18490,
+    "line": 19374,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4885,7 +4981,7 @@
   },
   {
     "name": "safe",
-    "line": 18491,
+    "line": 19375,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4896,7 +4992,7 @@
   },
   {
     "name": "handleFinanceMrr",
-    "line": 18503,
+    "line": 19387,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4909,7 +5005,7 @@
   },
   {
     "name": "handleFinanceAiSpend",
-    "line": 18507,
+    "line": 19391,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4926,7 +5022,7 @@
   },
   {
     "name": "safe",
-    "line": 18509,
+    "line": 19393,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4937,7 +5033,7 @@
   },
   {
     "name": "handleFinanceTransactionsList",
-    "line": 18541,
+    "line": 19425,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4954,7 +5050,7 @@
   },
   {
     "name": "handleFinanceTransactionGet",
-    "line": 18553,
+    "line": 19437,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4973,7 +5069,7 @@
   },
   {
     "name": "safe",
-    "line": 18554,
+    "line": 19438,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -4984,7 +5080,7 @@
   },
   {
     "name": "handleFinanceTransactionCreate",
-    "line": 18562,
+    "line": 19446,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5001,7 +5097,7 @@
   },
   {
     "name": "handleFinanceImportCsv",
-    "line": 18583,
+    "line": 19467,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5019,7 +5115,7 @@
   },
   {
     "name": "find",
-    "line": 18601,
+    "line": 19485,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5030,7 +5126,7 @@
   },
   {
     "name": "handleFinanceTransactionMutate",
-    "line": 18628,
+    "line": 19512,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5050,7 +5146,7 @@
   },
   {
     "name": "handleClients",
-    "line": 18668,
+    "line": 19552,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5068,7 +5164,7 @@
   },
   {
     "name": "handleProjects",
-    "line": 18723,
+    "line": 19607,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5085,7 +5181,7 @@
   },
   {
     "name": "handleHubRoadmap",
-    "line": 18743,
+    "line": 19627,
     "project": "inneranimalmedia",
     "purpose": "----- API: Mission Control Hub (read-only + task create/update) -----",
     "params": [
@@ -5099,7 +5195,7 @@
   },
   {
     "name": "handleHubTasks",
-    "line": 18756,
+    "line": 19640,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5113,7 +5209,7 @@
   },
   {
     "name": "handleHubStats",
-    "line": 18772,
+    "line": 19656,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5127,7 +5223,7 @@
   },
   {
     "name": "handleHubTerminal",
-    "line": 18789,
+    "line": 19673,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5141,7 +5237,7 @@
   },
   {
     "name": "handleHubTaskCreate",
-    "line": 18801,
+    "line": 19685,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5157,7 +5253,7 @@
   },
   {
     "name": "handleHubTaskUpdate",
-    "line": 18820,
+    "line": 19704,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5174,7 +5270,7 @@
   },
   {
     "name": "handleBillingSummary",
-    "line": 18835,
+    "line": 19719,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5191,7 +5287,7 @@
   },
   {
     "name": "hexToBytes",
-    "line": 18851,
+    "line": 19735,
     "project": "inneranimalmedia",
     "purpose": "Hex string to Uint8Array for PBKDF2 salt.",
     "params": [
@@ -5204,7 +5300,7 @@
   },
   {
     "name": "verifyPassword",
-    "line": 18858,
+    "line": 19742,
     "project": "inneranimalmedia",
     "purpose": "Verify password against PBKDF2-SHA256 stored hash (hex) and salt (hex). Returns true if match.",
     "params": [
@@ -5220,7 +5316,7 @@
   },
   {
     "name": "hashPassword",
-    "line": 18871,
+    "line": 19755,
     "project": "inneranimalmedia",
     "purpose": "Generate new salt (32 bytes hex) and PBKDF2-SHA256 hash for change-password. Returns { saltHex, hashHex }.",
     "params": [
@@ -5233,7 +5329,7 @@
   },
   {
     "name": "handleEmailPasswordLogin",
-    "line": 18885,
+    "line": 19769,
     "project": "inneranimalmedia",
     "purpose": "POST /api/auth/login -- body: { email, password, next? }. JSON clients get { ok, redirect } + Set-Cookie; others 302.",
     "params": [
@@ -5255,7 +5351,7 @@
   },
   {
     "name": "loginJson",
-    "line": 18890,
+    "line": 19774,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5270,7 +5366,7 @@
   },
   {
     "name": "finishLogin",
-    "line": 18902,
+    "line": 19786,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5289,7 +5385,7 @@
   },
   {
     "name": "handleBackupCodeLogin",
-    "line": 18996,
+    "line": 19880,
     "project": "inneranimalmedia",
     "purpose": "POST /api/auth/backup-code -- body: { email, code }. Verifies one-time backup code, marks it used, creates session. Returns 200 + Set-Cookie + { ok, redirect }.",
     "params": [
@@ -5307,7 +5403,7 @@
   },
   {
     "name": "handleLogout",
-    "line": 19039,
+    "line": 19923,
     "project": "inneranimalmedia",
     "purpose": "POST /api/auth/logout -- clear session cookie and redirect to sign-in.",
     "params": [
@@ -5324,7 +5420,7 @@
   },
   {
     "name": "arrayBufferToBase64",
-    "line": 19052,
+    "line": 19936,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5335,7 +5431,7 @@
   },
   {
     "name": "handleOvernightValidate",
-    "line": 19063,
+    "line": 19947,
     "project": "inneranimalmedia",
     "purpose": "POST /api/admin/overnight/validate -- run in worker (remote). D1 check, before screenshots to R2, one proof email WITH screenshot attachments.",
     "params": [
@@ -5357,7 +5453,7 @@
   },
   {
     "name": "handleOvernightStart",
-    "line": 19135,
+    "line": 20019,
     "project": "inneranimalmedia",
     "purpose": "POST /api/admin/overnight/start -- run in worker (remote). Before screenshots + first pipeline email WITH attachments, set D1 OVERNIGHT_STATUS for cron progress.",
     "params": [
@@ -5379,7 +5475,7 @@
   },
   {
     "name": "loadScreenshotAttachments",
-    "line": 19241,
+    "line": 20125,
     "project": "inneranimalmedia",
     "purpose": "Load screenshot attachments from R2 (before_dir) for progress emails.",
     "params": [
@@ -5396,7 +5492,7 @@
   },
   {
     "name": "runOvernightCronStep",
-    "line": 19257,
+    "line": 20141,
     "project": "inneranimalmedia",
     "purpose": "Cron every 30 min: send 30min, hourly, and morning progress emails when OVERNIGHT_STATUS is RUNNING.",
     "params": [
@@ -5415,7 +5511,7 @@
   },
   {
     "name": "oauthPostLoginGlobeRedirectUrl",
-    "line": 19370,
+    "line": 20254,
     "project": "inneranimalmedia",
     "purpose": "After Google/GitHub OAuth login, bounce through sign-in HTML so the same globe exit animation runs.",
     "params": [
@@ -5427,7 +5523,7 @@
   },
   {
     "name": "handleGoogleOAuthStart",
-    "line": 19380,
+    "line": 20264,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5445,7 +5541,7 @@
   },
   {
     "name": "handleGoogleOAuthCallback",
-    "line": 19410,
+    "line": 20294,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5468,7 +5564,7 @@
   },
   {
     "name": "handleGitHubOAuthStart",
-    "line": 19510,
+    "line": 20394,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5486,7 +5582,7 @@
   },
   {
     "name": "handleGitHubOAuthCallback",
-    "line": 19533,
+    "line": 20417,
     "project": "inneranimalmedia",
     "purpose": "Worker helper or handler.",
     "params": [
@@ -5506,6 +5602,37 @@
       "d1",
       "http-client",
       "kv"
+    ]
+  },
+  {
+    "name": "makeAgentEvent",
+    "line": 20541,
+    "project": "inneranimalmedia",
+    "purpose": "── Agent Orchestrator: Event emission ──────────────────────────────────────",
+    "params": [
+      "type",
+      "sessionId",
+      "payload"
+    ],
+    "calls": [],
+    "tags": [
+      "auth"
+    ]
+  },
+  {
+    "name": "emitSessionEvent",
+    "line": 20545,
+    "project": "inneranimalmedia",
+    "purpose": "Worker helper or handler.",
+    "params": [
+      "env",
+      "sessionId",
+      "event"
+    ],
+    "calls": [],
+    "tags": [
+      "auth",
+      "durable-objects"
     ]
   }
 ]

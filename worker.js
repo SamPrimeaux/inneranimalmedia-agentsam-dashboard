@@ -487,7 +487,7 @@ const INTENT_TO_TIER = {
 /**
  * Select best model for Auto mode based on intent and cost
  */
-async function selectAutoModel(env, lastUserContent) {
+async function selectAutoModel(env, lastUserContent, returnIntent = false) {
   try {
     const classification = await classifyIntent(env, lastUserContent);
     const intent = classification?.intent || 'action';
@@ -529,6 +529,7 @@ async function selectAutoModel(env, lastUserContent) {
       ).bind('claude-haiku-4-5-20251001').first();
     }
 
+    if (returnIntent) return { model, intent };
     return model;
 
   } catch (error) {
@@ -5184,8 +5185,11 @@ function getContextIndexSearchTerm(query) {
  * scope: tenant or bucket scope; rows match scope = 'global' OR scope = ?
  */
 async function fetchContextIndex(db, query, scope) {
-  const term = getContextIndexSearchTerm(query);
-  if (!db || !term) return [];
+  const rawTerm = getContextIndexSearchTerm(query);
+  if (!db || !rawTerm) return [];
+  // Sanitize: truncate, strip LIKE special chars to prevent "pattern too complex"
+  const term = rawTerm.slice(0, 60).replace(/[%_\[\]^]/g, " ").trim();
+  if (!term) return [];
 
   const scopeParam = scope && String(scope).trim() ? String(scope).trim() : 'global';
 
@@ -5393,11 +5397,16 @@ function buildDebugContext(sections, ragContext, fileContext, model, indexedCont
   return out + (fileBlock ? '\n\n' + fileBlock : '');
 }
 
-function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileContext, model, indexedContext) {
+function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileContext, model, indexedContext, intent) {
   if (mode === 'ask') return buildAskContext(sections, ragContext, fileContext, model, indexedContext);
   if (mode === 'plan') return buildPlanContext(sections, ragContext, fileContext, model, indexedContext);
   if (mode === 'debug') return buildDebugContext(sections, ragContext, fileContext, model, indexedContext);
-  return buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob, indexedContext);
+  // Intent-aware context filtering — shell needs no memory blob, question uses ask context
+  if (intent === 'shell') return fileContext || '';
+  if (intent === 'question') return buildAskContext(sections, ragContext, fileContext, model, indexedContext);
+  // For action/mixed/sql: cap the compiled context blob to reduce token burn
+  const cappedBlob = compiledContextBlob ? compiledContextBlob.slice(0, 4000) : null;
+  return buildAgentContext(sections, ragContext, fileContext, model, cappedBlob, indexedContext);
 }
 
 /** Filter tools by mode: Plan mode has no tools; Ask and Agent get all (subject to panel policy); Debug gets only terminal/log/read tools. */
@@ -6602,7 +6611,7 @@ async function runTerminalCommand(env, request, command, sessionId = null, execu
         ).bind(id1, terminalSessionIdForHistory, tenantIdHistory, seq, 'input', inputContent, 'agent', agentSessionIdForHistory, now).run();
         seq += 1;
         await env.DB.prepare(
-          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)`
         ).bind(id2, terminalSessionIdForHistory, tenantIdHistory, seq, 'output', outputContent, exitCode != null ? exitCode : null, 'agent', agentSessionIdForHistory, now).run();
         console.log('[runTerminalCommand] terminal_history written (input + output)');
         if (typeof exitCode === 'number' && exitCode !== 0 && executionCtx) {
@@ -7795,7 +7804,7 @@ FROM r2_bucket_summary`
         ).bind(historyId, 'input', command, 'user', body.session_id || null, null, now).run();
       } catch (_) {
         await env.DB.prepare(
-          "INSERT INTO terminal_history (id, direction, content, triggered_by, session_id, created_at) VALUES (?,?,?,?,?,?)"
+          "INSERT INTO terminal_history (id, direction, content, triggered_by, terminal_session_id, recorded_at) VALUES (?,?,?,?,?,?)"
         ).bind(historyId, 'input', command, 'user', body.session_id || null, now).run().catch(() => {});
       }
       return jsonResponse({ ok: true, proposal_id: proposalId, message: 'Run in terminal to execute: ' + command });
@@ -9448,8 +9457,11 @@ async function handleAgentApi(request, url, env, ctx) {
       if (model_id === 'auto') {
         console.log('[agent/chat] Auto mode activated - selecting optimal model');
         const autoUserText = getLatestUserPlainText(msgList);
-        model = await selectAutoModel(env, autoUserText);
-        console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null');
+        const autoResult = await selectAutoModel(env, autoUserText, true);
+        model = autoResult?.model ?? autoResult;
+        const autoIntent = autoResult?.intent ?? null;
+        if (model && autoIntent) model = { ...model, _intent: autoIntent };
+        console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null', 'intent:', autoIntent);
       } else {
         model = await env.DB.prepare('SELECT * FROM ai_models WHERE id = ? OR model_key = ?').bind(model_id, model_id).first();
         if (!model) {
@@ -9859,7 +9871,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           ? { ...resolvedSections, core: effectiveSystemCore, full: newFull }
           : { core: effectiveSystemCore, full: newFull, memory: mem, kb, mcp, schema, daily };
       }
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb);
+      const _agentIntent = model?._intent ?? null;
+      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb, _agentIntent);
       let finalSystem = (unifiedAgentContextBlock ? unifiedAgentContextBlock + '\n\n' : '') + systemWithBlurb;
 
       if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS) {
@@ -11768,7 +11781,7 @@ async function handleAgentsamApi(request, url, env) {
         const sid = m[1];
         const body = await readBody();
         if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
-        const fields = ['slug', 'display_name', 'default_model_id', 'allowed_tool_globs', 'instructions_markdown', 'is_active'];
+        const fields = ['slug', 'display_name', 'default_model_id', 'allowed_tool_globs', 'instructions_markdown', 'is_active', 'description', 'icon', 'access_mode', 'run_in_background', 'sort_order'];
         const setParts = [];
         const vals = [];
         for (const f of fields) {
@@ -11851,7 +11864,7 @@ async function handleAgentsamApi(request, url, env) {
         const sid = m[1];
         const body = await readBody();
         if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
-        const fields = ['name', 'description', 'content_markdown', 'metadata_json', 'file_path', 'scope', 'workspace_id', 'is_active'];
+        const fields = ['name', 'description', 'content_markdown', 'metadata_json', 'file_path', 'scope', 'workspace_id', 'is_active', 'icon', 'access_mode', 'default_model_id', 'sort_order'];
         const setParts = [];
         const vals = [];
         for (const f of fields) {
@@ -12197,6 +12210,34 @@ async function handleAgentsamApi(request, url, env) {
          LIMIT ?`
       ).bind(userKey, limit).all();
       return jsonResponse(results || []);
+    }
+
+    {
+      const m = pathLower.match(/^\/api\/agentsam\/ai\/([^/]+)$/);
+      if (m && method === 'PATCH') {
+        const sid = m[1];
+        const body = await readBody();
+        if (!body || typeof body !== 'object') return jsonResponse({ error: 'Invalid JSON' }, 400);
+        const fields = ['name', 'role_name', 'mode', 'safety_level', 'status',
+          'model_policy_json', 'requires_human_approval', 'mcp_services_json',
+          'tool_permissions_json', 'rate_limits_json', 'budgets_json',
+          'telemetry_enabled', 'system_prompt', 'tool_invocation_style',
+          'icon', 'access_mode', 'sort_order'];
+        const setParts = [];
+        const vals = [];
+        for (const f of fields) {
+          if (Object.prototype.hasOwnProperty.call(body, f)) {
+            setParts.push(`${f} = ?`);
+            vals.push(body[f]);
+          }
+        }
+        if (!setParts.length) return jsonResponse({ error: 'No fields to update' }, 400);
+        vals.push(sid);
+        await env.DB.prepare(
+          `UPDATE agentsam_ai SET ${setParts.join(', ')}, updated_at = datetime('now') WHERE id = ?`
+        ).bind(...vals).run();
+        return jsonResponse({ ok: true });
+      }
     }
 
     if (pathLower === '/api/agentsam/ai' && method === 'GET') {
@@ -17989,7 +18030,7 @@ async function compactAgentChatsToR2(env) {
     const out = await env.DB.prepare(
       `SELECT conversation_id, role, content, created_at
        FROM agent_messages
-       WHERE created_at >= ?
+       WHERE created_at < ?
        ORDER BY conversation_id, created_at ASC`
     ).bind(cutoff).all();
     rows = out?.results || [];
@@ -18052,7 +18093,32 @@ async function compactAgentChatsToR2(env) {
   } catch (e) {
     return { conversations: byConv.size, messages: rows.length, key: '', error: String(e?.message || e) };
   }
-  return { conversations: byConv.size, messages: rows.length, key };
+  // Archive each conversation as full JSONL to R2, then delete from D1
+  let deleted = 0;
+  const convIds = [...byConv.keys()];
+  for (const cid of convIds) {
+    const msgs = byConv.get(cid);
+    if (!msgs?.length) continue;
+    try {
+      // Write full conversation to R2
+      const convKey = `conversations/${today.slice(0,7)}/${cid}.jsonl`;
+      const jsonl = msgs.map(m => JSON.stringify(m)).join("\n");
+      await env.R2.put(convKey, jsonl, { httpMetadata: { contentType: "application/x-ndjson" } });
+      // Update conversation record
+      await env.DB.prepare(
+        `UPDATE agent_conversations SET r2_context_key = ?, is_archived = 1, updated_at = ? WHERE id = ?`
+      ).bind(convKey, Math.floor(Date.now()/1000), cid).run();
+      // Delete messages from D1
+      const del = await env.DB.prepare(
+        `DELETE FROM agent_messages WHERE conversation_id = ? AND created_at < ?`
+      ).bind(cid, cutoff).run();
+      deleted += del.changes ?? 0;
+    } catch (e) {
+      console.warn("[compact] archive/delete failed for", cid, e?.message);
+    }
+  }
+  console.log(`[compact] archived ${convIds.length} conversations, deleted ${deleted} messages from D1`);
+  return { conversations: byConv.size, messages: rows.length, key, deleted };
 }
 
 /**

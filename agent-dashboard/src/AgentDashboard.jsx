@@ -2318,6 +2318,10 @@ export default function AgentDashboard() {
         }
         const role = m.role === "assistant" ? "assistant" : "user";
         const raw = m.content;
+        // Preserve content arrays (tool_use blocks) — DO NOT stringify
+        // Anthropic requires tool_use blocks to remain in assistant messages
+        // so tool_result blocks in subsequent messages have matching tool_use_id
+        if (Array.isArray(raw)) return { role, content: raw };
         const safeContent =
           raw != null && String(raw).trim() !== "" ? String(raw) : "(empty)";
         return { role, content: safeContent };
@@ -5339,13 +5343,18 @@ export default function AgentDashboard() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (agentState !== AGENT_STATES.IDLE && !input.trim()) {
+                    if ((isLoading || agentState !== AGENT_STATES.IDLE) && !input.trim()) {
+                      if (abortControllerRef.current) {
+                        abortControllerRef.current.abort();
+                        abortControllerRef.current = null;
+                      }
+                      setIsLoading(false);
                       stopGeneration();
                     } else {
                       sendMessage();
                     }
                   }}
-                  disabled={(!input.trim() && !attachedImages.length && !attachedFiles.length) || agentState !== AGENT_STATES.IDLE}
+                  disabled={(!input.trim() && !attachedImages.length && !attachedFiles.length) && agentState === AGENT_STATES.IDLE && !isLoading}
                   aria-label={agentState !== AGENT_STATES.IDLE && !input.trim() ? "Stop" : "Send"}
                   style={{
                     width: 36,

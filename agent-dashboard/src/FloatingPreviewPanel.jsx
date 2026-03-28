@@ -1018,6 +1018,12 @@ export default function FloatingPreviewPanel({
       if (activeTab === "browser" && (browserInputUrl || browserUrl)) {
         const u = (browserInputUrl || browserUrl || "").trim();
         const url = u.startsWith("http") || u.startsWith("/") ? (u.startsWith("/") ? `${typeof window !== "undefined" ? window.location.origin : ""}${u}` : u) : "https://" + u;
+        // Block own dashboard — causes infinite mirror
+        const ownOrigin = typeof window !== "undefined" ? window.location.origin : "";
+        if (ownOrigin && url.startsWith(ownOrigin) && url.includes("/dashboard")) {
+          window.open(url, "_blank", "noopener noreferrer");
+          return;
+        }
         window.open(url, "_blank", "noopener");
         return;
       }

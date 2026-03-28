@@ -2449,9 +2449,9 @@ export default function AgentDashboard() {
                 } else if (data.type === "tool_approval_request" && data.tool) {
                   setPendingToolApproval(data.tool);
                 } else if (data.type === "done") {
-                  inputTok = data.input_tokens ?? 0;
-                  outputTok = data.output_tokens ?? 0;
-                  costUsd = data.cost_usd ?? 0;
+                  inputTok = data.input_tokens ?? data.usage?.input_tokens ?? 0;
+                  outputTok = data.output_tokens ?? data.usage?.output_tokens ?? 0;
+                  costUsd = data.cost_usd ?? data.usage?.cost_usd ?? 0;
                   if (data.conversation_id) convId = data.conversation_id;
                   if (data.model_used) setLastUsedModel(data.model_used);
                 } else if (data.type === "error") {
@@ -2465,9 +2465,14 @@ export default function AgentDashboard() {
                 } else if (data.type === "open_panel" && data.panel === "draw") {
                   setPreviewOpen(true);
                   setActiveTab("draw");
-                } else if (data.type === "tool_start" && data.tool?.startsWith?.("excalidraw")) {
-                  setPreviewOpen(true);
-                  setActiveTab("draw");
+                } else if (data.type === "tool_start") {
+                  if (data.tool?.startsWith?.("excalidraw")) {
+                    setPreviewOpen(true);
+                    setActiveTab("draw");
+                  }
+                  // Show tool activity in status — don't touch fullContent
+                  // (chatWithToolsAnthropic sends all content via final text event)
+                  setAgentState("TOOL_CALL");
                 } else if (data.type === "state" && data.context?.tool?.toLowerCase?.().includes("excalidraw")) {
                   setPreviewOpen(true);
                   setActiveTab("draw");
@@ -2477,11 +2482,12 @@ export default function AgentDashboard() {
                     const uiEvent = parsed?.ui_event || parsed?.result?.ui_event;
                     const isBroadcast = parsed?.broadcast === true && parsed?.action;
                     if (uiEvent?.type === 'excalidraw' || isBroadcast) {
-                      // Open panel so draw.html loads and connects to DO WebSocket
                       setPreviewOpen(true);
                       setActiveTab("draw");
                     }
-                  } catch (_) {}
+                  } catch (_) {
+                    // Non-JSON tool_result — ignore, final text event carries the response
+                  }
                 }
               } catch (_) { /* ignore parse errors */ }
             }

@@ -9648,7 +9648,12 @@ async function handleAgentApi(request, url, env, ctx) {
       let ragContext = '';
       const RAG_MIN_QUERY_WORDS = 4;
       const RAG_MIN_CONTEXT_CHARS = 100;
+      // AutoRAG: skip for shell/question (pgvector handles those), skip if token missing
+      // If AI Search returns 7001, fail silently — pgvector provides fallback context
+      const _intentForRag = model?._intent ?? null;
       const runRag = (chatMode === 'agent') &&
+        (_intentForRag !== 'shell') &&
+        (_intentForRag !== 'question') &&
         env.AI_SEARCH_TOKEN &&
         lastUserContent &&
         lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
@@ -9680,8 +9685,11 @@ async function handleAgentApi(request, url, env, ctx) {
                 raw, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
             }
           } else {
-            console.warn('[agent/chat] AutoRAG query failed:',
-              ragRes.status, await ragRes.text());
+            const ragErrText = await ragRes.text().catch(() => '');
+            if (!ragErrText.includes('7001')) {
+              console.warn('[agent/chat] AutoRAG query failed:', ragRes.status, ragErrText.slice(0, 200));
+            }
+            // 7001 = AI Search internal error — skip silently, pgvector provides fallback
           }
         } catch (e) {
           console.error('[agent/chat] AutoRAG failed:',
@@ -10006,6 +10014,13 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         } catch (_) {}
       }
       toolDefinitions = filterToolsByMode(chatMode, toolDefinitions);
+      // Shell intent post-filter: after mode filter, cap to terminal_execute only
+      if (typeof _agentIntent !== 'undefined' && _agentIntent === 'shell' && chatMode === 'agent') {
+        const hasTerminal = toolDefinitions.some((t) => t && t.name === 'terminal_execute');
+        if (hasTerminal) {
+          toolDefinitions = toolDefinitions.filter((t) => t && t.name === 'terminal_execute');
+        }
+      }
       const binaryAttachments = (attachedFiles || []).filter((f) => f.encoding === 'base64');
       if (binaryAttachments.length > 0) {
         toolDefinitions = [...toolDefinitions, {

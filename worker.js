@@ -6888,7 +6888,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
         };
 
         const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
@@ -6901,29 +6901,45 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           const errMsg = err?.error?.message ?? `Google error ${resp.status}`;
-          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}
-
-`));
+          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}\n\n`));
           break;
         }
 
-        const data = await resp.json();
-        const candidate = data.candidates?.[0];
-        const parts = candidate?.content?.parts || [];
-        const usage = data.usageMetadata;
-        if (usage) {
-          inputTokens += usage.promptTokenCount ?? 0;
-          outputTokens += usage.candidatesTokenCount ?? 0;
-        }
-
-        // Collect text parts
-        for (const part of parts) {
-          if (part.text) {
-            fullText += part.text;
-            await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}
-
-`));
+        // Stream SSE from Google — emit text tokens inline, collect parts for tool detection
+        const parts = [];
+        {
+          const sseReader = resp.body.getReader();
+          const sseDec = new TextDecoder();
+          let sseBuf = '';
+          for (;;) {
+            const { done, value } = await sseReader.read();
+            if (done) break;
+            sseBuf += sseDec.decode(value, { stream: true });
+            const lines = sseBuf.split(/\r?\n/);
+            sseBuf = lines.pop() || '';
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed === '[DONE]') continue;
+              const raw = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed;
+              let chunk;
+              try { chunk = JSON.parse(raw); } catch (_) { continue; }
+              const cparts = chunk.candidates?.[0]?.content?.parts || [];
+              const usage = chunk.usageMetadata;
+              if (usage) {
+                inputTokens = usage.promptTokenCount ?? inputTokens;
+                outputTokens = usage.candidatesTokenCount ?? outputTokens;
+              }
+              for (const part of cparts) {
+                // Accumulate all parts for tool call detection
+                parts.push(part);
+                if (part.text) {
+                  fullText += part.text;
+                  await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}\n\n`));
+                }
+              }
+            }
           }
+          sseReader.releaseLock();
         }
 
         // Check for function calls
@@ -6962,7 +6978,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 
       const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
-      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId })}
+      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}
 
 `));
     } catch (e) {

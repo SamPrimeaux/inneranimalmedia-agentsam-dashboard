@@ -5135,7 +5135,15 @@ function capWithMarker(text, maxChars) {
 
 /** Provider-aware system prompt caps — Google/OpenAI get trimmed context to reduce token burn */
 const PROVIDER_PROMPT_CAPS = {
-  anthropic: null, // no override — use PROMPT_CAPS defaults
+  anthropic: {
+    COMPILED_CONTEXT_MAX_CHARS: 6000,  // full context for complex tasks
+    RAG_CONTEXT_MAX_CHARS: 2000,
+    SCHEMA_BLURB_MAX_CHARS: 4000,
+    KNOWLEDGE_BLURB_MAX_CHARS: 2000,
+    DAILY_MEMORY_MAX_CHARS: 2000,
+    MCP_BLURB_MAX_CHARS: 800,
+    AGENT_CONTEXT_MAX_CHARS: 3000,
+  },
   google: {
     COMPILED_CONTEXT_MAX_CHARS: 800,
     RAG_CONTEXT_MAX_CHARS: 600,
@@ -5415,8 +5423,14 @@ function buildPlanContext(sections, ragContext, fileContext, model, indexedConte
 }
 
 function buildAgentContext(sections, ragContext, fileContext, model, compiledContextBlob, indexedContext) {
-  const rawFull = (sections && typeof sections.full === 'string') ? sections.full : (compiledContextBlob && typeof compiledContextBlob === 'string') ? compiledContextBlob : (sections ? [sections.core, sections.memory, sections.kb, sections.mcp, sections.schema, sections.daily].filter(Boolean).join('') : '');
-  // Apply provider-aware cap — Google/OpenAI get trimmed compiled context
+  // Prefer compiledContextBlob when explicitly passed (already capped by caller)
+  // Fall back to sections.full only when compiledContextBlob is null/undefined
+  const rawFull = (compiledContextBlob != null && typeof compiledContextBlob === 'string')
+    ? compiledContextBlob
+    : (sections && typeof sections.full === 'string')
+      ? sections.full
+      : (sections ? [sections.core, sections.memory, sections.kb, sections.mcp, sections.schema, sections.daily].filter(Boolean).join('') : '');
+  // Apply provider-aware cap as final safety net
   const full = capForProvider(rawFull, model?.provider, 'COMPILED_CONTEXT_MAX_CHARS') || rawFull;
   let out = full;
   const prefixParts = [];

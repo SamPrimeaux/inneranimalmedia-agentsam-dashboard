@@ -165,7 +165,7 @@
         .topbar {
             position: sticky;
             top: 0;
-            z-index: 9000;
+            z-index: 10005;
             background: var(--bg-nav);
             border-bottom: 1px solid var(--border-nav);
             height: 60px;
@@ -230,6 +230,23 @@
         .search-wrap .search-input::placeholder { color: var(--text-nav-muted); }
         .search-wrap .search-input:focus { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); }
         .search-wrap .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-nav-muted); }
+        /* Cursor-style search pill rest state */
+        .topbar-pill-repo-label {
+            flex: 1;
+            font-size: 13px;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: text;
+            user-select: none;
+            padding: 0 2px;
+        }
+        .topbar-search-input { transition: opacity 100ms; }
+        .topbar-command-pill.rest .topbar-search-input { display: none; }
+        .topbar-command-pill.rest .topbar-pill-repo-label { display: block; }
+        .topbar-command-pill.active .topbar-search-input { display: block; }
+        .topbar-command-pill.active .topbar-pill-repo-label { display: none; }
         .search-dropdown { position: fixed; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); z-index: 10001; display: none; }
         .search-dropdown.open { display: block; }
         .search-dropdown .item { padding: 10px 12px; font-size: 13px; color: var(--text-primary); cursor: pointer; border-bottom: 1px solid var(--border); }
@@ -744,10 +761,151 @@
             text-decoration: none;
             transition: color 150ms, background 150ms;
             flex-shrink: 0;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 0;
         }
         .topbar-icon-btn:hover {
             color: var(--text-primary);
             background: var(--bg-hover);
+        }
+        .topbar-menu-dropdown {
+            position: fixed;
+            top: 0;
+            right: 0;
+            min-width: 210px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.28);
+            z-index: 99999;
+            padding: 4px;
+            display: none;
+            flex-direction: column;
+        }
+        .topbar-menu-dropdown.open { display: flex; }
+        .tmenu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: var(--text-primary);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            width: 100%;
+            text-align: left;
+            transition: background 120ms;
+            box-sizing: border-box;
+        }
+        .tmenu-item:hover { background: var(--bg-hover); }
+        .tmenu-kbd {
+            margin-left: auto;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: monospace;
+        }
+        .tmenu-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+        /* === RIGHT DRAWER === */
+        .right-drawer {
+            position: fixed;
+            top: 60px;
+            right: 0;
+            bottom: 24px;
+            width: 280px;
+            background: var(--bg-elevated);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: row;
+            z-index: 10004;
+            transform: translateX(100%);
+            transition: transform 200ms cubic-bezier(0.4,0,0.2,1);
+            box-shadow: -4px 0 24px rgba(0,0,0,0.18);
+        }
+        .right-drawer.open { transform: translateX(0); }
+        .right-drawer-tabs {
+            width: 44px;
+            min-width: 44px;
+            background: var(--bg-nav);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 8px 0;
+            gap: 2px;
+        }
+        .rd-tab {
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: var(--text-muted);
+            background: transparent;
+            border: none;
+            padding: 0;
+            transition: color 120ms, background 120ms;
+            position: relative;
+        }
+        .rd-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+        .rd-tab.active { color: var(--text-primary); }
+        .rd-tab.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 8px;
+            bottom: 8px;
+            width: 2px;
+            background: var(--accent, var(--color-accent, #4a9eff));
+            border-radius: 0 2px 2px 0;
+        }
+        .right-drawer-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .rd-panel { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+        .rd-panel.active { display: flex; }
+        .rd-panel-header {
+            padding: 10px 12px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .rd-panel-body { flex: 1; overflow-y: auto; padding: 6px 0; }
+        .rd-file-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            font-size: 12px;
+            color: var(--text-primary);
+            cursor: pointer;
+            border-radius: 4px;
+            margin: 0 4px;
+            transition: background 100ms;
+        }
+        .rd-file-row:hover { background: var(--bg-hover); }
+        .rd-placeholder { padding: 24px 16px; font-size: 12px; color: var(--text-muted); text-align: center; line-height: 1.6; }
+        .rd-git-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: 12px; color: var(--text-primary); }
+        .rd-git-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--bg-hover); color: var(--text-muted); margin-left: auto; font-family: monospace; }
+        .item.search-cmd-row { display: flex; align-items: center; gap: 8px; }
+        .search-section-label {
+            padding: 8px 12px 4px;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: .06em;
         }
 
         /* Status bar */
@@ -839,7 +997,7 @@
         </div>
         <div class="topbar-center">
             <div class="topbar-center-inner" id="searchWrap">
-                <div class="topbar-command-pill" id="topbarCommandPill">
+                <div class="topbar-command-pill rest" id="topbarCommandPill">
                     <div class="topbar-search-side">
                         <button type="button" class="search-mobile-btn" id="searchMobileBtn" aria-label="Search">
                             <svg class="nav-icon-btn" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -848,7 +1006,8 @@
                             <circle cx="11" cy="11" r="8"/>
                             <path d="m21 21-4.35-4.35"/>
                         </svg>
-                        <input type="text" id="searchInput" class="topbar-search-input" placeholder="Search or type a command..." autocomplete="off"/>
+                        <span class="topbar-pill-repo-label" id="pillRepoLabel">inneranimalmedia</span>
+                        <input type="text" id="searchInput" class="topbar-search-input" placeholder="Search files, content and projects" autocomplete="off"/>
                     </div>
                     <div class="topbar-pill-divider"></div>
                     <div class="topbar-workspace-side" id="workspaceSelector" role="button" tabindex="0">
@@ -859,12 +1018,31 @@
                     </div>
                 </div>
                 <div class="search-dropdown" id="searchDropdown">
-                    <div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary); text-transform: uppercase;">Recent</div>
-                    <div class="item" data-url="/dashboard/overview">Overview</div>
-                    <div class="item" data-url="/dashboard/user-settings">User Settings</div>
-                    <div class="item" data-url="/dashboard/finance">Finance</div>
-                    <div class="item" data-url="/dashboard/draw">Draw</div>
-                    <div class="item" data-url="/dashboard/meet">Meet</div>
+                    <div class="search-section-label">Commands</div>
+                    <div class="item search-cmd-row" data-action="goto-file">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        <span style="flex:1">Go to File</span>
+                        <span style="font-size:11px;color:var(--text-muted);font-family:monospace">@ &#8984;P</span>
+                    </div>
+                    <div class="item search-cmd-row" data-action="show-commands">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        <span style="flex:1">Show and Run Commands</span>
+                        <span style="font-size:11px;color:var(--text-muted);font-family:monospace">&#8984;&#8679;P</span>
+                    </div>
+                    <div class="item search-cmd-row" data-action="run-task">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span style="flex:1">Run Task</span>
+                    </div>
+                    <div class="item search-cmd-row" data-action="debug">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        <span style="flex:1">Start Debugging</span>
+                        <span style="font-size:11px;color:var(--text-muted);font-family:monospace">F5</span>
+                    </div>
+                    <div id="searchRecentSection" style="display:none">
+                        <div class="tmenu-divider" style="margin:4px 0"></div>
+                        <div class="search-section-label">Recent Files</div>
+                        <div id="searchRecentFiles"></div>
+                    </div>
                 </div>
                 <select id="workspaceSelect" hidden aria-hidden="true">
                     <option value="ws_samprimeaux">Sam Primeaux Workspace</option>
@@ -872,31 +1050,51 @@
             </div>
         </div>
         <div class="topbar-right">
-            <button type="button" id="shellBellBtn" class="topbar-icon-btn" aria-label="Notifications" style="position:relative">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                </svg>
-                <span id="shellBellCount" style="display:none;position:absolute;top:4px;right:4px;width:8px;height:8px;border-radius:50%;background:var(--color-error);pointer-events:none"></span>
-            </button>
             <button type="button" id="topbarSidebarToggle" class="topbar-icon-btn" aria-label="Toggle sidebar" title="Toggle sidebar (Cmd+B)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                     <rect x="3" y="3" width="18" height="18" rx="2"/>
                     <path d="M9 3v18"/>
                 </svg>
             </button>
-            <button type="button" id="topbarTerminalToggle" class="topbar-icon-btn" aria-label="Toggle terminal" title="Toggle terminal (Cmd+J)">
+            <button type="button" id="topbarTerminalBtn" class="topbar-icon-btn" aria-label="Toggle terminal" title="Toggle terminal (Cmd+J)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                     <polyline points="4 17 10 11 4 5"/>
                     <line x1="12" y1="19" x2="20" y2="19"/>
                 </svg>
             </button>
-            <a href="/dashboard/user-settings" class="topbar-icon-btn topbar-gear-btn" id="topbarGearBtn" title="Settings">
+            <button type="button" id="topbarRightPanelBtn" class="topbar-icon-btn" aria-label="Toggle right panel" title="Toggle panel">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <path d="M15 3v18"/>
                 </svg>
-            </a>
+            </button>
+            <div style="position:relative" id="topbarMenuWrap">
+                <button type="button" id="topbarMenuBtn" class="topbar-icon-btn" aria-label="Menu" style="position:relative">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                        <circle cx="12" cy="5" r="1.5"/>
+                        <circle cx="12" cy="12" r="1.5"/>
+                        <circle cx="12" cy="19" r="1.5"/>
+                    </svg>
+                    <span id="shellBellCount" style="display:none;position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--color-error);pointer-events:none"></span>
+                </button>
+                <div id="topbarMenuDropdown" class="topbar-menu-dropdown" role="menu">
+                    <button type="button" class="tmenu-item" id="tmenuNotifications">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        Notifications
+                        <span id="tmenuBellDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--color-error);margin-left:auto;flex-shrink:0"></span>
+                    </button>
+                    <button type="button" class="tmenu-item" id="tmenuTerminal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        Toggle Terminal
+                        <span class="tmenu-kbd">&#8984;J</span>
+                    </button>
+                    <div class="tmenu-divider"></div>
+                    <a href="/dashboard/user-settings" class="tmenu-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        Settings
+                    </a>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -1130,8 +1328,8 @@
 <script>document.body.classList.add('agent-dashboard-page');</script>
 <div id="agent-dashboard-root" style="width:100%;height:100%;overflow:hidden;"></div>
 
-<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=146">
-    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=146"></script>
+<link rel="stylesheet" href="/static/dashboard/agent/agent-dashboard.css?v=150">
+    <script type="module" src="/static/dashboard/agent/agent-dashboard.js?v=150"></script>
         </main>
     </div>
 
@@ -1451,6 +1649,142 @@
             });
         }
 
+        // 3-dot topbar menu
+        (function() {
+            var btn = document.getElementById('topbarMenuBtn');
+            var dropdown = document.getElementById('topbarMenuDropdown');
+            var wrap = document.getElementById('topbarMenuWrap');
+            if (!btn || !dropdown) return;
+            function positionDropdown() {
+                var rect = btn.getBoundingClientRect();
+                dropdown.style.top = (rect.bottom + 6) + 'px';
+                dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+                dropdown.style.left = 'auto';
+            }
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var isOpen = dropdown.classList.contains('open');
+                if (!isOpen) { positionDropdown(); }
+                dropdown.classList.toggle('open');
+            });
+            document.addEventListener('click', function(e) {
+                if (!wrap.contains(e.target)) dropdown.classList.remove('open');
+            });
+            var tmTerm = document.getElementById('tmenuTerminal');
+            if (tmTerm) tmTerm.addEventListener('click', function() {
+                dropdown.classList.remove('open');
+                window.dispatchEvent(new CustomEvent('iam_toggle_terminal'));
+            });
+            var tmViewer = document.getElementById('tmenuViewer');
+            if (tmViewer) tmViewer.addEventListener('click', function() {
+                dropdown.classList.remove('open');
+                window.dispatchEvent(new CustomEvent('iam_toggle_viewer'));
+            });
+            var tmNotif = document.getElementById('tmenuNotifications');
+            if (tmNotif) tmNotif.addEventListener('click', function() {
+                dropdown.classList.remove('open');
+                window.dispatchEvent(new CustomEvent('iam_open_notifications'));
+            });
+            // Mirror unread dot into dropdown bell dot
+            var observer = new MutationObserver(function() {
+                var src = document.getElementById('shellBellCount');
+                var dst = document.getElementById('tmenuBellDot');
+                if (src && dst) dst.style.display = src.style.display;
+            });
+            var bellCount = document.getElementById('shellBellCount');
+            if (bellCount) observer.observe(bellCount, { attributes: true, attributeFilter: ['style'] });
+        })();
+
+        // topbarSidebarToggle wires into existing hamburger/sidenav system
+        (function() {
+            var topbarToggle = document.getElementById('topbarSidebarToggle');
+            var sidenav = document.getElementById('sidenav');
+            var overlay = document.getElementById('overlay');
+            var hamburger = document.getElementById('hamburger');
+            if (!topbarToggle || !sidenav) return;
+            topbarToggle.addEventListener('click', function() {
+                var isOpen = sidenav.classList.contains('open');
+                if (isOpen) {
+                    sidenav.classList.remove('open');
+                    if (overlay) overlay.classList.remove('open');
+                    if (hamburger) hamburger.classList.remove('open');
+                } else {
+                    sidenav.classList.add('open');
+                    if (overlay) overlay.classList.add('open');
+                    if (hamburger) hamburger.classList.add('open');
+                }
+            });
+        })();
+
+        // Command palette search
+        (function() {
+            var input = document.getElementById('searchInput');
+            var dropdown = document.getElementById('searchDropdown');
+            var recentSection = document.getElementById('searchRecentSection');
+            var recentFiles = document.getElementById('searchRecentFiles');
+            if (!input || !dropdown) return;
+            var recentLoaded = false;
+            function loadRecentFiles() {
+                if (recentLoaded) return;
+                recentLoaded = true;
+                fetch('/api/agent/recent-files?limit=10', { credentials: 'same-origin' })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(d) {
+                        if (!d) return;
+                        var files = Array.isArray(d.files) ? d.files : [];
+                        if (!files.length) return;
+                        recentSection.style.display = '';
+                        recentFiles.innerHTML = files.map(function(f) {
+                            return '<div class="item search-cmd-row" data-url="' + (f.url || '#') + '">' +
+                                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0;color:var(--text-muted)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+                                '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (f.name || f.path || 'Untitled') + '</span>' +
+                                '<span style="font-size:11px;color:var(--text-muted)">' + (f.type || '') + '</span></div>';
+                        }).join('');
+                        recentFiles.querySelectorAll('.item').forEach(function(el) {
+                            el.addEventListener('click', function() {
+                                var url = el.dataset.url;
+                                if (url && url !== '#') window.location.href = url;
+                                dropdown.classList.remove('open');
+                                input.value = '';
+                            });
+                        });
+                    }).catch(function() {});
+            }
+            input.addEventListener('focus', function() {
+                dropdown.classList.add('open');
+                loadRecentFiles();
+            });
+            input.addEventListener('input', function() {
+                var q = input.value.trim().toLowerCase();
+                dropdown.querySelectorAll('.item').forEach(function(el) {
+                    el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? '' : 'none';
+                });
+                if (recentSection) recentSection.style.display =
+                    (!q || 'recent'.includes(q)) ? (recentLoaded ? '' : 'none') : 'none';
+            });
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#searchWrap')) {
+                    dropdown.classList.remove('open');
+                }
+            });
+            dropdown.querySelectorAll('[data-action]').forEach(function(el) {
+                el.addEventListener('click', function() {
+                    var action = el.dataset.action;
+                    dropdown.classList.remove('open');
+                    input.value = '';
+                    if (action === 'goto-file') {
+                        window.dispatchEvent(new CustomEvent('iam_at_mention', { detail: { trigger: '@' } }));
+                    } else if (action === 'show-commands') {
+                        window.dispatchEvent(new CustomEvent('iam_open_notifications'));
+                    } else if (action === 'debug') {
+                        window.dispatchEvent(new CustomEvent('iam_toggle_terminal'));
+                    } else if (action === 'run-task') {
+                        window.dispatchEvent(new CustomEvent('iam_run_task'));
+                    }
+                });
+            });
+        })();
+
         // Bell — unread dot + open notifications panel
         (function() {
             function refreshBellCount() {
@@ -1503,129 +1837,143 @@
             });
         })();
 
-        // Search: dropdown on focus, RAG knowledge search (debounced), history from localStorage, mobile magnifier
-        (function () {
-            const wrap = document.getElementById('searchWrap');
-            const input = document.getElementById('searchInput');
-            const dropdown = document.getElementById('searchDropdown');
-            const mobileBtn = document.getElementById('searchMobileBtn');
-            const SEARCH_HISTORY_KEY = 'dashboard-search-history';
-            const maxHistory = 10;
-            var ragResults = [];
-            var ragLoading = false;
-            var ragDebounceTimer = null;
-
-            function getHistory() {
-                try { return JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]'); } catch { return []; }
+        // Search pill: rest ↔ active (Cursor-style)
+        (function() {
+            var pill = document.getElementById('topbarCommandPill');
+            var input = document.getElementById('searchInput');
+            var label = document.getElementById('pillRepoLabel');
+            var dropdown = document.getElementById('searchDropdown');
+            if (!pill || !input) return;
+            // Hydrate repo label from git status
+            fetch('/api/agent/git/status', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(d) {
+                    if (!d || !label) return;
+                    var repo = d.repo_full_name || d.worker_name || 'inneranimalmedia';
+                    label.textContent = repo.includes('/') ? repo.split('/')[1] : repo;
+                }).catch(function() {});
+            function activate() {
+                pill.classList.remove('rest');
+                pill.classList.add('active');
+                input.focus();
+                if (dropdown) dropdown.classList.add('open');
             }
-            function addToHistory(label, url) {
-                const h = getHistory().filter(function (x) { return x.url !== url; });
-                h.unshift({ label: label || url, url: url });
-                localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(h.slice(0, maxHistory)));
+            function deactivate() {
+                pill.classList.remove('active');
+                pill.classList.add('rest');
+                input.value = '';
+                if (dropdown) dropdown.classList.remove('open');
             }
-            function insertRagIntoChat(content) {
-                var text = 'Context from knowledge base:\n\n' + (content || '').slice(0, 2000) + '\n\nBased on this, ';
-                var footerInput = document.getElementById('agent-footer-chat-input');
-                var drawerInput = document.getElementById('agentDrawerInput');
-                if (footerInput) {
-                    footerInput.value = text;
-                    footerInput.focus();
-                    var pane = document.getElementById('agent-footer-pane');
-                    var bar = document.getElementById('agent-footer-chat');
-                    if (bar && bar.classList.contains('collapsed')) {
-                        var expandBtn = document.getElementById('agent-footer-expand-btn');
-                        if (expandBtn) expandBtn.click();
-                    }
-                } else if (drawerInput) {
-                    drawerInput.value = text;
-                    drawerInput.focus();
+            if (label) label.addEventListener('click', activate);
+            pill.addEventListener('click', function(e) {
+                if (pill.classList.contains('rest')) activate();
+            });
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#searchWrap') && pill.classList.contains('active')) {
+                    deactivate();
                 }
+            });
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') deactivate();
+            });
+        })();
+
+        // Search: command palette + RAG + history (dynamic section injected after static items)
+        (function () {
+            var wrap = document.getElementById('searchWrap');
+            var input = document.getElementById('searchInput');
+            var dropdown = document.getElementById('searchDropdown');
+            var mobileBtn = document.getElementById('searchMobileBtn');
+            if (!input || !dropdown) return;
+            var HISTORY_KEY = 'dashboard-search-history';
+            var ragResults = [], ragLoading = false, ragTimer = null;
+            // Inject dynamic section after static command items
+            var dynSection = document.createElement('div');
+            dynSection.id = 'searchDynSection';
+            dropdown.appendChild(dynSection);
+            function getHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { return []; } }
+            function addHistory(label, url) {
+                var h = getHistory().filter(function(x) { return x.url !== url; });
+                h.unshift({ label: label || url, url: url });
+                localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, 10)));
             }
-            function fetchRag(query, cb) {
-                if (ragLoading || !query || query.length < 3) { cb([]); return; }
-                ragLoading = true;
-                fetch(window.location.origin + '/api/agent/rag/query', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify({ query: query.trim() })
-                }).then(function (r) { return r.json(); }).then(function (d) {
-                    ragLoading = false;
-                    var matches = (d && d.matches) ? d.matches : [];
-                    cb(Array.isArray(matches) ? matches : []);
-                }).catch(function () { ragLoading = false; cb([]); });
-            }
-            function renderSuggestions() {
-                var q = (input && input.value) ? input.value.trim() : '';
-                var showRag = q.length >= 3 && (ragResults.length > 0 || ragLoading);
-                const h = getHistory();
-                const navItems = ['Overview', 'Finance', 'Billing', 'Clients', 'Calendar', 'Dev Tools', 'MCP', 'Cloud', 'Images', 'Draw', 'Meet', 'Kanban', 'Time Tracking', 'CMS', 'Mail', 'Pipelines', 'User Settings', 'Onboarding', 'Agent'];
-                const urls = ['/dashboard/overview', '/dashboard/finance', '/dashboard/billing', '/dashboard/clients', '/dashboard/calendar', '/dashboard/tools', '/dashboard/mcp', '/dashboard/cloud', '/dashboard/images', '/dashboard/draw', '/dashboard/meet', '/dashboard/kanban', '/dashboard/time-tracking', '/dashboard/cms', '/dashboard/mail', '/dashboard/pipelines', '/dashboard/user-settings', '/dashboard/onboarding', '/dashboard/agent', '/dashboard/chats'];
+            function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+            function renderDyn() {
+                var q = input.value.trim();
+                var h = getHistory();
                 var html = '';
-                if (showRag) {
-                    html += '<div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary); text-transform: uppercase;">Knowledge</div>';
+                if (q.length >= 3 && (ragResults.length || ragLoading)) {
+                    html += '<div class="search-section-label">Knowledge</div>';
                     if (ragLoading) {
-                        html += '<div class="item search-rag-item" style="color: var(--text-secondary);">Searching...</div>';
+                        html += '<div class="item" style="color:var(--text-muted);font-size:12px;padding:8px 12px">Searching knowledge base...</div>';
                     } else {
-                        ragResults.slice(0, 8).forEach(function (text) {
-                            var raw = typeof text === 'string' ? text : '';
-                            var snippet = raw.slice(0, 120);
-                            if (raw.length > 120) snippet += '...';
-                            var esc = snippet.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                            html += '<div class="item search-rag-item" data-rag-content="' + esc + '">' + esc + '</div>';
+                        ragResults.slice(0, 5).forEach(function(t) {
+                            var s = String(t).slice(0, 100);
+                            html += '<div class="item search-cmd-row rag-hit" data-rag="' + esc(s) + '" style="font-size:12px;color:var(--text-muted);align-items:flex-start">' + esc(s) + '</div>';
                         });
                     }
                 }
-                if (h.length) html += '<div class="search-dropdown-header" style="padding:8px 12px; font-size:11px; color: var(--text-secondary); text-transform: uppercase;">Recent</div>';
-                h.forEach(function (x) { html += '<div class="item" data-url="' + (x.url || '') + '">' + (x.label || x.url) + '</div>'; });
-                navItems.forEach(function (label, i) { if (!h.some(function (x) { return x.url === urls[i]; })) html += '<div class="item" data-url="' + urls[i] + '">' + label + '</div>'; });
-                if (dropdown) dropdown.innerHTML = html || '<div class="item" style="color: var(--text-secondary);">No history yet</div>';
-                dropdown.querySelectorAll('.item[data-url]').forEach(function (el) {
-                    el.addEventListener('click', function () {
-                        const u = el.getAttribute('data-url');
-                        if (u) { addToHistory(el.textContent.trim(), u); window.location.href = u; }
+                if (!q && h.length) {
+                    html += '<div class="tmenu-divider" style="margin:4px 0"></div><div class="search-section-label">Recent</div>';
+                    h.forEach(function(x) {
+                        html += '<div class="item search-cmd-row" data-url="' + esc(x.url||'') + '">' +
+                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" style="flex-shrink:0;color:var(--text-muted)"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' +
+                            '<span>' + esc(x.label||x.url) + '</span></div>';
+                    });
+                }
+                dynSection.innerHTML = html;
+                dynSection.querySelectorAll('[data-url]').forEach(function(el) {
+                    el.addEventListener('click', function() {
+                        var u = el.dataset.url;
+                        if (u) { addHistory(el.textContent.trim(), u); window.location.href = u; }
                     });
                 });
-                dropdown.querySelectorAll('.item.search-rag-item[data-rag-content]').forEach(function (el) {
-                    el.addEventListener('click', function () {
-                        var content = el.getAttribute('data-rag-content');
-                        if (content) insertRagIntoChat(content);
+                dynSection.querySelectorAll('.rag-hit').forEach(function(el) {
+                    el.addEventListener('click', function() {
                         dropdown.classList.remove('open');
+                        var content = el.dataset.rag || '';
+                        var ci = document.querySelector('[id*="chatInput"], [id*="chat-input"], #agent-footer-chat-input');
+                        if (ci) { ci.value = 'Context: ' + content + '\n\nBased on this, '; ci.focus(); }
                     });
                 });
             }
-            if (input) {
-                input.addEventListener('focus', function () { dropdown.classList.add('open'); positionHeaderDropdown(wrap, dropdown, 'left'); renderSuggestions(); });
-                input.addEventListener('blur', function () { setTimeout(function () { dropdown.classList.remove('open'); }, 150); });
-                input.addEventListener('input', function () {
-                    var q = input.value.trim();
-                    if (ragDebounceTimer) clearTimeout(ragDebounceTimer);
-                    if (q.length >= 3) {
-                        ragDebounceTimer = setTimeout(function () {
-                            fetchRag(q, function (matches) {
-                                ragResults = matches;
-                                if (dropdown.classList.contains('open')) renderSuggestions();
-                            });
-                        }, 300);
-                    } else {
-                        ragResults = [];
-                    }
-                    if (dropdown.classList.contains('open')) renderSuggestions();
+            function fetchRag(q) {
+                if (ragLoading || !q || q.length < 3) return;
+                ragLoading = true; ragResults = []; renderDyn();
+                fetch('/api/agent/rag/query', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({query:q.trim()}) })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(d) { ragLoading = false; var m = d && d.matches ? d.matches : []; ragResults = Array.isArray(m) ? m : []; renderDyn(); })
+                    .catch(function() { ragLoading = false; renderDyn(); });
+            }
+            function filterStatic(q) {
+                dropdown.querySelectorAll('.item[data-action]').forEach(function(el) {
+                    el.style.display = (!q || el.textContent.toLowerCase().includes(q.toLowerCase())) ? '' : 'none';
                 });
-                input.addEventListener('keydown', function (e) {
-                    if (e.key === 'Enter') {
-                        const v = input.value.trim();
-                        if (v) { addToHistory(v, '/dashboard/overview'); window.location.href = '/dashboard/overview'; }
-                    }
+                dropdown.querySelectorAll('.search-section-label:not(#searchDynSection .search-section-label)').forEach(function(el) {
+                    el.style.display = q ? 'none' : '';
                 });
             }
-            if (mobileBtn) {
-                mobileBtn.addEventListener('click', function () {
+            input.addEventListener('focus', function() { dropdown.classList.add('open'); renderDyn(); });
+            input.addEventListener('input', function() {
+                var q = input.value.trim();
+                filterStatic(q);
+                clearTimeout(ragTimer); ragResults = []; ragLoading = false;
+                if (q.length >= 3) { ragTimer = setTimeout(function() { fetchRag(q); }, 350); }
+                else { renderDyn(); }
+            });
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#searchWrap')) {
+                    dropdown.classList.remove('open');
+                    if (mobileBtn && wrap) wrap.classList.remove('expanded');
+                }
+            });
+            if (mobileBtn && wrap) {
+                mobileBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
                     wrap.classList.toggle('expanded');
-                    if (wrap.classList.contains('expanded')) { input.focus(); dropdown.classList.add('open'); positionHeaderDropdown(wrap, dropdown, 'left'); renderSuggestions(); }
+                    if (wrap.classList.contains('expanded')) input.focus();
                 });
             }
-            renderSuggestions();
         })();
 
         const sidenavLogout = document.getElementById('sidenavLogoutBtn');
@@ -1646,6 +1994,169 @@
                 if (topSearch) topSearch.focus();
             });
         }
+
+        // Right drawer panel
+        (function() {
+            var drawer = document.getElementById('rightDrawer');
+            var rdTabs = document.querySelectorAll('.rd-tab[data-panel]');
+            var rdPanels = document.querySelectorAll('.rd-panel');
+            var isOpen = false;
+            var activeTab = 'explorer';
+
+            function openDrawer(panel) {
+                isOpen = true;
+                drawer.classList.add('open');
+                switchTab(panel || activeTab);
+            }
+            function closeDrawer() { isOpen = false; drawer.classList.remove('open'); }
+            function switchTab(panel) {
+                activeTab = panel;
+                rdTabs.forEach(function(t) { t.classList.toggle('active', t.dataset.panel === panel); });
+                rdPanels.forEach(function(p) { p.classList.toggle('active', p.id === 'rd-' + panel); });
+                if (panel === 'explorer') loadExplorer();
+                if (panel === 'source') loadGitStatus();
+            }
+            rdTabs.forEach(function(tab) {
+                tab.addEventListener('click', function() {
+                    var p = tab.dataset.panel;
+                    if (!isOpen) { openDrawer(p); }
+                    else if (activeTab === p) { closeDrawer(); }
+                    else { switchTab(p); }
+                });
+            });
+            window.addEventListener('iam_toggle_viewer', function() { isOpen ? closeDrawer() : openDrawer(); });
+            var rpBtn = document.getElementById('topbarRightPanelBtn');
+            if (rpBtn) rpBtn.addEventListener('click', function() { isOpen ? closeDrawer() : openDrawer(); });
+            var termBtn = document.getElementById('topbarTerminalBtn');
+            if (termBtn) termBtn.addEventListener('click', function() { window.dispatchEvent(new CustomEvent('iam_toggle_terminal')); });
+
+            function loadExplorer() {
+                var body = document.getElementById('rd-explorer-body');
+                if (!body || body.dataset.loaded) return;
+                fetch('/api/r2/list?bucket=agent-sam&prefix=static/dashboard/&limit=60', { credentials: 'same-origin' })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(d) {
+                        if (!d) { body.innerHTML = '<div class="rd-placeholder">Could not load files.</div>'; return; }
+                        var objs = d.objects || d.files || d.items || [];
+                        if (!objs.length) { body.innerHTML = '<div class="rd-placeholder">No files found.</div>'; return; }
+                        body.dataset.loaded = '1';
+                        body.innerHTML = objs.map(function(o) {
+                            var key = o.key || o.name || '';
+                            var name = key.split('/').pop() || key;
+                            var size = o.size ? (o.size > 1024 ? Math.round(o.size/1024) + 'KB' : o.size + 'B') : '';
+                            return '<div class="rd-file-row">' +
+                                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="flex-shrink:0;color:var(--text-muted)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+                                '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + name + '</span>' +
+                                '<span style="font-size:10px;color:var(--text-muted)">' + size + '</span></div>';
+                        }).join('');
+                    }).catch(function() { body.innerHTML = '<div class="rd-placeholder">Load failed. Check /api/r2/list.</div>'; });
+            }
+            function loadGitStatus() {
+                var body = document.getElementById('rd-source-body');
+                if (!body) return;
+                fetch('/api/agent/git/status', { credentials: 'same-origin' })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(d) {
+                        if (!d || d.error) { body.innerHTML = '<div class="rd-placeholder">Git status unavailable.</div>'; return; }
+                        var branch = d.branch || 'main';
+                        var hash = d.git_hash ? d.git_hash.slice(0,7) : '';
+                        var repo = d.repo_full_name || d.worker_name || 'inneranimalmedia';
+                        var dirty = d.dirty;
+                        body.innerHTML =
+                            '<div class="rd-git-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>' +
+                            '<span style="font-weight:500">' + branch + '</span>' + (hash ? '<span class="rd-git-badge">' + hash + '</span>' : '') + '</div>' +
+                            '<div class="rd-git-row" style="color:var(--text-muted)"><span>' + repo + '</span></div>' +
+                            '<div class="rd-git-row" style="color:' + (dirty ? 'var(--color-warning,orange)' : 'var(--text-muted)') + '">' +
+                            '<span>' + (dirty ? 'Uncommitted changes' : 'Working tree clean') + '</span></div>' +
+                            (d.sync_last_at ? '<div class="rd-git-row" style="color:var(--text-muted);font-size:11px"><span>Last sync: ' + d.sync_last_at + '</span></div>' : '');
+                    }).catch(function() { body.innerHTML = '<div class="rd-placeholder">Git status unavailable.</div>'; });
+            }
+            var refreshBtn = document.getElementById('rdRefreshExplorer');
+            if (refreshBtn) refreshBtn.addEventListener('click', function() {
+                var body = document.getElementById('rd-explorer-body');
+                if (body) { delete body.dataset.loaded; body.innerHTML = '<div class="rd-placeholder">Loading...</div>'; loadExplorer(); }
+            });
+            var rdSearchInput = document.getElementById('rdSearchInput');
+            var rdResults = document.getElementById('rdSearchResults');
+            if (rdSearchInput && rdResults) {
+                var rdTimer = null;
+                rdSearchInput.addEventListener('input', function() {
+                    clearTimeout(rdTimer);
+                    var q = rdSearchInput.value.trim();
+                    if (!q) { rdResults.textContent = 'Type to search across files'; return; }
+                    rdTimer = setTimeout(function() {
+                        rdResults.textContent = 'Searching...';
+                        fetch('/api/search/docs', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({query:q}) })
+                            .then(function(r) { return r.ok ? r.json() : null; })
+                            .then(function(d) {
+                                var res = d && d.results ? d.results : [];
+                                if (!res.length) { rdResults.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0">No results.</div>'; return; }
+                                rdResults.innerHTML = res.slice(0,10).map(function(r) {
+                                    return '<div class="rd-file-row"><span style="flex:1;font-size:12px">' + (r.key||r.title||'Result') + '</span></div>';
+                                }).join('');
+                            }).catch(function() { rdResults.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Search unavailable.</div>'; });
+                    }, 350);
+                });
+            }
+        })();
+
     </script>
+    <!-- Right Drawer Panel -->
+    <div id="rightDrawer" class="right-drawer" role="complementary" aria-label="Right Panel">
+        <div class="right-drawer-tabs" role="tablist">
+            <button class="rd-tab active" data-panel="explorer" title="Explorer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </button>
+            <button class="rd-tab" data-panel="search" title="Search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            </button>
+            <button class="rd-tab" data-panel="source" title="Source Control">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+            </button>
+            <button class="rd-tab" data-panel="extensions" title="Extensions">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>
+            </button>
+            <button class="rd-tab" data-panel="debug" title="Run and Debug">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+            <button class="rd-tab" data-panel="remote" title="Remote Explorer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            </button>
+        </div>
+        <div class="right-drawer-content">
+            <div class="rd-panel active" id="rd-explorer">
+                <div class="rd-panel-header">
+                    <span>Explorer</span>
+                    <button class="rd-tab" id="rdRefreshExplorer" title="Refresh" style="width:22px;height:22px">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    </button>
+                </div>
+                <div class="rd-panel-body" id="rd-explorer-body"><div class="rd-placeholder">Loading project files...</div></div>
+            </div>
+            <div class="rd-panel" id="rd-search">
+                <div class="rd-panel-header"><span>Search</span></div>
+                <div class="rd-panel-body" style="padding:8px">
+                    <input type="text" id="rdSearchInput" placeholder="Search files and content..." style="width:100%;box-sizing:border-box;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-canvas);color:var(--text-primary);font-size:12px;outline:none"/>
+                    <div id="rdSearchResults" style="margin-top:8px;font-size:12px;color:var(--text-muted)">Type to search across files</div>
+                </div>
+            </div>
+            <div class="rd-panel" id="rd-source">
+                <div class="rd-panel-header"><span>Source Control</span></div>
+                <div class="rd-panel-body" id="rd-source-body"><div class="rd-placeholder">Loading git status...</div></div>
+            </div>
+            <div class="rd-panel" id="rd-extensions">
+                <div class="rd-panel-header"><span>Extensions</span></div>
+                <div class="rd-panel-body"><div class="rd-placeholder">MCP tool extensions and integrations will appear here.</div></div>
+            </div>
+            <div class="rd-panel" id="rd-debug">
+                <div class="rd-panel-header"><span>Run and Debug</span></div>
+                <div class="rd-panel-body"><div class="rd-placeholder">Debug configurations and task runners — coming in a future sprint.</div></div>
+            </div>
+            <div class="rd-panel" id="rd-remote">
+                <div class="rd-panel-header"><span>Remote Explorer</span></div>
+                <div class="rd-panel-body"><div class="rd-placeholder">SSH environments and remote connections are planned for a future sprint.</div></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

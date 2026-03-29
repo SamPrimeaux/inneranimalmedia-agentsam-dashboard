@@ -3996,6 +3996,178 @@ const worker = {
         return jsonResponse({ ok: true, files: null, chunks: null, message: 'Docs index job started' }, 202);
       }
 
+      // ----- API: Custom RAG ingest (/api/rag/ingest) -----
+      if (url.pathname === '/api/rag/ingest' && request.method === 'POST') {
+        let _ingObjKey = null;
+        try {
+          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingSess = await getSession(env, request);
+          if (!_ingSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
+          const _ingUserId = _ingSess
+            ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
+            : 'mcp_ingest';
+          const _ingBody = await request.json().catch(() => ({}));
+          const { object_key, force: _ingForce = false, workspace_id: _ingWs = 'ws_samprimeaux' } = _ingBody || {};
+          _ingObjKey = object_key != null ? String(object_key) : null;
+          if (!_ingObjKey) return jsonResponse({ error: 'object_key required' }, 400);
+          const _ingWid = String(_ingWs || 'ws_samprimeaux').slice(0, 200);
+
+          const _out = await runRagIngestSingle(env, {
+            object_key: _ingObjKey,
+            force: _ingForce,
+            _ingUserId,
+            _ingWid,
+            triggeredBy: 'api',
+          });
+          if (_out.kind === 'skipped') return jsonResponse(_out.data, 200);
+          if (_out.kind === 'err') return jsonResponse({ error: _out.error }, _out.status);
+          return new Response(JSON.stringify(_out.data), { headers: { 'Content-Type': 'application/json' } });
+        } catch (e) {
+          await env.DB.prepare(`INSERT INTO rag_ingest_log (object_key, status, error_msg, triggered_by) VALUES (?,?,?,?)`)
+            .bind(_ingObjKey ?? 'unknown', 'error', e?.message ?? String(e), 'api').run().catch(() => {});
+          return new Response(JSON.stringify({ error: e?.message }), { status: 500 });
+        }
+      }
+
+      // ----- API: RAG batch ingest (sequential server-side; one request) -----
+      if (url.pathname === '/api/rag/ingest-batch' && request.method === 'POST') {
+        try {
+          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingSess = await getSession(env, request);
+          if (!_ingSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
+          const _ingUserId = _ingSess
+            ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
+            : 'mcp_ingest';
+          const _ingBody = await request.json().catch(() => ({}));
+          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = 'ws_samprimeaux' } = _ingBody || {};
+          const _ingWid = String(_ingWsBatch || 'ws_samprimeaux').slice(0, 200);
+          const keyList = Array.isArray(_rawKeys) ? _rawKeys.map((k) => String(k || '').trim()).filter(Boolean) : [];
+          if (keyList.length === 0) return jsonResponse({ error: 'keys array required' }, 400);
+          const results = [];
+          let ok = 0;
+          let skipped = 0;
+          let errors = 0;
+          for (const object_key of keyList) {
+            const r = await runRagIngestSingle(env, {
+              object_key,
+              force: _forceBatch,
+              _ingUserId,
+              _ingWid,
+              triggeredBy: 'batch',
+            });
+            if (r.kind === 'ok') {
+              ok++;
+              results.push({ object_key, ...r.data });
+            } else if (r.kind === 'skipped') {
+              skipped++;
+              results.push({ object_key, ...r.data });
+            } else {
+              errors++;
+              results.push({ object_key, ok: false, error: r.error, status: r.status });
+            }
+          }
+          return jsonResponse({
+            ok: true,
+            summary: { total: keyList.length, indexed: ok, skipped, errors },
+            results,
+          });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
+      // ----- API: Custom RAG query (/api/rag/query) -----
+      if (url.pathname === '/api/rag/query' && request.method === 'POST') {
+        try {
+          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _qSess = await getSession(env, request);
+          if (!_qSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
+          const _qBody = await request.json().catch(() => ({}));
+          const { query: _qText, top_k: _qTopK = 5, conversation_id: _qConv, mode: _qMode, intent: _qIntent } = _qBody || {};
+          if (!_qText) return jsonResponse({ error: 'query required' }, { status: 400 });
+          const _t0q = Date.now();
+          const _EMBED_MODEL_Q = '@cf/baai/bge-base-en-v1.5';
+          const _CPT_Q = 4;
+          const _qTokens = Math.ceil(String(_qText).length / _CPT_Q);
+
+          const _qEmb = await env.AI.run(_EMBED_MODEL_Q, { text: _qText });
+          const _qVec = _qEmb?.data?.[0] ?? _qEmb?.result?.data?.[0];
+          if (!_qVec) throw new Error('Embedding failed');
+
+          const _chunkRows = await env.DB.prepare(
+            `SELECT id, content, token_count, embedding_vector
+             FROM ai_knowledge_chunks
+             WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
+          ).all();
+          const _allCh = _chunkRows.results ?? [];
+          const _cosQ = (a, b) => {
+            let dot = 0, na = 0, nb = 0;
+            for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+            return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
+          };
+          const _qScored = _allCh
+            .map((c) => { try { return { ...c, score: _cosQ(_qVec, JSON.parse(c.embedding_vector)) }; } catch { return null; } })
+            .filter(Boolean).sort((a, b) => b.score - a.score).slice(0, Math.min(Number(_qTopK) || 5, 20));
+          const _qInjectText = _qScored.map((c) => c.content).join('\n\n');
+          const _qInjectTokens = _qScored.reduce((s, c) => s + (c.token_count || 0), 0);
+          const _qDur = Date.now() - _t0q;
+          const _qTop = _qScored[0]?.score ?? 0;
+          const _qHistId = crypto.randomUUID();
+          const _qChunkIds = _qScored.map((c) => c.id);
+          const _qScoreMap = {};
+          for (const c of _qScored) _qScoreMap[c.id] = c.score;
+
+          await env.DB.prepare(`
+            INSERT INTO rag_query_log
+              (conversation_id,query_text,query_tokens,results_count,top_score,
+               chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          `).bind(_qConv ?? null, String(_qText).slice(0, 500), _qTokens, _allCh.length, _qTop,
+            _qScored.length, _qInjectTokens, _qInjectText.length, _EMBED_MODEL_Q, _qMode ?? null, _qIntent ?? null,
+            'd1_cosine', _qDur, 0, 0, 0).run();
+
+          await env.DB.prepare(
+            `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at)
+             VALUES (?,?,?,?,?,?,unixepoch())`
+          ).bind(_qHistId, 'tenant_sam_primeaux', String(_qText).slice(0, 2000), JSON.stringify(_qChunkIds), JSON.stringify(_qScoreMap), _qInjectText).run();
+          await insertQualityCheckRagQuery(env, _qTop);
+
+          return new Response(JSON.stringify({
+            ok: true, search_history_id: _qHistId, chunks_injected: _qScored.length, inject_tokens: _qInjectTokens,
+            top_score: _qTop, duration_ms: _qDur, context: _qInjectText
+          }), { headers: { 'Content-Type': 'application/json' } });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e?.message }), { status: 500 });
+        }
+      }
+
+      // ----- API: RAG retrieval feedback (queues re-ingest when was_useful === 0) -----
+      if (url.pathname === '/api/rag/feedback' && request.method === 'POST') {
+        try {
+          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _fbSess = await getSession(env, request);
+          if (!_fbSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
+          if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+          const _fbBody = await request.json().catch(() => ({}));
+          const _fbId = _fbBody.search_history_id ?? _fbBody.id;
+          const _fbUse = _fbBody.was_useful;
+          if (!_fbId || (_fbUse !== 0 && _fbUse !== 1)) {
+            return jsonResponse({ error: 'search_history_id and was_useful (0|1) required' }, { status: 400 });
+          }
+          await env.DB.prepare(
+            'UPDATE ai_rag_search_history SET was_useful = ?, feedback_text = ? WHERE id = ?'
+          ).bind(_fbUse, _fbBody.feedback_text != null ? String(_fbBody.feedback_text).slice(0, 2000) : null, String(_fbId)).run();
+          if (_fbUse === 0) {
+            await env.DB.prepare(
+              `UPDATE agentsam_code_index_job SET status = 'queued' WHERE workspace_id = ? AND status != 'running'`
+            ).bind('ws_samprimeaux').run().catch(() => {});
+          }
+          return jsonResponse({ ok: true });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       // ----- API: Search (pgvector via Hyperdrive when configured, else Vectorize RAG + history) -----
       if (url.pathname === '/api/search') {
         let body = {};
@@ -5027,8 +5199,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   try {
     await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,unixepoch())`
-    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeOutput, amountUsd).run();
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,unixepoch())`
+    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd).run();
   } catch (e) {
     console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
   }
@@ -5037,7 +5209,7 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     try {
       await env.DB.prepare(
         `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind('sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(), 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', safeProvider, 'api_direct', Math.floor(Date.now() / 1000), amountUsd, safeModelKey, safeInput, safeOutput, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
+      ).bind('sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(), 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(safeProvider), 'api_direct', Math.floor(Date.now() / 1000), amountUsd, safeModelKey, safeInput, safeOutput, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
     } catch (e) {
       console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
     }
@@ -5584,6 +5756,165 @@ function filterToolRowsByPanel(requestAgentId, rows) {
   });
 }
 
+/** Log classifyIntent outcomes to agent_intent_execution_log (requires agent_intent_patterns rows for sql|shell|question|mixed). */
+async function logAgentIntentExecution(env, userText, intentDetected, confidence = 0.9) {
+  if (!env?.DB || !userText || !intentDetected) return;
+  try {
+    const pr = await env.DB.prepare('SELECT id FROM agent_intent_patterns WHERE intent_slug = ? LIMIT 1').bind(intentDetected).first();
+    if (!pr?.id) return;
+    await env.DB.prepare(
+      `INSERT INTO agent_intent_execution_log (tenant_id, intent_pattern_id, user_input, intent_detected, confidence_score, created_at)
+       VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, unixepoch())`
+    ).bind(pr.id, String(userText).slice(0, 8000), intentDetected, confidence).run();
+  } catch (e) {
+    console.warn('[logAgentIntentExecution]', e?.message ?? e);
+  }
+}
+
+async function insertQualityCheckRagIngest(env, chunkCount) {
+  if (!env?.DB) return;
+  const met = chunkCount >= 3;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).bind('inneranimalmedia', 'rag_ingest', 'chunk_count_minimum', met ? 'passed' : 'failed', String(chunkCount), '3', met ? 1 : 0, 'high').run();
+  } catch (e) {
+    console.warn('[quality_checks rag_ingest]', e?.message ?? e);
+  }
+}
+
+async function insertQualityCheckRagQuery(env, topScore) {
+  if (!env?.DB) return;
+  const met = topScore >= 0.75;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
+       VALUES (?,?,?,?,?,?,?,?)`
+    ).bind('inneranimalmedia', 'rag_query', 'top_score_threshold', met ? 'passed' : 'failed', String(topScore), '0.75', met ? 1 : 0, 'high').run();
+  } catch (e) {
+    console.warn('[quality_checks rag_query]', e?.message ?? e);
+  }
+}
+
+/**
+ * Core RAG ingest for one autorag object_key. Used by POST /api/rag/ingest and /api/rag/ingest-batch.
+ * @param {{ object_key: string, force?: boolean, _ingUserId: string, _ingWid: string, triggeredBy?: string }} p
+ * @returns {Promise<{ kind: 'ok', data: Record<string, unknown> } | { kind: 'skipped', data: Record<string, unknown> } | { kind: 'err', status: number, error: string }>}
+ */
+async function runRagIngestSingle(env, p) {
+  const _ingObjKey = p.object_key;
+  const _ingForce = !!p.force;
+  const _ingUserId = p._ingUserId;
+  const _ingWid = p._ingWid;
+  const triggeredBy = p.triggeredBy || 'api';
+  try {
+    const _existing = await env.DB.prepare(
+      `SELECT id, index_status FROM autorag WHERE object_key = ?`
+    ).bind(_ingObjKey).first();
+    if (_existing?.index_status === 'indexed' && !_ingForce) {
+      return { kind: 'skipped', data: { skipped: true, reason: 'already_indexed', id: _existing.id } };
+    }
+
+    if (!env.AUTORAG_BUCKET || !env.AI || !env.DB) {
+      return { kind: 'err', status: 503, error: 'AUTORAG_BUCKET, AI, or DB not configured' };
+    }
+
+    await env.DB.prepare(
+      `UPDATE agentsam_code_index_job SET status = 'indexing', last_error = NULL WHERE user_id = ? AND workspace_id = ?`
+    ).bind(_ingUserId, _ingWid).run().catch(() => {});
+
+    const _t0i = Date.now();
+    const _EMBED_MODEL_I = '@cf/baai/bge-base-en-v1.5';
+    const _CHUNK_CHARS = 1600;
+    const _CPT = 4;
+
+    const _obj = await env.AUTORAG_BUCKET.get(_ingObjKey);
+    if (!_obj) {
+      await env.DB.prepare(`UPDATE agentsam_code_index_job SET status = 'idle', last_error = ? WHERE user_id = ? AND workspace_id = ?`)
+        .bind('object_key not found in R2', _ingUserId, _ingWid).run().catch(() => {});
+      return { kind: 'err', status: 404, error: 'object_key not found in R2' };
+    }
+    const _rawText = await _obj.text();
+    const _charCount = _rawText.length;
+    const _tokenCount = Math.ceil(_charCount / _CPT);
+
+    const _autoragRowEarly = await env.DB.prepare(`SELECT id FROM autorag WHERE object_key=?`).bind(_ingObjKey).first();
+    const _kbId = _autoragRowEarly?.id;
+    if (!_kbId) {
+      await env.DB.prepare(`UPDATE agentsam_code_index_job SET status = 'idle', last_error = ? WHERE user_id = ? AND workspace_id = ?`)
+        .bind('autorag row missing', _ingUserId, _ingWid).run().catch(() => {});
+      return { kind: 'err', status: 404, error: 'autorag row not found for object_key' };
+    }
+
+    const _sourceUrl = `https://autorag.inneranimalmedia.com/${_ingObjKey}`;
+    await env.DB.prepare(`
+            INSERT INTO ai_knowledge_base (id, tenant_id, title, content, content_type, source_url, created_at, updated_at)
+            VALUES (?, 'tenant_sam_primeaux', ?, ?, 'document', ?, unixepoch(), unixepoch())
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, content=excluded.content, source_url=excluded.source_url, updated_at=unixepoch()
+          `).bind(_kbId, _ingObjKey, _rawText, _sourceUrl).run();
+
+    const _chunks = [];
+    for (let _ci = 0; _ci < _rawText.length; _ci += _CHUNK_CHARS) {
+      _chunks.push(_rawText.slice(_ci, _ci + _CHUNK_CHARS));
+    }
+
+    await env.DB.prepare(
+      `UPDATE autorag SET index_status='indexing', char_count=?, token_count=?, chunk_count=?, embed_model=?, updated_at=datetime('now') WHERE object_key=?`
+    ).bind(_charCount, _tokenCount, _chunks.length, _EMBED_MODEL_I, _ingObjKey).run();
+
+    let _embedCalls = 0;
+
+    for (let _idx = 0; _idx < _chunks.length; _idx++) {
+      const _ct = _chunks[_idx];
+      const _ctTokens = Math.ceil(_ct.length / _CPT);
+      const _chunkId = `${_kbId}_c${_idx}`;
+      const _emb = await env.AI.run(_EMBED_MODEL_I, { text: _ct });
+      const _vec = _emb?.data?.[0] ?? _emb?.result?.data?.[0];
+      _embedCalls++;
+      const _vecJson = _vec ? JSON.stringify(_vec) : null;
+      await env.DB.prepare(`
+              INSERT INTO ai_knowledge_chunks (id, knowledge_id, tenant_id, chunk_index, content, content_preview, token_count, embedding_model, is_indexed, embedding_vector, created_at)
+              VALUES (?,?,?,?,?,?,?,?,1,?,unixepoch())
+              ON CONFLICT(id) DO UPDATE SET content=excluded.content, token_count=excluded.token_count, embedding_vector=excluded.embedding_vector, is_indexed=1
+            `).bind(_chunkId, _kbId, 'system', _idx, _ct, _ct.slice(0, 200), _ctTokens, _EMBED_MODEL_I, _vecJson).run();
+    }
+
+    const _durI = Date.now() - _t0i;
+    await env.DB.prepare(`UPDATE autorag SET index_status='indexed', indexed_at=datetime('now'), updated_at=datetime('now'), chunk_count=? WHERE object_key=?`).bind(_chunks.length, _ingObjKey).run();
+    await env.DB.prepare(
+      `UPDATE ai_knowledge_base SET chunk_count=?, token_count=?, is_indexed=1, updated_at=unixepoch() WHERE id=?`
+    ).bind(_chunks.length, _tokenCount, _kbId).run();
+    invalidateCompiledContextCache(env);
+    await env.DB.prepare(`
+            INSERT INTO rag_ingest_log (object_key, status, char_count, token_count, chunk_count, embed_calls, embed_model, duration_ms, triggered_by)
+            VALUES (?,?,?,?,?,?,?,?,?)
+          `).bind(_ingObjKey, 'ok', _charCount, _tokenCount, _chunks.length, _embedCalls, _EMBED_MODEL_I, _durI, triggeredBy).run();
+    await insertQualityCheckRagIngest(env, _chunks.length);
+
+    await env.DB.prepare(
+      `UPDATE agentsam_code_index_job SET status = 'idle', file_count = ? WHERE user_id = ? AND workspace_id = ?`
+    ).bind(_chunks.length, _ingUserId, _ingWid).run().catch(() => {});
+
+    return {
+      kind: 'ok',
+      data: {
+        ok: true,
+        object_key: _ingObjKey,
+        char_count: _charCount,
+        token_count: _tokenCount,
+        chunk_count: _chunks.length,
+        embed_calls: _embedCalls,
+        duration_ms: _durI,
+      },
+    };
+  } catch (e) {
+    await env.DB.prepare(`INSERT INTO rag_ingest_log (object_key, status, error_msg, triggered_by) VALUES (?,?,?,?)`)
+      .bind(_ingObjKey ?? 'unknown', 'error', e?.message ?? String(e), triggeredBy).run().catch(() => {});
+    return { kind: 'err', status: 500, error: e?.message ?? String(e) };
+  }
+}
+
 /** Use Haiku to classify intent of the last user message. Returns { intent: 'sql'|'shell'|'question'|'mixed', tasks?: [{ type, content }] }. */
 async function classifyIntent(env, lastMessageText) {
   if (!lastMessageText) return null;
@@ -5610,7 +5941,10 @@ Reply ONLY with JSON: {"intent":"sql"|"shell"|"question"|"mixed"}` }] }],
         const classifyData = await classifyRes.json();
         const raw = classifyData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
         const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
-        if (parsed?.intent) return parsed;
+        if (parsed?.intent) {
+          await logAgentIntentExecution(env, lastMessageText, parsed.intent, 0.9);
+          return parsed;
+        }
       }
     } catch (_) {}
   }
@@ -5654,7 +5988,10 @@ Reply with only the JSON object.`;
   if (!text) return null;
   try {
     const parsed = JSON.parse(text.replace(/^[\s\S]*?(\{[\s\S]*\})[\s\S]*$/, '$1'));
-    if (parsed && typeof parsed.intent === 'string') return parsed;
+    if (parsed && typeof parsed.intent === 'string') {
+      await logAgentIntentExecution(env, lastMessageText, parsed.intent, 0.85);
+      return parsed;
+    }
   } catch (_) {}
   return null;
 }
@@ -5963,21 +6300,11 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
 
   // Before any tool calls, classify intent of the last user message (cheap Haiku).
   const lastUserText = getLastUserMessageText(messages);
-  if (lastUserText && provider === 'anthropic') {
+      if (lastUserText && provider === 'anthropic') {
     try {
       classification = await classifyIntent(env, lastUserText);
       if (classification) {
         console.log('[runToolLoop] intent:', classification.intent, 'tasks:', classification.tasks?.length ?? 0);
-        const patternRow = await env.DB.prepare('SELECT id FROM agent_intent_patterns LIMIT 1').first();
-        const intentPatternId = patternRow?.id ?? 1;
-        if (intentPatternId != null) {
-          try {
-            await env.DB.prepare(
-              `INSERT INTO agent_intent_execution_log (tenant_id, intent_pattern_id, user_input, intent_detected, confidence_score, created_at)
-               VALUES ('tenant_sam_primeaux', ?, ?, ?, 0.9, unixepoch())`
-            ).bind(intentPatternId, lastUserText.slice(0, 4000), classification.intent).run();
-          } catch (e) { console.warn('[runToolLoop] agent_intent_execution_log', e?.message ?? e); }
-        }
       }
     } catch (e) {
       console.log('[runToolLoop] intent classification failed:', e?.message ?? e);
@@ -9937,6 +10264,7 @@ async function handleAgentApi(request, url, env, ctx) {
         return { role: m.role === 'assistant' ? 'assistant' : 'user', content };
       });
 
+      const ragConversationId = session_id ?? null;
       let ragContext = '';
       const RAG_MIN_QUERY_WORDS = 4;
       const RAG_MIN_CONTEXT_CHARS = 100;
@@ -9946,47 +10274,71 @@ async function handleAgentApi(request, url, env, ctx) {
       const runRag = (chatMode === 'agent') &&
         (_intentForRag !== 'shell') &&
         (_intentForRag !== 'question') &&
-        env.AI_SEARCH_TOKEN &&
+        env.AI &&
+        env.VECTORIZE_INDEX &&
         lastUserContent &&
         lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
       if (runRag) {
         try {
-          const ragRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai-search/instances/iam-docs-search/search`,
-            {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${env.AI_SEARCH_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                messages: [{ content: lastUserContent, role: 'user' }],
-                ai_search_options: { retrieval: { max_num_results: 5 } },
-              }),
+          const _t0Rag = Date.now();
+          const _EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+          const _CPT = 4;
+          const _embedRes = await env.AI.run(_EMBED_MODEL, { text: lastUserContent });
+          const _queryVec = _embedRes?.data?.[0] ?? _embedRes?.result?.data?.[0];
+          if (_queryVec) {
+            const _chunkRows = await env.DB.prepare(
+              `SELECT id, content, token_count, embedding_vector
+               FROM ai_knowledge_chunks
+               WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
+            ).all();
+            const _chunks = _chunkRows.results ?? [];
+            const _cos = (a, b) => {
+              let dot = 0, na = 0, nb = 0;
+              for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+              return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
+            };
+            const _scored = _chunks
+              .map((c) => { try { return { ...c, score: _cos(_queryVec, JSON.parse(c.embedding_vector)) }; } catch { return null; } })
+              .filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 3);
+            const _topRag = _scored[0]?.score ?? 0;
+            if (_topRag < 0.6 && env.DB) {
+              const _slug = String(_intentForRag ?? 'mixed');
+              const _rule = await env.DB.prepare(
+                `SELECT fallback_model_key FROM ai_routing_rules WHERE COALESCE(is_active,1)=1 AND match_type='intent' AND match_value=? ORDER BY priority DESC LIMIT 1`
+              ).bind(_slug).first();
+              if (_rule?.fallback_model_key) {
+                const _fb = await env.DB.prepare('SELECT * FROM ai_models WHERE model_key = ? AND COALESCE(is_active,1)=1').bind(_rule.fallback_model_key).first();
+                if (_fb) model = { ..._fb, _intent: model._intent };
+              }
             }
-          );
-          if (ragRes.ok) {
-            const ragData = await ragRes.json();
-            const chunks = ragData?.result?.chunks ?? ragData?.chunks ?? [];
-            const raw = (chunks ?? [])
-              .map((c) => c.text)
-              .filter(Boolean)
-              .join('\n\n');
-            if (raw.length >= RAG_MIN_CONTEXT_CHARS) {
-              ragContext = capWithMarker(
-                raw, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
+            const _rawRag = _scored.map((c) => c.content).join('\n\n');
+            const _injectTokens = _scored.reduce((s, c) => s + (c.token_count || 0), 0);
+            const _wasCapped = _rawRag.length > PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS;
+            if (_rawRag.length >= RAG_MIN_CONTEXT_CHARS) {
+              ragContext = capWithMarker(_rawRag, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
             }
-          } else {
-            const ragErrText = await ragRes.text().catch(() => '');
-            if (!ragErrText.includes('7001')) {
-              console.warn('[agent/chat] AutoRAG query failed:', ragRes.status, ragErrText.slice(0, 200));
-            }
-            // 7001 = AI Search internal error — skip silently, pgvector provides fallback
+            const _ragDur = Date.now() - _t0Rag;
+            const _ragHistId = crypto.randomUUID();
+            const _ragChunkIds = _scored.map((c) => c.id);
+            const _ragScoreMap = {};
+            for (const c of _scored) _ragScoreMap[c.id] = c.score;
+            ctx.waitUntil(env.DB.prepare(`
+              INSERT INTO rag_query_log
+                (conversation_id,query_text,query_tokens,results_count,top_score,
+                 chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            `).bind(ragConversationId, lastUserContent.slice(0, 500),
+              Math.ceil(lastUserContent.length / _CPT), _chunks.length, _topRag,
+              _scored.length, _injectTokens, _rawRag.length, _EMBED_MODEL, chatMode, _intentForRag,
+              'd1_cosine', _ragDur, _wasCapped ? 1 : 0, 0, 0
+            ).run().catch(() => {}));
+            ctx.waitUntil(env.DB.prepare(
+              `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at)
+               VALUES (?,?,?,?,?,?,unixepoch())`
+            ).bind(_ragHistId, 'tenant_sam_primeaux', lastUserContent.slice(0, 2000), JSON.stringify(_ragChunkIds), JSON.stringify(_ragScoreMap), ragContext || _rawRag).run().catch(() => {}));
+            ctx.waitUntil(insertQualityCheckRagQuery(env, _topRag));
           }
-        } catch (e) {
-          console.error('[agent/chat] AutoRAG failed:',
-            e?.message ?? e);
-        }
+        } catch (e) { console.error('[agent/chat] RAG failed:', e?.message ?? e); }
       }
 
       let pgMatchRows = [];
@@ -10246,7 +10598,14 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           : { core: effectiveSystemCore, full: newFull, memory: mem, kb, mcp, schema, daily };
       }
       const _agentIntent = model?._intent ?? null;
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb, _agentIntent);
+      if (!_agentIntent && lastUserContent) {
+        try {
+          const _mc = await classifyIntent(env, lastUserContent);
+          if (_mc?.intent) model = { ...model, _intent: _mc.intent };
+        } catch (_) {}
+      }
+      const _agentIntentFinal = model?._intent ?? 'mixed';
+      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb, _agentIntentFinal);
       let finalSystem = (unifiedAgentContextBlock ? unifiedAgentContextBlock + '\n\n' : '') + systemWithBlurb;
 
       if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS) {
@@ -10321,7 +10680,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         } catch (_) {}
       }
       // Intent-aware tool selection — keyword-boosted, hard cap 15
-      const _intentForFilter = _agentIntent || (chatMode !== 'agent' ? chatMode : 'mixed');
+      const _intentForFilter = _agentIntentFinal || (chatMode !== 'agent' ? chatMode : 'mixed');
       const _msgForFilter = getLatestUserPlainText(msgList) || '';
       if (chatMode === 'agent' || chatMode === 'ask') {
         toolDefinitions = filterToolsByIntent(_intentForFilter, _msgForFilter, toolDefinitions);
@@ -10373,7 +10732,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             conversation_history: charsToTokens(telemetryPayload.historyChars),
             tool_definitions: charsToTokens(telemetryPayload.toolDefChars),
           },
-          total_input_tokens_est: charsToTokens(telemetryPayload.totalAssembledChars),
+          total_input_tokens: charsToTokens(telemetryPayload.totalAssembledChars),
           mode: chatMode,
           tools_included: (toolDefinitions?.length ?? 0) > 0,
           message_count: apiMessages.length,
@@ -10457,7 +10816,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
               const au = await getAuthUser(request, env);
               oauthUserIdForTools = au ? (au.email || au.id) : undefined;
             } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntent }, toolDefinitions);
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal }, toolDefinitions);
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -10554,14 +10913,14 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                         const now = Math.floor(Date.now() / 1000);
                         ctx.waitUntil(envRef.DB.prepare(
                           `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-                        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', modelRef.provider, 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
+                        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(modelRef.provider), 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
                       } else {
                         try {
                           const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
                           const now = Math.floor(Date.now() / 1000);
                           await envRef.DB.prepare(
                             `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-                          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', modelRef.provider, 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
+                          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(modelRef.provider), 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
                         } catch (e) {
                           console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
                         }
@@ -10654,7 +11013,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             const au = await getAuthUser(request, env);
             oauthUserIdForTools = au ? (au.email || au.id) : undefined;
           } catch (_) { oauthUserIdForTools = undefined; }
-          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools });
+          console.log(`[TOKEN_AUDIT] intent=${_agentIntentFinal} toolCount=${toolDefinitions.length} systemChars=${finalSystem.length} historyChars=${historyChars} toolDefChars=${toolDefChars}`);
+          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal }, toolDefinitions);
           if (toolsResp) return toolsResp;
         }
         const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
@@ -10834,14 +11194,14 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const now = Math.floor(Date.now() / 1000);
         ctx.waitUntil(env.DB.prepare(
           `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', model.provider, 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
+        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(model.provider), 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
       } else {
         try {
           const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
           const now = Math.floor(Date.now() / 1000);
           await env.DB.prepare(
             `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', model.provider, 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
+          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(model.provider), 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
         } catch (e) {
           console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
         }
@@ -14009,16 +14369,24 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       const results = merged;
       if (env.DB) {
         try {
+          const _ksIds = results.map((r) => String(r.file_id ?? r.title ?? r.sourceTag ?? r.id ?? ''));
+          const _ksScores = {};
+          for (let _i = 0; _i < results.length; _i++) {
+            const r = results[_i];
+            const kid = _ksIds[_i] || `row_${_i}`;
+            if (r && r.score != null) _ksScores[kid] = r.score;
+          }
           await env.DB.prepare(
-            `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, context_used, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+            `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at) VALUES (?, ?, ?, ?, ?, ?, unixepoch())`
           ).bind(
             crypto.randomUUID(),
             'tenant_sam_primeaux',
             q,
-            JSON.stringify(results.map(r => r.file_id ?? r.title ?? r.sourceTag ?? '')),
-            answer,
-            Math.floor(Date.now() / 1000)
+            JSON.stringify(_ksIds),
+            JSON.stringify(_ksScores),
+            answer
           ).run();
+          await insertQualityCheckRagQuery(env, Number(results[0]?.score) || 0);
         } catch (dbErr) {
           await env.DB.prepare(
             `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, context_used, created_at) VALUES (?, ?, ?, ?, unixepoch())`
@@ -17380,6 +17748,17 @@ const DEFAULT_TENANT = 'system';
 const PROJECT_ID = 'inneranimalmedia';
 function origin(url) { return url.origin; }
 
+/** True when X-Ingest-Secret matches env.INGEST_SECRET (MCP / trusted automation). */
+function isIngestSecretAuthorized(request, env) {
+  const h = request.headers.get('X-Ingest-Secret');
+  return !!(env.INGEST_SECRET && h && h === env.INGEST_SECRET);
+}
+
+/** spend_ledger CHECK expects cloudflare_workers_ai; ai_models may still say workers_ai. */
+function spendLedgerProvider(provider) {
+  return provider === 'workers_ai' ? 'cloudflare_workers_ai' : provider;
+}
+
 function jsonResponse(body, status = 200) {
   const st = Number(status) || 200;
   if (st >= 500 && st < 600 && __iamResponseLog?.env?.DB && __iamResponseLog?.ctx?.waitUntil) {
@@ -17745,6 +18124,7 @@ function vaultRegistry() {
     { name: 'GOOGLE_CLIENT_SECRET', type: 'secret', description: 'Google OAuth' },
     { name: 'GOOGLE_OAUTH_CLIENT_SECRET', type: 'secret', description: 'Google OAuth (alternate)' },
     { name: 'INTERNAL_API_SECRET', type: 'secret', description: 'Internal APIs (post-deploy, X-Internal-Secret, admin routes)' },
+    { name: 'INGEST_SECRET', type: 'secret', description: 'X-Ingest-Secret bypass for /api/rag/ingest, /api/rag/query, /api/rag/feedback (MCP)' },
     { name: 'INTERNAL_WEBHOOK_SECRET', type: 'secret', description: '/api/webhooks/internal X-IAM-Signature HMAC' },
     { name: 'MCP_AUTH_TOKEN', type: 'secret', description: 'MCP server auth' },
     { name: 'OPENAI_API_KEY', type: 'secret', description: 'OpenAI API' },

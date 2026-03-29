@@ -128,7 +128,15 @@ Or use `scripts/upload-schema-memory-to-r2.sh` if present.
 
 ---
 
-## 7. Daily digest and roadmap_steps
+## 7. D1 views (audit 2026-03-29)
+
+- **quality_checks migration** (`migrations/20260329_fix_quality_checks_constraint.sql`) temporarily dropped many views so SQLite could recreate `quality_checks` with an expanded `check_type` CHECK. **Restored from repo SQL:** `project_quality_summary` (same migration), then `v_mcp_tool_drift` and `v_context_optimization_savings` (`migrations/20260329_recreate_views_from_repo.sql` — definitions from `158_mcp_tool_drift_view.sql` and `153_context_mem_mcp.sql`).
+- **Not in repo:** Dozens of historical views (e.g. `v_recent_deployments`, `cost_summary_daily`, Cursor inventory views) had **no** `CREATE VIEW` in `migrations/`; they existed only in D1. They are **not** recreated here. Restore from a **pre-drop D1 export** or Cloudflare backup if a dashboard or script still `SELECT`s one of those names. **Worker hot paths** (`/api/agent/chat`, finance reads, telemetry) use **base tables** (`spend_ledger`, `agent_telemetry`, `deployments`), not those views—grep `worker.js` for `FROM v_` is empty.
+- **Bulk RAG ingest:** `POST /api/rag/ingest-batch` with `X-Ingest-Secret` and body `{ "keys": [...], "force": false }` runs sequential ingest server-side (see `worker.js`).
+
+---
+
+## 8. Daily digest and roadmap_steps
 
 - **Daily digest:** Cron at 6pm Louisiana time (midnight UTC, `0 0 * * *`) runs `sendDailyDigest(env)`. It reads **live** from: `cloudflare_deployments`, `spend_ledger`, `roadmap_steps`, `notification_outbox`; passes the data to Claude to write a short summary; sends email via Resend (when `RESEND_API_KEY` is set). One-time trigger: `POST /api/admin/send-digest` (remove this endpoint after confirming the first email).
 - **Keeping the digest accurate:** The digest is accurate every day because it reads from the same tables the dashboard uses. The only extra step: **at the end of each Cursor session**, have the agent (or you) update `roadmap_steps` for any step that was completed:

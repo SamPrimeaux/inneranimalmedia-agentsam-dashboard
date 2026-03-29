@@ -9730,6 +9730,12 @@ async function handleAgentApi(request, url, env, ctx) {
         console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null', 'intent:', autoIntent);
       } else {
         model = await env.DB.prepare('SELECT * FROM ai_models WHERE id = ? OR model_key = ?').bind(model_id, model_id).first();
+        if (model) {
+          try {
+            const _mt = getLatestUserPlainText(msgList);
+            if (_mt) { const _mc = await classifyIntent(env, _mt); if (_mc?.intent) model = { ...model, _intent: _mc.intent }; }
+          } catch (_) {}
+        }
         if (!model) {
           const syn = syntheticWorkersAiChatModelRow(model_id);
           if (syn) model = syn;

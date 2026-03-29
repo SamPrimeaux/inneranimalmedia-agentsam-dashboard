@@ -98,23 +98,18 @@
       },
       {
         "name": "AGENT_SESSION",
-        "class_name": "IAMSession",
-        "script_name": "inneranimalmedia"
+        "class_name": "AgentChatSqlV1"
       }
     ]
   },
   "migrations": [
     {
-      "tag": "v1",
-      "new_classes": ["IAMCollaborationSession"]
+      "tag": "v4",
+      "new_sqlite_classes": ["IAMAgentSession"]
     },
     {
-      "tag": "v2",
-      "new_classes": ["ChessRoom"]
-    },
-    {
-      "tag": "v3",
-      "new_classes": ["IAMSession"]
+      "tag": "v5",
+      "new_sqlite_classes": ["AgentChatSqlV1"]
     }
   ],
   "analytics_engine_datasets": [

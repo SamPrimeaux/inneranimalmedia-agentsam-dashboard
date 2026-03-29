@@ -17,7 +17,7 @@ PROD_URL="https://inneranimalmedia.com"
 PASS=0
 FAIL=0
 GITHUB_REPO="SamPrimeaux/inneranimalmedia-agentsam-dashboard"
-GITHUB_BRANCH="agentsam-clean"
+GITHUB_BRANCH="main"
 
 for arg in "$@"; do
   case $arg in

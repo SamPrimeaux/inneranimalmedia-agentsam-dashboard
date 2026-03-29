@@ -95,6 +95,11 @@
       {
         "name": "CHESS_SESSION",
         "class_name": "ChessRoom"
+      },
+      {
+        "name": "AGENT_SESSION",
+        "class_name": "IAMSession",
+        "script_name": "inneranimalmedia"
       }
     ]
   },
@@ -106,6 +111,10 @@
     {
       "tag": "v2",
       "new_classes": ["ChessRoom"]
+    },
+    {
+      "tag": "v3",
+      "new_classes": ["IAMSession"]
     }
   ],
   "analytics_engine_datasets": [

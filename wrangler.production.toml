@@ -99,6 +99,11 @@ class_name = "IAMCollaborationSession"
 [[durable_objects.bindings]]
 name = "CHESS_SESSION"
 class_name = "ChessRoom"
+[[durable_objects.bindings]]
+name = "AGENT_SESSION"
+class_name = "IAMSession"
+script_name = "inneranimalmedia"
+
 
 [[migrations]]
 tag = "v1"

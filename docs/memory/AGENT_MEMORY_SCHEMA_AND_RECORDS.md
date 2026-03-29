@@ -133,6 +133,7 @@ Or use `scripts/upload-schema-memory-to-r2.sh` if present.
 - **quality_checks migration** (`migrations/20260329_fix_quality_checks_constraint.sql`) temporarily dropped many views so SQLite could recreate `quality_checks` with an expanded `check_type` CHECK. **Restored from repo SQL:** `project_quality_summary` (same migration), then `v_mcp_tool_drift` and `v_context_optimization_savings` (`migrations/20260329_recreate_views_from_repo.sql` — definitions from `158_mcp_tool_drift_view.sql` and `153_context_mem_mcp.sql`).
 - **Not in repo:** Dozens of historical views (e.g. `v_recent_deployments`, `cost_summary_daily`, Cursor inventory views) had **no** `CREATE VIEW` in `migrations/`; they existed only in D1. They are **not** recreated here. Restore from a **pre-drop D1 export** or Cloudflare backup if a dashboard or script still `SELECT`s one of those names. **Worker hot paths** (`/api/agent/chat`, finance reads, telemetry) use **base tables** (`spend_ledger`, `agent_telemetry`, `deployments`), not those views—grep `worker.js` for `FROM v_` is empty.
 - **Bulk RAG ingest:** `POST /api/rag/ingest-batch` with `X-Ingest-Secret` and body `{ "keys": [...], "force": false }` runs sequential ingest server-side (see `worker.js`).
+- **Batch 3 corpus:** Tools-bucket prefixes in `autorag` — `code/`, `draw/`, `pages/` (Monaco saves, Excalidraw scenes). Extend `batch-ingest.sh` or use `ingest-batch` when objects exist in R2.
 
 ---
 

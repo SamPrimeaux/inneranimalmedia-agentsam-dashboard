@@ -21,6 +21,12 @@ Use Wrangler (`r2 object put` / `get`) with `./scripts/with-cloudflare-env.sh` f
 
 ```
 autorag/
+├── code/
+│   └── (function indexes, Monaco exports — RAG-friendly)
+├── draw/
+│   └── (Excalidraw scene JSON — Batch 3 ingest list)
+├── pages/
+│   └── (saved Monaco pages / HTML fragments — Batch 3 ingest list)
 ├── knowledge/
 │   ├── architecture/
 │   │   ├── worker-core.md

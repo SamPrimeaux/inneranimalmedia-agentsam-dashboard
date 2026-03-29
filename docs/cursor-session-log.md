@@ -896,3 +896,25 @@ Sandbox deploy spend + ingest-batch + benchmark 31/31; promote to prod; curl `in
 - Rotate `INGEST_SECRET` if it was pasted in chat logs.
 - Optional: `./scripts/benchmark-full.sh prod` for parity with session playbook.
 
+## 2026-03-29 Batch 3 ingest notes + sandbox promote (IAMSession migration caveat)
+
+### What was asked
+Second git commit (MCP, cursor rules, scripts, dashboard); optional v3 `IAMSession` migration on `wrangler.production.toml`; Batch 3 RAG targets for tools bucket `code/`, `draw/`, `pages/`; sandbox + promote.
+
+### Files changed
+- `batch-ingest.sh`: Batch 3 header + commented `draw/` / `pages/` extension.
+- `docs/AUTORAG_BUCKET_STRUCTURE.md`: `code/`, `draw/`, `pages/` in layout.
+- `docs/memory/AGENT_MEMORY_SCHEMA_AND_RECORDS.md`: Batch 3 corpus bullet.
+- `dashboard/agent.html`: `v=195` (matches sandbox promote R2).
+- `wrangler.production.toml`: **no** v3 `new_classes` block — adding `IAMSession` failed deploy with `Cannot apply new-class migration to class 'IAMSession' that is already depended on by existing Durable Objects [10074]`. Production already had `IAMSession` registered; sandbox uses `wrangler.jsonc` migrations (v3 present there). Duplicate migration must not be added to prod toml.
+- `worker.js`: unchanged — `export class IAMSession` already exists (~392).
+
+### Deploy status
+- Sandbox: `deploy-sandbox.sh` — worker `cf722a51-74e8-4156-b2b2-a337634b2754`, **v=195**.
+- Benchmark: `./scripts/benchmark-full.sh sandbox` — **31/31 PASS** (script lines 62/73 emit harmless `integer expression expected` warnings).
+- Production R2: promoted **v=195** to `agent-sam`.
+- Production worker: `b55a2070-732d-408d-a66c-1cac4626fd85` (after removing invalid v3 migration and `./scripts/promote-to-prod.sh --worker-only`).
+
+### Notes
+- Prior commit on main: `a5f58a2` chore MCP, rules, scripts, `agent.html`.
+

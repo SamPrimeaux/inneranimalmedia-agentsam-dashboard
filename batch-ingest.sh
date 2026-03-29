@@ -2,6 +2,10 @@
 # Batch ingest all pending autorag docs
 # Run from: /Users/samprimeaux/Downloads/march1st-inneranimalmedia
 # Usage: INGEST_SECRET=your_secret bash batch-ingest.sh
+#
+# Batch 3 (DO tools bucket): Monaco editor saves and Excalidraw scenes live under autorag
+# prefixes code/, draw/, and pages/. Add keys as objects appear in R2, or call
+# POST /api/rag/ingest-batch with a full key list (list objects via wrangler r2 object list or dashboard).
 
 set -euo pipefail
 
@@ -63,6 +67,12 @@ KEYS=(
   "skills/skill-creator/SKILL.md"
   "skills/web-perf/SKILL.md"
 )
+
+# --- Batch 3 tools bucket (add when present in autorag R2) ---
+# draw/*.json   Excalidraw scene exports
+# pages/*       Saved Monaco / page outputs
+# (code/* is partially covered above; extend with new function-index or snippet keys)
+# KEYS+=( "draw/example.json" "pages/example.md" )
 
 TOTAL=${#KEYS[@]}
 echo "=== Batch RAG Ingest — $TOTAL docs ==="

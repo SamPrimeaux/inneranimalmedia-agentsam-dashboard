@@ -7420,7 +7420,19 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
   } catch (e) {
     return jsonResponse({ error: e?.message ?? String(e) }, 502);
   }
-  if (!resp || !resp.body) return jsonResponse({ error: 'Workers AI stream failed' }, 502);
+  if (!resp) return jsonResponse({ error: 'Workers AI returned null' }, 502);
+  if (!resp.body && resp[Symbol.asyncIterator]) {
+    const iter = resp[Symbol.asyncIterator]();
+    resp = { body: new ReadableStream({
+      async pull(ctrl) {
+        const { done, value } = await iter.next();
+        if (done) { ctrl.close(); return; }
+        const text = typeof value === 'string' ? value : (value?.response ?? value?.text ?? '');
+        if (text) ctrl.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ response: text }) + '\n\n'));
+      }
+    })};
+  }
+  if (!resp.body) return jsonResponse({ error: 'Workers AI stream failed' }, 502);
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -16788,7 +16800,23 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     pendingStateEvents.length = 0;
   };
 
-  while (iter < MCP_CHAT_TOOL_LOOP_MAX) {
+  // ── STREAMING SETUP (moved before loop so client gets response immediately) ──
+  let _streamWriter = null;
+  let _streamEnc = null;
+  let _streamResponse = null;
+  if (wantStream) {
+    const { readable, writable } = new TransformStream();
+    _streamEnc = new TextEncoder();
+    _streamWriter = writable.getWriter();
+    _streamResponse = new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+    // Pass writer into opts so tool_start can emit immediately
+    opts.streamWriter = _streamWriter;
+    opts.streamEnc = _streamEnc;
+  }
+
+  // Run loop in background IIFE when streaming so response is returned immediately
+  const _runLoop = async () => {
+    while (iter < MCP_CHAT_TOOL_LOOP_MAX) {
     iter++;
     // Adaptive thinking for Opus 4.6 / Sonnet 4.6 (interleaved auto-enabled, no beta header needed)
     const _isAdaptive = modelKey.includes('opus-4-6') || modelKey.includes('sonnet-4-6');
@@ -16836,6 +16864,12 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     }
     const textParts = content.filter((b) => b.type === 'text').map((b) => b.text).filter(Boolean);
     lastContent = textParts.join('');
+    // ── Stream text immediately after each Anthropic API call ──
+    if (wantStream && _streamWriter && lastContent) {
+      try {
+        await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({ type: 'text', text: lastContent }) + '\n\n'));
+      } catch (_) {}
+    }
 
     if (mode === 'ask' && toolUseBlocks.length > 0) {
       const actionBlock = toolUseBlocks.find((b) => isActionTool(b.name));
@@ -16999,27 +17033,44 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     }
   }
 
+  // ── END _runLoop ──
+  }; // end _runLoop async function
+
   if (wantStream) {
-    const { readable, writable } = new TransformStream();
-    const enc = new TextEncoder();
-    const writer = writable.getWriter();
-    (async () => {
+    // Fire the loop in background, return stream immediately
+    _runLoop().then(async () => {
       try {
-        // Flush queued state/tool_result events first
+        // Flush any remaining state/tool_result events
         for (const evt of pendingStateEvents) {
-          await writer.write(enc.encode('data: ' + JSON.stringify(evt) + '\n\n'));
+          await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify(evt) + '\n\n'));
         }
         pendingStateEvents.length = 0;
-        await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text: lastContent || '(Tool loop limit reached.)' }) + '\n\n'));
-        await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', usage: lastUsage }) + '\n\n'));
+        // Final done event with cost tracking
+        const finalInputTokens = lastUsage.input_tokens || 0;
+        const finalOutputTokens = lastUsage.output_tokens || 0;
+        const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
+        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages));
+        await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({
+          type: 'done',
+          input_tokens: finalInputTokens,
+          output_tokens: finalOutputTokens,
+          cost_usd: finalCost,
+          conversation_id: conversationId,
+          model_used: model.model_key,
+        }) + '\n\n'));
       } catch(e) {
-        await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message }) + '\n\n'));
+        try { await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message }) + '\n\n')); } catch(_) {}
       } finally {
-        await writer.close().catch(() => {});
+        await _streamWriter.close().catch(() => {});
       }
-    })();
-    return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+    }).catch(async (e) => {
+      try { await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message }) + '\n\n')); } catch(_) {}
+      await _streamWriter.close().catch(() => {});
+    });
+    return _streamResponse;
   }
+  // Non-streaming: run loop synchronously
+  await _runLoop();
   return jsonResponse({
     content: [{ type: 'text', text: lastContent || '(Tool loop limit reached.)' }],
     message: { content: lastContent || '(Tool loop limit reached.)', role: 'assistant', tool_calls: allToolCalls },

@@ -64,7 +64,7 @@ for line in sys.stdin:
         done_data = d
     elif t == 'error':
         print(f'ERROR|0|0|0|0|{d.get(\"error\",\"?\")}')
-        sys.exit(0)
+        pass  # don't exit on error if chunks came in
 
 elapsed = int((time.time()-start)*1000)
 tok_in = done_data.get('input_tokens') or done_data.get('usage',{}).get('input_tokens',0) or 0
@@ -93,6 +93,12 @@ run_test "google_gemini_3_1_flash_lite"     "Google Gemini 3.1 Flash Lite" "agen
 run_test "gpt-4o-mini"                      "OpenAI GPT-4o Mini"          "agent"
 run_test "gemini-2.0-flash"                 "Gemini 2.5 Flash (ask)"      "ask"
 run_test "claude-haiku-4-5-20251001"        "Haiku (ask mode)"            "ask"
+
+run_test "gpt-4o"           "OpenAI GPT-4o"        "agent"
+run_test "gpt-4.1-nano"     "OpenAI GPT-4.1 Nano"  "agent"
+run_test "gpt-4.1-mini"     "OpenAI GPT-4.1 Mini"  "agent"
+run_test "gpt-5.4-nano"     "OpenAI GPT-5.4 Nano"  "agent"
+run_test "gpt-5.4-mini"     "OpenAI GPT-5.4 Mini"  "agent"
 
 echo ""
 echo "=== BENCHMARK COMPLETE ==="

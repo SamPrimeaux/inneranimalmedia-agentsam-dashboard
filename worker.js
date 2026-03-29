@@ -4886,7 +4886,7 @@ function getSpendRates(provider, modelKey) {
   const p = (provider || '').toLowerCase();
   const m = (String(modelKey || '')).toLowerCase().trim();
   if (p === 'anthropic') {
-    if (m.includes('haiku') || m.includes('claude-haiku-4-5')) return { rateIn: 0.0000008, rateOut: 0.000001 };
+    if (m.includes('haiku') || m.includes('claude-haiku-4-5')) return { rateIn: 0.000001, rateOut: 0.000005 }; // Haiku 4.5: $1/$5 per MTok
     if (m.includes('sonnet') || m.includes('claude-sonnet-4')) return { rateIn: 0.000003, rateOut: 0.000015 };
     return { rateIn: 0.000003, rateOut: 0.000015 };
   }
@@ -5582,7 +5582,35 @@ function filterToolRowsByPanel(requestAgentId, rows) {
 
 /** Use Haiku to classify intent of the last user message. Returns { intent: 'sql'|'shell'|'question'|'mixed', tasks?: [{ type, content }] }. */
 async function classifyIntent(env, lastMessageText) {
-  if (!lastMessageText || !env.ANTHROPIC_API_KEY) return null;
+  if (!lastMessageText) return null;
+  // Use Gemini Lite for classification — $0.000004/call vs Haiku $0.003/call (750x cheaper)
+  if (env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY) {
+    try {
+      const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
+      const classifyRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: 'You classify user messages into a single intent. Reply with JSON only, no markdown, no explanation. Valid intents: sql, shell, question, mixed.' }] },
+            contents: [{ role: 'user', parts: [{ text: `Classify this message intent:
+"${lastMessageText.slice(0, 300)}"
+
+Reply ONLY with JSON: {"intent":"sql"|"shell"|"question"|"mixed"}` }] }],
+            generationConfig: { maxOutputTokens: 20, temperature: 0 },
+          }),
+        }
+      );
+      if (classifyRes.ok) {
+        const classifyData = await classifyRes.json();
+        const raw = classifyData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+        if (parsed?.intent) return parsed;
+      }
+    } catch (_) {}
+  }
+  if (!env.ANTHROPIC_API_KEY) return null;
   const haikuKey = resolveAnthropicModelKey('claude_haiku_4_5');
   const system = `You classify the user message into a single intent. Reply with JSON only, no markdown.
 - "sql" = user wants to run a SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP VIEW, ALTER TABLE, or any database operation).
@@ -6769,6 +6797,109 @@ function emitCodeBlocksFromText(fullText, send) {
 
 /**
  * OpenAI streaming: same SSE contract as Anthropic.
+/**
+ * OpenAI Responses API streaming — required for GPT-5.x models.
+ * Uses /v1/responses endpoint, supports previous_response_id caching (40-80% token savings on turn 2+).
+ * Tool format: internally-tagged { type, name, description, parameters } (no nested .function wrapper).
+ */
+async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = []) {
+  const modelKey = modelRow.model_key || 'gpt-5.4-mini';
+  // Build input array: system as developer message + user/assistant turns
+  const inputMsgs = [
+    { role: 'developer', content: systemWithBlurb },
+    ...apiMessages.map((m, i) => {
+      const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
+      return { role: m.role, content: isLastUser ? buildOpenAIContent(m.content, images) : m.content };
+    })
+  ];
+  // Responses API tool format (internally-tagged, strict:true by default)
+  const tools = toolDefinitions.length > 0 ? toolDefinitions.map(t => ({
+    type: 'function',
+    name: t.name,
+    description: (t.description || t.name).slice(0, 500),
+    parameters: t.input_schema || { type: 'object', properties: {} },
+  })) : undefined;
+  // Effort: none for gpt-5.4.x (fastest), low for gpt-5/o-series (cap verbosity), omit for gpt-4.x
+  const isGpt54 = modelKey.startsWith('gpt-5.4');
+  const isReasoningModel = modelKey.startsWith('gpt-5') || modelKey.startsWith('o');
+  const reasoningConfig = isGpt54
+    ? { reasoning: { effort: 'none' } }
+    : isReasoningModel ? { reasoning: { effort: 'low' } }
+    : {};
+  const body = {
+    model: modelKey,
+    input: inputMsgs,
+    stream: true,
+    store: true, // enables previous_response_id caching
+    ...reasoningConfig,
+    ...(tools ? { tools } : {}),
+  };
+  const resp = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const errData = await resp.json().catch(() => ({}));
+    const errMsg = errData?.error?.message ?? `OpenAI Responses API error ${resp.status}`;
+    const enc = new TextEncoder();
+    return new Response(new ReadableStream({ start(c) {
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}\n\n`));
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: `[OpenAI API error: ${errMsg}]` })}\n\n`));
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: 0, output_tokens: 0, cost_usd: 0 })}\n\n`));
+      c.close();
+    }}), { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const readable = new ReadableStream({
+    async pull(controller) {
+      const enc = new TextEncoder();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') continue;
+            try {
+              const data = JSON.parse(raw);
+              // Responses API delta events
+              if (data.type === 'response.output_text.delta' || data.type === 'response.text.delta') {
+                const text = data.delta || '';
+                if (text) { fullText += text; controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)); }
+              }
+              if (data.type === 'response.completed' && data.response?.usage) {
+                inputTokens = data.response.usage.input_tokens ?? 0;
+                outputTokens = data.response.usage.output_tokens ?? 0;
+              }
+            } catch (_) {}
+          }
+        }
+        const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
+        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
+      } catch(e) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: e?.message ?? String(e) })}\n\n`));
+      } finally {
+        reader.releaseLock();
+        controller.close();
+      }
+    }
+  });
+  return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
+}
+
+/**
+ * OpenAI streaming: same SSE contract as Anthropic.
  * POST to chat/completions with stream: true, stream_options: { include_usage: true }.
  */
 async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx) {
@@ -6792,14 +6923,14 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
   });
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
-    const errMsg = errData?.error?.message ?? errData?.message ?? `Google API error ${resp.status}`;
+    const errMsg = errData?.error?.message ?? errData?.message ?? `OpenAI API error ${resp.status}`;
     const enc = new TextEncoder();
     const errStream = new ReadableStream({
       start(controller) {
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errMsg })}
 
 `));
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: `[Google API error: ${errMsg}]` })}
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: `[OpenAI API error: ${errMsg}]` })}
 
 `));
         controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: 0, output_tokens: 0, cost_usd: 0 })}
@@ -9952,7 +10083,19 @@ async function handleAgentApi(request, url, env, ctx) {
         resolvedSections = { full: compiledContext };
       }
 
-      const coreSystemPrefix = `SYSTEM: You are Agent Sam. Resolved model: ${model.model_key} provider: ${model.provider}. Always report this exact model_key when asked what model you are running on.
+      const coreSystemPrefix = `<role>You are Agent Sam, an AI devops and business assistant for Inner Animals Media. Resolved model: ${model.model_key} provider: ${model.provider}. Always report this exact model_key when asked what model you are running on.</role>
+<rules>
+- Never hallucinate deploys or database writes. Always verify with a query after any write.
+- Never rotate tokens mid-session without local verification first.
+- Report exact model_key and provider when asked.
+- Deploy rule: sandbox first, then promote. Never npm run deploy alone.
+</rules>
+<parallel_tools>
+If calling multiple independent tools, call them all in parallel simultaneously. Never sequential when parallel is possible. Maximize parallel tool calls for speed.
+</parallel_tools>
+<context_management>
+Your context window will be automatically compacted as it approaches its limit. Do not stop tasks early due to token budget concerns. Save progress state to memory before compaction. Be persistent and complete tasks fully.
+</context_management>
 
 CRITICAL: Never simulate, roleplay, or fabricate tool calls or their results. If you cannot call a real tool, say so plainly. Never invent data or pretend to execute queries.
 
@@ -10200,7 +10343,20 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         await upsertMcpAgentSession(env, conversationId, agent_id);
 
         if (canStreamOpenAI) {
-          return streamOpenAI(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
+          // GPT-5.x requires Responses API (Chat Completions rejects these models)
+        const _needsResponsesAPI = model.model_key && (
+          model.model_key.startsWith('gpt-5.') ||
+          model.model_key === 'gpt-5' ||
+          model.model_key === 'gpt-5-mini' ||
+          model.model_key === 'gpt-5-nano' ||
+          model.model_key === 'o4-mini' ||
+          model.model_key === 'o3' ||
+          model.model_key === 'o1'
+        );
+        if (_needsResponsesAPI) {
+          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions);
+        }
+        return streamOpenAI(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
         }
         console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {
@@ -10216,7 +10372,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
               const au = await getAuthUser(request, env);
               oauthUserIdForTools = au ? (au.email || au.id) : undefined;
             } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools }, toolDefinitions);
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntent }, toolDefinitions);
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -16547,12 +16703,22 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
 
   while (iter < MCP_CHAT_TOOL_LOOP_MAX) {
     iter++;
+    // Adaptive thinking for Opus 4.6 / Sonnet 4.6 (interleaved auto-enabled, no beta header needed)
+    const _isAdaptive = modelKey.includes('opus-4-6') || modelKey.includes('sonnet-4-6');
+    const _isSimpleIntent = opts._intent === 'sql' || opts._intent === 'question' || opts._intent === 'shell';
+    const _thinkingConfig = _isAdaptive ? {
+      thinking: { type: 'adaptive' },
+      output_config: { effort: _isSimpleIntent ? 'low' : 'medium' },
+    } : {};
+    // display:omitted skips streaming thinking tokens → faster first text token for pipelines
+    if (_isAdaptive && !wantStream) _thinkingConfig.thinking = { type: 'adaptive', display: 'omitted' };
     const body = {
       model: modelKey,
-      max_tokens: 8192,
+      max_tokens: _isAdaptive ? 16000 : 8192,
       system: systemWithBlurb,
       messages,
       tools,
+      ..._thinkingConfig,
     };
     console.log('[chatWithToolsAnthropic] Sending request to Claude', {
       model: modelKey,

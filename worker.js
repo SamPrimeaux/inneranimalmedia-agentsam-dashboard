@@ -5927,6 +5927,27 @@ function ensureAgentMemoryIndexInsertDefaults(sql) {
 }
 
 /** Multi-provider tool loop (non-streaming). Supports anthropic, openai, google. Returns final assistant text. */
+
+/**
+ * executeToolCall — unified tool executor for all providers.
+ * Wraps invokeMcpToolFromChat and normalizes the return to a plain string
+ * so streamOpenAIResponses and runToolLoop share a single execution path.
+ */
+async function executeToolCall(env, request, toolName, params, conversationId, executionCtx, opts = {}) {
+  try {
+    const out = await invokeMcpToolFromChat(env, toolName, params, conversationId, {
+      allowRemoteMcp: true,
+      executionCtx,
+      ...opts,
+    });
+    if (out && out.error) return JSON.stringify({ error: out.error });
+    if (typeof out.result === 'string') return out.result;
+    return JSON.stringify(out.result || {});
+  } catch (e) {
+    return JSON.stringify({ error: e?.message ?? String(e) });
+  }
+}
+
 async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest, executionCtx, images = []) {
   let messages = [...apiMessages];
   let finalText = '';
@@ -6850,50 +6871,106 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
       c.close();
     }}), { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
   }
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let fullText = '';
   let inputTokens = 0;
   let outputTokens = 0;
+  // Tool-aware multi-round streaming loop for Responses API
+  let currentInputMsgs = [...inputMsgs];
   const readable = new ReadableStream({
-    async pull(controller) {
+    async start(controller) {
       const enc = new TextEncoder();
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') continue;
-            try {
-              const data = JSON.parse(raw);
-              // Responses API delta events
-              if (data.type === 'response.output_text.delta' || data.type === 'response.text.delta') {
-                const text = data.delta || '';
-                if (text) { fullText += text; controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)); }
-              }
-              if (data.type === 'response.completed' && data.response?.usage) {
-                inputTokens = data.response.usage.input_tokens ?? 0;
-                outputTokens = data.response.usage.output_tokens ?? 0;
-              }
-            } catch (_) {}
+      let toolRound = 0;
+      const MAX_TOOL_ROUNDS = 5;
+      while (toolRound <= MAX_TOOL_ROUNDS) {
+        // Round 0 reuses the already-fetched resp; subsequent rounds re-fetch with updated input
+        let currentResp = resp;
+        if (toolRound > 0) {
+          currentResp = await fetch('https://api.openai.com/v1/responses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+            body: JSON.stringify({
+              model: modelKey,
+              input: currentInputMsgs,
+              stream: true,
+              store: true,
+              ...reasoningConfig,
+              ...(tools ? { tools } : {}),
+            }),
+          });
+          if (!currentResp.ok) {
+            const errData = await currentResp.json().catch(() => ({}));
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: errData?.error?.message ?? `OpenAI error ${currentResp.status}` })}\n\n`));
+            break;
           }
         }
-        const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
-      } catch(e) {
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: e?.message ?? String(e) })}\n\n`));
-      } finally {
-        reader.releaseLock();
-        controller.close();
+        const roundReader = currentResp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const roundToolCalls = [];
+        const outputItems = [];
+        const pendingFnArgs = {};
+        try {
+          for (;;) {
+            const { done, value } = await roundReader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const raw = line.slice(6).trim();
+              if (raw === '[DONE]') continue;
+              try {
+                const data = JSON.parse(raw);
+                // Stream text to client
+                if (data.type === 'response.output_text.delta' || data.type === 'response.text.delta') {
+                  const text = data.delta || '';
+                  if (text) { fullText += text; controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)); }
+                }
+                // Accumulate function call arguments by item_id
+                if (data.type === 'response.function_call_arguments.delta') {
+                  const callId = data.item_id || data.call_id;
+                  if (callId) { if (!pendingFnArgs[callId]) pendingFnArgs[callId] = ''; pendingFnArgs[callId] += data.delta || ''; }
+                }
+                // Capture completed output items (text blocks + function_call blocks)
+                if (data.type === 'response.output_item.done' && data.item) {
+                  outputItems.push(data.item);
+                  if (data.item.type === 'function_call') roundToolCalls.push(data.item);
+                }
+                // Final usage
+                if (data.type === 'response.completed' && data.response?.usage) {
+                  inputTokens = data.response.usage.input_tokens ?? 0;
+                  outputTokens = data.response.usage.output_tokens ?? 0;
+                }
+              } catch (_) {}
+            }
+          }
+        } finally {
+          roundReader.releaseLock();
+        }
+        // No tool calls this round → done
+        if (roundToolCalls.length === 0) break;
+        toolRound++;
+        if (toolRound > MAX_TOOL_ROUNDS) break;
+        // Execute all tool calls (parallel)
+        const toolOutputItems = await Promise.all(roundToolCalls.map(async (tc) => {
+          const name = tc.name;
+          const args = tc.arguments || pendingFnArgs[tc.id] || '{}';
+          let tcParams = {};
+          try { tcParams = JSON.parse(args); } catch (_) {}
+          console.log('[streamOpenAIResponses] tool call', name, Object.keys(tcParams));
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'tool_start', tool: name, label: name })}\n\n`));
+          const resultStr = await executeToolCall(env, null, name, tcParams, conversationId, ctx, {});
+          return { type: 'function_call_output', call_id: tc.call_id || tc.id, output: resultStr };
+        }));
+        // Build next round input: prior input + this round's output items + tool results
+        currentInputMsgs = [...currentInputMsgs, ...outputItems, ...toolOutputItems];
       }
-    }
+      const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
+      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
+      controller.close();
+    },
   });
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
@@ -6941,7 +7018,7 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
     });
     return new Response(errStream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
   }
-  console.log('[streamGoogle] resp.ok:', resp.ok, 'status:', resp.status);
+  console.log('[streamOpenAI] resp.ok:', resp.ok, 'status:', resp.status);
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -7272,7 +7349,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
       toolConfig: { functionCallingConfig: { mode: "NONE" } },
     }),
   });
-  console.log('[streamGoogle] resp.ok:', resp.ok, 'status:', resp.status);
+  console.log('[streamOpenAI] resp.ok:', resp.ok, 'status:', resp.status);
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
     return jsonResponse(errData, resp.status);
@@ -10362,7 +10439,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         if (_needsResponsesAPI) {
           return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions);
         }
-        return streamOpenAI(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx);
+        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions);
         }
         console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {

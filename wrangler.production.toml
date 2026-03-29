@@ -101,9 +101,7 @@ name = "CHESS_SESSION"
 class_name = "ChessRoom"
 [[durable_objects.bindings]]
 name = "AGENT_SESSION"
-class_name = "IAMSession"
-script_name = "inneranimalmedia"
-
+class_name = "AgentChatSqlV1"
 
 [[migrations]]
 tag = "v1"
@@ -112,6 +110,14 @@ new_classes = ["IAMCollaborationSession"]
 [[migrations]]
 tag = "v2"
 new_classes = ["ChessRoom"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["IAMAgentSession"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["AgentChatSqlV1"]
 
 [[queues.producers]]
 binding = "MY_QUEUE"

@@ -6114,6 +6114,105 @@ Reply with only the JSON object.`;
   return null;
 }
 
+const VERTEX_PROJECT_ID = 'gen-lang-client-0684066529';
+const VERTEX_LOCATION = 'us-central1';
+
+function _b64UrlEncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function _b64UrlEncodeRaw(buf) {
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Service account JSON (secret) to OAuth access token; cached in KV ~55m. */
+async function getVertexAccessToken(env) {
+  if (env.KV) {
+    const cached = await env.KV.get('vertex:access_token');
+    if (cached) return cached;
+  }
+  const raw = env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw || typeof raw !== 'string') throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON not configured');
+  const sa = JSON.parse(raw);
+  const now = Math.floor(Date.now() / 1000);
+  const header = _b64UrlEncodeUtf8(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = _b64UrlEncodeUtf8(JSON.stringify({
+    iss: sa.client_email,
+    sub: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now - 60,
+  }));
+  const pem = sa.private_key;
+  const pemContents = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s/g, '');
+  const binaryDer = Uint8Array.from(atob(pemContents), (c) => c.charCodeAt(0));
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8',
+    binaryDer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signingInput = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    new TextEncoder().encode(signingInput),
+  );
+  const jwt = `${signingInput}.${_b64UrlEncodeRaw(signature)}`;
+  const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt,
+    }),
+  });
+  const tokJson = await tokenResp.json();
+  if (!tokenResp.ok || !tokJson.access_token) {
+    const err = tokJson.error_description || tokJson.error || 'token exchange failed';
+    throw new Error(typeof err === 'string' ? err : JSON.stringify(err));
+  }
+  if (env.KV) {
+    await env.KV.put('vertex:access_token', tokJson.access_token, { expirationTtl: 3300 });
+  }
+  return tokJson.access_token;
+}
+
+function vertexGeminiUrl(modelId, stream) {
+  const action = stream ? 'streamGenerateContent' : 'generateContent';
+  const q = stream ? '?alt=sse' : '';
+  return `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${modelId}:${action}${q}`;
+}
+
+/** Vertex AI Gemini (same project/region as console); uses Bearer from service account. */
+async function callVertexAI(env, modelId, body, stream) {
+  const token = await getVertexAccessToken(env);
+  const url = vertexGeminiUrl(modelId, stream);
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function useVertexForGoogle(env) {
+  return !!env.GOOGLE_SERVICE_ACCOUNT_JSON;
+}
+
 /** One round with the main model, no tools. Used for "question" intent and for aggregate step of mixed. */
 async function singleRoundNoTools(env, provider, modelKey, systemWithBlurb, messages) {
   console.log('[singleRoundNoTools] modelKey:', modelKey);
@@ -6180,13 +6279,23 @@ async function singleRoundNoTools(env, provider, modelKey, systemWithBlurb, mess
       contents: filteredMessages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: toParts(m) })),
       tool_config: { function_calling_config: { mode: 'NONE' } },
     };
+    const reqBodyVertex = {
+      systemInstruction: { parts: [{ text: systemWithBlurb }] },
+      contents: filteredMessages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: toParts(m) })),
+      toolConfig: { functionCallingConfig: { mode: 'NONE' } },
+    };
     console.log('[singleRoundNoTools] Google request body:', JSON.stringify(reqBody).slice(0, 1000));
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`;
-    const resp = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
-      body: JSON.stringify(reqBody),
-    });
+    let resp;
+    if (useVertexForGoogle(env)) {
+      resp = await callVertexAI(env, modelKey, reqBodyVertex, false);
+    } else {
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`;
+      resp = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
+        body: JSON.stringify(reqBody),
+      });
+    }
     let data;
     try {
       data = await resp.json();
@@ -6484,31 +6593,48 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         tool_choice: 'auto',
       };
     } else if (provider === 'google') {
-      apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`;
-      headers = { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY };
       const toParts = (m) => {
         if (m.parts) return m.parts;  // Check parts FIRST - tool results use this
         if (typeof m.content === 'string') return [{ text: m.content }];
         if (Array.isArray(m.content)) return m.content;
         return [{ text: JSON.stringify(m.content || '') }];
       };
-      reqBody = {
-        system_instruction: { parts: [{ text: systemWithBlurb }] },
-        contents: messages.map(m => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: toParts(m),
-        })),
-        tools: [{ function_declarations: toolDefinitions.map(t => ({
-          name: t.name,
-          description: t.description || '',
-          parameters: stripAdditionalProperties(t.input_schema),
-        })) }],
-      };
+      const geminiContents = messages.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: toParts(m),
+      }));
+      const funcDecls = toolDefinitions.map(t => ({
+        name: t.name,
+        description: t.description || '',
+        parameters: stripAdditionalProperties(t.input_schema),
+      }));
+      if (useVertexForGoogle(env)) {
+        apiUrl = '';
+        headers = {};
+        reqBody = {
+          systemInstruction: { parts: [{ text: systemWithBlurb }] },
+          contents: geminiContents,
+          tools: [{ functionDeclarations: funcDecls }],
+        };
+      } else {
+        apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`;
+        headers = { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY };
+        reqBody = {
+          system_instruction: { parts: [{ text: systemWithBlurb }] },
+          contents: geminiContents,
+          tools: [{ function_declarations: funcDecls }],
+        };
+      }
     } else {
       break;
     }
 
-    const resp = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(reqBody) });
+    let resp;
+    if (provider === 'google' && useVertexForGoogle(env)) {
+      resp = await callVertexAI(env, modelKey, reqBody, false);
+    } else {
+      resp = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(reqBody) });
+    }
     const data = await resp.json();
     if (provider === 'google') {
       const bodyPreview = typeof data === 'object' ? JSON.stringify(data) : String(data);
@@ -7680,14 +7806,19 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
           tools: toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined,
         };
 
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
-            body: JSON.stringify(body),
-          }
-        );
+        let resp;
+        if (useVertexForGoogle(env)) {
+          resp = await callVertexAI(env, modelKey, body, true);
+        } else {
+          resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
+              body: JSON.stringify(body),
+            }
+          );
+        }
 
         console.log('[chatWithToolsGoogle] iter:', iter, 'status:', resp.status);
 
@@ -7801,20 +7932,23 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
     .replace(/- For worker\.js edits[^\n]*/g, '')
     .replace(/- For D1 operations[^\n]*/g, '')
     .replace(/CODE DELIVERY RULES[\s\S]*?(?=\n\n)/g, '');
+  const streamBody = {
+    systemInstruction: { parts: [{ text: googleSystem }] },
+    contents: googleContents,
+    toolConfig: { functionCallingConfig: { mode: "NONE" } },
+  };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
-  console.log('[streamGoogle] calling url:', url, 'key set:', !!env.GOOGLE_AI_API_KEY);
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': env.GOOGLE_AI_API_KEY,
-    },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: googleSystem }] },
-      contents: googleContents,
-      toolConfig: { functionCallingConfig: { mode: "NONE" } },
-    }),
-  });
+  console.log('[streamGoogle] calling url:', url, 'vertex:', useVertexForGoogle(env), 'key set:', !!env.GOOGLE_AI_API_KEY);
+  const resp = useVertexForGoogle(env)
+    ? await callVertexAI(env, modelKey, streamBody, true)
+    : await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': env.GOOGLE_AI_API_KEY,
+      },
+      body: JSON.stringify(streamBody),
+    });
   console.log('[streamOpenAI] resp.ok:', resp.ok, 'status:', resp.status);
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
@@ -9051,6 +9185,32 @@ async function handleAgentApi(request, url, env, ctx) {
       } catch (e) {
         try { await _browseBrowser?.close(); } catch (_) {}
         return jsonResponse({ error: e?.message ?? String(e) }, 500);
+      }
+    }
+
+    if (pathLower === '/api/agent/vertex-test' && method === 'POST') {
+      const _vtIngest = isIngestSecretAuthorized(request, env);
+      if (!_vtIngest) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+        return jsonResponse({ ok: false, error: 'GOOGLE_SERVICE_ACCOUNT_JSON not configured' }, 503);
+      }
+      try {
+        const resp = await callVertexAI(
+          env,
+          'gemini-2.5-flash',
+          {
+            contents: [{ role: 'user', parts: [{ text: 'Reply with: Vertex test passed.' }] }],
+          },
+          false,
+        );
+        const data = await resp.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!resp.ok) {
+          return jsonResponse({ ok: false, status: resp.status, error: data?.error ?? data }, resp.status);
+        }
+        return jsonResponse({ ok: true, response: text ?? '' });
+      } catch (e) {
+        return jsonResponse({ ok: false, error: e?.message ?? String(e) }, 500);
       }
     }
 
@@ -10897,7 +11057,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const useGateway = bodyUseGateway !== false && !!env.AI_GATEWAY_BASE_URL;
       const canStreamAnthropic = model.provider === 'anthropic' && !(useGateway && gatewayModel) && !!env.ANTHROPIC_API_KEY;
       const canStreamOpenAI = model.provider === 'openai' && !(useGateway && gatewayModel) && !!env.OPENAI_API_KEY;
-      const canStreamGoogle = model.provider === 'google' && !!env.GOOGLE_AI_API_KEY;
+      const canStreamGoogle = model.provider === 'google' && (!!env.GOOGLE_AI_API_KEY || !!env.GOOGLE_SERVICE_ACCOUNT_JSON);
       const canStreamWorkersAI = (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && !!env.AI;
       const wantStream = body.stream === true && (canStreamAnthropic || canStreamOpenAI || canStreamGoogle || canStreamWorkersAI);
 
@@ -11306,26 +11466,33 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           return jsonResponse({ error: 'OpenAI request failed', detail: err?.message ?? String(err) }, 502);
         }
       }
-      if (result === undefined && model.provider === 'google' && env.GOOGLE_AI_API_KEY) {
+      if (result === undefined && model.provider === 'google' && (env.GOOGLE_AI_API_KEY || env.GOOGLE_SERVICE_ACCOUNT_JSON)) {
         const googleContents = apiMessages.map((m, i) => {
           const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
           const parts = isLastUser ? buildGoogleParts(m.content, images) : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }];
           return { role: m.role === 'assistant' ? 'model' : 'user', parts };
         });
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${(model.model_key || 'gemini-2.5-flash')}:generateContent`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-goog-api-key': env.GOOGLE_AI_API_KEY,
-            },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: finalSystem }] },
-              contents: googleContents,
-            }),
-          }
-        );
+        const mk = model.model_key || 'gemini-2.5-flash';
+        const genBody = {
+          systemInstruction: { parts: [{ text: finalSystem }] },
+          contents: googleContents,
+        };
+        let resp;
+        if (useVertexForGoogle(env)) {
+          resp = await callVertexAI(env, mk, genBody, false);
+        } else {
+          resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${mk}:generateContent`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': env.GOOGLE_AI_API_KEY,
+              },
+              body: JSON.stringify(genBody),
+            }
+          );
+        }
         result = await resp.json();
         if (!resp.ok) return jsonResponse(result, resp.status);
       }

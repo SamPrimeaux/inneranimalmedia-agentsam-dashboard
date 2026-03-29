@@ -7414,73 +7414,59 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
   const messages = [{ role: 'system', content: systemWithBlurb }, ...apiMessages];
   const modelKey = (modelRow && modelRow.model_key) ? modelRow.model_key : '@cf/meta/llama-3.1-8b-instruct';
   const inputCharCount = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
-  let resp;
-  try {
-    resp = await env.AI.run(modelKey, { messages, stream: true });
-  } catch (e) {
-    return jsonResponse({ error: e?.message ?? String(e) }, 502);
-  }
-  if (!resp) return jsonResponse({ error: 'Workers AI returned null' }, 502);
-  if (!resp.body && resp[Symbol.asyncIterator]) {
-    const iter = resp[Symbol.asyncIterator]();
-    resp = { body: new ReadableStream({
-      async pull(ctrl) {
-        const { done, value } = await iter.next();
-        if (done) { ctrl.close(); return; }
-        const text = typeof value === 'string' ? value : (value?.response ?? value?.text ?? '');
-        if (text) ctrl.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ response: text }) + '\n\n'));
-      }
-    })};
-  }
-  if (!resp.body) return jsonResponse({ error: 'Workers AI stream failed' }, 502);
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullText = '';
-  const readable = new ReadableStream({
-    async pull(controller) {
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const enc = new TextEncoder();
+  const emit = (obj) => writer.write(enc.encode('data: ' + JSON.stringify(obj) + '\n\n'));
+
+  // Fire the AI call in background — return stream immediately to avoid runtime hang
+  (async () => {
+    try {
+      const WAI_TIMEOUT_MS = 25000;
+      let result;
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            try {
-              const data = JSON.parse(raw);
-              const text = (typeof data.response === 'string' ? data.response : null)
-                ?? (typeof data.text === 'string' ? data.text : null)
-                ?? (data.choices?.[0]?.delta?.content != null ? String(data.choices[0].delta.content) : '');
-              if (typeof text === 'string' && text) {
-                fullText += text;
-                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'text', text })}\n\n`));
-              }
-            } catch (_) {}
-          }
-        }
-        const inputTokens = Math.round(inputCharCount / 4);
-        const outputTokens = Math.round(fullText.length / 4);
-        const costUsd = 0;
-        const safeInput = inputTokens ?? 0;
-        const safeOutput = outputTokens ?? 0;
-        const safeCost = costUsd ?? 0;
-        const safeText = fullText || '';
-        const safeModel = (modelRow && modelRow.model_key != null) ? modelRow.model_key : 'unknown';
-        const safeRow = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
-        await streamDoneDbWrites(env, conversationId, safeRow, safeText, safeInput, safeOutput, safeCost, agent_id, ctx, getLastUserMessageText(apiMessages));
-        emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: safeInput, output_tokens: safeOutput, cost_usd: safeCost, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name })}\n\n`));
+        result = await Promise.race([
+          env.AI.run(modelKey, { messages }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Workers AI timeout after 25s')), WAI_TIMEOUT_MS))
+        ]);
       } catch (e) {
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'error', error: e?.message ?? String(e) })}\n\n`));
-      } finally {
-        reader.releaseLock();
+        await emit({ type: 'error', error: e?.message ?? String(e) });
+        return;
       }
-      controller.close();
-    },
-  });
+
+      if (!result) {
+        await emit({ type: 'error', error: 'Workers AI returned null' });
+        return;
+      }
+
+      // Non-streaming: result is { response: string } or { text: string }
+      const fullText = (typeof result.response === 'string' ? result.response : null)
+        ?? (typeof result.text === 'string' ? result.text : null)
+        ?? (result.choices?.[0]?.message?.content != null ? String(result.choices[0].message.content) : '')
+        ?? '';
+
+      if (fullText) {
+        await emit({ type: 'text', text: fullText });
+      }
+
+      const inputTokens  = Math.round(inputCharCount / 4);
+      const outputTokens = Math.round(fullText.length / 4);
+      const costUsd      = 0;
+
+      const safeModel = (modelRow && modelRow.model_key != null) ? modelRow.model_key : 'unknown';
+      const safeRow   = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
+
+      await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      emitCodeBlocksFromText(fullText, (obj) => emit(obj));
+      await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
+    } catch (e) {
+      await emit({ type: 'error', error: e?.message ?? String(e) }).catch(() => {});
+    } finally {
+      await writer.close().catch(() => {});
+    }
+  })();
+
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 

@@ -29,16 +29,13 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   echo "Pulling latest build from sandbox R2 (${SANDBOX_BUCKET})..."
   mkdir -p agent-dashboard/dist dashboard
 
-  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
-    static/dashboard/agent/agent-dashboard.js \
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent/agent-dashboard.js" \
     --file "$JS_PATH" --remote -c "$PROD_CFG"
 
-  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
-    static/dashboard/agent/agent-dashboard.css \
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent/agent-dashboard.css" \
     --file "$CSS_PATH" --remote -c "$PROD_CFG"
 
-  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
-    static/dashboard/agent.html \
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
     --file "$HTML_PATH" --remote -c "$PROD_CFG"
 
   CURRENT_V=$(grep -o '?v=[0-9]*' "$HTML_PATH" | head -1 | grep -o '[0-9]*' || echo "0")

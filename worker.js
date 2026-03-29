@@ -1189,6 +1189,7 @@ const WEBHOOK_ENDPOINT_PATH_ALIASES = {
   '/api/hooks/stripe': '/api/webhooks/stripe',
   '/api/hooks/internal': '/api/webhooks/internal',
   '/api/hooks/supabase': '/api/webhooks/supabase',
+  '/api/hooks/openai': '/api/webhooks/openai',
 };
 
 function webhookCaptureHeaders(request) {
@@ -2636,6 +2637,9 @@ const worker = {
         }
         if (pathLower === '/api/webhooks/supabase') {
           return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/webhooks/supabase' }, ctx);
+        }
+        if (pathLower === '/api/webhooks/openai') {
+          return handleInboundWebhook(env, request, secret, { verifyKind: 'openai', source: 'openai', endpointPath: '/api/webhooks/openai' }, ctx);
         }
         if (pathLower === '/api/webhooks/internal') {
           return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/webhooks/internal' }, ctx);

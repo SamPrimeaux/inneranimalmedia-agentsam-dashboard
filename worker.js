@@ -526,117 +526,63 @@ export class ChessRoom extends DurableObject {
 }
 
 // ============================================================================
-// AUTO MODE: COST-BASED MODEL ROUTING
+// AUTO MODE: D1 ai_routing_rules (intent → target model)
 // ============================================================================
 
 /**
- * Model cost tiers and per-token pricing
- * Costs in USD per 1M tokens (input/output)
- * Data from ai_models.input_rate_per_mtok / output_rate_per_mtok
- */
-const MODEL_COST_TIERS = {
-  'gemini-2.5-flash': {
-    input: 0.10,
-    output: 0.40,
-    tier: 'budget',
-    provider: 'google'
-  },
-  'gpt-4o-mini': {
-    input: 0.15,
-    output: 0.60,
-    tier: 'budget',
-    provider: 'openai'
-  },
-  'claude-haiku-4-5-20251001': {
-    input: 0.80,
-    output: 1.00,
-    tier: 'standard',
-    provider: 'anthropic'
-  },
-  'gpt-4o': {
-    input: 2.50,
-    output: 10.00,
-    tier: 'standard',
-    provider: 'openai'
-  },
-  'claude-sonnet-4-20250514': {
-    input: 3.00,
-    output: 15.00,
-    tier: 'premium',
-    provider: 'anthropic'
-  },
-  'claude-opus-4-6': {
-    input: 15.00,
-    output: 75.00,
-    tier: 'max',
-    provider: 'anthropic'
-  },
-  /** Manual / documentation tier only — selectAutoModel only matches budget|standard|premium|max, so this is never auto-selected. */
-  '@cf/meta/llama-4-scout-17b-16e-instruct': {
-    input: 0,
-    output: 0,
-    tier: 'workers_ai_premium',
-    provider: 'workers_ai'
-  }
-};
-
-/**
- * Map intent classifications to cost tiers
- * Existing classifyIntent returns: sql, shell, question, mixed
- */
-const INTENT_TO_TIER = {
-  'question': 'budget',
-  'simple_query': 'budget',
-  'sql': 'standard',
-  'shell': 'standard',
-  'action': 'standard',
-  'code_generation': 'premium',
-  'planning': 'premium',
-  'architecture': 'max',
-  'mixed': 'standard'
-};
-
-/**
- * Select best model for Auto mode based on intent and cost
+ * Select model for Auto mode: classify intent, then match ai_routing_rules (match_type=intent).
  */
 async function selectAutoModel(env, lastUserContent, returnIntent = false) {
   try {
     const classification = await classifyIntent(env, lastUserContent);
-    const intent = classification?.intent || 'action';
+    const intent = classification?.intent || 'mixed';
 
     console.log('[Auto Mode] Intent classified as:', intent);
 
-    const targetTier = INTENT_TO_TIER[intent] || 'standard';
-
-    console.log('[Auto Mode] Target tier:', targetTier);
-
-    let selectedKey = null;
-    let lowestCost = Infinity;
-
-    for (const [modelKey, config] of Object.entries(MODEL_COST_TIERS)) {
-      if (config.tier === targetTier) {
-        const avgCost = (config.input + config.output) / 2;
-        if (avgCost < lowestCost) {
-          lowestCost = avgCost;
-          selectedKey = modelKey;
-        }
+    let routingRule = null;
+    if (env.DB) {
+      try {
+        routingRule = await env.DB.prepare(`
+          SELECT id, target_model_key, target_provider, fallback_model_key, fallback_provider
+          FROM ai_routing_rules 
+          WHERE match_type='intent' 
+          AND is_active=1
+          AND (
+            match_value = ? 
+            OR match_value LIKE '%,' || ? || ',%'
+            OR match_value LIKE ? || ',%'
+            OR match_value LIKE '%,' || ?
+          )
+          ORDER BY priority ASC LIMIT 1
+        `).bind(intent, intent, intent, intent).first();
+      } catch (e) {
+        console.warn('[Auto Mode] ai_routing_rules lookup failed:', e?.message ?? e);
       }
     }
 
-    if (!selectedKey) {
-      console.log('[Auto Mode] No model found for tier, falling back to budget');
-      selectedKey = 'gemini-2.5-flash';
+    const autoModel = routingRule?.target_model_key || 'gemini-2.5-flash';
+    const autoProvider = routingRule?.target_provider || 'google';
+
+    if (routingRule?.id) {
+      console.log(`[Auto Mode] Routing rule matched: ${routingRule.id} → ${autoModel}`);
+    } else {
+      console.log('[Auto Mode] No rule matched, using default', autoModel, autoProvider);
     }
 
-    console.log('[Auto Mode] Selected model:', selectedKey, 'tier:', targetTier);
-
-    const model = await env.DB.prepare(
+    let model = await env.DB.prepare(
       'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
-    ).bind(selectedKey).first();
+    ).bind(autoModel).first();
+
+    if (!model && routingRule?.fallback_model_key) {
+      console.log('[Auto Mode] primary model missing in DB, trying fallback:', routingRule.fallback_model_key);
+      model = await env.DB.prepare(
+        'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
+      ).bind(routingRule.fallback_model_key).first();
+    }
 
     if (!model) {
-      console.warn('[Auto Mode] Model not found in DB:', selectedKey, '- falling back to Haiku');
-      return await env.DB.prepare(
+      console.warn('[Auto Mode] Model not found in DB:', autoModel, '- falling back to Haiku');
+      model = await env.DB.prepare(
         'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
       ).bind('claude-haiku-4-5-20251001').first();
     }
@@ -6195,10 +6141,23 @@ function vertexGeminiUrl(modelId, stream) {
   return `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/${modelId}:${action}${q}`;
 }
 
+/** Map D1 / UI model keys to Vertex publisher model IDs (preview IDs are not on Vertex; see ai_models.model_key). */
+function toVertexModelId(modelKey) {
+  const map = {
+    'gemini-3.1-flash': 'gemini-2.5-flash',
+    'gemini-3-flash-preview': 'gemini-2.5-flash',
+    'gemini-3.1-flash-lite-preview': 'gemini-2.5-flash-lite',
+    'gemini-3.1-pro': 'gemini-2.5-pro',
+    'gemini-3.1-pro-preview': 'gemini-2.5-pro',
+    'gemini-3.1-pro-preview-customtools': 'gemini-2.5-pro',
+  };
+  return map[modelKey] || modelKey;
+}
+
 /** Vertex AI Gemini (same project/region as console); uses Bearer from service account. */
 async function callVertexAI(env, modelId, body, stream) {
   const token = await getVertexAccessToken(env);
-  const url = vertexGeminiUrl(modelId, stream);
+  const url = vertexGeminiUrl(toVertexModelId(modelId), stream);
   return fetch(url, {
     method: 'POST',
     headers: {
@@ -7806,18 +7765,24 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
           tools: toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined,
         };
 
+        const geminiStreamUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
         let resp;
         if (useVertexForGoogle(env)) {
           resp = await callVertexAI(env, modelKey, body, true);
-        } else {
-          resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`,
-            {
+          if ((resp.status === 404 || resp.status === 400) && env.GOOGLE_AI_API_KEY) {
+            await resp.text().catch(() => '');
+            resp = await fetch(geminiStreamUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
               body: JSON.stringify(body),
-            }
-          );
+            });
+          }
+        } else {
+          resp = await fetch(geminiStreamUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GOOGLE_AI_API_KEY },
+            body: JSON.stringify(body),
+          });
         }
 
         console.log('[chatWithToolsGoogle] iter:', iter, 'status:', resp.status);
@@ -7939,9 +7904,22 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
   console.log('[streamGoogle] calling url:', url, 'vertex:', useVertexForGoogle(env), 'key set:', !!env.GOOGLE_AI_API_KEY);
-  const resp = useVertexForGoogle(env)
-    ? await callVertexAI(env, modelKey, streamBody, true)
-    : await fetch(url, {
+  let resp;
+  if (useVertexForGoogle(env)) {
+    resp = await callVertexAI(env, modelKey, streamBody, true);
+    if ((resp.status === 404 || resp.status === 400) && env.GOOGLE_AI_API_KEY) {
+      await resp.text().catch(() => '');
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.GOOGLE_AI_API_KEY,
+        },
+        body: JSON.stringify(streamBody),
+      });
+    }
+  } else {
+    resp = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -7949,6 +7927,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
       },
       body: JSON.stringify(streamBody),
     });
+  }
   console.log('[streamOpenAI] resp.ok:', resp.ok, 'status:', resp.status);
   if (!resp.ok) {
     const errData = await resp.json().catch(() => ({}));
@@ -10457,9 +10436,20 @@ async function handleAgentApi(request, url, env, ctx) {
       console.log('[agent/chat] model_id:', model_id);
       const bodyCompiledContextTrim = typeof bodyCompiledContext === 'string' ? bodyCompiledContext.trim() : '';
       if (!msgList || !Array.isArray(msgList) || msgList.length === 0) return jsonResponse({ error: 'messages required' }, 400);
-      const chatSession = await getSession(env, request).catch(() => null);
-      const chatUserId = chatSession?.user_id || 'sam_primeaux';
-      await ensureWorkSessionAndSignal(env, chatUserId, body?.workspace_id || 'ws_samprimeaux', 'ai', 'agent-chat', {
+      const ingestBypass = isIngestSecretAuthorized(request, env);
+      let chatUserId, chatWorkspaceId, chatTenantId;
+      if (ingestBypass) {
+        chatUserId = 'sam_primeaux';
+        chatWorkspaceId = 'ws_samprimeaux';
+        chatTenantId = 'tenant_sam_primeaux';
+      } else {
+        const chatSession = await getSession(env, request).catch(() => null);
+        chatUserId = chatSession?.user_id;
+        chatWorkspaceId = body?.workspace_id || 'ws_samprimeaux';
+        chatTenantId = 'tenant_sam_primeaux';
+        if (!chatUserId) return jsonResponse({ error: 'Session invalid', code: 401 }, 401);
+      }
+      await ensureWorkSessionAndSignal(env, chatUserId, chatWorkspaceId, 'ai', 'agent-chat', {
         mode: chatMode,
         message_count: msgList.length,
       });
@@ -21668,7 +21658,13 @@ async function handleGoogleOAuthCallback(request, url, env) {
   if (!email) {
     return Response.redirect(`${origin(url)}/auth/signin?error=no_email`, 302);
   }
-  const userId = email;
+  let userId = email;
+  try {
+    const urow = await env.DB.prepare(
+      `SELECT id, user_key, default_workspace_id FROM users WHERE email=? LIMIT 1`
+    ).bind(email).first();
+    if (urow?.id) userId = urow.id;
+  } catch (_) {}
 
   if (connectDrive) {
     const sessionUser = await getAuthUser(request, env);

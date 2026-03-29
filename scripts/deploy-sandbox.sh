@@ -101,3 +101,15 @@ echo "  Bucket:  ${SANDBOX_BUCKET}"
 echo "  Version: v=${CURRENT_V:-n/a}"
 echo ""
 echo "Review at sandbox, then run: ./scripts/promote-to-prod.sh"
+
+if [ -z "${CURRENT_V:-}" ]; then
+  CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html 2>/dev/null | head -1 | grep -o '[0-9]*' || echo "?")
+fi
+NEXT_VERSION="${NEXT_VERSION:-$CURRENT_V}"
+DEPLOY_DESC="${DEPLOY_DESC:-sandbox deploy $(date +%Y-%m-%d)}"
+DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
+  --remote --config wrangler.production.toml \
+  --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
+  2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
+echo "[deploy-sandbox] D1 deployment row updated"

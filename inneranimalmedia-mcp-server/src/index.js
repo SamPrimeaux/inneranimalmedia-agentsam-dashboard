@@ -35,6 +35,7 @@ const IMPLEMENTED_TOOL_LIST = [
   { name: 'resend_create_api_key', description: 'Create Resend API key', inputSchema: { type: 'object', properties: { name: { type: 'string' }, permission: { type: 'string', enum: ['sending_access', 'full_access'] }, domain_id: { type: 'string' } }, required: ['name', 'permission'] } },
   { name: 'resend_send_broadcast', description: 'Send or schedule Resend broadcast', inputSchema: { type: 'object', properties: { broadcast_id: { type: 'string' }, scheduled_at: { type: 'string' } }, required: ['broadcast_id'] } },
   { name: 'knowledge_search', description: 'POST /api/rag/query on main worker (X-Ingest-Secret)', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', default: 3 } }, required: ['query'] } },
+  { name: 'browse_url', description: 'Headless browser fetch — text/screenshot/html/title', inputSchema: { type: 'object', properties: { url: { type: 'string' }, action: { type: 'string', enum: ['text', 'screenshot', 'html', 'title'], default: 'text' } }, required: ['url'] } },
   { name: 'rag_ingest', description: 'POST /api/rag/ingest on main worker', inputSchema: { type: 'object', properties: { object_key: { type: 'string' }, force: { type: 'boolean', default: false } }, required: ['object_key'] } },
   { name: 'rag_feedback', description: 'POST /api/rag/feedback', inputSchema: { type: 'object', properties: { search_history_id: { type: 'string' }, was_useful: { type: 'integer', enum: [0, 1] }, feedback_text: { type: 'string' } }, required: ['search_history_id', 'was_useful'] } },
   { name: 'rag_status', description: 'autorag index_status and chunk_count', inputSchema: { type: 'object', properties: { object_key: { type: 'string' } } } },
@@ -451,6 +452,15 @@ async function handleToolCall(name, args, env) {
     const r = await mainWorkerPost(env, '/api/rag/query', { query: args.query, top_k: limit });
     if (!r.ok) result = textContent(JSON.stringify(r, null, 2));
     else result = textContent(JSON.stringify(r.data, null, 2));
+  } else if (name === 'browse_url') {
+    const browseUrl = String(args.url || '').trim();
+    const browseAction = String(args.action || 'text').trim();
+    if (!browseUrl) result = textContent('Error: url required');
+    else {
+      const r = await mainWorkerPost(env, '/api/agent/browse', { url: browseUrl, action: browseAction });
+      if (!r.ok) result = textContent(JSON.stringify(r, null, 2));
+      else result = textContent(JSON.stringify(r.data, null, 2));
+    }
   } else if (name === 'rag_ingest') {
     const r = await mainWorkerPost(env, '/api/rag/ingest', { object_key: args.object_key, force: !!args.force });
     if (!r.ok) result = textContent(JSON.stringify(r, null, 2));

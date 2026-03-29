@@ -389,11 +389,123 @@ export class IAMCollaborationSession extends DurableObject {
   }
 }
 
+/** Legacy KV-backed stub (migration v3). */
 export class IAMSession extends DurableObject {
   async fetch(request) {
-    return new Response(JSON.stringify({ do: 'IAMSession', ok: true }), {
+    return new Response(JSON.stringify({ do: 'IAMSession', ok: true, legacy: true }), {
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+}
+
+/** Stub for migration v4 class name; AGENT_SESSION uses {@link AgentChatSqlV1}. */
+export class IAMAgentSession extends DurableObject {
+  async fetch(request) {
+    return new Response(JSON.stringify({ do: 'IAMAgentSession', ok: true, legacy: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+export class AgentChatSqlV1 extends DurableObject {
+  /**
+   * @param {import('@cloudflare/workers-types').DurableObjectState} state
+   * @param {Record<string, unknown>} env
+   */
+  constructor(state, env) {
+    super(state, env);
+    this.state = state;
+    this.env = env;
+    /** @type {import('@cloudflare/workers-types').SqlStorage} */
+    this.sql = state.storage.sql;
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS session_messages (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      model_used TEXT,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      rag_chunks_injected INTEGER DEFAULT 0,
+      top_rag_score REAL DEFAULT 0,
+      created_at INTEGER DEFAULT (unixepoch())
+    )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS session_rag_cache (
+      query_hash TEXT PRIMARY KEY,
+      chunk_ids TEXT,
+      context TEXT,
+      top_score REAL,
+      cached_at INTEGER DEFAULT (unixepoch())
+    )`);
+  }
+
+  /** @param {Request} request */
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/health') {
+      return Response.json({ ok: true, class: 'AgentChatSqlV1' });
+    }
+
+    if (url.pathname === '/history') {
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const rows = [...this.sql.exec(
+        'SELECT id, role, content, model_used, input_tokens, output_tokens, created_at FROM session_messages ORDER BY created_at DESC LIMIT ?',
+        limit,
+      )];
+      return Response.json({ messages: rows.reverse() });
+    }
+
+    if (url.pathname === '/message' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const { role, content, model_used, input_tokens, output_tokens, rag_chunks_injected, top_rag_score } = body;
+      this.sql.exec(
+        'INSERT INTO session_messages (role,content,model_used,input_tokens,output_tokens,rag_chunks_injected,top_rag_score) VALUES (?,?,?,?,?,?,?)',
+        role,
+        content,
+        model_used ?? null,
+        input_tokens ?? 0,
+        output_tokens ?? 0,
+        rag_chunks_injected ?? 0,
+        top_rag_score ?? 0,
+      );
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/rag-cache' && request.method === 'GET') {
+      const hash = url.searchParams.get('hash');
+      if (!hash) return Response.json({ hit: false });
+      const cutoff = Math.floor(Date.now() / 1000) - 3600;
+      const rows = [...this.sql.exec(
+        'SELECT query_hash, chunk_ids, context, top_score, cached_at FROM session_rag_cache WHERE query_hash = ? AND cached_at > ?',
+        hash,
+        cutoff,
+      )];
+      if (!rows.length) return Response.json({ hit: false });
+      const row = rows[0];
+      return Response.json({
+        hit: true,
+        query_hash: row.query_hash,
+        chunk_ids: row.chunk_ids,
+        context: row.context,
+        top_score: row.top_score,
+        cached_at: row.cached_at,
+      });
+    }
+
+    if (url.pathname === '/rag-cache' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const { query_hash, chunk_ids, context, top_score } = body;
+      this.sql.exec(
+        'INSERT OR REPLACE INTO session_rag_cache (query_hash, chunk_ids, context, top_score) VALUES (?,?,?,?)',
+        query_hash,
+        chunk_ids,
+        context,
+        top_score ?? 0,
+      );
+      return Response.json({ ok: true });
+    }
+
+    return new Response('AgentChatSqlV1 DO', { status: 200 });
   }
 }
 
@@ -3282,6 +3394,12 @@ const worker = {
           if (command.implementation_type === 'builtin' && command.implementation_ref) {
             const builtins = {
               clear_context: async () => ({ output: 'Context cleared' }),
+              runfullaitest: async () => ({
+                output: 'cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/benchmark-full.sh sandbox',
+              }),
+              runtests: async () => ({
+                output: 'cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/benchmark-full.sh sandbox --quick',
+              }),
               list_tools: async () => {
                 const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
                 return { output: JSON.stringify((r.results || []).map(t => ({ name: t.tool_name, description: t.description })), null, 2) };
@@ -7148,13 +7266,20 @@ function emitCodeBlocksFromText(fullText, send) {
 }
 
 /**
- * OpenAI streaming: same SSE contract as Anthropic.
-/**
  * OpenAI Responses API streaming — required for GPT-5.x models.
  * Uses /v1/responses endpoint, supports previous_response_id caching (40-80% token savings on turn 2+).
  * Tool format: internally-tagged { type, name, description, parameters } (no nested .function wrapper).
  */
-async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = []) {
+function intentToReasoningEffort(intent) {
+  if (intent === 'sql' || intent === 'shell') return 'none';
+  if (intent === 'question') return 'low';
+  return 'none';
+}
+function intentToVerbosity(intent) {
+  if (intent === 'sql' || intent === 'shell') return 'low';
+  return 'medium';
+}
+async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = [], _agentIntentFinal = 'mixed') {
   const modelKey = modelRow.model_key || 'gpt-5.4-mini';
   // Build input array: system as developer message + user/assistant turns
   const inputMsgs = [
@@ -7164,20 +7289,30 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
       return { role: m.role, content: isLastUser ? buildOpenAIContent(m.content, images) : m.content };
     })
   ];
-  // Responses API tool format (internally-tagged, strict:true by default)
-  const tools = toolDefinitions.length > 0 ? toolDefinitions.map(t => ({
-    type: 'function',
-    name: t.name,
-    description: (t.description || t.name).slice(0, 500),
-    parameters: t.input_schema || { type: 'object', properties: {} },
-  })) : undefined;
-  // Effort: none for gpt-5.4.x (fastest), low for gpt-5/o-series (cap verbosity), omit for gpt-4.x
-  const isGpt54 = modelKey.startsWith('gpt-5.4');
+  const rawToolDefs = modelKey === 'gpt-5-search-api'
+    ? [{ type: 'web_search' }, ...toolDefinitions]
+    : toolDefinitions;
+  // Responses API tool format (internally-tagged, strict:true by default); web_search is a built-in tool
+  const tools = rawToolDefs.length > 0 ? rawToolDefs.map(t => {
+    if (t && t.type === 'web_search') return { type: 'web_search' };
+    return {
+      type: 'function',
+      name: t.name,
+      description: (t.description || t.name).slice(0, 500),
+      parameters: t.input_schema || { type: 'object', properties: {} },
+    };
+  }) : undefined;
+  const isGpt54IntentParams = modelKey.startsWith('gpt-5.4') || modelKey.startsWith('gpt-5.');
   const isReasoningModel = modelKey.startsWith('gpt-5') || modelKey.startsWith('o');
-  const reasoningConfig = isGpt54
-    ? { reasoning: { effort: 'none' } }
-    : isReasoningModel ? { reasoning: { effort: 'low' } }
-    : {};
+  let reasoningConfig = {};
+  if (isGpt54IntentParams) {
+    reasoningConfig = {
+      reasoning: { effort: intentToReasoningEffort(_agentIntentFinal) },
+      text: { verbosity: intentToVerbosity(_agentIntentFinal) },
+    };
+  } else if (isReasoningModel) {
+    reasoningConfig = { reasoning: { effort: 'low' } };
+  }
   const body = {
     model: modelKey,
     input: inputMsgs,
@@ -8875,6 +9010,50 @@ async function handleAgentApi(request, url, env, ctx) {
   const method = (request.method || 'GET').toUpperCase();
 
   try {
+    if (pathLower === '/api/agent/browse' && method === 'POST') {
+      const _browseSess = await getSession(env, request).catch(() => null);
+      const _browseIngest = isIngestSecretAuthorized(request, env);
+      if (!_browseSess?.user_id && !_browseIngest) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.MYBROWSER) return jsonResponse({ error: 'MYBROWSER not configured' }, 503);
+      const _browseBody = await request.json().catch(() => ({}));
+      const _browseUrl = typeof _browseBody.url === 'string' ? _browseBody.url.trim() : '';
+      const _browseAction = typeof _browseBody.action === 'string' ? _browseBody.action : 'text';
+      if (!_browseUrl) return jsonResponse({ error: 'url required' }, 400);
+      let _browseBrowser;
+      try {
+        if (!playwrightLaunch) {
+          const pw = await import('@cloudflare/playwright');
+          playwrightLaunch = pw.launch;
+        }
+        _browseBrowser = await playwrightLaunch(env.MYBROWSER);
+        const _page = await _browseBrowser.newPage();
+        try {
+          await _page.goto(_browseUrl, { waitUntil: 'networkidle', timeout: 30000 });
+        } catch {
+          await _page.goto(_browseUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        }
+        let _browseResult;
+        if (_browseAction === 'screenshot') {
+          const _buf = await _page.screenshot({ type: 'png' });
+          const _u8 = _buf instanceof Uint8Array ? _buf : new Uint8Array(_buf);
+          let _bin = '';
+          for (let i = 0; i < _u8.length; i++) _bin += String.fromCharCode(_u8[i]);
+          _browseResult = { ok: true, type: 'screenshot', data: btoa(_bin) };
+        } else if (_browseAction === 'html') {
+          _browseResult = { ok: true, type: 'html', content: await _page.content() };
+        } else if (_browseAction === 'title') {
+          _browseResult = { ok: true, type: 'title', content: await _page.title() };
+        } else {
+          _browseResult = { ok: true, type: 'text', content: await _page.evaluate(() => document.body.innerText) };
+        }
+        await _browseBrowser.close();
+        return jsonResponse(_browseResult);
+      } catch (e) {
+        try { await _browseBrowser?.close(); } catch (_) {}
+        return jsonResponse({ error: e?.message ?? String(e) }, 500);
+      }
+    }
+
     if (pathLower === '/api/agent/modes' && method === 'GET') {
       if (!env.DB) return jsonResponse([]);
       try {
@@ -10264,10 +10443,39 @@ async function handleAgentApi(request, url, env, ctx) {
         return { role: m.role === 'assistant' ? 'assistant' : 'user', content };
       });
 
-      const ragConversationId = session_id ?? null;
+      let conversationId = session_id || null;
+      if (!conversationId && env.DB) {
+        try {
+          conversationId = crypto.randomUUID();
+          const now = Math.floor(Date.now() / 1000);
+          await env.DB.prepare(
+            "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
+          ).bind(conversationId, env.TENANT_ID || 'system', 'chat', 'active', '{}', now, now, PROJECT_ID).run();
+          try {
+            const session = await getSession(env, request);
+            const userId = session?.user_id || 'system';
+            await env.DB.prepare(
+              "INSERT INTO agent_conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)"
+            ).bind(conversationId, userId, 'New Conversation', now, now).run();
+          } catch (e) {
+            console.error('[agent/chat] agent_conversations INSERT failed:', e?.message ?? e);
+          }
+          if (ctx && typeof ctx.waitUntil === 'function') {
+            ctx.waitUntil(generateConversationName(env, conversationId, lastUserContent || '').catch((e) => console.warn('[agent/chat] generateConversationName', e?.message)));
+          }
+        } catch (e) {
+          console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
+        }
+      }
+      conversationId = conversationId || crypto.randomUUID();
+
       let ragContext = '';
       const RAG_MIN_QUERY_WORDS = 4;
       const RAG_MIN_CONTEXT_CHARS = 100;
+      let doRagChunksInjected = 0;
+      let doTopRagScore = 0;
+      let doTopChunkIds = [];
+      let doQueryHash = '';
       // AutoRAG: skip for shell/question (pgvector handles those), skip if token missing
       // If AI Search returns 7001, fail silently — pgvector provides fallback context
       const _intentForRag = model?._intent ?? null;
@@ -10278,16 +10486,47 @@ async function handleAgentApi(request, url, env, ctx) {
         env.VECTORIZE_INDEX &&
         lastUserContent &&
         lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
-      if (runRag) {
+
+      let ragSkippedFromDoCache = false;
+      if (runRag && lastUserContent && env.AGENT_SESSION && conversationId) {
+        try {
+          const _qhBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lastUserContent));
+          doQueryHash = Array.from(new Uint8Array(_qhBuf)).map((x) => x.toString(16).padStart(2, '0')).join('');
+          const _doId = env.AGENT_SESSION.idFromName(String(conversationId));
+          const _doSess = env.AGENT_SESSION.get(_doId);
+          const _ragCacheResp = await _doSess.fetch(new Request(`https://do/rag-cache?hash=${encodeURIComponent(doQueryHash)}`));
+          const _ragCache = await _ragCacheResp.json().catch(() => ({}));
+          if (_ragCache.hit === true && _ragCache.context != null && String(_ragCache.context).length >= RAG_MIN_CONTEXT_CHARS) {
+            ragContext = capWithMarker(String(_ragCache.context), PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
+            ragSkippedFromDoCache = true;
+            doTopRagScore = Number(_ragCache.top_score) || 0;
+            try {
+              const _cid = _ragCache.chunk_ids;
+              doTopChunkIds = typeof _cid === 'string' && _cid.trim() ? JSON.parse(_cid) : [];
+            } catch {
+              doTopChunkIds = [];
+            }
+            doRagChunksInjected = Array.isArray(doTopChunkIds) ? doTopChunkIds.length : 0;
+          }
+        } catch (e) {
+          console.warn('[agent/chat] DO RAG cache read', e?.message ?? e);
+        }
+      }
+
+      if (runRag && !ragSkippedFromDoCache) {
         try {
           const _t0Rag = Date.now();
           const _EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
           const _CPT = 4;
+          if (!doQueryHash && lastUserContent) {
+            const _qhBuf2 = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lastUserContent));
+            doQueryHash = Array.from(new Uint8Array(_qhBuf2)).map((x) => x.toString(16).padStart(2, '0')).join('');
+          }
           const _embedRes = await env.AI.run(_EMBED_MODEL, { text: lastUserContent });
           const _queryVec = _embedRes?.data?.[0] ?? _embedRes?.result?.data?.[0];
           if (_queryVec) {
             const _chunkRows = await env.DB.prepare(
-              `SELECT id, content, token_count, embedding_vector
+              `SELECT id, content, token_count, embedding_vector, metadata_json
                FROM ai_knowledge_chunks
                WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
             ).all();
@@ -10311,11 +10550,26 @@ async function handleAgentApi(request, url, env, ctx) {
                 if (_fb) model = { ..._fb, _intent: model._intent };
               }
             }
-            const _rawRag = _scored.map((c) => c.content).join('\n\n');
+            const _ragChunksForXml = _scored.map((c) => {
+              let object_key = '';
+              try {
+                if (c.metadata_json != null) {
+                  const m = typeof c.metadata_json === 'string' ? JSON.parse(c.metadata_json) : c.metadata_json;
+                  object_key = m.object_key || m.source || m.path || '';
+                }
+              } catch (_) {}
+              return { content: c.content, score: c.score, object_key };
+            });
+            const _xmlEscAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const ragBlock = _ragChunksForXml.length
+              ? `<retrieved_context>\n${_ragChunksForXml.map((c, i) =>
+                `  <chunk index="${i + 1}" score="${typeof c.score === 'number' ? c.score.toFixed(3) : '?'}" source="${_xmlEscAttr(c.object_key || '')}">\n<![CDATA[\n${c.content}\n]]>\n  </chunk>`,
+              ).join('\n')}\n</retrieved_context>`
+              : '';
             const _injectTokens = _scored.reduce((s, c) => s + (c.token_count || 0), 0);
-            const _wasCapped = _rawRag.length > PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS;
-            if (_rawRag.length >= RAG_MIN_CONTEXT_CHARS) {
-              ragContext = capWithMarker(_rawRag, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
+            const _wasCapped = ragBlock.length > PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS;
+            if (ragBlock.length >= RAG_MIN_CONTEXT_CHARS) {
+              ragContext = capWithMarker(ragBlock, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
             }
             const _ragDur = Date.now() - _t0Rag;
             const _ragHistId = crypto.randomUUID();
@@ -10327,16 +10581,19 @@ async function handleAgentApi(request, url, env, ctx) {
                 (conversation_id,query_text,query_tokens,results_count,top_score,
                  chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            `).bind(ragConversationId, lastUserContent.slice(0, 500),
+            `).bind(conversationId, lastUserContent.slice(0, 500),
               Math.ceil(lastUserContent.length / _CPT), _chunks.length, _topRag,
-              _scored.length, _injectTokens, _rawRag.length, _EMBED_MODEL, chatMode, _intentForRag,
+              _scored.length, _injectTokens, ragBlock.length, _EMBED_MODEL, chatMode, _intentForRag,
               'd1_cosine', _ragDur, _wasCapped ? 1 : 0, 0, 0
             ).run().catch(() => {}));
             ctx.waitUntil(env.DB.prepare(
               `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at)
                VALUES (?,?,?,?,?,?,unixepoch())`
-            ).bind(_ragHistId, 'tenant_sam_primeaux', lastUserContent.slice(0, 2000), JSON.stringify(_ragChunkIds), JSON.stringify(_ragScoreMap), ragContext || _rawRag).run().catch(() => {}));
+            ).bind(_ragHistId, 'tenant_sam_primeaux', lastUserContent.slice(0, 2000), JSON.stringify(_ragChunkIds), JSON.stringify(_ragScoreMap), ragContext || ragBlock).run().catch(() => {}));
             ctx.waitUntil(insertQualityCheckRagQuery(env, _topRag));
+            doRagChunksInjected = _scored.length;
+            doTopRagScore = _topRag;
+            doTopChunkIds = _ragChunkIds;
           }
         } catch (e) { console.error('[agent/chat] RAG failed:', e?.message ?? e); }
       }
@@ -10742,31 +10999,6 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
 
       if (wantStream) {
-        let conversationId = session_id;
-        if (!conversationId) {
-          try {
-            conversationId = crypto.randomUUID();
-            const now = Math.floor(Date.now() / 1000);
-            await env.DB.prepare(
-          "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
-        ).bind(conversationId, env.TENANT_ID || 'system', 'chat', 'active', '{}', now, now, PROJECT_ID).run();
-            try {
-              const session = await getSession(env, request);
-              const userId = session?.user_id || 'system';
-              await env.DB.prepare(
-                "INSERT INTO agent_conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)"
-              ).bind(conversationId, userId, 'New Conversation', now, now).run();
-            } catch (e) {
-              console.error('[agent/chat] agent_conversations INSERT failed:', e?.message ?? e);
-            }
-            if (ctx && typeof ctx.waitUntil === 'function') {
-              ctx.waitUntil(generateConversationName(env, conversationId, lastUserContent || '').catch(e => console.warn('[agent/chat] generateConversationName', e?.message)));
-            }
-          } catch (e) {
-            console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
-          }
-        }
-        conversationId = conversationId || crypto.randomUUID();
         try {
           const userContent = lastUserContent || msgList[msgList.length - 1]?.content || '';
           await env.DB.prepare(
@@ -10798,9 +11030,9 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           model.model_key === 'o1'
         );
         if (_needsResponsesAPI) {
-          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions);
+          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal);
         }
-        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions);
+        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal);
         }
         console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {
@@ -10971,30 +11203,6 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 
       console.log('[agent/chat] wantStream:', wantStream, 'useTools:', useTools, 'toolDefs:', toolDefinitions?.length, 'body.stream:', body.stream);
       if (useTools && toolDefinitions.length > 0) {
-        let conversationId = session_id;
-        if (!conversationId) {
-          try {
-            conversationId = crypto.randomUUID();
-            const now = Math.floor(Date.now() / 1000);
-            await env.DB.prepare(
-              "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
-            ).bind(conversationId, env.TENANT_ID || 'system', 'chat', 'active', '{}', now, now, PROJECT_ID).run();
-            try {
-              const session = await getSession(env, request);
-              const userId = session?.user_id || 'system';
-              await env.DB.prepare(
-                "INSERT INTO agent_conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)"
-              ).bind(conversationId, userId, 'New Conversation', now, now).run();
-            } catch (e) {
-              console.error('[agent/chat] agent_conversations INSERT failed:', e?.message ?? e);
-            }
-            if (ctx && typeof ctx.waitUntil === 'function') {
-              ctx.waitUntil(generateConversationName(env, conversationId, lastUserContent || '').catch(e => console.warn('[agent/chat] generateConversationName', e?.message)));
-            }
-          } catch (e) {
-            console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
-          }
-        }
         try {
           const userContent = lastUserContent || msgList[msgList.length - 1]?.content || '';
           await env.DB.prepare(
@@ -11134,30 +11342,6 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const { rateIn, rateOut } = getSpendRates(model.provider, model.model_key);
       const amountUsd = Math.round((inputTok * rateIn + outputTok * rateOut) * 1e8) / 1e8;
       const computedCostUsd = amountUsd;
-      let conversationId = session_id;
-      if (!conversationId) {
-        try {
-          conversationId = crypto.randomUUID();
-          const now = Math.floor(Date.now() / 1000);
-          await env.DB.prepare(
-            "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
-          ).bind(conversationId, env.TENANT_ID || 'system', 'chat', 'active', '{}', now, now, PROJECT_ID).run();
-        try {
-          const session = await getSession(env, request);
-          const userId = session?.user_id || 'system';
-          await env.DB.prepare(
-            "INSERT INTO agent_conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)"
-          ).bind(conversationId, userId, 'New Conversation', now, now).run();
-        } catch (e) {
-          console.error('[agent/chat] agent_conversations INSERT failed:', e?.message ?? e);
-        }
-        if (ctx && typeof ctx.waitUntil === 'function') {
-          ctx.waitUntil(generateConversationName(env, conversationId, lastUserContent || '').catch(e => console.warn('[agent/chat] generateConversationName', e?.message)));
-        }
-        } catch (e) {
-          console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
-        }
-      }
       const assistantContent =
         result?.content?.[0]?.text
         ?? result?.choices?.[0]?.message?.content
@@ -11220,12 +11404,66 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           provider: model.provider,
         }).catch((e) => console.warn('[agent_memory]', e?.message ?? e)));
       }
+      if (ctx && typeof ctx.waitUntil === 'function' && env.AGENT_SESSION && conversationId) {
+        const _doPersistId = env.AGENT_SESSION.idFromName(String(conversationId));
+        const _doPersist = env.AGENT_SESSION.get(_doPersistId);
+        const _modelKeyPersist = model.model_key || (model.id != null ? String(model.id) : '');
+        ctx.waitUntil(
+          _doPersist.fetch(new Request('https://do/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              role: 'assistant',
+              content: assistantContent || '',
+              model_used: _modelKeyPersist,
+              input_tokens: inputTok,
+              output_tokens: outputTok,
+              rag_chunks_injected: doRagChunksInjected || 0,
+              top_rag_score: doTopRagScore || 0,
+            }),
+          })).catch((e) => console.warn('[agent/chat] DO message persist', e?.message ?? e)),
+        );
+        if (doRagChunksInjected > 0 && ragContext && doQueryHash) {
+          ctx.waitUntil(
+            _doPersist.fetch(new Request('https://do/rag-cache', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query_hash: doQueryHash,
+                chunk_ids: JSON.stringify(doTopChunkIds || []),
+                context: ragContext,
+                top_score: doTopRagScore || 0,
+              }),
+            })).catch((e) => console.warn('[agent/chat] DO rag cache write', e?.message ?? e)),
+          );
+        }
+      }
       return jsonResponse({
+        ok: true,
         content: [{ type: 'text', text: assistantContent || '' }],
         text: assistantContent || '',
         conversation_id: conversationId,
         usage: { input_tokens: inputTok, output_tokens: outputTok, prompt_tokens: inputTok, completion_tokens: outputTok }
       });
+    }
+
+    if (pathLower === '/api/agent/do-history' && method === 'GET') {
+      try {
+        const _doSessCheck = await getSession(env, request).catch(() => null);
+        if (!_doSessCheck?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const _doHistUrl = new URL(request.url);
+        const _doConv = _doHistUrl.searchParams.get('conversation_id');
+        if (!_doConv) return jsonResponse({ error: 'conversation_id required' }, 400);
+        if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION not configured' }, 503);
+        const _doHistId = env.AGENT_SESSION.idFromName(String(_doConv));
+        const _doHistStub = env.AGENT_SESSION.get(_doHistId);
+        const _lim = _doHistUrl.searchParams.get('limit') || '50';
+        const _doHistResp = await _doHistStub.fetch(new Request(`https://do/history?limit=${encodeURIComponent(_lim)}`));
+        const _doHistData = await _doHistResp.json().catch(() => ({}));
+        return jsonResponse(_doHistData, _doHistResp.status);
+      } catch (e) {
+        return jsonResponse({ error: e?.message || String(e) }, 500);
+      }
     }
 
     if (pathLower === '/api/agent/playwright' && method === 'POST') {
@@ -17036,6 +17274,28 @@ async function runMeshyBuiltinTool(env, toolName, params) {
 
 const MCP_CHAT_TOOL_LOOP_MAX = 10;
 
+function enqueueAgentChatDoPersist(env, ctx, conversationId, modelKey, assistantContent, inputTokens, outputTokens) {
+  if (!ctx || typeof ctx.waitUntil !== 'function' || !env.AGENT_SESSION || !conversationId) return;
+  const _doPersistId = env.AGENT_SESSION.idFromName(String(conversationId));
+  const _doPersist = env.AGENT_SESSION.get(_doPersistId);
+  const _modelKeyPersist = modelKey || '';
+  ctx.waitUntil(
+    _doPersist.fetch(new Request('https://do/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        role: 'assistant',
+        content: assistantContent || '',
+        model_used: _modelKeyPersist,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        rag_chunks_injected: 0,
+        top_rag_score: 0,
+      }),
+    })).catch((e) => console.warn('[chatWithToolsAnthropic] DO message persist', e?.message ?? e)),
+  );
+}
+
 const ACTION_TOOLS = [
   'd1_write', 'r2_write', 'r2_delete', 'terminal_execute', 'worker_deploy',
   'playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content',
@@ -17265,6 +17525,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const outputTokens = lastUsage.output_tokens;
       const costUsd = calculateCost(model, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages));
+      enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       if (wantStream) {
         const streamBody = new ReadableStream({
           start(controller) {
@@ -17425,9 +17686,13 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   }
   // Non-streaming: run loop synchronously
   await _runLoop();
+  const _finalIn = lastUsage.input_tokens || 0;
+  const _finalOut = lastUsage.output_tokens || 0;
+  const _finalText = lastContent || '(Tool loop limit reached.)';
+  enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, _finalText, _finalIn, _finalOut);
   return jsonResponse({
-    content: [{ type: 'text', text: lastContent || '(Tool loop limit reached.)' }],
-    message: { content: lastContent || '(Tool loop limit reached.)', role: 'assistant', tool_calls: allToolCalls },
+    content: [{ type: 'text', text: _finalText }],
+    message: { content: _finalText, role: 'assistant', tool_calls: allToolCalls },
     conversation_id: conversationId,
     stream: false,
   });

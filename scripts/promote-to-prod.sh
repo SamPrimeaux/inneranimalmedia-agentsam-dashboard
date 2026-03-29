@@ -97,3 +97,15 @@ echo "  Worker:  inneranimalmedia @ ${PROD_VERSION}"
 echo "  URL:     https://inneranimalmedia.com/dashboard/agent"
 echo "  Bucket:  ${PROD_BUCKET}"
 echo "  Version: v=${CURRENT_V:-n/a}"
+
+if [ -z "${CURRENT_V:-}" ] && [ -f "$HTML_PATH" ]; then
+  CURRENT_V=$(grep -o '?v=[0-9]*' "$HTML_PATH" 2>/dev/null | head -1 | grep -o '[0-9]*' || echo "?")
+fi
+NEXT_VERSION="${NEXT_VERSION:-$CURRENT_V}"
+DEPLOY_DESC="${DEPLOY_DESC:-prod promote $(date +%Y-%m-%d)}"
+DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
+  --remote --config wrangler.production.toml \
+  --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
+  2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
+echo "[promote-to-prod] D1 deployment row updated"

@@ -12,6 +12,9 @@ else
   BASE="https://inneranimalmedia.com"
 fi
 
+QUICK_MODE=false
+[[ "${2:-}" == "--quick" ]] && QUICK_MODE=true
+
 PASS=0; FAIL=0; SKIP=0
 declare -a RESULTS
 
@@ -87,8 +90,38 @@ echo -e "${BOLD}║         AGENT SAM — FULL MODEL BENCHMARK                  
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════════╝${RESET}"
 echo -e "  Target : ${CYAN}$BASE${RESET}"
 echo -e "  Time   : $(date '+%Y-%m-%d %H:%M:%S')"
+if [ "$QUICK_MODE" = true ]; then
+  echo -e "  ${YELLOW}Quick mode — 6 models only${RESET}"
+fi
 echo ""
 
+if [ "$QUICK_MODE" = true ]; then
+echo -e "${BOLD}── QUICK (6 models) ───────────────────────────────────────────────${RESET}"
+PROMPT_ANTHROPIC="In 2 sentences, explain why Cloudflare Workers are ideal for AI APIs."
+PROMPT_OPENAI_SIMPLE="Reply with exactly: ok"
+PROMPT_GOOGLE="In one sentence, what is the capital of France?"
+PROMPT_WAI="Reply with exactly: hello"
+SQL_BENCH_PROMPT="Query the ai_models table and count how many models have show_in_picker = 1"
+test_model "claude-haiku-4-5-20251001" \
+  "Haiku 4.5" \
+  "$PROMPT_ANTHROPIC" "anthropic"
+test_model "claude-haiku-4-5-20251001" \
+  "Haiku 4.5 [SQL]" \
+  "$SQL_BENCH_PROMPT" "anthropic" "1"
+test_model "gpt-4.1-nano" \
+  "GPT-4.1 Nano" \
+  "$PROMPT_OPENAI_SIMPLE" "openai"
+test_model "gpt-4.1-nano" \
+  "GPT-4.1 Nano [SQL]" \
+  "$SQL_BENCH_PROMPT" "openai" "1"
+test_model "gemini-3.1-flash-lite-preview" \
+  "Gemini 3.1 Flash-Lite" \
+  "$PROMPT_GOOGLE" "google"
+test_model "@cf/meta/llama-4-scout-17b-16e-instruct" \
+  "Llama 4 Scout 17B" \
+  "$PROMPT_WAI" "workers_ai"
+echo ""
+else
 # ═══════════════════════════════════════════════════════════════════════
 echo -e "${BOLD}── ANTHROPIC ──────────────────────────────────────────────────────${RESET}"
 # Anthropic: code/writing tasks — best use case
@@ -239,6 +272,7 @@ test_model "@cf/nvidia/nemotron-3-120b-a12b" \
   "$PROMPT_WAI" "workers_ai"
 
 echo ""
+fi
 # ═══════════════════════════════════════════════════════════════════════
 # SUMMARY TABLE
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════════════╗${RESET}"

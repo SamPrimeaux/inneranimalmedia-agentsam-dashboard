@@ -918,3 +918,31 @@ Second git commit (MCP, cursor rules, scripts, dashboard); optional v3 `IAMSessi
 ### Notes
 - Prior commit on main: `a5f58a2` chore MCP, rules, scripts, `agent.html`.
 
+## 2026-03-29 v197 — browse API, GPT-5.4 intent params, DO tool path, MCP browse_url
+
+### What was asked
+Master prompt: promote v196, deploy script D1 logging, worker changes (DO persist on Anthropic tool non-stream path, Responses API reasoning/text for gpt-5.4 and gpt-5.*, web_search for gpt-5-search-api, POST /api/agent/browse), benchmark --quick, slash builtins runfullaitest/runtests, MCP browse_url, sandbox deploy and browse curl, git commit. Do not run benchmark-full during pipeline; do not change OAuth; prod worker promote hit 10074 if wrangler migration edits present.
+
+### Files changed
+- `worker.js`: `POST /api/agent/browse` (MYBROWSER + Playwright); `enqueueAgentChatDoPersist` + calls in `chatWithToolsAnthropic` non-stream paths; `streamOpenAIResponses` intent-based reasoning/text, `gpt-5-search-api` web_search tool; builtins `runfullaitest` / `runtests`; pass `_agentIntentFinal` into Responses stream.
+- `scripts/deploy-sandbox.sh`, `scripts/promote-to-prod.sh`: D1 UPDATE latest `deployments` row for version/description.
+- `scripts/benchmark-full.sh`: `QUICK_MODE` when second arg is `--quick` (six quick tests).
+- `inneranimalmedia-mcp-server/src/index.js`: `browse_url` tool posting to `/api/agent/browse`.
+- `dashboard/agent.html`: cache bump to `v=197`.
+
+### Files NOT changed (and why)
+- `wrangler.production.toml` / `wrangler.jsonc`: reverted local migration edits; prod deploy fails with 10074 when conflicting DO migration blocks are added; production worker bundle unchanged until that is resolved separately.
+
+### Deploy status
+- Built: yes (`npm run build:vite-only`).
+- Sandbox: `deploy-sandbox.sh` — **v=197**, browse curl OK on sandbox.
+- Production R2: **v=197** via `promote-to-prod.sh`.
+- Production worker: deploy **failed** (10074) when broken wrangler edits were present; after restore of wrangler files, **not redeployed** this session (R2/HTML at v=197).
+- MCP: `inneranimalmedia-mcp-server` deployed (browse_url).
+
+### What is live now
+- Sandbox worker includes new routes; prod static dashboard **v=197**; prod main worker code may lag until migration/DEPLOY issue fixed.
+
+### Known issues / next steps
+- Resolve IAMSession / AgentChatSqlV1 migration and prod worker deploy without 10074.
+

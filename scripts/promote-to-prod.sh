@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# promote-to-prod.sh — promote sandbox build to production (no rebuild)
+# promote-to-prod.sh — pull sandbox R2 build → push to production R2 → deploy worker
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
-# Requires: agent-dashboard/dist/ and dashboard/agent.html to exist (last sandbox build)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,31 +13,40 @@ for arg in "$@"; do
 done
 
 echo "=== PROMOTE TO PRODUCTION ==="
-echo "  Re-using last sandbox build — no rebuild."
 echo ""
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
+SANDBOX_BUCKET="agent-sam-sandbox-cidi"
 PROD_BUCKET="agent-sam"
 PROD_CFG="wrangler.production.toml"
 
-# ── Sanity check ──────────────────────────────────────────────────────────────
-if [ "$WORKER_ONLY" -eq 0 ]; then
-  for f in "agent-dashboard/dist/agent-dashboard.js" "agent-dashboard/dist/agent-dashboard.css" "dashboard/agent.html"; do
-    if [ ! -f "$f" ]; then
-      echo "ERROR: $f not found. Run ./scripts/deploy-sandbox.sh first."
-      exit 1
-    fi
-  done
-fi
+JS_PATH="agent-dashboard/dist/agent-dashboard.js"
+CSS_PATH="agent-dashboard/dist/agent-dashboard.css"
+HTML_PATH="dashboard/agent.html"
 
-# ── Upload to production R2 ───────────────────────────────────────────────────
+# ── Step 1: Pull current build from sandbox R2 into local dist ────────────────
 if [ "$WORKER_ONLY" -eq 0 ]; then
-  CURRENT_V=$(grep -o '?v=[0-9]*' dashboard/agent.html | head -1 | grep -o '[0-9]*' || echo "0")
+  echo "Pulling latest build from sandbox R2 (${SANDBOX_BUCKET})..."
+  mkdir -p agent-dashboard/dist dashboard
+
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
+    static/dashboard/agent/agent-dashboard.js \
+    --file "$JS_PATH" --remote -c "$PROD_CFG"
+
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
+    static/dashboard/agent/agent-dashboard.css \
+    --file "$CSS_PATH" --remote -c "$PROD_CFG"
+
+  ./scripts/with-cloudflare-env.sh npx wrangler r2 object get "${SANDBOX_BUCKET}" \
+    static/dashboard/agent.html \
+    --file "$HTML_PATH" --remote -c "$PROD_CFG"
+
+  CURRENT_V=$(grep -o '?v=[0-9]*' "$HTML_PATH" | head -1 | grep -o '[0-9]*' || echo "0")
+  echo "  Pulled v=${CURRENT_V} from sandbox."
+  echo ""
+
+  # ── Step 2: Push to production R2 ──────────────────────────────────────────
   echo "Promoting v=${CURRENT_V} to production bucket (${PROD_BUCKET})..."
-
-  JS_PATH="agent-dashboard/dist/agent-dashboard.js"
-  CSS_PATH="agent-dashboard/dist/agent-dashboard.css"
-  HTML_PATH="dashboard/agent.html"
 
   ./scripts/with-cloudflare-env.sh npx wrangler r2 object put "${PROD_BUCKET}/static/dashboard/agent/agent-dashboard.js" \
     --file "$JS_PATH" --content-type "application/javascript" \
@@ -54,7 +62,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
 
   echo "  R2 production uploads complete."
 
-  # Log to dashboard_versions (is_production=1)
+  # Log to dashboard_versions
   JS_HASH=$(md5 -q "$JS_PATH" 2>/dev/null || md5sum "$JS_PATH" | cut -d' ' -f1)
   CSS_HASH=$(md5 -q "$CSS_PATH" 2>/dev/null || md5sum "$CSS_PATH" | cut -d' ' -f1)
   HTML_HASH=$(md5 -q "$HTML_PATH" 2>/dev/null || md5sum "$HTML_PATH" | cut -d' ' -f1)
@@ -72,7 +80,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --command="$D1_SQL" 2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
 fi
 
-# ── Deploy production worker ──────────────────────────────────────────────────
+# ── Step 3: Deploy production worker ──────────────────────────────────────────
 echo "Deploying production worker (inneranimalmedia)..."
 NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
@@ -81,7 +89,6 @@ PROD_VERSION=$(./scripts/with-cloudflare-env.sh npx wrangler deploy ./worker.js 
   -c "$PROD_CFG" 2>&1 | tee /tmp/prod-deploy-out.txt | grep "Current Version ID:" | grep -o '[a-f0-9-]\{36\}' || echo "unknown")
 cat /tmp/prod-deploy-out.txt
 
-# Record in deployments
 ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
   --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at) VALUES ('${PROD_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'production', 'inneranimalmedia', '${TRIGGERED_BY}', '${NOTES}', datetime('now'))" \

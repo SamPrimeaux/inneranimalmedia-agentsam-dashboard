@@ -43,6 +43,14 @@ bucket_name = "iam-platform"
 binding = "DASHBOARD"
 bucket_name = "agent-sam"
 
+[[r2_buckets]]
+binding = "AUTORAG"
+bucket_name = "autorag"
+
+[[r2_buckets]]
+binding = "IAM_DOCS"
+bucket_name = "iam-docs"
+
 [[vectorize]]
 binding = "VECTORIZE"
 index_name = "ai-search-inneranimalmedia-aisearch"

@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy -c wrangler.toml",
+		"deploy": "npx wrangler deploy -c wrangler.toml",
 		"dev": "wrangler dev -c wrangler.toml",
 		"start": "wrangler dev -c wrangler.toml"
 	},

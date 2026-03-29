@@ -946,3 +946,18 @@ Master prompt: promote v196, deploy script D1 logging, worker changes (DO persis
 ### Known issues / next steps
 - Resolve IAMSession / AgentChatSqlV1 migration and prod worker deploy without 10074.
 
+## 2026-03-29 DO migrations + Vertex JWT
+
+### What was asked
+Fix wrangler 10074 by removing v3 migration and setting migrations v1, v2, v4, v5; bind `AGENT_SESSION` to `AgentChatSqlV1` (no `script_name`); deploy prod worker; verify browse; commit. Add Vertex OAuth2 JWT (`GOOGLE_SERVICE_ACCOUNT_JSON`), wire Google paths to Vertex when set, and `POST /api/agent/vertex-test`.
+
+### Files changed
+- `wrangler.production.toml`: `AGENT_SESSION` class `AgentChatSqlV1`; migrations v4 (`IAMAgentSession`), v5 (`AgentChatSqlV1`); removed `script_name` and cross-worker binding.
+- `worker.js`: `getVertexAccessToken`, `callVertexAI`, `vertexGeminiUrl`, `useVertexForGoogle`; Vertex branches in `singleRoundNoTools`, `chatWithToolsGoogle`, `runToolLoop` (google), non-stream agent chat, `streamGoogle`; `canStreamGoogle` includes SA JSON; `POST /api/agent/vertex-test` (ingest secret).
+
+### Deploy status
+- Production worker: deployed (`wrangler deploy --config wrangler.production.toml`); Version ID `6a9689df-b4ce-40a6-a05d-a57cebc1e991`. R2 promote not run (HTML already v197 per user).
+
+### What is live now
+- Prod worker includes Vertex helpers and vertex-test; DO binding targets `AgentChatSqlV1` on the same worker.
+

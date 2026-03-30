@@ -57,7 +57,7 @@ hr() { echo -e "${CYN}───────────────────�
 
 d1() {
   # d1 <sql> — runs a query against the IAM D1 database
-  "$CF_ENV_WRAPPER" wrangler d1 execute "$DB_ID" \
+  "$CF_ENV_WRAPPER" wrangler d1 execute inneranimalmedia-business \
     --config "$IAM_PROD_CONFIG" --remote \
     --command "$1" 2>/dev/null || echo "D1_ERROR"
 }

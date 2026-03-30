@@ -2569,7 +2569,7 @@ const worker = {
 
       try {
         if (request.method === 'GET' && url.pathname === '/api/meauxcad/d1/tables') {
-          const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+          const { results } = await env.DB.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all();
           return Response.json({ success: true, tables: results.map(r => r.name) });
         }
 

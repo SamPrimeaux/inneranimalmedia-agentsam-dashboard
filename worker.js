@@ -1432,11 +1432,24 @@ function githubCommitMessageFromWebhookPayload(rawBody) {
   }
 }
 
+/** Prefer inbound webhook User-Agent; otherwise a stable worker identity (never NULL in D1). */
+function cidiActivityUserAgent(hookCtx) {
+  const raw = hookCtx && hookCtx.userAgent != null ? String(hookCtx.userAgent).trim() : '';
+  if (raw) return raw.slice(0, 512);
+  return 'InnerAnimalMedia-CIDI/1.0 (Cloudflare-Worker; IAM)';
+}
+
+function cidiActivityIp(hookCtx) {
+  if (!hookCtx || hookCtx.ipAddress == null) return null;
+  const s = String(hookCtx.ipAddress).trim();
+  return s ? s.slice(0, 128) : null;
+}
+
 /**
  * After a successful cicd_runs row insert: mirror to deployments + optional cidi_activity_log.
  * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.
  */
-async function recordGithubCicdFollowups(env, row, rawBody) {
+async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
   if (!env?.DB || !row || typeof row !== 'object') return;
   const status = String(row.status || '').toLowerCase();
   const conclusion = String(row.conclusion || '').toLowerCase();
@@ -1502,16 +1515,20 @@ async function recordGithubCicdFollowups(env, row, rawBody) {
       status: String(row.status || row.conclusion || ''),
     });
 
+    const ua = cidiActivityUserAgent(hookCtx);
+    const ip = cidiActivityIp(hookCtx);
     await env.DB.prepare(
       `INSERT INTO cidi_activity_log (
-        cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json
-      ) VALUES (?, ?, 'updated', 'deployment', ?, ?, 'github_webhook', ?)`
+        cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json, user_agent, ip_address
+      ) VALUES (?, ?, 'updated', 'deployment', ?, ?, 'github_webhook', ?, ?, ?)`
     ).bind(
       cidiRow.id,
       cidiRow.workflow_id,
       commitSha || runId || 'success',
       `CI success: ${wfName || 'workflow_run'}`,
-      meta
+      meta,
+      ua,
+      ip
     ).run();
   } catch (e) {
     console.warn('[cicd] cidi_activity_log INSERT', e?.message ?? e);
@@ -1559,7 +1576,7 @@ async function runWriteD1MapInsert(env, cfg, ctx) {
     const result = await stmt.bind(...cols.map((c) => row[c])).run();
     const changes = result.meta?.changes ?? result.changes ?? 0;
     if (table === 'cicd_runs' && changes > 0) {
-      const follow = recordGithubCicdFollowups(env, row, ctx.rawBody);
+      const follow = recordGithubCicdFollowups(env, row, ctx.rawBody, ctx);
       if (typeof ctx.waitUntil === 'function') {
         ctx.waitUntil(follow.catch((e) => console.warn('[cicd] followup', e?.message ?? e)));
       } else {
@@ -1678,15 +1695,19 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
         ).bind(cfg.value, matchVal).run();
         const cidiRow = await env.DB.prepare(`SELECT id, workflow_id FROM cidi WHERE ${matchBy} = ? LIMIT 1`).bind(matchVal).first();
         if (cidiRow?.id != null && cidiRow?.workflow_id) {
+          const ua = cidiActivityUserAgent(ctx);
+          const ip = cidiActivityIp(ctx);
           await env.DB.prepare(
-            `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json)
-             VALUES (?, ?, 'webhook', ?, ?, 'stripe webhook', 'webhook', ?)`
+            `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json, user_agent, ip_address)
+             VALUES (?, ?, 'webhook', ?, ?, 'stripe webhook', 'webhook', ?, ?, ?)`
           ).bind(
             cidiRow.id,
             cidiRow.workflow_id,
             field,
             String(cfg.value),
-            JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType })
+            JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType }),
+            ua,
+            ip
           ).run();
         }
         return { ok: true, result: { field, match_by: matchBy } };
@@ -1709,9 +1730,11 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
       await env.DB.prepare(`UPDATE cidi SET ${setClause}, updated_at = datetime('now') WHERE id = ?`).bind(...vals, cidiIdNum).run();
       const actType = cfg.action_type != null ? String(cfg.action_type) : 'webhook';
       const changedBy = cfg.changed_by != null ? String(cfg.changed_by) : 'webhook';
+      const ua = cidiActivityUserAgent(ctx);
+      const ip = cidiActivityIp(ctx);
       await env.DB.prepare(
-        `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO cidi_activity_log (cidi_id, workflow_id, action_type, field_changed, new_value, change_description, changed_by, metadata_json, user_agent, ip_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         cidiIdNum,
         existing.workflow_id,
@@ -1720,7 +1743,9 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
         JSON.stringify(patch),
         cfg.change_description != null ? String(cfg.change_description) : 'webhook patch',
         changedBy,
-        JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType })
+        JSON.stringify({ webhook_event_id: ctx.webhookEventId, event_type: ctx.eventType }),
+        ua,
+        ip
       ).run();
       return { ok: true, result: { cidi_id: cidiIdNum } };
     } catch (e) {
@@ -1891,11 +1916,14 @@ async function handleInboundWebhook(env, request, resolveSecret, opts, execution
     }, executionCtx);
   }
 
+  const inboundUa = request.headers.get('User-Agent');
   const ctx = {
     webhookEventId: eventId,
     rawBody,
     eventType,
     source,
+    userAgent: (inboundUa && inboundUa.trim()) ? inboundUa.trim().slice(0, 512) : null,
+    ipAddress: ip || null,
     waitUntil: executionCtx && typeof executionCtx.waitUntil === 'function'
       ? executionCtx.waitUntil.bind(executionCtx)
       : null,
@@ -5182,8 +5210,20 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
   }
 }
 
+/** Mark agentsam_agent_run row completed with same cost/tokens as agent_telemetry (id = run row PK). */
+async function completeAgentsamAgentRun(env, runId, conversationId, inputTokens, outputTokens, costUsd) {
+  if (!runId || !env?.DB) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE agentsam_agent_run SET cost_usd = ?, input_tokens = ?, output_tokens = ?, completed_at = datetime('now'), status = 'completed', conversation_id = COALESCE(conversation_id, ?) WHERE id = ?`
+    ).bind(Number(costUsd) || 0, Math.floor(Number(inputTokens) || 0), Math.floor(Number(outputTokens) || 0), conversationId || null, runId).run();
+  } catch (e) {
+    console.warn('[agentsam_agent_run] completion', e?.message ?? e);
+  }
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
-async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory) {
+async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null) {
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
   const safeOutput = outputTokens ?? 0;
@@ -5264,6 +5304,9 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
       modelKey: safeModelKey,
       provider: safeProvider,
     }).catch((e) => console.warn('[agent_memory]', e?.message ?? e)));
+  }
+  if (agentsamAgentRunId) {
+    await completeAgentsamAgentRun(env, agentsamAgentRunId, conversationId, safeInput, safeOutput, amountUsd);
   }
 }
 
@@ -7341,7 +7384,7 @@ function intentToVerbosity(intent) {
   if (intent === 'sql' || intent === 'shell') return 'low';
   return 'medium';
 }
-async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = [], _agentIntentFinal = 'mixed') {
+async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = [], _agentIntentFinal = 'mixed', agentsamAgentRunId = null) {
   const modelKey = modelRow.model_key || 'gpt-5.4-mini';
   // Build input array: system as developer message + user/assistant turns
   const inputMsgs = [
@@ -7495,7 +7538,7 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
         currentInputMsgs = [...currentInputMsgs, ...outputItems, ...toolOutputItems];
       }
       const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
       controller.close();
     },
@@ -7507,7 +7550,7 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
  * OpenAI streaming: same SSE contract as Anthropic.
  * POST to chat/completions with stream: true, stream_options: { include_usage: true }.
  */
-async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx) {
+async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
   const modelKey = modelRow.model_key || 'gpt-4o';
   const openAiMessages = apiMessages.map((m, i) => {
     const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
@@ -7581,7 +7624,7 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
           }
         }
         const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
         emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
         controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}\n\n`));
       } catch (e) {
@@ -7684,6 +7727,7 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
  */
 async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, opts = {}) {
   const mode = opts.mode || 'agent';
+  const agentsamAgentRunId = opts.agentsamAgentRunId || null;
   const modelKey = modelRow.model_key || 'gemini-2.5-flash';
   const enc = new TextEncoder();
 
@@ -7857,7 +7901,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       }
 
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
       await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name })}
 
 `));
@@ -7874,7 +7918,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 }
 
 
-async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx) {
+async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
   const modelKey = modelRow.model_key || 'gemini-2.5-flash';
   const googleContents = apiMessages.map((m, i) => {
     const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
@@ -7981,7 +8025,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
         } catch (_) {}
       }
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name }) + '\n\n'));
     } catch (e) {
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
@@ -7997,7 +8041,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
  * Cloudflare Workers AI streaming: env.AI.run(model_key, { messages, stream: true }).
  * Same SSE contract; cost_usd: 0 (neurons). Handle all chunk shapes; null-coerce before D1.
  */
-async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx) {
+async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
   const messages = [{ role: 'system', content: systemWithBlurb }, ...apiMessages];
   const modelKey = (modelRow && modelRow.model_key) ? modelRow.model_key : '@cf/meta/llama-3.1-8b-instruct';
   const inputCharCount = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
@@ -8044,7 +8088,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       const safeModel = (modelRow && modelRow.model_key != null) ? modelRow.model_key : 'unknown';
       const safeRow   = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
 
-      await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
@@ -11192,16 +11236,16 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           model.model_key === 'o1'
         );
         if (_needsResponsesAPI) {
-          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal);
+          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId);
         }
-        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal);
+        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId);
         }
         console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {
-          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode });
+          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode, agentsamAgentRunId: agentsamRunId });
         }
         if (canStreamWorkersAI) {
-          return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx);
+          return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, agentsamRunId);
         }
         if (toolDefinitions.length > 0) {
           if (canStreamAnthropic) {
@@ -11210,7 +11254,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
               const au = await getAuthUser(request, env);
               oauthUserIdForTools = au ? (au.email || au.id) : undefined;
             } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal }, toolDefinitions);
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId }, toolDefinitions);
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -11319,6 +11363,13 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                           console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
                         }
                       }
+                      if (agentsamRunId) {
+                        try {
+                          await completeAgentsamAgentRun(envRef, agentsamRunId, conversationIdRef, inputTokens, outputTokens, amountUsd);
+                        } catch (e) {
+                          console.warn('[agent/chat] agentsam_agent_run completion', e?.message ?? e);
+                        }
+                      }
                       if (agent_id) {
                         try {
                           await envRef.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
@@ -11384,7 +11435,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             oauthUserIdForTools = au ? (au.email || au.id) : undefined;
           } catch (_) { oauthUserIdForTools = undefined; }
           console.log(`[TOKEN_AUDIT] intent=${_agentIntentFinal} toolCount=${toolDefinitions.length} systemChars=${finalSystem.length} historyChars=${historyChars} toolDefChars=${toolDefChars}`);
-          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal }, toolDefinitions);
+          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId }, toolDefinitions);
           if (toolsResp) return toolsResp;
         }
         const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
@@ -11394,7 +11445,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const resolvedModelForTools = model.provider === 'google' ? await resolveGoogleModelRowForVertexAi(env, model) : model;
         const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
         try {
-          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '');
+          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId);
         } catch (e) {
           console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
         }
@@ -11574,6 +11625,13 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         try {
           await env.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
         } catch (_) {}
+      }
+      if (agentsamRunId) {
+        try {
+          await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
+        } catch (e) {
+          console.warn('[agent/chat] agentsam_agent_run completion', e?.message ?? e);
+        }
       }
       if (ctx && typeof ctx.waitUntil === 'function') {
         ctx.waitUntil(persistAgentMemoryHyperdrive(env, {
@@ -17704,20 +17762,22 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const inputTokens = lastUsage.input_tokens;
       const outputTokens = lastUsage.output_tokens;
       const costUsd = calculateCost(model, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages));
-      enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       if (wantStream) {
-        const streamBody = new ReadableStream({
-          start(controller) {
-            flushPendingToolStates(controller);
-            enqueue(controller, { type: 'text', text: lastContent });
-            emitCodeBlocksFromText(lastContent, (obj) => enqueue(controller, obj));
-            enqueue(controller, { type: 'done', usage: { input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd } });
-            controller.close();
-          },
-        });
-        return new Response(streamBody, { headers: { 'Content-Type': 'text/event-stream' } });
+        // Single telemetry write per request: streamDoneDbWrites runs once in _runLoop().then().
+        // (Previously we called streamDoneDbWrites here and again in .then() — doubled tokens/cost in D1.)
+        try {
+          for (const evt of pendingStateEvents) {
+            await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify(evt) + '\n\n'));
+          }
+          pendingStateEvents.length = 0;
+          emitCodeBlocksFromText(lastContent, (obj) => {
+            _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify(obj) + '\n\n')).catch(() => {});
+          });
+        } catch (_) {}
+        return;
       }
+      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null);
+      enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       return jsonResponse({
         content: [{ type: 'text', text: lastContent }],
         message: { content: lastContent, role: 'assistant', tool_calls: allToolCalls.length ? allToolCalls : undefined },
@@ -17833,8 +17893,12 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
 
   if (wantStream) {
     // Fire the loop in background, return stream immediately
-    _runLoop().then(async () => {
+    _runLoop().then(async (result) => {
       try {
+        if (result instanceof Response) {
+          await _streamWriter.close().catch(() => {});
+          return;
+        }
         // Flush any remaining state/tool_result events
         for (const evt of pendingStateEvents) {
           await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify(evt) + '\n\n'));
@@ -17844,7 +17908,8 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalInputTokens = lastUsage.input_tokens || 0;
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
-        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages));
+        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null);
+        enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({
           type: 'done',
           input_tokens: finalInputTokens,

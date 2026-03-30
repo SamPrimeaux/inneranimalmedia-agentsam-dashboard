@@ -14688,35 +14688,18 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const action = tool_name.replace('excalidraw_', '');
     const drawPayload = { type: 'iam_excalidraw', action, params: params || {} };
     await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: JSON.stringify(drawPayload), error: null, serviceName: 'builtin' });
-    try {
-      if (env.IAM_COLLAB) {
-        // Broadcast both ui.panel.open AND draw command to the draw room
-        // draw.html forwards ui.panel.open to parent window
-        const drawDOId = env.IAM_COLLAB.idFromName('draw');
-        await env.IAM_COLLAB.get(drawDOId).fetch(new Request('https://internal/broadcast', {
-          method: 'POST',
-          body: JSON.stringify({ type: 'ui.panel.open', payload: { panel_type: 'excalidraw' } }),
-          headers: { 'Content-Type': 'application/json' }
-        }));
-        const drawDOId2 = env.IAM_COLLAB.idFromName('draw');
-        const drawStub = env.IAM_COLLAB.get(drawDOId);
-        await drawStub.fetch(new Request('https://internal/broadcast', {
-          method: 'POST',
-          body: JSON.stringify(drawPayload),
-          headers: { 'Content-Type': 'application/json' }
-        }));
-      }
-    } catch (e) {
-      console.warn('[excalidraw] DO broadcast failed', e?.message ?? e);
-    }
     // Build the Excalidraw element payload for add_elements action
     let excalidrawElements = [];
-    if (action === 'add_elements' && Array.isArray(params?.elements)) {
+    let elementsInput = params?.elements;
+    if (typeof elementsInput === 'string') {
+      try { elementsInput = JSON.parse(elementsInput); } catch (_) {}
+    }
+    if (action === 'add_elements' && Array.isArray(elementsInput)) {
       const canvasStroke = (c) =>
         (c != null && String(c).startsWith('var(')) ? 'rgba(156, 181, 188, 1)' : (c || 'rgba(156, 181, 188, 1)');
       const canvasFill = (c) =>
         (c != null && String(c).startsWith('var(')) ? 'transparent' : (c || 'transparent');
-      excalidrawElements = params.elements.map(el => ({
+      excalidrawElements = elementsInput.map(el => ({
         id: el.id ?? crypto.randomUUID(),
         type: el.type ?? 'rectangle',
         x: Number(el.x ?? 0),
@@ -14732,6 +14715,14 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         opacity: 100,
         version: 1,
         isDeleted: false,
+        seed: Math.floor(Math.random() * 100000),
+        versionNonce: Math.floor(Math.random() * 100000),
+        groupIds: [],
+        frameId: null,
+        boundElements: null,
+        updated: Date.now(),
+        link: null,
+        locked: false,
         ...(el.type === 'text' ? { text: el.text ?? '', fontSize: el.fontSize ?? 16, fontFamily: 1 } : {})
       }));
     }
@@ -17954,15 +17945,6 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
           const resultObj = typeof out.result === 'string' ? JSON.parse(out.result) : (out.result || {});
           const uiEvent = resultObj.ui_event;
           if (uiEvent) {
-            // Stream immediately via its own response — don't queue
-            const uiEnc = new TextEncoder();
-            const uiStream = new ReadableStream({
-              start(controller) {
-                controller.enqueue(uiEnc.encode('data: ' + JSON.stringify({ type: 'tool_result', tool: name, result: JSON.stringify(resultObj) }) + '\n\n'));
-                controller.close();
-              }
-            });
-            // Store for flush — also push so it emits in the final stream
             pendingStateEvents.push({ type: 'tool_result', tool: name, result: JSON.stringify(resultObj) });
           }
         } catch (_) {}

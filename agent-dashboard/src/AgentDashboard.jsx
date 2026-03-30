@@ -22,7 +22,6 @@ function applyExcalidrawOp(api, op) {
   if (act === "updateScene") {
     api.updateScene({
       elements: params.elements ?? [],
-      appState: params.appState ?? {},
     });
   } else if (act === "resetScene" || act === "clear") {
     api.resetScene();
@@ -1377,13 +1376,13 @@ export default function AgentDashboard() {
 
   const dispatchExcalidrawOp = useCallback((op) => {
     if (!op?.action) return;
-    if (excalidrawReadyRef.current && excalidrawAPIRef.current) {
-      try {
-        applyExcalidrawOp(excalidrawAPIRef.current, op);
-      } catch (_) {}
-    } else {
+    if (!excalidrawReadyRef.current || !excalidrawAPIRef.current) {
       pendingExcalidrawOpsRef.current.push(op);
+      return;
     }
+    try {
+      applyExcalidrawOp(excalidrawAPIRef.current, op);
+    } catch (_) {}
   }, []);
 
   const onExcalidrawApiReady = useCallback(

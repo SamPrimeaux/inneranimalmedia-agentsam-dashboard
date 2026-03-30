@@ -2558,6 +2558,43 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
 
 const worker = {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // ── Task 12: MeauxCAD D1 Proxy ─────────────────────────────────────────────
+    if (url.pathname.startsWith('/api/meauxcad/d1/')) {
+      const auth = request.headers.get('Authorization');
+      if (!auth || auth !== `Bearer ${env.INTERNAL_API_SECRET}`) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+
+      try {
+        if (request.method === 'GET' && url.pathname === '/api/meauxcad/d1/tables') {
+          const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+          return Response.json({ success: true, tables: results.map(r => r.name) });
+        }
+
+        if (request.method === 'GET' && url.pathname.startsWith('/api/meauxcad/d1/schema/')) {
+          const table = url.pathname.split('/').pop();
+          const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all();
+          return Response.json({ success: true, schema: results });
+        }
+
+        if (request.method === 'POST' && url.pathname === '/api/meauxcad/d1/query') {
+          const { sql, write } = await request.json();
+          const isWrite = /INSERT|UPDATE|DELETE|DROP|CREATE|ALTER/i.test(sql);
+          
+          if (isWrite && !write) {
+            return Response.json({ success: false, error: 'Write operations blocked. Enable "Write Mode" in settings.' }, { status: 403 });
+          }
+
+          const { results } = await env.DB.prepare(sql).all();
+          return Response.json({ success: true, results });
+        }
+      } catch (e) {
+        return Response.json({ success: false, error: e.message }, { status: 500 });
+      }
+    }
+
     let prevIAmResponseLog = null;
     try {
       // Load vault secrets — vault wins over wrangler env, wrangler is fallback
@@ -2632,6 +2669,51 @@ const worker = {
             status: 200,
           }
         );
+      }
+
+      // ── Task 3: MeauxCAD Integration Proxy ───────────────────────────────────
+      if (pathLower.startsWith('/api/meauxcad/')) {
+        const authHeader = request.headers.get('Authorization') ?? '';
+        const internalSecret = secret('INTERNAL_API_SECRET') || env.INTERNAL_API_SECRET;
+        const expectedToken = `Bearer ${internalSecret ?? ''}`;
+        if (!internalSecret || authHeader !== expectedToken) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // POST /api/meauxcad/agent-runs — create an IAM agent run from MeauxCAD
+        if (pathLower === '/api/meauxcad/agent-runs' && methodUpper === 'POST') {
+          try {
+            const body = await request.json();
+            const id = crypto.randomUUID();
+            const now = new Date().toISOString();
+            await env.DB.prepare(
+              `INSERT INTO agentsam_agent_run (id, workspace_id, status, created_at, updated_at)
+               VALUES (?, ?, 'running', ?, ?)`
+            ).bind(id, body.workspace_id ?? 'tenant_sam_primeaux', now, now).run();
+            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+          } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+          }
+        }
+
+        // POST /api/meauxcad/deployments — log MeauxCAD deploy to shared deployments table
+        if (pathLower === '/api/meauxcad/deployments' && methodUpper === 'POST') {
+          try {
+            const body = await request.json();
+            const id = crypto.randomUUID();
+            const now = new Date().toISOString();
+            // Audit: deployments table has id, timestamp, version, git_hash, status, deployed_by, notes, worker_name
+            await env.DB.prepare(
+              `INSERT INTO deployments (id, worker_name, version, git_hash, description, status, deployed_by, environment, created_at, timestamp)
+               VALUES (?, 'meauxcad', ?, ?, ?, 'success', 'meauxcad_bot', 'production', ?, ?)`
+            ).bind(id, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', now, now).run();
+            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+          } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+          }
+        }
+
+        return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
       }
 
       // ----- API: Webhooks (canonical /api/webhooks/* + /api/email/inbound; legacy /api/hooks/*) -----
@@ -14627,7 +14709,42 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     } catch (e) {
       console.warn('[excalidraw] DO broadcast failed', e?.message ?? e);
     }
-    return { result: { ok: true, action, broadcast: true } };
+    // Build the Excalidraw element payload for add_elements action
+    let excalidrawElements = [];
+    if (action === 'add_elements' && Array.isArray(params?.elements)) {
+      const canvasStroke = (c) =>
+        (c != null && String(c).startsWith('var(')) ? 'rgba(156, 181, 188, 1)' : (c || 'rgba(156, 181, 188, 1)');
+      const canvasFill = (c) =>
+        (c != null && String(c).startsWith('var(')) ? 'transparent' : (c || 'transparent');
+      excalidrawElements = params.elements.map(el => ({
+        id: el.id ?? crypto.randomUUID(),
+        type: el.type ?? 'rectangle',
+        x: Number(el.x ?? 0),
+        y: Number(el.y ?? 0),
+        width: Number(el.width ?? 120),
+        height: Number(el.height ?? 60),
+        angle: 0,
+        strokeColor: canvasStroke(el.strokeColor),
+        backgroundColor: canvasFill(el.backgroundColor),
+        fillStyle: el.fillStyle ?? 'solid',
+        strokeWidth: el.strokeWidth ?? 2,
+        roughness: el.roughness ?? 0,
+        opacity: 100,
+        version: 1,
+        isDeleted: false,
+        ...(el.type === 'text' ? { text: el.text ?? '', fontSize: el.fontSize ?? 16, fontFamily: 1 } : {})
+      }));
+    }
+
+    const uiEvent = {
+       type: 'excalidraw',
+       action: action === 'add_elements' ? 'updateScene' : action,
+       params: action === 'add_elements' 
+         ? { elements: excalidrawElements, appState: { viewBackgroundColor: 'transparent' } }
+         : (params || {})
+    };
+
+    return { result: { ok: true, action, broadcast: true, ui_event: uiEvent } };
   }
 
   if (tool_name.startsWith('resend_')) {
@@ -18432,7 +18549,8 @@ async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
   const sessionUserId = session._session_user_id || session.user_id;
-  return { id: session.user_id, email: sessionUserId };
+  const tenantId = session.tenant_id || 'tenant_sam_primeaux';
+  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
 }
 
 // ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----

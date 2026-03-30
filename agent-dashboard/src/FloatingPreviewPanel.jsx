@@ -337,7 +337,10 @@ export default function FloatingPreviewPanel({
   onOpenInBrowser,
   onDeployStart,
   onDeployComplete,
+  /** Legacy prop (unused): draw is rendered via `drawPanel` from AgentDashboard. */
   drawPageSrc = "/dashboard/pages/draw.html",
+  /** Draw tab content: native Excalidraw + toolbar from AgentDashboard. */
+  drawPanel = null,
   shellNavActive = false,
 }) {
   const [previewEdit, setPreviewEdit] = useState(false);
@@ -1347,20 +1350,11 @@ export default function FloatingPreviewPanel({
           </div>
         )}
 
-        {/* DRAW TAB -- shell-less Excalidraw page in iframe */}
+        {/* DRAW TAB -- native Excalidraw from parent (no draw.html iframe) */}
         {activeTab === "draw" && (
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-canvas)" }}>
-            {drawPageSrc?.trim() ? (
-              <iframe
-                id="draw-panel-iframe"
-                key={drawPageSrc}
-                src={drawPageSrc.trim().startsWith("/") || drawPageSrc.trim().startsWith("http") ? drawPageSrc.trim() : `https://${drawPageSrc.trim()}`}
-                title="Draw"
-                style={{ width: "100%", flex: 1, minHeight: 200, border: "none", display: "block", background: "var(--bg-canvas)" }}
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              />
-            ) : (
-              <div style={{ padding: "20px", color: "var(--text-secondary)", fontSize: "12px" }}>Draw page URL not configured.</div>
+            {drawPanel ?? (
+              <div style={{ padding: "20px", color: "var(--text-secondary)", fontSize: "12px" }}>Draw panel not available.</div>
             )}
           </div>
         )}

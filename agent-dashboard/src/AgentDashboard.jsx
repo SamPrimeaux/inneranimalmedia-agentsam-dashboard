@@ -11,6 +11,28 @@ import {
 } from "./viewer-panel-strip-icons";
 import { getActiveAtMention } from "./chatAtContextMention.js";
 import { ChatAtContextPicker } from "./ChatAtContextPicker.jsx";
+import { Excalidraw } from "@excalidraw/excalidraw";
+import "@excalidraw/excalidraw/index.css";
+
+/** Apply one draw op from worker SSE / tool_result to Excalidraw API (same JS context, no iframe). */
+function applyExcalidrawOp(api, op) {
+  if (!api || !op?.action) return;
+  const act = op.action;
+  const params = op.params || {};
+  if (act === "updateScene") {
+    api.updateScene({
+      elements: params.elements ?? [],
+      appState: params.appState ?? {},
+    });
+  } else if (act === "resetScene" || act === "clear") {
+    api.resetScene();
+  } else if (act === "addFiles") {
+    const files = params.files ?? [];
+    if (files.length && typeof api.addFiles === "function") {
+      api.addFiles(files);
+    }
+  }
+}
 
 const SpeechRecognitionAPI =
   typeof window !== "undefined"
@@ -1195,7 +1217,7 @@ export default function AgentDashboard() {
 
   const [activeTab, setActiveTab] = useState("terminal");
 
-  // Connect directly to draw DO room on mount — receives ui.panel.open before iframe exists
+  // Connect directly to draw DO room on mount — receives ui.panel.open (native Excalidraw draw tab)
   useEffect(() => {
     let ws;
     let reconnectTimer;
@@ -1311,6 +1333,9 @@ export default function AgentDashboard() {
   const [lightboxImage, setLightboxImage] = useState(null);
   const [pendingDrawImage, setPendingDrawImage] = useState(null);
   const pendingDrawImageRef = useRef(null);
+  const excalidrawAPIRef = useRef(null);
+  const excalidrawReadyRef = useRef(false);
+  const pendingExcalidrawOpsRef = useRef([]);
   const streamAutoPreviewImgRef = useRef(false);
   const [connectedIntegrations, setConnectedIntegrations] = useState({});
   const [proposedFileChange, setProposedFileChange] = useState(null);
@@ -1323,6 +1348,173 @@ export default function AgentDashboard() {
   const [recentFiles, setRecentFiles] = useState([]);
 
   const defaultBucketForMonacoRef = useRef(null);
+
+  const flushExcalidrawQueue = useCallback(() => {
+    const api = excalidrawAPIRef.current;
+    if (!api || !pendingExcalidrawOpsRef.current.length) return;
+    pendingExcalidrawOpsRef.current.forEach((op) => {
+      try {
+        applyExcalidrawOp(api, op);
+      } catch (_) {}
+    });
+    pendingExcalidrawOpsRef.current = [];
+  }, []);
+
+  const loadImageIntoDraw = useCallback(async (url) => {
+    if (!url || !excalidrawAPIRef.current) return;
+    try {
+      const api = excalidrawAPIRef.current;
+      const r = await fetch(url, { credentials: "same-origin" });
+      const blob = await r.blob();
+      const file = new File([blob], "embed.png", { type: blob.type || "image/png" });
+      if (typeof api.addFiles === "function") {
+        api.addFiles([file]);
+      }
+    } catch (_) {}
+    pendingDrawImageRef.current = null;
+    setPendingDrawImage(null);
+  }, []);
+
+  const dispatchExcalidrawOp = useCallback((op) => {
+    if (!op?.action) return;
+    if (excalidrawReadyRef.current && excalidrawAPIRef.current) {
+      try {
+        applyExcalidrawOp(excalidrawAPIRef.current, op);
+      } catch (_) {}
+    } else {
+      pendingExcalidrawOpsRef.current.push(op);
+    }
+  }, []);
+
+  const onExcalidrawApiReady = useCallback(
+    (api) => {
+      excalidrawAPIRef.current = api;
+      excalidrawReadyRef.current = true;
+      flushExcalidrawQueue();
+      if (pendingDrawImageRef.current) {
+        void loadImageIntoDraw(pendingDrawImageRef.current);
+      }
+    },
+    [flushExcalidrawQueue, loadImageIntoDraw]
+  );
+
+  const handleDrawAction = useCallback(
+    (actionKind) => {
+      const prompts = {
+        from_chat:
+          "[Draw] Generate a diagram from our current conversation and render it on the canvas.",
+        uml: "[Draw] Generate a UML diagram for the current conversation context and render it on the canvas.",
+        mockup: "[Draw] Generate a UI mockup for the current conversation context and render it on the canvas.",
+        wireframe:
+          "[Draw] Generate a wireframe for the current conversation context and render it on the canvas.",
+      };
+      const prompt = prompts[actionKind];
+      if (prompt && typeof sendMessageRef.current === "function") {
+        setPreviewOpen(true);
+        setActiveTab("draw");
+        sendMessageRef.current(prompt);
+      }
+    },
+    [setActiveTab, setPreviewOpen]
+  );
+
+  const drawPanel = useMemo(
+    () => (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          background: "var(--bg-canvas)",
+          minHeight: 0,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            padding: "6px 10px",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--bg-elevated)",
+            flexShrink: 0,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          {[
+            { label: "From Chat", action: "from_chat" },
+            { label: "UML", action: "uml" },
+            { label: "Mockup", action: "mockup" },
+            { label: "Wireframe", action: "wireframe" },
+          ].map(({ label, action }) => (
+            <button
+              key={action}
+              type="button"
+              onClick={() => handleDrawAction(action)}
+              style={{
+                padding: "3px 10px",
+                fontSize: "12px",
+                borderRadius: 4,
+                border: "1px solid var(--border)",
+                background: "var(--bg-canvas)",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => excalidrawAPIRef.current?.resetScene()}
+            style={{
+              marginLeft: "auto",
+              padding: "3px 10px",
+              fontSize: "12px",
+              borderRadius: 4,
+              border: "1px solid var(--border)",
+              background: "transparent",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Clear
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+          <Excalidraw
+            excalidrawAPI={onExcalidrawApiReady}
+            theme="dark"
+            UIOptions={{
+              canvasActions: {
+                saveToActiveFile: false,
+                loadScene: false,
+                export: { saveFileToDisk: true },
+                toggleTheme: false,
+              },
+            }}
+            initialData={{
+              appState: {
+                viewBackgroundColor: "transparent",
+                theme: "dark",
+              },
+            }}
+          />
+        </div>
+      </div>
+    ),
+    [handleDrawAction, onExcalidrawApiReady]
+  );
+
+  useEffect(() => {
+    const url = pendingDrawImage;
+    if (!url) return;
+    if (!excalidrawReadyRef.current || !excalidrawAPIRef.current) return;
+    void loadImageIntoDraw(url);
+  }, [pendingDrawImage, loadImageIntoDraw]);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const messagesEndRef = useRef(null);
@@ -1477,65 +1669,15 @@ export default function AgentDashboard() {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  // ── Draw iframe (pages/draw) -> chat: structured prompts for Agent Sam ──
+  // ── Draw: DO/collab may still open panel via postMessage; iframe bridge removed (native Excalidraw) ──
   useEffect(() => {
-    const postLoadImageToDrawFrame = (url, attempt) => {
-      const n = attempt === undefined ? 0 : attempt;
-      const frame = document.querySelector('iframe[title="Draw"]');
-      if (frame?.contentWindow && url) {
-        try {
-          frame.contentWindow.postMessage(
-            { type: "load_image_background", url },
-            window.location.origin
-          );
-        } catch (_) {}
-        pendingDrawImageRef.current = null;
-        setPendingDrawImage(null);
-        return;
-      }
-      if (n < 40 && url) {
-        setTimeout(() => postLoadImageToDrawFrame(url, n + 1), 50);
-      }
-    };
     const onIamDrawMessage = (event) => {
       if (event.origin !== window.location.origin) return;
       if (!event.data) return;
       if (event.data.type === "iam_panel_open" && event.data.panel === "draw") {
         setPreviewOpen(true);
         setActiveTab("draw");
-        return;
       }
-      if (event.data.type === "draw_ready") {
-        const url = pendingDrawImageRef.current;
-        if (url) postLoadImageToDrawFrame(url, 0);
-        // Flush any queued excalidraw commands
-        if (window.__pendingExcalidrawCmds?.length) {
-          const drawFrame = document.getElementById('draw-panel-iframe');
-          if (drawFrame) {
-            window.__pendingExcalidrawCmds.forEach(cmd => {
-              drawFrame.contentWindow?.postMessage(cmd, window.location.origin);
-            });
-          }
-          window.__pendingExcalidrawCmds = [];
-        }
-        return;
-      }
-      if (event.data.type !== "iam_draw_request") return;
-      const kind = event.data.kind;
-      const prompts = {
-        from_chat:
-          "[Draw] From Chat: generate from the current conversation and render on the draw canvas.",
-        uml: "[Draw] Generate a UML diagram for the current conversation context and render it in the draw canvas.",
-        mockup: "[Draw] Generate a UI mockup for the current conversation context and render it in the draw canvas.",
-        wireframe:
-          "[Draw] Generate a wireframe for the current conversation context and render it in the draw canvas.",
-      };
-      const promptText = prompts[kind];
-      if (!promptText) return;
-      setPreviewOpen(true);
-      setActiveTab("draw");
-      const fn = sendMessageRef.current;
-      if (typeof fn === "function") void fn(promptText);
     };
     window.addEventListener("message", onIamDrawMessage);
     const handleShellNav = (e) => {
@@ -2478,12 +2620,24 @@ export default function AgentDashboard() {
                   setActiveTab("draw");
                 } else if (data.type === "tool_result" && data.result) {
                   try {
-                    const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+                    const parsed = typeof data.result === "string" ? JSON.parse(data.result) : data.result;
                     const uiEvent = parsed?.ui_event || parsed?.result?.ui_event;
                     const isBroadcast = parsed?.broadcast === true && parsed?.action;
-                    if (uiEvent?.type === 'excalidraw' || isBroadcast) {
+                    if (uiEvent?.type === "excalidraw" || isBroadcast) {
                       setPreviewOpen(true);
                       setActiveTab("draw");
+                      let action = uiEvent?.action ?? parsed?.action;
+                      let params = uiEvent?.params ?? parsed?.params ?? {};
+                      if (action === "add_elements" && Array.isArray(params.elements)) {
+                        action = "updateScene";
+                        params = {
+                          elements: params.elements,
+                          appState: params.appState ?? { viewBackgroundColor: "transparent" },
+                        };
+                      }
+                      if (action) {
+                        dispatchExcalidrawOp({ action, params });
+                      }
                     }
                   } catch (_) {
                     // Non-JSON tool_result — ignore, final text event carries the response
@@ -5532,6 +5686,7 @@ export default function AgentDashboard() {
                     onDeployStart={handleDeployStart}
                     onDeployComplete={handleDeployComplete}
                     shellNavActive={shellNavActive}
+                    drawPanel={drawPanel}
                   />
                 </div>
                 {bottomDockOpen && (
@@ -5619,6 +5774,7 @@ export default function AgentDashboard() {
                     onDeployStart={handleDeployStart}
                     onDeployComplete={handleDeployComplete}
                     shellNavActive={shellNavActive}
+                    drawPanel={drawPanel}
                   />
                 </div>
                 {bottomDockOpen && (

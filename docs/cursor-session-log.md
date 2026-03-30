@@ -1028,3 +1028,27 @@ Wire Vertex AI into `worker.js` Google path with model-specific routing; fix D1 
 
 [2026-03-30 EOD] Full sprint complete. Sandbox and prod deployed. All providers 0% drift on benchmark. Vertex AI routing live (Pro models to us-central1). agent_costs/ai_usage_log frozen (1176/1625). quality_checks and spend_audit rows written to D1. Backlog: flash SSE tokens, table DROPs, Anthropic streaming. v=199.
 
+## 2026-03-30 Vite chunk R2 deploy (sandbox + promote + gate)
+
+### What was asked
+Fix 404s on Vite code-split chunks under `/static/dashboard/agent/` by uploading all `agent-dashboard/dist/` files to R2; align `promote-to-prod.sh` and `deploy-gate.sh` `write_dashboard_versions` with multi-file hashing and D1 rows.
+
+### Files changed
+- `scripts/deploy-sandbox.sh`: Loop upload every file in `agent-dashboard/dist/` with correct content types; write sorted `.deploy-manifest` (for promote pulls; wrangler has no `r2 object list`); upload `dashboard/agent.html` as before; D1 `dashboard_versions` one row per dist asset (`agent`, `agent-css`, `agent-dist-<filename>`) plus `agent-html`.
+- `scripts/promote-to-prod.sh`: Pull via `.deploy-manifest` when present (else legacy JS/CSS only); loop push all of `dist/` to prod; same D1 row pattern; sanity check for `agent-dashboard.js` after pull.
+- `scripts/deploy-gate.sh`: `write_dashboard_versions` inserts one row per dist file (excluding `.deploy-manifest`) plus HTML; `audit_assets` logs extra chunk files; fixed `file_bytes` typo for HTML; D1 drift queries use `page_name='agent'` for main JS.
+
+### Files NOT changed (and why)
+- Draw/Excalidraw app code: not touched (per request).
+
+### Deploy status
+- Built: no (scripts only).
+- R2 uploaded: no.
+- Worker deployed: no.
+
+### What is live now
+- Unchanged until you run `./scripts/deploy-sandbox.sh` (uploads all chunks + manifest).
+
+### Known issues / next steps
+- Promote requires a sandbox deploy that uploaded `.deploy-manifest`; older sandbox builds fall back to legacy two-file pull (chunks may still 404 on prod until a fresh sandbox cycle).
+

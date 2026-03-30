@@ -9766,6 +9766,34 @@ async function handleAgentApi(request, url, env, ctx) {
       return jsonResponse(payload);
     }
 
+    if (pathLower === '/api/loading-states' && (method || 'GET').toUpperCase() === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const context = (url.searchParams.get('context') || 'default').trim() || 'default';
+      const agentId = (url.searchParams.get('agent_id') || '').trim();
+      let personalityTone = 'dry_wit';
+      try {
+        const session = await getSession(env, request);
+        const oauthUserId = session && (session._session_user_id || session.email || session.user_id);
+        if (oauthUserId && agentId) {
+          const aiRow = await env.DB.prepare('SELECT role_name FROM agentsam_ai WHERE id = ?').bind(agentId).first();
+          const slugFromRole = aiRow?.role_name ? String(aiRow.role_name).toLowerCase().replace(/\s+/g, '-') : '';
+          const prof = await env.DB.prepare(
+            `SELECT personality_tone FROM agentsam_subagent_profile WHERE user_id = ? AND is_active = 1 AND (id = ? OR slug = ?) LIMIT 1`
+          ).bind(oauthUserId, agentId, slugFromRole).first();
+          if (prof?.personality_tone) personalityTone = String(prof.personality_tone);
+        }
+      } catch (_) {}
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT message FROM ui_loading_states WHERE context = ? AND is_active = 1 AND (personality_tone = ? OR personality_tone IS NULL) ORDER BY sort_order`
+        ).bind(context, personalityTone).all();
+        const messages = (results || []).map((r) => r.message).filter(Boolean);
+        return jsonResponse({ messages });
+      } catch (e) {
+        return jsonResponse({ messages: [], error: e?.message || String(e) }, 500);
+      }
+    }
+
     if (pathLower === '/api/agent/conversations/search' && method === 'GET') {
       const q = (url.searchParams.get('q') || '').trim();
       if (!q) return jsonResponse([]);
@@ -11180,6 +11208,30 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         'data.type=\'code\' SSE events with fields: code, filename, language.\n' +
         '- Terminal commands must use terminal_execute tool. Never tell the user to ' +
         'run commands manually when terminal_execute is available.';
+
+      try {
+        const libRes = await env.DB.prepare(
+          `SELECT slug, name, agent_tags FROM draw_libraries WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 80`
+        ).all();
+        const libRows = libRes?.results || [];
+        if (libRows.length) {
+          const lines = libRows.map((r) => {
+            let tags = r.agent_tags;
+            try {
+              const parsed = typeof tags === 'string' ? JSON.parse(tags) : tags;
+              tags = Array.isArray(parsed) ? parsed.join(', ') : String(tags || '');
+            } catch (_) {
+              tags = String(tags || '');
+            }
+            return `- ${r.slug}: ${r.name} (agent_tags: ${tags})`;
+          });
+          finalSystem +=
+            '\n\nEXCALIDRAW SHAPE LIBRARIES (call excalidraw_load_library with { slug } to merge a library before drawing when it matches the task):\n' +
+            lines.join('\n');
+        }
+      } catch (e) {
+        console.warn('[agent/chat] draw_libraries system prompt', e?.message ?? e);
+      }
 
       const gatewayModel = getGatewayModel(model.provider, model.model_key);
       const useGateway = bodyUseGateway !== false && !!env.AI_GATEWAY_BASE_URL;
@@ -14686,6 +14738,69 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   }
   if (tool_name.startsWith('excalidraw_')) {
     const action = tool_name.replace('excalidraw_', '');
+
+    if (action === 'load_library') {
+      const slug = params?.slug != null ? String(params.slug).trim() : '';
+      if (!slug) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'ui',
+          toolInput: params,
+          result: null,
+          error: 'slug required',
+          serviceName: 'builtin',
+        });
+        return { error: 'slug required' };
+      }
+      if (!env.DB) {
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'ui',
+          toolInput: params,
+          result: null,
+          error: 'Database unavailable',
+          serviceName: 'builtin',
+        });
+        return { error: 'Database unavailable' };
+      }
+      const row = await env.DB.prepare(
+        `SELECT public_url FROM draw_libraries WHERE slug = ? AND is_active = 1 LIMIT 1`
+      )
+        .bind(slug)
+        .first();
+      if (!row?.public_url) {
+        const err = `draw_library not found for slug: ${slug}`;
+        await rec({
+          conversationId,
+          toolName: tool_name,
+          toolCategory: 'ui',
+          toolInput: params,
+          result: null,
+          error: err,
+          serviceName: 'builtin',
+        });
+        return { error: err };
+      }
+      const uiEvent = {
+        type: 'excalidraw',
+        action: 'loadLibrary',
+        params: { url: String(row.public_url) },
+      };
+      const resultPayload = { ok: true, action: 'load_library', broadcast: true, ui_event: uiEvent };
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'ui',
+        toolInput: params,
+        result: JSON.stringify(resultPayload),
+        error: null,
+        serviceName: 'builtin',
+      });
+      return { result: resultPayload };
+    }
+
     const drawPayload = { type: 'iam_excalidraw', action, params: params || {} };
     await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: JSON.stringify(drawPayload), error: null, serviceName: 'builtin' });
     // Build the Excalidraw element payload for add_elements action

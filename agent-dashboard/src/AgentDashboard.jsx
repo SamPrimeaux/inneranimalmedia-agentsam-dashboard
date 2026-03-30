@@ -15,7 +15,7 @@ import { Excalidraw } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 
 /** Apply one draw op from worker SSE / tool_result to Excalidraw API (same JS context, no iframe). */
-function applyExcalidrawOp(api, op) {
+function applyExcalidrawOp(api, op, excalidrawReadyRef) {
   if (!api || !op?.action) return;
   const act = op.action;
   const params = op.params || {};
@@ -23,12 +23,31 @@ function applyExcalidrawOp(api, op) {
     api.updateScene({
       elements: params.elements ?? [],
     });
+  } else if (act === "loadLibrary") {
+    const url = params.url;
+    if (url && typeof api.updateLibrary === "function") {
+      void (async () => {
+        try {
+          const resp = await fetch(url);
+          const data = await resp.json();
+          console.log("[excalidraw] library keys:", Object.keys(data));
+          const items =
+            data.libraryItems ?? data.library ?? data.elements ?? [];
+          if (items.length && typeof api.updateLibrary === "function") {
+            api.updateLibrary({ libraryItems: items, merge: true });
+          }
+        } catch (_) {}
+      })();
+    }
   } else if (act === "resetScene" || act === "clear") {
     api.resetScene();
+    if (excalidrawReadyRef) excalidrawReadyRef.current = true;
   } else if (act === "addFiles") {
     const files = params.files ?? [];
     if (files.length && typeof api.addFiles === "function") {
-      api.addFiles(files);
+      try {
+        api.addFiles(files);
+      } catch (_) {}
     }
   }
 }
@@ -86,7 +105,7 @@ const WELCOME_COMMANDS = [
   },
 ];
 
-const LOADING_SAYINGS = [
+const FALLBACK_LOADING_LINES = [
   "Checking the D1 connection...",
   "Asking the models nicely...",
   "Counting tokens so you don't have to...",
@@ -1136,9 +1155,6 @@ export default function AgentDashboard() {
   const agentNotifWrapRef = useRef(null);
   const [agentNotifList, setAgentNotifList] = useState([]);
   const [agentNotifOpen, setAgentNotifOpen] = useState(false);
-  const [loadingSaying] = useState(
-    () => LOADING_SAYINGS[Math.floor(Math.random() * LOADING_SAYINGS.length)]
-  );
 
   // ── Agent / model pickers ─────────────────────────────────────────────────
   const [agents, setAgents] = useState([]);
@@ -1189,6 +1205,37 @@ export default function AgentDashboard() {
   // ── Agent state (SSE type=state) ───────────────────────────────────────────
   const [agentState, setAgentState] = useState(AGENT_STATES.IDLE);
   const [agentStateContext, setAgentStateContext] = useState({});
+  const [loadingLines, setLoadingLines] = useState([]);
+  const [streamTextSeen, setStreamTextSeen] = useState(false);
+  const [loadingRotateIdx, setLoadingRotateIdx] = useState(0);
+
+  const loadingContextKey = useMemo(() => {
+    if (agentState === AGENT_STATES.TOOL_CALL) {
+      const t = String(agentStateContext?.tool || "").toLowerCase();
+      if (t.includes("excalidraw_load_library")) return "library_loading";
+      if (t.includes("excalidraw")) return "drawing";
+      if (t.includes("d1") || t.includes("query") || t.includes("db")) return "querying";
+      if (t.includes("knowledge") || t.includes("search") || t.includes("rag")) return "searching";
+      return "tool_call";
+    }
+    if (agentState === AGENT_STATES.THINKING && !streamTextSeen) return "thinking";
+    if (isLoading && streamTextSeen) return "streaming";
+    if (agentState === AGENT_STATES.THINKING) return "thinking";
+    if (isLoading) return "streaming";
+    return "default";
+  }, [agentState, agentStateContext, isLoading, streamTextSeen]);
+
+  const mergedStatusConfig = useMemo(() => {
+    const base = STATE_CONFIG[agentState] || STATE_CONFIG.IDLE;
+    const msgs = loadingLines.length ? loadingLines : base.messages;
+    return { ...base, messages: msgs };
+  }, [agentState, loadingLines]);
+
+  const bubbleLoadingLine = useMemo(() => {
+    const lines = loadingLines.length ? loadingLines : FALLBACK_LOADING_LINES;
+    if (!lines.length) return "";
+    return lines[loadingRotateIdx % lines.length];
+  }, [loadingLines, loadingRotateIdx]);
 
   // ── Execution plan for approval (Step 10) ───────────────────────────────────
   const [executionPlan, setExecutionPlan] = useState(null);
@@ -1353,7 +1400,7 @@ export default function AgentDashboard() {
     if (!api || !pendingExcalidrawOpsRef.current.length) return;
     pendingExcalidrawOpsRef.current.forEach((op) => {
       try {
-        applyExcalidrawOp(api, op);
+        applyExcalidrawOp(api, op, excalidrawReadyRef);
       } catch (_) {}
     });
     pendingExcalidrawOpsRef.current = [];
@@ -1367,7 +1414,9 @@ export default function AgentDashboard() {
       const blob = await r.blob();
       const file = new File([blob], "embed.png", { type: blob.type || "image/png" });
       if (typeof api.addFiles === "function") {
-        api.addFiles([file]);
+        try {
+          api.addFiles([file]);
+        } catch (_) {}
       }
     } catch (_) {}
     pendingDrawImageRef.current = null;
@@ -1381,7 +1430,7 @@ export default function AgentDashboard() {
       return;
     }
     try {
-      applyExcalidrawOp(excalidrawAPIRef.current, op);
+      applyExcalidrawOp(excalidrawAPIRef.current, op, excalidrawReadyRef);
     } catch (_) {}
   }, []);
 
@@ -1635,6 +1684,38 @@ export default function AgentDashboard() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setLoadingRotateIdx(0);
+  }, [loadingContextKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ context: loadingContextKey });
+    if (activeAgent?.id) params.set("agent_id", activeAgent.id);
+    fetch(`/api/loading-states?${params.toString()}`, { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setLoadingLines(Array.isArray(data.messages) ? data.messages : []);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadingLines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadingContextKey, activeAgent?.id]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const lines = loadingLines.length ? loadingLines : FALLBACK_LOADING_LINES;
+    if (!lines.length) return;
+    const id = setInterval(() => {
+      setLoadingRotateIdx((i) => (i + 1) % lines.length);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [isLoading, loadingLines, loadingContextKey]);
 
   const workersAiPickerExtras = useMemo(
     () =>
@@ -2434,6 +2515,7 @@ export default function AgentDashboard() {
     setAttachedImages([]);
     setAttachedFiles([]);
     setWorkflowCollabRunId(null);
+    setStreamTextSeen(false);
     setIsLoading(true);
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -2535,13 +2617,25 @@ export default function AgentDashboard() {
                     setPreviewOpen(true);
                     setActiveTab("draw");
                   }
-                  if (data.tool != null || data.file != null || data.current != null || data.total != null || data.position != null) {
+                  const c = data.context && typeof data.context === "object" ? data.context : {};
+                  if (
+                    data.tool != null ||
+                    data.file != null ||
+                    data.current != null ||
+                    data.total != null ||
+                    data.position != null ||
+                    c.tool != null ||
+                    c.file != null ||
+                    c.current != null ||
+                    c.total != null ||
+                    c.position != null
+                  ) {
                     setAgentStateContext({
-                      tool: data.tool,
-                      file: data.file,
-                      current: data.current,
-                      total: data.total,
-                      position: data.position,
+                      tool: c.tool ?? data.tool,
+                      file: c.file ?? data.file,
+                      current: c.current ?? data.current,
+                      total: c.total ?? data.total,
+                      position: c.position ?? data.position,
                     });
                   }
                   if (data.state === "WAITING_APPROVAL" && data.plan_id != null) {
@@ -2566,6 +2660,7 @@ export default function AgentDashboard() {
                     )
                   );
                 } else if (data.type === "text" && data.text && String(data.text).trim()) {
+                  setStreamTextSeen(true);
                   fullContent += data.text;
                   const openMatch = fullContent.match(/OPEN_IN_PREVIEW:\s*(https?:\/\/[^\s\n]+)/);
                   if (openMatch) setBrowserUrl(openMatch[1]);
@@ -4540,7 +4635,7 @@ export default function AgentDashboard() {
                       AI
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{loadingSaying}</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{bubbleLoadingLine}</div>
                       <div style={{ display: "flex", gap: "4px" }}>
                         {[0, 1, 2].map((i) => (
                           <div
@@ -4574,8 +4669,9 @@ export default function AgentDashboard() {
                 }}
               >
                 <AnimatedStatusText
+                  key={loadingContextKey}
                   state={agentState}
-                  config={STATE_CONFIG[agentState]}
+                  config={mergedStatusConfig}
                   context={agentStateContext}
                 />
               </div>

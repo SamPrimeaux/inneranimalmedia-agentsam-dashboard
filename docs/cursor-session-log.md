@@ -961,3 +961,40 @@ Fix wrangler 10074 by removing v3 migration and setting migrations v1, v2, v4, v
 ### What is live now
 - Prod worker includes Vertex helpers and vertex-test; DO binding targets `AgentChatSqlV1` on the same worker.
 
+## 2026-03-29 Retire agent_costs and ai_usage_log in worker.js
+
+### What was asked
+Remove all D1 writes and reads for `agent_costs` and `ai_usage_log` from `worker.js`; keep `spend_ledger` and `agent_telemetry` unchanged; update health workflow step and retention config; sandbox deploy only.
+
+### Files changed
+- `worker.js`: Removed `ai_usage_log` and `agent_costs` INSERTs from `streamDoneDbWrites` / `spendAndUsage`; removed `agent_costs` INSERT from `runToolLoop`; removed unified-spend parallel queries for both tables; health check workflow now counts `agent_telemetry`; removed `agent_costs` from `RETENTION_PURGE_TABLE_CONFIG`; renamed unused `streamDoneDbWrites` cost param to `_costUsd` after removing consumers of `safeCost`.
+
+### Files NOT changed (and why)
+- `agent_telemetry` INSERT/SELECT paths: unchanged per task.
+- Production worker: not deployed (sandbox only).
+
+### Deploy status
+- Built: no (worker-only change).
+- R2 uploaded: no.
+- Sandbox worker: yes — `inneranimal-dashboard` Version ID `b9053b77-da89-44d7-9267-08ad0867ac52` via `./scripts/deploy-sandbox.sh --worker-only`.
+- Deploy approved by Sam: task-specified sandbox deploy.
+
+### What is live now
+- Sandbox worker at `https://inneranimal-dashboard.meauxbility.workers.dev` runs the patched worker; shared D1 `agent_telemetry` still receives chat completions; `agent_costs` / `ai_usage_log` baseline counts (e.g. 1159 / 1608) unchanged until new chat traffic would have incremented them under old code.
+
+### Known issues / next steps
+- Send test messages on sandbox UI and confirm `agent_costs`/`ai_usage_log` counts stay flat while `agent_telemetry` grows; drop tables via separate DDL when ready.
+
+## 2026-03-29 benchmark-cost-accuracy.sh
+
+### What was asked
+Add `scripts/benchmark-cost-accuracy.sh`: run each model through `POST /api/agent/chat`, compare streamed bench `cost_usd` vs `agent_telemetry` vs expected cost from `ai_models` rates; provider summary; read-only D1; sandbox/prod target.
+
+### Files changed
+- `scripts/benchmark-cost-accuracy.sh`: new executable script (aligned with `benchmark-full.sh` JSON: `messages`, `model_id`, `stream`; `Cookie: session=...`; wrangler D1 against `wrangler.production.toml`).
+
+### Deploy status
+- Not applicable (script only).
+
+2026-03-29 benchmark-cost-accuracy.sh run sandbox+prod. Post-sandbox: frozen agent_costs=1159, ai_usage_log=1608; agent_telemetry gained 17 rows (1685 vs 1668). Post-prod: agent_costs=1176, ai_usage_log=1625 (+17 each vs baseline); agent_telemetry=1702 (+34 vs 1668). Report: docs/cost-tracking-analysis-20260329.md. v=202.
+

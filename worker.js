@@ -872,70 +872,6 @@ async function fetchUnifiedSpendGrouped(env, periodDays, groupKey) {
       } catch (_) {}
     })(),
     (async () => {
-      try {
-        let sql = `SELECT NULL AS provider, model_used AS model, cost_usd,
-          tokens_in, tokens_out, strftime('%s', created_at) AS ts FROM agent_costs WHERE 1=1`;
-        if (periodDays > 0) {
-          sql += ` AND created_at >= datetime('now', '-' || ? || ' days')`;
-          const { results } = await env.DB.prepare(sql).bind(String(periodDays)).all();
-          for (const r of results || []) {
-            merged.push({
-              provider: r.provider,
-              model: r.model,
-              cost_usd: r.cost_usd,
-              tokens_in: r.tokens_in,
-              tokens_out: r.tokens_out,
-              ts: normalizeUnifiedSpendTs(r.ts),
-            });
-          }
-        } else {
-          const { results } = await env.DB.prepare(sql).all();
-          for (const r of results || []) {
-            merged.push({
-              provider: r.provider,
-              model: r.model,
-              cost_usd: r.cost_usd,
-              tokens_in: r.tokens_in,
-              tokens_out: r.tokens_out,
-              ts: normalizeUnifiedSpendTs(r.ts),
-            });
-          }
-        }
-      } catch (_) {}
-    })(),
-    (async () => {
-      let results = [];
-      try {
-        let sql = `SELECT provider, model, cost_estimate AS cost_usd,
-          tokens_input AS tokens_in, tokens_output AS tokens_out, created_at AS ts FROM ai_usage_log WHERE 1=1`;
-        const stmt = sinceUnix != null
-          ? env.DB.prepare(`${sql} AND created_at >= ?`).bind(sinceUnix)
-          : env.DB.prepare(sql);
-        const r1 = await stmt.all();
-        results = r1.results || [];
-      } catch (_) {
-        try {
-          const sql2 = `SELECT provider, model, cost_estimate AS cost_usd,
-            tokens_input AS tokens_in, tokens_output AS tokens_out, date AS ts FROM ai_usage_log WHERE 1=1`;
-          const stmt2 = sinceUnix != null
-            ? env.DB.prepare(`${sql2} AND unixepoch(date) >= ?`).bind(sinceUnix)
-            : env.DB.prepare(sql2);
-          const r2 = await stmt2.all();
-          results = r2.results || [];
-        } catch (__) {}
-      }
-      for (const r of results) {
-        merged.push({
-          provider: r.provider,
-          model: r.model,
-          cost_usd: r.cost_usd,
-          tokens_in: r.tokens_in,
-          tokens_out: r.tokens_out,
-          ts: normalizeUnifiedSpendTs(r.ts),
-        });
-      }
-    })(),
-    (async () => {
       let results = [];
       try {
         let sql = `SELECT 'cursor' AS provider, model, estimated_cost_usd AS cost_usd,
@@ -5245,7 +5181,7 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
 }
 
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
-async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, lastUserTextForMemory) {
+async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory) {
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
   const safeOutput = outputTokens ?? 0;
@@ -5253,7 +5189,13 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   const safeModelKey = (modelRow && modelRow.model_key != null) ? String(modelRow.model_key) : 'unknown';
   const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
   const amountUsd = Math.round((safeInput * rateIn + safeOutput * rateOut) * 1e8) / 1e8;
-  const safeCost = costUsd ?? amountUsd;
+  let googleServiceName = null;
+  let googlePricingSource = null;
+  if (safeProvider === 'google') {
+    const vertex = shouldUseVertexForGoogleModel(env, safeModelKey);
+    googleServiceName = vertex ? 'vertex_ai' : 'gemini_api';
+    googlePricingSource = vertex ? 'vertex_official' : 'gemini_api_official';
+  }
   try {
     await env.DB.prepare(
       "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
@@ -5263,12 +5205,11 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   try {
     await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,unixepoch())`
-    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd).run();
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
+    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource).run();
   } catch (e) {
     console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
   }
-  const dayStr = new Date().toISOString().slice(0, 10);
   const spendAndUsage = async () => {
     try {
       await env.DB.prepare(
@@ -5277,35 +5218,12 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     } catch (e) {
       console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
     }
-    try {
-      await env.DB.prepare(
-        `INSERT INTO ai_usage_log (id, date, provider, model, tokens_input, tokens_output, cost_estimate, endpoint, tenant_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '/api/agent/chat', 'tenant_sam_primeaux', unixepoch())`
-      ).bind(
-        'aul_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(),
-        dayStr,
-        safeProvider,
-        safeModelKey,
-        safeInput,
-        safeOutput,
-        safeCost
-      ).run();
-    } catch (e) {
-      console.error('[agent/chat] ai_usage_log INSERT failed:', e?.message ?? e);
-    }
   };
   if (ctx && typeof ctx.waitUntil === 'function') {
     ctx.waitUntil(spendAndUsage());
   } else {
     await spendAndUsage();
   }
-  try {
-    await env.DB.prepare(
-      `INSERT INTO agent_costs (model_used, tokens_in, tokens_out, cost_usd, task_type, user_id, created_at) VALUES (?, ?, ?, ?, ?, 'agent_sam', datetime('now'))`
-    ).bind(safeModelKey, safeInput, safeOutput, safeCost, 'chat_stream').run();
-    } catch (e) {
-      console.error('[agent/chat] agent_costs INSERT failed:', e?.message ?? e);
-    }
   try {
     if (conversationId) {
       await env.DB.prepare(
@@ -6063,6 +5981,19 @@ Reply with only the JSON object.`;
 const VERTEX_PROJECT_ID = 'gen-lang-client-0684066529';
 const VERTEX_LOCATION = 'us-central1';
 
+/** Route these D1/UI model keys to Vertex when env.GOOGLE_SERVICE_ACCOUNT_JSON is set; other Google models use Gemini API (API key). */
+const VERTEX_PREFERRED_MODELS = [
+  'gemini-3.1-pro-preview',
+  'gemini-3.1-pro-preview-customtools',
+  'gemini-3-pro-image-preview',
+];
+
+function shouldUseVertexForGoogleModel(env, modelKey) {
+  if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) return false;
+  const mk = (modelKey || '').trim();
+  return VERTEX_PREFERRED_MODELS.includes(mk);
+}
+
 function _b64UrlEncodeUtf8(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = '';
@@ -6150,6 +6081,7 @@ function toVertexModelId(modelKey) {
     'gemini-3.1-pro': 'gemini-2.5-pro',
     'gemini-3.1-pro-preview': 'gemini-2.5-pro',
     'gemini-3.1-pro-preview-customtools': 'gemini-2.5-pro',
+    'gemini-3-pro-image-preview': 'gemini-2.5-flash-image',
   };
   return map[modelKey] || modelKey;
 }
@@ -6166,10 +6098,6 @@ async function callVertexAI(env, modelId, body, stream) {
     },
     body: JSON.stringify(body),
   });
-}
-
-function useVertexForGoogle(env) {
-  return !!env.GOOGLE_SERVICE_ACCOUNT_JSON;
 }
 
 /** One round with the main model, no tools. Used for "question" intent and for aggregate step of mixed. */
@@ -6245,7 +6173,7 @@ async function singleRoundNoTools(env, provider, modelKey, systemWithBlurb, mess
     };
     console.log('[singleRoundNoTools] Google request body:', JSON.stringify(reqBody).slice(0, 1000));
     let resp;
-    if (useVertexForGoogle(env)) {
+    if (shouldUseVertexForGoogleModel(env, modelKey)) {
       resp = await callVertexAI(env, modelKey, reqBodyVertex, false);
     } else {
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:generateContent`;
@@ -6567,7 +6495,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         description: t.description || '',
         parameters: stripAdditionalProperties(t.input_schema),
       }));
-      if (useVertexForGoogle(env)) {
+      if (shouldUseVertexForGoogleModel(env, modelKey)) {
         apiUrl = '';
         headers = {};
         reqBody = {
@@ -6589,7 +6517,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
     }
 
     let resp;
-    if (provider === 'google' && useVertexForGoogle(env)) {
+    if (provider === 'google' && shouldUseVertexForGoogleModel(env, modelKey)) {
       resp = await callVertexAI(env, modelKey, reqBody, false);
     } else {
       resp = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(reqBody) });
@@ -7099,14 +7027,6 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       if (!finalText) finalText = 'Command executed. See terminal for output.';
     }
   }
-  try {
-    const taskType = classification?.intent ?? 'tool_loop';
-    const costUsd = calculateCost(modelRow, totalInputTokens, totalOutputTokens);
-    await env.DB.prepare(
-      `INSERT INTO agent_costs (model_used, tokens_in, tokens_out, cost_usd, task_type, user_id, created_at)
-       VALUES (?, ?, ?, ?, ?, 'agent_sam', datetime('now'))`
-    ).bind(modelRow?.model_key ?? modelKey, totalInputTokens, totalOutputTokens, costUsd, taskType).run();
-  } catch (e) { console.warn('[runToolLoop] agent_costs INSERT', e?.message ?? e); }
   return { content: [{ type: 'text', text: finalText }] };
 }
 
@@ -7767,7 +7687,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 
         const geminiStreamUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
         let resp;
-        if (useVertexForGoogle(env)) {
+        if (shouldUseVertexForGoogleModel(env, modelKey)) {
           resp = await callVertexAI(env, modelKey, body, true);
           if ((resp.status === 404 || resp.status === 400) && env.GOOGLE_AI_API_KEY) {
             await resp.text().catch(() => '');
@@ -7903,9 +7823,15 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
     toolConfig: { functionCallingConfig: { mode: "NONE" } },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
-  console.log('[streamGoogle] calling url:', url, 'vertex:', useVertexForGoogle(env), 'key set:', !!env.GOOGLE_AI_API_KEY);
+  const useVertex = shouldUseVertexForGoogleModel(env, modelKey);
+  if (useVertex) {
+    console.log('[Google] Routing', modelKey, 'to Vertex AI (us-central1)');
+  } else {
+    console.log('[Google] Routing', modelKey, 'to Gemini API (direct key)');
+  }
+  console.log('[streamGoogle] calling url:', url, 'vertex:', useVertex, 'key set:', !!env.GOOGLE_AI_API_KEY);
   let resp;
-  if (useVertexForGoogle(env)) {
+  if (useVertex) {
     resp = await callVertexAI(env, modelKey, streamBody, true);
     if ((resp.status === 404 || resp.status === 400) && env.GOOGLE_AI_API_KEY) {
       await resp.text().catch(() => '');
@@ -11047,7 +10973,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       const useGateway = bodyUseGateway !== false && !!env.AI_GATEWAY_BASE_URL;
       const canStreamAnthropic = model.provider === 'anthropic' && !(useGateway && gatewayModel) && !!env.ANTHROPIC_API_KEY;
       const canStreamOpenAI = model.provider === 'openai' && !(useGateway && gatewayModel) && !!env.OPENAI_API_KEY;
-      const canStreamGoogle = model.provider === 'google' && (!!env.GOOGLE_AI_API_KEY || !!env.GOOGLE_SERVICE_ACCOUNT_JSON);
+      const canStreamGoogle = model.provider === 'google' && (!!env.GOOGLE_AI_API_KEY || shouldUseVertexForGoogleModel(env, model.model_key || ''));
       const canStreamWorkersAI = (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && !!env.AI;
       const wantStream = body.stream === true && (canStreamAnthropic || canStreamOpenAI || canStreamGoogle || canStreamWorkersAI);
 
@@ -11456,7 +11382,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           return jsonResponse({ error: 'OpenAI request failed', detail: err?.message ?? String(err) }, 502);
         }
       }
-      if (result === undefined && model.provider === 'google' && (env.GOOGLE_AI_API_KEY || env.GOOGLE_SERVICE_ACCOUNT_JSON)) {
+      if (result === undefined && model.provider === 'google' && (env.GOOGLE_AI_API_KEY || shouldUseVertexForGoogleModel(env, model.model_key || 'gemini-2.5-flash'))) {
         const googleContents = apiMessages.map((m, i) => {
           const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
           const parts = isLastUser ? buildGoogleParts(m.content, images) : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }];
@@ -11468,7 +11394,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           contents: googleContents,
         };
         let resp;
-        if (useVertexForGoogle(env)) {
+        if (shouldUseVertexForGoogleModel(env, mk)) {
           resp = await callVertexAI(env, mk, genBody, false);
         } else {
           resp = await fetch(
@@ -11523,10 +11449,17 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       } catch (e) {
         console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
       }
+      let nsGoogleServiceName = null;
+      let nsGooglePricingSource = null;
+      if (model.provider === 'google') {
+        const v = shouldUseVertexForGoogleModel(env, model.model_key || '');
+        nsGoogleServiceName = v ? 'vertex_ai' : 'gemini_api';
+        nsGooglePricingSource = v ? 'vertex_official' : 'gemini_api_official';
+      }
       try {
         await env.DB.prepare(
-          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,unixepoch())`
-        ).bind(crypto.randomUUID(), env.TENANT_ID || 'system', conversationId || null, 'llm_call', 'chat_completion', 1, model.model_key, model.provider, inputTok, outputTok, computedCostUsd).run();
+          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
+        ).bind(crypto.randomUUID(), env.TENANT_ID || 'system', conversationId || null, 'llm_call', 'chat_completion', 1, model.model_key, model.provider, inputTok, outputTok, computedCostUsd, nsGoogleServiceName, nsGooglePricingSource).run();
       } catch (e) {
         console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
       }
@@ -15764,9 +15697,9 @@ function matchAgentChatWorkflowIntent(userText) {
 const AGENT_BUILTIN_WORKFLOW_STEPS = {
   wf_worker_health_check: [
     {
-      name: 'D1: agent_costs row count',
+      name: 'D1: agent_telemetry row count',
       step_type: 'd1_query',
-      sql: 'SELECT COUNT(*) AS n FROM agent_costs',
+      sql: 'SELECT COUNT(*) AS n FROM agent_telemetry',
       requires_approval: false,
     },
     {
@@ -17961,7 +17894,6 @@ const RETENTION_PURGE_TABLE_CONFIG = {
   notifications: { dateColumn: 'created_at', compare: 'datetime' },
   deployment_notifications: { dateColumn: 'created_at', compare: 'datetime' },
   terminal_history: { dateColumn: 'created_at', compare: 'unix' },
-  agent_costs: { dateColumn: 'created_at', compare: 'datetime' },
   mcp_tool_calls: { dateColumn: 'created_at', compare: 'datetime' },
   mcp_usage_log: { dateColumn: 'date', compare: 'date_col' },
   mcp_audit_log: { dateColumn: 'created_at', compare: 'unix' },

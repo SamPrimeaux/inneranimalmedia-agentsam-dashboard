@@ -998,3 +998,29 @@ Add `scripts/benchmark-cost-accuracy.sh`: run each model through `POST /api/agen
 
 2026-03-29 benchmark-cost-accuracy.sh run sandbox+prod. Post-sandbox: frozen agent_costs=1159, ai_usage_log=1608; agent_telemetry gained 17 rows (1685 vs 1668). Post-prod: agent_costs=1176, ai_usage_log=1625 (+17 each vs baseline); agent_telemetry=1702 (+34 vs 1668). Report: docs/cost-tracking-analysis-20260329.md. v=202.
 
+## 2026-03-29 Vertex AI Google provider routing (sandbox)
+
+### What was asked
+Wire Vertex AI into `worker.js` Google path with model-specific routing; fix D1 `worker_env` catalog (VERTEX_SA_KEY_JSON to GOOGLE_SERVICE_ACCOUNT_JSON); fix `ai_services` project/region; stamp `service_name` / `pricing_source` on `agent_telemetry`; sandbox deploy and verify.
+
+### Files changed
+- `worker.js`: Added `VERTEX_PREFERRED_MODELS` and `shouldUseVertexForGoogleModel(env, modelKey)` (replaces blanket `useVertexForGoogle`); Pro/image preview keys route to existing `callVertexAI` + JWT via `env.GOOGLE_SERVICE_ACCOUNT_JSON`; flash models use Gemini API key path; `toVertexModelId` maps `gemini-3-pro-image-preview` to `gemini-2.5-flash-image`; `streamDoneDbWrites` and non-stream chat `agent_telemetry` INSERTs include `service_name` and `pricing_source` (`vertex_ai` / `vertex_official` vs `gemini_api` / `gemini_api_official`); `canStreamGoogle` and Google chat gate require API key or Vertex-eligible model.
+
+### Files NOT changed (and why)
+- `getVertexAccessToken` / `callVertexAI` / `vertexGeminiUrl`: already present; no duplicate helpers added.
+- Production worker: not deployed (sandbox only).
+
+### Deploy status
+- Built: no (`--worker-only`).
+- R2 uploaded: no.
+- Sandbox worker: yes — `inneranimal-dashboard` Version ID `50e0053e-28f0-4a04-a976-44f8f524cd71` via `./scripts/deploy-sandbox.sh --worker-only`.
+- D1 (remote): `worker_env` row renamed to `GOOGLE_SERVICE_ACCOUNT_JSON`; `ai_services` `ai_vertex_opus_4_6` project/region patched; `ai_models` Vertex platform rows updated for three model keys.
+
+### What is live now
+- Sandbox worker serves updated routing; D1 telemetry shows `service_name=vertex_ai` for Vertex-preferred models and `gemini_api` for `gemini-2.5-flash` on recent rows.
+
+### Known issues / next steps
+- `/api/agent/health` returns 404 on sandbox; use `/api/health` (200). Chat may return SSE even with `stream:false`; `input_tokens` still 0 on some streamed `done` events (separate from this change).
+
+2026-03-29 Vertex AI wired into worker.js. Pro models route to Vertex (us-central1, gen-lang-client-0684066529). Flash models stay on Gemini API. Secret = GOOGLE_SERVICE_ACCOUNT_JSON. JWT exchange via Web Crypto (existing `getVertexAccessToken`). Sandbox tested. v=202.
+

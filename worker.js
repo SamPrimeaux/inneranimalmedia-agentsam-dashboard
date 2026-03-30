@@ -5042,11 +5042,13 @@ function resolveAnthropicModelKey(modelKey) {
 /** Compute cost from ai_models row (D1). Never use a hardcoded map. */
 function calculateCost(model, inputTokens, outputTokens) {
   if (!model || (inputTokens == null && outputTokens == null)) return 0;
-  const inputRate = typeof model.input_rate_per_mtok === 'number' ? model.input_rate_per_mtok : 0;
-  const outputRate = typeof model.output_rate_per_mtok === 'number' ? model.output_rate_per_mtok : 0;
+  const inputRate = Number(model.input_rate_per_mtok);
+  const outputRate = Number(model.output_rate_per_mtok);
+  const inR = Number.isFinite(inputRate) ? inputRate : 0;
+  const outR = Number.isFinite(outputRate) ? outputRate : 0;
   const inTok = Number(inputTokens) || 0;
   const outTok = Number(outputTokens) || 0;
-  return (inTok / 1e6 * inputRate) + (outTok / 1e6 * outputRate);
+  return (inTok / 1e6 * inR) + (outTok / 1e6 * outR);
 }
 
 /** AI Gateway compat: model string for gateway (provider/model). Used only when AI_GATEWAY_BASE_URL is set. */
@@ -5187,8 +5189,21 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   const safeOutput = outputTokens ?? 0;
   const safeProvider = (modelRow && modelRow.provider != null) ? String(modelRow.provider) : 'unknown';
   const safeModelKey = (modelRow && modelRow.model_key != null) ? String(modelRow.model_key) : 'unknown';
-  const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
-  const amountUsd = Math.round((safeInput * rateIn + safeOutput * rateOut) * 1e8) / 1e8;
+  let rowForTelemetry = modelRow;
+  if (safeProvider === 'google' && env?.DB && shouldUseVertexForGoogleModel(env, safeModelKey)) {
+    if (typeof modelRow?.input_rate_per_mtok !== 'number' || typeof modelRow?.output_rate_per_mtok !== 'number') {
+      rowForTelemetry = await resolveGoogleModelRowForVertexAi(env, modelRow);
+    }
+  }
+  let amountUsd;
+  if (typeof rowForTelemetry?.input_rate_per_mtok === 'number' && typeof rowForTelemetry?.output_rate_per_mtok === 'number') {
+    amountUsd = calculateCost(rowForTelemetry, safeInput, safeOutput);
+  } else {
+    const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
+    amountUsd = Math.round((safeInput * rateIn + safeOutput * rateOut) * 1e8) / 1e8;
+  }
+  const inputRateCol = typeof rowForTelemetry?.input_rate_per_mtok === 'number' ? rowForTelemetry.input_rate_per_mtok : null;
+  const outputRateCol = typeof rowForTelemetry?.output_rate_per_mtok === 'number' ? rowForTelemetry.output_rate_per_mtok : null;
   let googleServiceName = null;
   let googlePricingSource = null;
   if (safeProvider === 'google') {
@@ -5205,8 +5220,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   try {
     await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
-    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource).run();
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch())`
+    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol).run();
   } catch (e) {
     console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
   }
@@ -5994,6 +6009,41 @@ function shouldUseVertexForGoogleModel(env, modelKey) {
   return VERTEX_PREFERRED_MODELS.includes(mk);
 }
 
+/** Merge Vertex/Gemini stream chunks: usage may appear only on the final SSE event; support nested response and snake_case. */
+function mergeGeminiStreamUsageFromChunk(data, inputTokens, outputTokens) {
+  if (!data || typeof data !== 'object') return { inputTokens, outputTokens };
+  const root = data.response && typeof data.response === 'object' ? data.response : data;
+  const u = root.usageMetadata || root.usage_metadata || data.usageMetadata;
+  if (!u || typeof u !== 'object') return { inputTokens, outputTokens };
+  const pt = u.promptTokenCount ?? u.prompt_token_count;
+  let ct = u.candidatesTokenCount ?? u.candidates_token_count;
+  const tt = u.totalTokenCount ?? u.total_token_count;
+  if (ct == null && tt != null && pt != null) {
+    ct = Math.max(0, Number(tt) - Number(pt));
+  }
+  let inTok = inputTokens;
+  let outTok = outputTokens;
+  if (pt != null) inTok = Math.max(inTok, Number(pt) || 0);
+  if (ct != null) outTok = Math.max(outTok, Number(ct) || 0);
+  return { inputTokens: inTok, outputTokens: outTok };
+}
+
+/** Prefer ai_models row with api_platform=vertex_ai for pricing when routing to Vertex (rates differ from Gemini API). */
+async function resolveGoogleModelRowForVertexAi(env, modelRow) {
+  if (!modelRow || !env?.DB) return modelRow;
+  const mk = (modelRow.model_key || '').trim();
+  if (!mk || !shouldUseVertexForGoogleModel(env, mk)) return modelRow;
+  try {
+    const vr = await env.DB.prepare(
+      `SELECT * FROM ai_models WHERE model_key = ? AND provider = 'google' AND api_platform = 'vertex_ai' AND COALESCE(is_active,1) = 1 LIMIT 1`
+    ).bind(mk).first();
+    if (vr) return { ...modelRow, ...vr };
+  } catch (e) {
+    console.warn('[resolveGoogleModelRowForVertexAi]', e?.message ?? e);
+  }
+  return modelRow;
+}
+
 function _b64UrlEncodeUtf8(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = '';
@@ -6081,7 +6131,6 @@ function toVertexModelId(modelKey) {
     'gemini-3.1-pro': 'gemini-2.5-pro',
     'gemini-3.1-pro-preview': 'gemini-2.5-pro',
     'gemini-3.1-pro-preview-customtools': 'gemini-2.5-pro',
-    'gemini-3-pro-image-preview': 'gemini-2.5-flash-image',
   };
   return map[modelKey] || modelKey;
 }
@@ -6556,8 +6605,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       messages.push(choice.message);
     } else if (provider === 'google') {
       const parts = data.candidates?.[0]?.content?.parts ?? [];
-      if (data.usageMetadata?.promptTokenCount != null) totalInputTokens += data.usageMetadata.promptTokenCount;
-      if (data.usageMetadata?.candidatesTokenCount != null) totalOutputTokens += data.usageMetadata.candidatesTokenCount;
+      const um = data.usageMetadata || data.usage_metadata;
+      if (um && typeof um === 'object') {
+        if (um.promptTokenCount != null) totalInputTokens += Number(um.promptTokenCount) || 0;
+        else if (um.prompt_token_count != null) totalInputTokens += Number(um.prompt_token_count) || 0;
+        if (um.candidatesTokenCount != null) totalOutputTokens += Number(um.candidatesTokenCount) || 0;
+        else if (um.candidates_token_count != null) totalOutputTokens += Number(um.candidates_token_count) || 0;
+        else if (um.totalTokenCount != null && um.promptTokenCount != null) {
+          totalOutputTokens += Math.max(0, Number(um.totalTokenCount) - Number(um.promptTokenCount));
+        }
+      }
       textContent = parts.filter(p => p.text).map(p => p.text).join('');
       toolCalls = parts.filter(p => p.functionCall);
       if (!toolCalls.length) {
@@ -7027,7 +7084,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       if (!finalText) finalText = 'Command executed. See terminal for output.';
     }
   }
-  return { content: [{ type: 'text', text: finalText }] };
+  return { content: [{ type: 'text', text: finalText }], input_tokens: totalInputTokens, output_tokens: totalOutputTokens };
 }
 
 /** Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8 (onData sends raw strings). */
@@ -7671,6 +7728,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
   const writer = writable.getWriter();
 
   (async () => {
+    const effectiveModelRow = await resolveGoogleModelRowForVertexAi(env, modelRow);
     let fullText = '';
     let inputTokens = 0;
     let outputTokens = 0;
@@ -7732,21 +7790,34 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
               const raw = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed;
               let chunk;
               try { chunk = JSON.parse(raw); } catch (_) { continue; }
-              const cparts = chunk.candidates?.[0]?.content?.parts || [];
-              const usage = chunk.usageMetadata;
-              if (usage) {
-                inputTokens = usage.promptTokenCount ?? inputTokens;
-                outputTokens = usage.candidatesTokenCount ?? outputTokens;
-              }
-              for (const part of cparts) {
-                // Accumulate all parts for tool call detection
-                parts.push(part);
-                if (part.text) {
-                  fullText += part.text;
-                  await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}\n\n`));
+              const chunkList = Array.isArray(chunk) ? chunk : [chunk];
+              for (const c of chunkList) {
+                const m = mergeGeminiStreamUsageFromChunk(c, inputTokens, outputTokens);
+                inputTokens = m.inputTokens;
+                outputTokens = m.outputTokens;
+                const cparts = c.candidates?.[0]?.content?.parts || [];
+                for (const part of cparts) {
+                  parts.push(part);
+                  if (part.text) {
+                    fullText += part.text;
+                    await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}\n\n`));
+                  }
                 }
               }
             }
+          }
+          if (sseBuf.trim()) {
+            try {
+              const tail = sseBuf.trim();
+              const rawT = tail.startsWith('data: ') ? tail.slice(6) : tail;
+              const td = JSON.parse(rawT);
+              const tl = Array.isArray(td) ? td : [td];
+              for (const c of tl) {
+                const m = mergeGeminiStreamUsageFromChunk(c, inputTokens, outputTokens);
+                inputTokens = m.inputTokens;
+                outputTokens = m.outputTokens;
+              }
+            } catch (_) {}
           }
           sseReader.releaseLock();
         }
@@ -7785,9 +7856,9 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
         await new Promise(r => setTimeout(r, 500));
       }
 
-      const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
-      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}
+      const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name })}
 
 `));
     } catch (e) {
@@ -7822,6 +7893,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
     contents: googleContents,
     toolConfig: { functionCallingConfig: { mode: "NONE" } },
   };
+  const effectiveModelRow = await resolveGoogleModelRowForVertexAi(env, modelRow);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelKey}:streamGenerateContent?alt=sse`;
   const useVertex = shouldUseVertexForGoogleModel(env, modelKey);
   if (useVertex) {
@@ -7882,21 +7954,35 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
           let data;
           try { data = JSON.parse(trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.replace(/^,/, '')); } catch (_) { continue; }
           console.log('[streamGoogle] chunk:', JSON.stringify(data).slice(0, 200));
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (typeof text === 'string' && text) {
-            fullText += text;
-            await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text }) + '\n\n'));
-          }
-          const usage = data.usageMetadata;
-          if (usage) {
-            inputTokens = usage.promptTokenCount ?? 0;
-            outputTokens = usage.candidatesTokenCount ?? 0;
+          const chunkList = Array.isArray(data) ? data : [data];
+          for (const chunk of chunkList) {
+            const m = mergeGeminiStreamUsageFromChunk(chunk, inputTokens, outputTokens);
+            inputTokens = m.inputTokens;
+            outputTokens = m.outputTokens;
+            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (typeof text === 'string' && text) {
+              fullText += text;
+              await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text }) + '\n\n'));
+            }
           }
         }
       }
-      const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
-      await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name }) + '\n\n'));
+      if (buffer.trim()) {
+        try {
+          const tail = buffer.trim();
+          const raw = tail.startsWith('data: ') ? tail.slice(6) : tail.replace(/^,/, '');
+          const tailData = JSON.parse(raw);
+          const tailList = Array.isArray(tailData) ? tailData : [tailData];
+          for (const chunk of tailList) {
+            const m = mergeGeminiStreamUsageFromChunk(chunk, inputTokens, outputTokens);
+            inputTokens = m.inputTokens;
+            outputTokens = m.outputTokens;
+          }
+        } catch (_) {}
+      }
+      const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages));
+      await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name }) + '\n\n'));
     } catch (e) {
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
     } finally {
@@ -11130,7 +11216,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           }
           if (canStreamOpenAI || canStreamGoogle) {
             const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles, ctx, images);
-            return toolLoopResult;
+            return jsonResponse(toolLoopResult);
           }
         }
         if (canStreamAnthropic) {
@@ -11303,8 +11389,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         }
         const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
         const finalText = typeof toolLoopResult === 'string' ? toolLoopResult : (toolLoopResult?.content?.[0]?.text ?? '');
+        const loopInTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.input_tokens != null ? Number(toolLoopResult.input_tokens) || 0 : 0;
+        const loopOutTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.output_tokens != null ? Number(toolLoopResult.output_tokens) || 0 : 0;
+        const resolvedModelForTools = model.provider === 'google' ? await resolveGoogleModelRowForVertexAi(env, model) : model;
+        const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
         try {
-          await streamDoneDbWrites(env, conversationId, model, finalText, 0, 0, 0, agentIdForTools, ctx, lastUserContent || '');
+          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '');
         } catch (e) {
           console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
         }
@@ -11326,7 +11416,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 
 `));
             }
-            controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', conversation_id: conversationId, input_tokens: 0, output_tokens: charsToTokens(sseText.length), cost_usd: 0 })}
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', conversation_id: conversationId, input_tokens: loopInTok, output_tokens: loopOutTok, cost_usd: toolLoopCostUsd })}
 
 `));
             controller.close();

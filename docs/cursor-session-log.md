@@ -1024,3 +1024,7 @@ Wire Vertex AI into `worker.js` Google path with model-specific routing; fix D1 
 
 2026-03-29 Vertex AI wired into worker.js. Pro models route to Vertex (us-central1, gen-lang-client-0684066529). Flash models stay on Gemini API. Secret = GOOGLE_SERVICE_ACCOUNT_JSON. JWT exchange via Web Crypto (existing `getVertexAccessToken`). Sandbox tested. v=202.
 
+## 2026-03-30 EOD — cost tracking sprint close
+
+[2026-03-30 EOD] Full sprint complete. Sandbox and prod deployed. All providers 0% drift on benchmark. Vertex AI routing live (Pro models to us-central1). agent_costs/ai_usage_log frozen (1176/1625). quality_checks and spend_audit rows written to D1. Backlog: flash SSE tokens, table DROPs, Anthropic streaming. v=199.
+

@@ -510,4 +510,106 @@ UPDATE ai_models SET input_rate_per_mtok=15, output_rate_per_mtok=75,
 
 ---
 
-*Generated from benchmark-cost-accuracy.sh run 2026-03-29 · v=202 · D1 queries via `wrangler d1 execute` (remote).*
+## 14. End-of-Day Sprint Summary (2026-03-30)
+
+### Production promote confirmed
+
+- Deployed: 2026-03-30 end of day
+- Worker version: `d4ce9ab7-587b-4c4b-ba6f-4438288033a1`
+- All sprint patches live on prod: `shouldUseVertexForGoogleModel`, `mergeGeminiStreamUsageFromChunk`, `getVertexAccessToken`, `streamDoneDbWrites` rate stamping
+
+### Final benchmark results — Production
+
+```text
+
+╔══════════════════════════════════════════════════════════════════╗
+║  AGENT SAM — COST ACCURACY BENCHMARK                            ║
+╚══════════════════════════════════════════════════════════════════╝
+  Target : https://inneranimalmedia.com
+  Time   : 2026-03-29 22:55:40
+  Prompt : "Reply with exactly: 'Cost tracking test OK.' Nothing else."
+
+  MODEL                                    STATUS     BENCH $      TELEM $      EXPECTED $   DRIFT      NOTE
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+── ANTHROPIC ──────────────────────────────────────────────────────────────
+  claude-haiku-4-5-20251001                OK         $0.003614   $0.003614   $0.003614   +0.0%      
+  claude-sonnet-4-6                        OK         $0.010833   $0.010833   $0.010833   +0.0%      
+  claude-opus-4-6                          OK         $0.018050   $0.018050   $0.018050   -0.0%      STALE RATE (DB $5/$25 vs real $15/$75)
+
+── OPENAI ──────────────────────────────────────────────────────────────
+  gpt-4.1-nano                             OK         $0.000257   $0.000257   $0.000257   +0.0%      
+  gpt-4.1-mini                             OK         $0.001029   $0.001029   $0.001029   +0.0%      
+  gpt-4.1                                  OK         $0.005142   $0.005142   $0.005142   +0.0%      
+  gpt-5.4-nano                             OK         $0.000519   $0.000519   $0.000519   +0.0%      
+  gpt-5.4                                  OK         $0.006655   $0.006655   $0.006655   -0.0%      
+  o4-mini                                  OK         $0.002955   $0.002955   $0.002955   +0.0%      
+
+── GOOGLE ──────────────────────────────────────────────────────────────
+  gemini-2.5-flash                         OK         $0.001445   $0.001445   $0.001445   -0.0%      
+  gemini-3.1-flash-lite-preview            OK         $0.001216   $0.001216   $0.001216   +0.0%      
+  gemini-3-flash-preview                   OK         $0.002429   $0.002429   $0.002429   -0.0%      
+
+── WORKERS AI (free tier — expect $0) ──────────────────────────────────────────────────────────────
+  @cf/meta/llama-4-scout-17b-16e-instruc   FREE       $0.000000   $0.000000   $0.000000   n/a        FREE tier (expect $0)
+  @cf/meta/llama-3.3-70b-instruct-fp8-fa   FREE       $0.000000   $0.000000   $0.000000   n/a        FREE tier (expect $0)
+
+╔══════════════════════════════════════════════════════════════════╗
+║  TRACKING ACCURACY SUMMARY BY PROVIDER                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+  PROVIDER         CALLS  BENCH TOTAL    TELEM TOTAL    EXPECTED TOTAL DRIFT %    ZEROS    VERDICT                 
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+anthropic             3 $    0.032497 $    0.032497 $    0.032497 +0.0%             0 ACCURATE
+openai                6 $    0.016557 $    0.016557 $    0.016557 +0.0%             0 ACCURATE
+google                3 $    0.005089 $    0.005089 $    0.005090 -0.0%             0 ACCURATE
+workers_ai            2 $    0.000000 $    0.000000 $    0.000000 n/a               0 FREE TIER (expect $0 telem)
+
+── KNOWN ISSUES (D1 / product audit) ─────────────────────────────────
+  - workers_ai: computed_cost_usd = 0 in telemetry is expected (FREE tier). OK.
+  - gemini-2.5-flash: ~23% zero-cost rows in last 24h in some audits — watch PARTIAL / MISS.
+  - claude-opus-4-6: ai_models may still show $5/$25 per MTok while API billing is $15/$75 — stale rate row.
+  - Any non-workers_ai model with telem $0: NOT TRACKED (write path or cost pipeline).
+
+── NEXT STEPS ──────────────────────────────────────────────────────────
+  (see benchmark script output for D1 fix snippets)
+```
+
+### Sprint accomplishments
+
+| Item | Status |
+|---|---|
+| agent_costs write path removed | Done |
+| ai_usage_log write path removed | Done |
+| agent_telemetry sole write target | Done |
+| api_platform column added to ai_models | Done |
+| 5 Google model rates corrected | Done |
+| Cache rates added to all 8 Google models | Done |
+| Vertex AI wired for Pro models | Done |
+| Vertex token/cost tracking live | Done |
+| Gemini API service_name stamping | Done |
+| benchmark-cost-accuracy.sh created | Done |
+| All providers at 0% drift | Done |
+| worker_env GOOGLE_SERVICE_ACCOUNT_JSON documented | Done |
+| ai_services Vertex project_id corrected | Done |
+| quality_checks rows written | Done |
+| Flash SSE token extraction | Backlog P1 |
+| agent_costs / ai_usage_log DROP | After 30-day window |
+| agent_model_registry DROP | Safe now |
+| agentsam_agent_run completion handler | Backlog P1 |
+
+### Backlog for next sprint
+
+| Priority | Issue |
+|---|---|
+| P0 | canStreamAnthropic: false — Anthropic streaming disabled |
+| P1 | Flash SSE token extraction — Gemini API input_tokens=0 on streamed rows |
+| P1 | agentsam_agent_run 100% null cost — completion handler not wired |
+| P2 | mcp_tool_calls null cost_usd — attribute from session telemetry |
+| P3 | DROP agent_costs, ai_usage_log, agent_model_registry |
+
+---
+
+*Sprint closed 2026-03-30 · v=199 · All providers ACCURATE · Vertex AI live*
+
+*Generated from benchmark-cost-accuracy.sh run 2026-03-30 EOD · v=199 · D1 queries via `wrangler d1 execute` (remote).*

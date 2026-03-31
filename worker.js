@@ -46,6 +46,72 @@ function normalizeThemeSlug(value) {
   return value.startsWith('theme-') ? value.substring(6) : value;
 }
 
+/** Parse cms_themes row.config JSON for theme API responses. */
+function parseCmsThemeRowConfig(themeRow) {
+  const cfg = (themeRow?.config && typeof themeRow.config === 'string')
+    ? (() => { try { return JSON.parse(themeRow.config); } catch (_) { return {}; } })()
+    : (typeof themeRow?.config === 'object' && themeRow?.config !== null ? themeRow.config : {});
+  return cfg && typeof cfg === 'object' ? cfg : {};
+}
+
+/** Truecolor ANSI foreground from #RRGGBB (terminal login scenes). */
+function hexToAnsi(hex) {
+  if (!hex || typeof hex !== 'string' || !hex.startsWith('#') || hex.length < 7) return '';
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return '';
+  return `\u001b[38;2;${r};${g};${b}m`;
+}
+
+/** Replace %%TOKEN%% placeholders in terminal.login_scene using theme cssVars (hex only). */
+function resolveSceneTokens(scene, cssVars) {
+  if (!scene || !cssVars || typeof cssVars !== 'object') return scene;
+  const get = (...keys) => {
+    for (const k of keys) {
+      const v = cssVars[k];
+      if (v && typeof v === 'string' && v.startsWith('#')) return hexToAnsi(v);
+    }
+    return '';
+  };
+  return String(scene)
+    .replace(/%%PRIMARY%%/g, get('--color-primary'))
+    .replace(/%%BG%%/g, get('--bg-canvas'))
+    .replace(/%%SURFACE%%/g, get('--bg-elevated', '--bg-surface'))
+    .replace(/%%TEXT%%/g, get('--color-text', '--text-primary'))
+    .replace(/%%MUTED%%/g, get('--text-muted'))
+    .replace(/%%CYAN%%/g, get('--accent-cyan', '--color-primary-hover', '--color-primary'))
+    .replace(/%%ORANGE%%/g, get('--accent-orange', '--color-primary'))
+    .replace(/%%YELLOW%%/g, get('--accent-warning', '--text-muted'))
+    .replace(/%%GREEN%%/g, get('--accent-success', '--color-success'))
+    .replace(/%%RED%%/g, get('--accent-danger', '--color-danger'))
+    .replace(/%%RESET%%/g, '\u001b[0m')
+    .replace(/%%BOLD%%/g, '\u001b[1m')
+    .replace(/%%DIM%%/g, '\u001b[2m');
+}
+
+/** GET /api/settings/theme JSON body (variables + optional terminal / monaco). */
+function themeApiPayloadFromRow(slug, themeRow) {
+  const cfg = parseCmsThemeRowConfig(themeRow);
+  const variables = variablesFromCmsThemeConfig(cfg);
+  const cssVars = cfg.cssVars && typeof cfg.cssVars === 'object' ? cfg.cssVars : {};
+  const rawScene = cfg.terminal?.login_scene ?? null;
+  const terminalOut = cfg.terminal
+    ? {
+        ...cfg.terminal,
+        login_scene: rawScene ? resolveSceneTokens(rawScene, cssVars) : null,
+      }
+    : null;
+  return {
+    theme: slug,
+    name: themeRow?.name || slug,
+    variables,
+    is_dark: cfg.is_dark ?? 1,
+    monaco_theme: cfg.monaco_theme ?? 'vs-dark',
+    terminal: terminalOut,
+  };
+}
+
 /** Merge cms_themes.config into API `variables` (GET /api/settings/theme). Supports cssVars (camelCase) and css_vars. */
 function variablesFromCmsThemeConfig(cfg) {
   if (!cfg || typeof cfg !== 'object') cfg = {};
@@ -282,7 +348,9 @@ async function resolveTerminalSessionIdForHistory(env, request) {
  * Use executionCtx.waitUntil when provided so the fetch path never blocks.
  */
 async function notifySam(env, opts, executionCtx) {
-  const subjectRaw = String(opts.subject || '').trim();
+  const subjectRaw = String(opts.subject || '')
+    .replace(/[\r\n\t]/g, ' ')
+    .trim();
   const bodyRaw = String(opts.body || '').trim();
   const category = String(opts.category || 'notice').trim();
   const toAddr = opts.to || 'sam@inneranimalmedia.com';
@@ -526,11 +594,16 @@ export class ChessRoom extends DurableObject {
 }
 
 // ============================================================================
-// AUTO MODE: D1 ai_routing_rules (intent → target model)
+// AUTO MODE: D1 model_routing_rules (intent -> task_type -> primary model)
 // ============================================================================
 
+function intentToModelRoutingTaskType(intent) {
+  const map = { sql: 'run_d1_query', shell: 'debug', question: 'chat_simple', mixed: 'agent_chat' };
+  return map[intent] ?? 'chat_simple';
+}
+
 /**
- * Select model for Auto mode: classify intent, then match ai_routing_rules (match_type=intent).
+ * Select model for Auto mode: classify intent, then model_routing_rules by task_type.
  */
 async function selectAutoModel(env, lastUserContent, returnIntent = false) {
   try {
@@ -539,35 +612,59 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
 
     console.log('[Auto Mode] Intent classified as:', intent);
 
+    const taskType = intentToModelRoutingTaskType(intent);
+
     let routingRule = null;
     if (env.DB) {
       try {
         routingRule = await env.DB.prepare(`
-          SELECT id, target_model_key, target_provider, fallback_model_key, fallback_provider
-          FROM ai_routing_rules 
-          WHERE match_type='intent' 
-          AND is_active=1
-          AND (
-            match_value = ? 
-            OR match_value LIKE '%,' || ? || ',%'
-            OR match_value LIKE ? || ',%'
-            OR match_value LIKE '%,' || ?
-          )
-          ORDER BY priority ASC LIMIT 1
-        `).bind(intent, intent, intent, intent).first();
+          SELECT
+            task_type,
+            primary_model      AS target_model_key,
+            provider           AS target_provider,
+            fallback_model     AS fallback_model_key,
+            provider           AS fallback_provider,
+            perf_override_model,
+            perf_override_provider,
+            performance_score,
+            success_rate,
+            avg_latency_ms
+          FROM model_routing_rules
+          WHERE task_type = ?
+            AND is_active = 1
+          LIMIT 1
+        `).bind(taskType).first();
       } catch (e) {
-        console.warn('[Auto Mode] ai_routing_rules lookup failed:', e?.message ?? e);
+        console.warn('[Auto Mode] model_routing_rules lookup failed:', e?.message ?? e);
       }
     }
 
-    const autoModel = routingRule?.target_model_key || 'gemini-2.5-flash';
-    const autoProvider = routingRule?.target_provider || 'google';
+    let autoModel;
+    let autoProvider;
 
-    if (routingRule?.id) {
-      console.log(`[Auto Mode] Routing rule matched: ${routingRule.id} → ${autoModel}`);
+    if (
+      routingRule?.perf_override_model &&
+      routingRule?.performance_score != null &&
+      routingRule?.performance_score > 0
+    ) {
+      autoModel = routingRule.perf_override_model;
+      autoProvider = routingRule.perf_override_provider
+        ?? routingRule.target_provider
+        ?? 'google';
     } else {
-      console.log('[Auto Mode] No rule matched, using default', autoModel, autoProvider);
+      autoModel = routingRule?.target_model_key
+        ?? 'gemini-2.5-flash';
+      autoProvider = routingRule?.target_provider
+        ?? 'google';
     }
+
+    console.log(
+      '[Auto Mode] task_type:', taskType,
+      'model:', autoModel,
+      'provider:', autoProvider,
+      'perf_override:', !!routingRule?.perf_override_model,
+      'score:', routingRule?.performance_score ?? 'n/a'
+    );
 
     let model = await env.DB.prepare(
       'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
@@ -587,7 +684,7 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
       ).bind('claude-haiku-4-5-20251001').first();
     }
 
-    if (returnIntent) return { model, intent };
+    if (returnIntent) return { model, intent, taskType };
     return model;
 
   } catch (error) {
@@ -676,8 +773,10 @@ function extractWorkersAiImageBytes(result) {
   return null;
 }
 
-async function handleDeploymentLog(request, env, ctx) {
-  const token = env.DEPLOY_TRACKING_TOKEN || env.WORKER_SECRET;
+async function handleDeploymentLog(request, env, ctx, secretFn) {
+  const token =
+    (secretFn('DEPLOY_TRACKING_TOKEN') ?? env.DEPLOY_TRACKING_TOKEN) ||
+    (secretFn('WORKER_SECRET') ?? env.WORKER_SECRET);
   if (!token) return jsonResponse({ error: 'Deploy tracking not configured' }, 501);
   const authHeader = request.headers.get('Authorization') || request.headers.get('X-Deploy-Token') || '';
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
@@ -706,6 +805,13 @@ async function handleDeploymentLog(request, env, ctx) {
           await env.DB.prepare(
             `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
           ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+          appendCidiPipelineRunFromDeploy(env, {
+            deploymentId: id,
+            environment,
+            gitHash: gitHash || 'unknown',
+            versionId: version || id,
+            description: description || 'deploy via script',
+          });
           for (let i = 0; i < changes.length; i++) {
             const ch = changes[i];
             const changeId = id + '-ch-' + i;
@@ -736,6 +842,13 @@ async function handleDeploymentLog(request, env, ctx) {
       await env.DB.prepare(
         `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
       ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+      appendCidiPipelineRunFromDeploy(env, {
+        deploymentId: id,
+        environment,
+        gitHash: gitHash || 'unknown',
+        versionId: version || id,
+        description: description || 'deploy via script',
+      });
       for (let i = 0; i < changes.length; i++) {
         const ch = changes[i];
         const changeId = id + '-ch-' + i;
@@ -1328,6 +1441,13 @@ async function verifyWebhookSignature(verifyKind, resolveSecret, request, rawBod
       const ok = await verifySha256EqualsSecretHmac(s, rawBody, sig);
       return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid X-IAM-Signature' };
     }
+    case 'openai': {
+      const s = resolveSecret('OPENAI_WEBHOOK_SECRET');
+      if (!s) return { ok: false, status: 501, message: 'OPENAI_WEBHOOK_SECRET not configured' };
+      const sig = request.headers.get('X-OpenAI-Signature') || '';
+      const ok = await verifySha256EqualsSecretHmac(s, rawBody, sig);
+      return ok ? { ok: true } : { ok: false, status: 401, message: 'Invalid X-OpenAI-Signature' };
+    }
     default:
       return { ok: false, status: 400, message: 'Unknown webhook verify kind' };
   }
@@ -1493,6 +1613,13 @@ async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
         environment, deploy_time_seconds, worker_name, triggered_by, notes
       ) VALUES (?, datetime('now'), ?, ?, ?, 'success', ?, 'production', 0, ?, 'github_push', ?)`
     ).bind(deployId, versionShort, commitSha || null, desc, actor, workerName, notes || null).run();
+    appendCidiPipelineRunFromDeploy(env, {
+      deploymentId: deployId,
+      environment: 'production',
+      gitHash: commitSha || 'unknown',
+      versionId: versionShort || deployId,
+      description: desc || 'deploy via script',
+    });
   } catch (e) {
     console.warn('[cicd] deployments INSERT', e?.message ?? e);
   }
@@ -1853,7 +1980,7 @@ async function handleHooksHealth(env) {
 
 /**
  * opts: { verifyKind, source, endpointPath }
- * verifyKind: github | stripe | cursor | resend | supabase | cloudflare | internal | none
+ * verifyKind: github | stripe | cursor | resend | supabase | cloudflare | internal | openai | none
  */
 async function handleInboundWebhook(env, request, resolveSecret, opts, executionCtx) {
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
@@ -2649,6 +2776,28 @@ const worker = {
         });
       }
 
+      if (pathLower === '/api/system/health' && methodUpper === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        const refresh = url.searchParams.get('refresh') === 'true';
+        try {
+          let snapshot = null;
+          if (refresh) {
+            snapshot = await runIntegritySnapshot(env, 'manual');
+          } else {
+            snapshot = await env.DB.prepare(
+              'SELECT * FROM system_health_snapshots ORDER BY snapshot_at DESC LIMIT 1'
+            ).first();
+          }
+          const now = Math.floor(Date.now() / 1000);
+          const snapTs = snapshot ? Number(snapshot.snapshot_at) || 0 : 0;
+          const is_fresh = snapTs > 0 && now - snapTs < 300;
+          const triggered_by = snapshot?.triggered_by != null ? String(snapshot.triggered_by) : refresh ? 'manual' : 'none';
+          return jsonResponse({ snapshot, is_fresh, triggered_by });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       if (path === '/health' || pathLower === '/health') {
         return new Response(
           JSON.stringify({
@@ -2707,6 +2856,13 @@ const worker = {
               `INSERT INTO deployments (id, worker_name, version, git_hash, description, status, deployed_by, environment, created_at, timestamp)
                VALUES (?, 'meauxcad', ?, ?, ?, 'success', 'meauxcad_bot', 'production', ?, ?)`
             ).bind(id, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', now, now).run();
+            appendCidiPipelineRunFromDeploy(env, {
+              deploymentId: id,
+              environment: 'production',
+              gitHash: body.git_hash ?? 'unknown',
+              versionId: body.version_id ?? id,
+              description: body.note ?? 'deploy via script',
+            });
             return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
           } catch (e) {
             return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
@@ -2767,13 +2923,13 @@ const worker = {
 
       // ----- API: Internal post-deploy (knowledge sync to R2) -----
       if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/post-deploy') {
-        const secret = env.INTERNAL_API_SECRET;
-        if (!secret) {
+        const internalApiSecret = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        if (!internalApiSecret) {
           return jsonResponse({ error: 'post-deploy not configured (INTERNAL_API_SECRET)' }, 501);
         }
         const authHeader = request.headers.get('Authorization') || request.headers.get('X-Internal-Secret') || '';
         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-        if (token !== secret) {
+        if (token !== internalApiSecret) {
           return jsonResponse({ error: 'Unauthorized' }, 401);
         }
         let body = {};
@@ -2792,7 +2948,7 @@ const worker = {
 
       // ----- API: Deployment tracking (deployments + deployment_changes tables) -----
       if (url.pathname === '/api/deployments/log' && (request.method || 'GET').toUpperCase() === 'POST') {
-        return handleDeploymentLog(request, env, ctx);
+        return handleDeploymentLog(request, env, ctx, secret);
       }
       if (url.pathname === '/api/deployments/recent' && (request.method || 'GET').toUpperCase() === 'GET') {
         return handleDeploymentsRecent(request, env);
@@ -2800,13 +2956,13 @@ const worker = {
 
       // ----- API: Internal record-deploy (one row in deployments) -----
       if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/record-deploy') {
-        const secret = env.INTERNAL_API_SECRET;
-        if (!secret) {
+        const internalApiSecret = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        if (!internalApiSecret) {
           return jsonResponse({ error: 'record-deploy not configured (INTERNAL_API_SECRET)' }, 501);
         }
         const authHeader = request.headers.get('Authorization') || request.headers.get('X-Internal-Secret') || '';
         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-        if (token !== secret) {
+        if (token !== internalApiSecret) {
           return jsonResponse({ error: 'Unauthorized' }, 401);
         }
         let body = {};
@@ -2816,15 +2972,83 @@ const worker = {
         } catch (_) {}
         const triggeredBy = (body.triggered_by || 'api_record_deploy').toString().replace(/'/g, "''");
         const notes = (body.deployment_notes || body.notes || '').toString().replace(/'/g, "''");
+        const gitHash = (body.git_hash || body.gitHash || '').toString().trim();
+        const versionId = (body.version_id || body.version || '').toString().trim();
         const deployId = 'rec-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+        const deployStart = Date.now();
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         try {
-          env.DB.prepare(
-            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES (?, datetime('now'), ?, '', 'Internal record-deploy (API)', 'success', ?, 'production', 0, 'inneranimalmedia', ?, ?)`
-          ).bind(deployId, deployId, triggeredBy, triggeredBy, notes).run();
+          const deployTimeSeconds = Math.round((Date.now() - deployStart) / 1000);
+          await env.DB.prepare(
+            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES (?, datetime('now'), ?, ?, 'Internal record-deploy (API)', 'success', ?, 'production', ?, 'inneranimalmedia', ?, ?)`
+          ).bind(deployId, versionId || deployId, gitHash || null, triggeredBy, deployTimeSeconds, triggeredBy, notes).run();
+          appendCidiPipelineRunFromDeploy(env, {
+            deploymentId: deployId,
+            environment: 'production',
+            gitHash: gitHash || 'unknown',
+            versionId: versionId || deployId,
+            description: notes || 'deploy via script',
+          });
+          if (ctx && typeof ctx.waitUntil === 'function') {
+            ctx.waitUntil(runPostDeployQualityChecks(env, deployId).catch(() => {}));
+          } else {
+            void runPostDeployQualityChecks(env, deployId).catch(() => {});
+          }
           return jsonResponse({ ok: true, deployment_id: deployId });
         } catch (e) {
           console.error('[record-deploy]', e?.message ?? e);
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
+      // ----- API: Internal deploy-complete (mark deployment row finished) -----
+      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/deploy-complete') {
+        const internalApiSecret = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        if (!internalApiSecret) {
+          return jsonResponse({ error: 'deploy-complete not configured (INTERNAL_API_SECRET)' }, 501);
+        }
+        const authHeader = request.headers.get('Authorization') || request.headers.get('X-Internal-Secret') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        if (token !== internalApiSecret) {
+          return jsonResponse({ error: 'Unauthorized' }, 401);
+        }
+        let body = {};
+        try {
+          const raw = await request.text();
+          if (raw) body = JSON.parse(raw);
+        } catch (_) {}
+        const deployId = (body.deploy_id != null ? String(body.deploy_id) : '').trim();
+        if (!deployId) return jsonResponse({ error: 'deploy_id required' }, 400);
+        const statusVal = (body.status != null ? String(body.status) : 'success').trim();
+        const workerName = body.worker_name != null ? String(body.worker_name).trim() : null;
+        const versionId = body.version_id != null ? String(body.version_id).trim() : '';
+        const durationMs = body.duration_ms != null && Number.isFinite(Number(body.duration_ms)) ? Math.round(Number(body.duration_ms)) : null;
+        const durationSec = durationMs != null ? Math.max(0, Math.round(durationMs / 1000)) : null;
+        const notesPatch = body.notes != null ? String(body.notes).slice(0, 4000) : null;
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        try {
+          const run = await env.DB.prepare(
+            `UPDATE deployments SET
+              status = ?,
+              version = COALESCE(NULLIF(?, ''), version),
+              worker_name = COALESCE(?, worker_name),
+              deploy_time_seconds = COALESCE(?, deploy_time_seconds),
+              deploy_duration_ms = COALESCE(?, deploy_duration_ms),
+              timestamp = datetime('now'),
+              notes = COALESCE(NULLIF(?, ''), notes)
+             WHERE id = ?`
+          ).bind(
+            statusVal,
+            versionId,
+            workerName,
+            durationSec,
+            durationMs,
+            notesPatch,
+            deployId
+          ).run();
+          return jsonResponse({ success: true, changes: run.meta?.changes ?? 0 });
+        } catch (e) {
+          console.error('[deploy-complete]', e?.message ?? e);
           return jsonResponse({ error: String(e?.message || e) }, 500);
         }
       }
@@ -3071,6 +3295,19 @@ const worker = {
         }
       }
 
+      if (pathLower === '/api/admin/archive-conversations' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const session = await getSession(env, request);
+        if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const email = (session.email || session.user_id || '').toLowerCase();
+        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        try {
+          const result = await archiveOldConversations(env);
+          return jsonResponse(result);
+        } catch (e) {
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
       // POST /api/admin/vectorize-kb — index ai_knowledge_base (is_indexed=0) into Vectorize; optional ai_knowledge_chunks audit.
       if (pathLower === '/api/admin/vectorize-kb' && (request.method || 'GET').toUpperCase() === 'POST') {
         const session = await getSession(env, request);
@@ -3138,7 +3375,8 @@ const worker = {
       if (pathLower === '/api/admin/trigger-workflow' && (request.method || 'GET').toUpperCase() === 'POST') {
         const internalSecret = request.headers.get('X-Internal-Secret') || request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
         const session = await getSession(env, request);
-        const allowed = (env.INTERNAL_API_SECRET && internalSecret === env.INTERNAL_API_SECRET) || (session && SUPERADMIN_EMAILS.includes((session.email || session.user_id || '').toLowerCase()));
+        const expectedInternal = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        const allowed = (expectedInternal && internalSecret === expectedInternal) || (session && SUPERADMIN_EMAILS.includes((session.email || session.user_id || '').toLowerCase()));
         if (!allowed) return jsonResponse({ error: 'Unauthorized' }, 401);
         if (!env.DB) return jsonResponse({ error: 'DB not available' }, 503);
         try {
@@ -3461,7 +3699,7 @@ const worker = {
 
       // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
       if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states') {
-        return handleAgentApi(request, url, env, ctx);
+        return handleAgentApi(request, url, env, ctx, secret);
       }
 
       // ----- API: MCP dashboard (/api/mcp/*) -----
@@ -3987,8 +4225,8 @@ const worker = {
       }
     }
 
-      // ----- API: Federated search (AI + sources) -----
-      if (url.pathname === '/api/search/federated' && request.method === 'POST') {
+      // ----- API: Federated search (unified D1 + autorag + r2_objects) -----
+      if (pathLower === '/api/search/federated' && methodUpper === 'POST') {
         return handleFederatedSearch(request, env);
       }
 
@@ -4110,7 +4348,7 @@ const worker = {
       if (url.pathname === '/api/rag/ingest' && request.method === 'POST') {
         let _ingObjKey = null;
         try {
-          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingestBypass = isIngestSecretAuthorized(request, env, secret);
           const _ingSess = await getSession(env, request);
           if (!_ingSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
           const _ingUserId = _ingSess
@@ -4142,7 +4380,7 @@ const worker = {
       // ----- API: RAG batch ingest (sequential server-side; one request) -----
       if (url.pathname === '/api/rag/ingest-batch' && request.method === 'POST') {
         try {
-          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingestBypass = isIngestSecretAuthorized(request, env, secret);
           const _ingSess = await getSession(env, request);
           if (!_ingSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
           const _ingUserId = _ingSess
@@ -4189,7 +4427,7 @@ const worker = {
       // ----- API: Custom RAG query (/api/rag/query) -----
       if (url.pathname === '/api/rag/query' && request.method === 'POST') {
         try {
-          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingestBypass = isIngestSecretAuthorized(request, env, secret);
           const _qSess = await getSession(env, request);
           if (!_qSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
           const _qBody = await request.json().catch(() => ({}));
@@ -4254,7 +4492,7 @@ const worker = {
       // ----- API: RAG retrieval feedback (queues re-ingest when was_useful === 0) -----
       if (url.pathname === '/api/rag/feedback' && request.method === 'POST') {
         try {
-          const _ingestBypass = isIngestSecretAuthorized(request, env);
+          const _ingestBypass = isIngestSecretAuthorized(request, env, secret);
           const _fbSess = await getSession(env, request);
           if (!_fbSess && !_ingestBypass) return jsonResponse({ error: 'Unauthorized' }, 401);
           if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -4273,6 +4511,19 @@ const worker = {
             ).bind('ws_samprimeaux').run().catch(() => {});
           }
           return jsonResponse({ ok: true });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
+      // ----- API: RAG index status (D1 counts + known Vectorize size) -----
+      if (pathLower === '/api/rag/status' && methodUpper === 'GET') {
+        const _stSess = await getSession(env, request);
+        if (!_stSess) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const payload = await getRagStatusPayload(env);
+          return jsonResponse(payload || { error: 'status_unavailable' }, payload ? 200 : 503);
         } catch (e) {
           return jsonResponse({ error: e?.message ?? String(e) }, 500);
         }
@@ -4717,14 +4968,22 @@ const worker = {
         if (request.method === 'GET') {
           // Allow unauthenticated GET so agent/dashboard can apply default theme without 401 (theme testing, pre-login paint)
           if (!user) {
+            const slugParam = url.searchParams.get('slug');
+            if (slugParam && String(slugParam).trim()) {
+              const requested = normalizeThemeSlug(String(slugParam).trim()) || String(slugParam).trim();
+              try {
+                const themeRow = await env.DB.prepare("SELECT name, config FROM cms_themes WHERE slug = ? LIMIT 1").bind(requested).first();
+                if (themeRow) {
+                  return Response.json(themeApiPayloadFromRow(requested, themeRow));
+                }
+              } catch (_) {}
+            }
             const defaultSlug = normalizeThemeSlug('meaux-storm-gray') || 'meaux-storm-gray';
             try {
               const themeRow = await env.DB.prepare("SELECT name, config FROM cms_themes WHERE slug = ? LIMIT 1").bind(defaultSlug).first();
-              const cfg = (themeRow?.config && typeof themeRow.config === 'string') ? (() => { try { return JSON.parse(themeRow.config); } catch (_) { return {}; } })() : (typeof themeRow?.config === 'object' && themeRow.config !== null ? themeRow.config : {});
-              const variables = variablesFromCmsThemeConfig(cfg);
-              return Response.json({ theme: defaultSlug, name: themeRow?.name || defaultSlug, variables });
+              return Response.json(themeApiPayloadFromRow(defaultSlug, themeRow || { name: defaultSlug, config: '{}' }));
             } catch (_) {
-              return Response.json({ theme: defaultSlug, name: defaultSlug, variables: {} });
+              return Response.json({ theme: defaultSlug, name: defaultSlug, variables: {}, is_dark: 1, monaco_theme: 'vs-dark', terminal: null });
             }
           }
           const cacheKey = 'theme:' + (user.id || '');
@@ -4742,19 +5001,13 @@ const worker = {
             let slug = row?.theme ? normalizeThemeSlug(row.theme) : null;
             if (!slug) slug = 'meaux-storm-gray';
             const themeRow = await env.DB.prepare("SELECT name, config FROM cms_themes WHERE slug = ? LIMIT 1").bind(slug).first();
-            const cfg = (themeRow?.config && typeof themeRow.config === 'string') ? (() => { try { return JSON.parse(themeRow.config); } catch (_) { return {}; } })() : (typeof themeRow?.config === 'object' && themeRow.config !== null ? themeRow.config : {});
-            const variables = variablesFromCmsThemeConfig(cfg);
-            const payload = {
-              theme: slug,
-              name: themeRow?.name || slug,
-              variables
-            };
+            const payload = themeApiPayloadFromRow(slug, themeRow || { name: slug, config: '{}' });
             if (env.SESSION_CACHE && cacheKey) {
               env.SESSION_CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 3600 }).catch(() => {});
             }
             return Response.json(payload);
           } catch (e) {
-            return Response.json({ theme: 'meaux-glass-blue', name: 'meaux-glass-blue', variables: {} });
+            return Response.json({ theme: 'meaux-glass-blue', name: 'meaux-glass-blue', variables: {}, is_dark: 1, monaco_theme: 'vs-dark', terminal: null });
           }
         }
         if (request.method === 'PATCH') {
@@ -5191,6 +5444,163 @@ function getSpendRates(provider, modelKey) {
   return { rateIn: 0, rateOut: 0 };
 }
 
+/** USD per MTok for agent_telemetry.input_rate_per_mtok / output_rate_per_mtok when ai_models row lacks rates. Longer prefixes first. */
+const TELEMETRY_FALLBACK_RATE_ENTRIES = [
+  ['gpt-5.4-nano', { in: 0.075, out: 0.3 }],
+  ['gpt-5.4-mini', { in: 0.4, out: 1.6 }],
+  ['gpt-5.4', { in: 2.5, out: 15 }],
+  ['gpt-4.1-nano', { in: 0.1, out: 0.4 }],
+  ['gpt-4.1-mini', { in: 0.4, out: 1.6 }],
+  ['gpt-4.1', { in: 2, out: 8 }],
+  ['gpt-4o-mini', { in: 0.15, out: 0.6 }],
+  ['gpt-4o', { in: 2.5, out: 10 }],
+  ['claude-haiku-4-5-20251001', { in: 0.8, out: 4 }],
+  ['claude-sonnet-4-20250514', { in: 3, out: 15 }],
+  ['claude-sonnet-4-6', { in: 3, out: 15 }],
+  ['claude-opus-4-6', { in: 15, out: 75 }],
+  ['o4-mini', { in: 1.1, out: 4.4 }],
+  ['o3', { in: 10, out: 40 }],
+  ['gemini-3.1-pro-preview', { in: 1.25, out: 5 }],
+  ['gemini-3-flash-preview', { in: 0.1, out: 0.4 }],
+  ['gemini-2.5-flash', { in: 0.3, out: 2.5 }],
+  ['@cf/', { in: 0, out: 0 }],
+];
+
+function getTelemetryFallbackRates(modelKey) {
+  if (!modelKey) return { in: 1, out: 3 };
+  const mk = String(modelKey);
+  for (const [prefix, rates] of TELEMETRY_FALLBACK_RATE_ENTRIES) {
+    if (mk === prefix || mk.startsWith(prefix)) return rates;
+  }
+  return { in: 1, out: 3 };
+}
+
+/** Fire-and-forget agent_command_audit_log for terminal_execute / d1_write. */
+function insertAgentCommandAuditLog(env, {
+  userId = null,
+  workspaceId = null,
+  commandKey,
+  target,
+  success,
+  output = null,
+  errorMessage = null,
+  requestId = null,
+}) {
+  if (!env?.DB || !commandKey) return;
+  console.log('[cmd_audit] INSERT attempted', commandKey);
+  const id = 'cmdaudit_' + crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+  const targetSlice = String(target ?? '').slice(0, 500);
+  const resultStr = success ? 'success' : 'error';
+  const resultJson = JSON.stringify({ output_length: output != null ? String(output).length : 0 }).slice(0, 2000);
+  const errSlice = errorMessage != null ? String(errorMessage).slice(0, 200) : null;
+  env.DB.prepare(
+    `INSERT INTO agent_command_audit_log
+      (id, timestamp, user_id, workspace_id, tenant_id,
+       command_key, target, result, result_json, cost, error_text, request_id)
+     VALUES (?, unixepoch(), ?, ?, 'tenant_sam_primeaux', ?, ?, ?, ?, 0.0, ?, ?)`
+  ).bind(
+    id,
+    userId ?? 'sam_primeaux',
+    workspaceId ?? 'default',
+    commandKey,
+    targetSlice,
+    resultStr,
+    resultJson,
+    errSlice,
+    requestId ?? null
+  ).run().catch(() => {});
+}
+
+/** Fire-and-forget mcp_audit_log + daily mcp_tool_call_stats rollup after a tool call. */
+function appendMcpAuditLogAndStats(env, {
+  conversationId,
+  toolName,
+  toolCategory,
+  toolInput,
+  result,
+  error,
+  durationMs = 0,
+  costUsd = 0,
+}) {
+  if (!env?.DB || !toolName) return;
+  const errStr = error ? String(error).slice(0, 200) : null;
+  const ok = !error;
+  const status = ok ? 'success' : 'error';
+  let respLen = 0;
+  try {
+    respLen = typeof result === 'string' ? result.length : (result != null ? String(JSON.stringify(result)).length : 0);
+  } catch (_) {
+    respLen = 0;
+  }
+  const argsSlice = JSON.stringify(toolInput ?? {}).slice(0, 500);
+  console.log('[mcp_audit_log] INSERT attempted');
+  env.DB.prepare(
+    `INSERT INTO mcp_audit_log
+      (tenant_id, session_id, tool_name, tool_category,
+       request_args_json, response_size_bytes, latency_ms,
+       status, error_message, tokens_used, cost_usd, created_at)
+     VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, unixepoch())`
+  ).bind(
+    conversationId ?? '',
+    toolName,
+    toolCategory ?? 'builtin',
+    argsSlice,
+    respLen,
+    durationMs ?? 0,
+    status,
+    errStr,
+    costUsd ?? 0
+  ).run().catch((e) => console.warn('[mcp_audit_log] insert failed', e?.message ?? e));
+  console.log('[mcp_tool_call_stats] UPSERT attempted');
+  env.DB.prepare(
+    `INSERT INTO mcp_tool_call_stats
+      (date, tool_name, tool_category, tenant_id,
+       call_count, success_count, failure_count)
+     VALUES (date('now'), ?, ?, 'tenant_sam_primeaux', 1, ?, ?)
+     ON CONFLICT(date, tool_name, tenant_id) DO UPDATE SET
+       call_count = call_count + 1,
+       success_count = success_count + excluded.success_count,
+       failure_count = failure_count + excluded.failure_count,
+       updated_at = datetime('now')`
+  ).bind(
+    toolName,
+    toolCategory ?? 'builtin',
+    ok ? 1 : 0,
+    ok ? 0 : 1
+  ).run().catch((e) => console.warn('[mcp_tool_call_stats] upsert failed', e?.message ?? e));
+}
+
+/** Fire-and-forget skill invocation rows when chat body includes skill_id / skill_ids. */
+function recordAgentsamSkillInvocationsFromChat(env, {
+  skillIds,
+  userId,
+  workspaceId,
+  conversationId,
+  inputSummary,
+  modelUsed,
+  durationMs,
+}) {
+  if (!env?.DB || !Array.isArray(skillIds) || skillIds.length === 0) return;
+  const uid = userId ?? 'sam_primeaux';
+  const ws = workspaceId ?? '';
+  const conv = conversationId ?? null;
+  const summary = inputSummary != null ? String(inputSummary).slice(0, 200) : null;
+  const model = modelUsed != null ? String(modelUsed) : null;
+  const dur = durationMs != null ? Number(durationMs) : null;
+  for (const sid of skillIds) {
+    const skillId = sid != null ? String(sid).trim() : '';
+    if (!skillId) continue;
+    const id = 'skillinv_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    env.DB.prepare(
+      `INSERT INTO agentsam_skill_invocation
+        (id, skill_id, user_id, workspace_id, conversation_id,
+         trigger_method, input_summary, success, duration_ms,
+         model_used, tokens_in, tokens_out, cost_usd, invoked_at)
+       VALUES (?, ?, ?, ?, ?, 'auto', ?, 1, ?, ?, 0, 0, 0.0, datetime('now'))`
+    ).bind(id, skillId, uid, ws, conv, summary, dur, model).run().catch(() => {});
+  }
+}
+
 /** Write one row to agent_audit_log. Fire-and-forget; never throw. */
 async function writeAuditLog(env, { event_type, message, run_id = null, metadata = {} }) {
   if (!env?.DB) return;
@@ -5204,22 +5614,158 @@ async function writeAuditLog(env, { event_type, message, run_id = null, metadata
   }
 }
 
+function appendCidiPipelineRunFromDeploy(env, {
+  deploymentId,
+  environment = 'production',
+  gitHash = 'unknown',
+  versionId = null,
+  description = 'deploy via script',
+}) {
+  if (!env?.DB || !deploymentId) return;
+  env.DB.prepare(
+    `INSERT OR IGNORE INTO cidi_pipeline_runs
+      (run_id, branch, env, status, commit_hash,
+       worker_version_id, notes, created_at)
+    VALUES (?, 'main', ?, 'passed', ?, ?, ?, datetime('now'))`
+  ).bind(
+    'cidi_' + String(deploymentId),
+    String(environment || 'production'),
+    String(gitHash || 'unknown'),
+    String(versionId || deploymentId),
+    String(description || 'deploy via script')
+  ).run().catch((e) => console.warn('[cidi_pipeline_runs]', e?.message ?? e));
+}
+
+async function runPostDeployQualityChecks(env, deploymentId) {
+  if (!env?.DB || !deploymentId) return;
+  try {
+    const runId = 'qrun_' + crypto.randomUUID().slice(0, 8);
+    await env.DB.prepare(
+      `INSERT INTO quality_runs
+        (id, deployment_id, status, started_at, created_at)
+      VALUES (?, ?, 'running', datetime('now'), datetime('now'))`
+    ).bind(runId, deploymentId).run().catch(() => {});
+    const [telCheck, mcpCheck, deployCheck] = await Promise.all([
+      env.DB.prepare(`SELECT
+        COUNT(*) as total,
+        COUNT(CASE WHEN computed_cost_usd > 0 THEN 1 END) as has_cost,
+        COUNT(CASE WHEN event_type IS NOT NULL THEN 1 END) as has_event_type
+        FROM agent_telemetry
+        WHERE created_at > unixepoch() - 3600`).first(),
+      env.DB.prepare(`SELECT COUNT(*) as total,
+        COUNT(CASE WHEN cost_usd IS NOT NULL THEN 1 END) as has_cost
+        FROM mcp_tool_calls
+        WHERE date(created_at) = date('now')`).first(),
+      env.DB.prepare(`SELECT COUNT(*) as total,
+        COUNT(CASE WHEN git_hash IS NOT NULL THEN 1 END) as has_git
+        FROM deployments
+        WHERE date(created_at) = date('now')`).first(),
+    ]);
+    const checks = [
+      {
+        name: 'telemetry_cost_populated',
+        pass: Number(telCheck?.total || 0) === 0 || (Number(telCheck?.has_cost || 0) / Number(telCheck?.total || 1)) > 0.8,
+        detail: `${Number(telCheck?.has_cost || 0)}/${Number(telCheck?.total || 0)} telemetry rows have cost`,
+      },
+      {
+        name: 'mcp_cost_populated',
+        pass: Number(mcpCheck?.total || 0) === 0 || (Number(mcpCheck?.has_cost || 0) / Number(mcpCheck?.total || 1)) > 0.8,
+        detail: `${Number(mcpCheck?.has_cost || 0)}/${Number(mcpCheck?.total || 0)} mcp_tool_calls have cost`,
+      },
+      {
+        name: 'deploy_git_hash',
+        pass: Number(deployCheck?.total || 0) === 0 || (Number(deployCheck?.has_git || 0) / Number(deployCheck?.total || 1)) > 0.9,
+        detail: `${Number(deployCheck?.has_git || 0)}/${Number(deployCheck?.total || 0)} deploys have git_hash`,
+      },
+    ];
+    for (const c of checks) {
+      await env.DB.prepare(
+        `INSERT INTO quality_results
+          (id, run_id, check_name, status, detail, created_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))`
+      ).bind(
+        'qr_' + crypto.randomUUID().slice(0, 8),
+        runId,
+        c.name,
+        c.pass ? 'pass' : 'fail',
+        c.detail
+      ).run().catch(() => {});
+    }
+    await env.DB.prepare(
+      `UPDATE quality_runs SET status=?, completed_at=datetime('now') WHERE id=?`
+    ).bind(checks.every((c) => c.pass) ? 'passed' : 'failed', runId).run().catch(() => {});
+  } catch (e) {
+    console.warn('[quality_runs]', e?.message);
+  }
+}
+
+async function writeDailySnapshot(env, reason = 'cron') {
+  if (!env?.DB) return;
+  const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
+  const [tt, dt] = await Promise.all([
+    safe(env.DB.prepare(
+      `SELECT COALESCE(SUM(input_tokens), 0) AS tokens_in,
+        COALESCE(SUM(output_tokens), 0) AS tokens_out,
+        ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd
+       FROM agent_telemetry
+       WHERE created_at >= unixepoch('now', 'start of day')`
+    ).first()),
+    safe(env.DB.prepare(
+      `SELECT COUNT(*) AS total
+       FROM deployments
+       WHERE created_at >= unixepoch('now', 'start of day')`
+    ).first()),
+  ]);
+  const digestSummary = `snapshot:${String(reason)} spend $${tt?.cost_usd ?? 0} | deploys ${dt?.total ?? 0}`;
+  await env.DB.prepare(
+    `INSERT OR REPLACE INTO daily_snapshots (
+      snapshot_date, deploy_count, tokens_in, tokens_out, cost_usd,
+      active_workflows, digest_text, created_at, updated_at
+    ) VALUES (
+      date('now'), ?, ?, ?, ?,
+      15, ?, unixepoch(), unixepoch()
+    )`
+  ).bind(
+    dt?.total ?? 0,
+    tt?.tokens_in ?? 0,
+    tt?.tokens_out ?? 0,
+    tt?.cost_usd ?? 0,
+    digestSummary
+  ).run().catch(() => {});
+}
+
 /** Set for the lifetime of one `worker.fetch` invocation so `jsonResponse` can log 5xx without per-call plumbing. */
 let __iamResponseLog = null;
 
 /** INSERT worker_analytics_errors (best-effort; table from migrations/167_worker_analytics_errors.sql). */
 async function recordWorkerAnalyticsError(env, { path = '', method = 'GET', status_code = 500, error_message = '' } = {}) {
   if (!env?.DB) return;
-  const id = crypto.randomUUID();
+  const eventId = crypto.randomUUID();
+  const workerName = 'inneranimalmedia';
+  const environment = 'production';
+  const ts = Math.floor(Date.now() / 1000);
   const pathSlice = String(path || '').slice(0, 500);
   const methodSlice = String(method || 'GET').slice(0, 24);
   const code = Number(status_code);
   const msg = String(error_message || '').slice(0, 8000);
   try {
     await env.DB.prepare(
-      `INSERT INTO worker_analytics_errors (id, path, method, status_code, error_message, created_at)
-       VALUES (?, ?, ?, ?, ?, unixepoch())`
-    ).bind(id, pathSlice, methodSlice, Number.isFinite(code) ? code : 500, msg).run();
+      `INSERT INTO worker_analytics_errors (
+        event_id, worker_name, environment, timestamp,
+        error_message, path, method, status_code, resolved, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      eventId,
+      workerName,
+      environment,
+      ts,
+      msg,
+      pathSlice,
+      methodSlice,
+      Number.isFinite(code) ? code : 500,
+      0,
+      ts
+    ).run();
   } catch (e) {
     console.warn('[worker_analytics_errors]', e?.message ?? e);
   }
@@ -5304,8 +5850,162 @@ async function completeAgentsamAgentRun(env, runId, conversationId, inputTokens,
   }
 }
 
+/** After telemetry row exists: link latest routing_decisions row for this session to that telemetry and mark complete. */
+async function completeRoutingDecisionTelemetry(env, conversationId, telemetryId, inputTokens, outputTokens, costUsd, routingOpts) {
+  if (!routingOpts || typeof routingOpts.chatStartMs !== 'number' || !conversationId || !telemetryId || !env?.DB) return;
+  try {
+    const latencyMs = Date.now() - routingOpts.chatStartMs;
+    await env.DB.prepare(
+      `UPDATE routing_decisions SET
+        telemetry_id = ?,
+        latency_ms = ?,
+        input_tokens = ?,
+        output_tokens = ?,
+        cost_usd = ?,
+        completed = 1
+      WHERE id = (
+        SELECT id FROM routing_decisions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
+      )`
+    ).bind(telemetryId, latencyMs, Math.floor(Number(inputTokens) || 0), Math.floor(Number(outputTokens) || 0), Number(costUsd) || 0, conversationId).run();
+  } catch (e) {
+    console.warn('[routing_decisions] telemetry completion', e?.message ?? e);
+  }
+}
+
+/** Parallel D1 reads + INSERT into system_health_snapshots; returns the inserted row. */
+async function runIntegritySnapshot(env, triggeredBy = 'cron') {
+  if (!env?.DB) throw new Error('DB unavailable');
+  const tb = ['cron', 'manual', 'deploy', 'api'].includes(String(triggeredBy)) ? String(triggeredBy) : 'api';
+  const sqlQ1 = `
+    SELECT
+      COUNT(*) AS rd_total,
+      COALESCE(SUM(CASE WHEN task_type = 'unclassified' THEN 1 ELSE 0 END), 0) AS rd_unclassified_task,
+      COALESCE(SUM(CASE WHEN model_selected = 'unknown' THEN 1 ELSE 0 END), 0) AS rd_unknown_model,
+      COALESCE(SUM(CASE WHEN rule_source = 'unknown' THEN 1 ELSE 0 END), 0) AS rd_unknown_rule_source,
+      COALESCE(SUM(completed), 0) AS rd_completed,
+      COALESCE(SUM(CASE WHEN completed = 1 AND latency_ms IS NULL THEN 1 ELSE 0 END), 0) AS rd_missing_latency,
+      COALESCE(SUM(CASE WHEN completed = 1 AND cost_usd IS NULL THEN 1 ELSE 0 END), 0) AS rd_missing_cost,
+      COALESCE(SUM(CASE WHEN completed = 1 AND input_tokens IS NULL THEN 1 ELSE 0 END), 0) AS rd_missing_tokens,
+      ROUND(100.0 * COALESCE(SUM(CASE WHEN completed = 1 AND latency_ms IS NOT NULL AND cost_usd IS NOT NULL THEN 1 ELSE 0 END), 0)
+        / NULLIF(COALESCE(SUM(completed), 0), 0), 1) AS rd_pct_complete_valid
+    FROM routing_decisions`;
+  const sqlQ2 = `
+    SELECT
+      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN 1 ELSE 0 END), 0) AS tel_total_24h,
+      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN 1 ELSE 0 END), 0) AS tel_total_7d,
+      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_24h,
+      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_7d
+    FROM agent_telemetry`;
+  const sqlQ3 = `
+    SELECT provider, COUNT(*) AS n, SUM(computed_cost_usd) AS cost
+    FROM agent_telemetry WHERE created_at >= (unixepoch() - 604800)
+    GROUP BY provider ORDER BY n DESC`;
+  const sqlQ4 = `
+    SELECT
+      COUNT(*) AS tools_total,
+      COALESCE(SUM(is_degraded), 0) AS tools_degraded,
+      COALESCE(SUM(CASE WHEN modes_json IS NULL OR modes_json = '' THEN 1 ELSE 0 END), 0) AS tools_missing_modes
+    FROM mcp_registered_tools WHERE enabled = 1`;
+  const sqlQ4b = `
+    SELECT tool_name,
+      SUM(failure_count) AS failure_count,
+      SUM(success_count) AS success_count,
+      ROUND(100.0 * SUM(failure_count) / NULLIF(SUM(failure_count) + SUM(success_count), 0), 1) AS fail_pct
+    FROM mcp_tool_call_stats
+    GROUP BY tool_name
+    HAVING SUM(failure_count) > 0
+    ORDER BY fail_pct DESC
+    LIMIT 5`;
+  const sqlQ5 = `
+    SELECT
+      (SELECT COUNT(*) FROM agent_intent_patterns) AS intents_total,
+      (SELECT COUNT(*) FROM agent_intent_patterns WHERE total_executions > 0) AS intents_wired,
+      (SELECT COUNT(*) FROM model_routing_rules WHERE is_active = 1) AS routing_rules_active,
+      (SELECT COUNT(*) FROM model_routing_rules WHERE is_active = 1 AND provider = 'google') AS routing_rules_with_google,
+      (SELECT COUNT(*) FROM provider_prompt_fragments WHERE is_active = 1) AS provider_fragments_active`;
+  const sqlQ5b = `
+    SELECT intent_slug, total_executions FROM agent_intent_patterns
+    WHERE total_executions > 0 ORDER BY total_executions DESC LIMIT 10`;
+  const [r1, r2, r3all, r4, r4b, r5, r5b] = await Promise.all([
+    env.DB.prepare(sqlQ1).first(),
+    env.DB.prepare(sqlQ2).first(),
+    env.DB.prepare(sqlQ3).all(),
+    env.DB.prepare(sqlQ4).first(),
+    env.DB.prepare(sqlQ4b).all(),
+    env.DB.prepare(sqlQ5).first(),
+    env.DB.prepare(sqlQ5b).all(),
+  ]);
+  const rd_total = Number(r1?.rd_total) || 0;
+  const rd_unclassified_task = Number(r1?.rd_unclassified_task) || 0;
+  const rd_unknown_model = Number(r1?.rd_unknown_model) || 0;
+  const rd_unknown_rule_source = Number(r1?.rd_unknown_rule_source) || 0;
+  const rd_completed = Number(r1?.rd_completed) || 0;
+  const rd_missing_latency = Number(r1?.rd_missing_latency) || 0;
+  const rd_missing_cost = Number(r1?.rd_missing_cost) || 0;
+  const rd_missing_tokens = Number(r1?.rd_missing_tokens) || 0;
+  let rd_pct_complete_valid = Number(r1?.rd_pct_complete_valid);
+  if (rd_completed === 0) rd_pct_complete_valid = 100;
+  else if (!Number.isFinite(rd_pct_complete_valid)) rd_pct_complete_valid = 0;
+  const tel_total_24h = Number(r2?.tel_total_24h) || 0;
+  const tel_total_7d = Number(r2?.tel_total_7d) || 0;
+  const tel_cost_24h = Number(r2?.tel_cost_24h) || 0;
+  const tel_cost_7d = Number(r2?.tel_cost_7d) || 0;
+  const tel_providers_json = JSON.stringify((r3all?.results ?? []).map((row) => ({
+    provider: row.provider,
+    n: Number(row.n) || 0,
+    cost: Number(row.cost) || 0,
+  })));
+  const tools_total = Number(r4?.tools_total) || 0;
+  const tools_degraded = Number(r4?.tools_degraded) || 0;
+  const tools_missing_modes = Number(r4?.tools_missing_modes) || 0;
+  const tool_top_failures_json = JSON.stringify(r4b?.results ?? []);
+  const intents_total = Number(r5?.intents_total) || 0;
+  const intents_wired = Number(r5?.intents_wired) || 0;
+  const routing_rules_active = Number(r5?.routing_rules_active) || 0;
+  const routing_rules_with_google = Number(r5?.routing_rules_with_google) || 0;
+  const provider_fragments_active = Number(r5?.provider_fragments_active) || 0;
+  const intents_top_json = JSON.stringify(r5b?.results ?? []);
+  const noteParts = [];
+  if (rd_missing_cost > 0) noteParts.push('completed routing rows missing cost_usd');
+  if (rd_missing_latency > 0) noteParts.push('completed routing rows missing latency_ms');
+  if (rd_missing_tokens > 0) noteParts.push('completed routing rows missing input_tokens');
+  if (rd_unknown_model > 5) noteParts.push('rd_unknown_model above threshold');
+  if (rd_unclassified_task > 10) noteParts.push('rd_unclassified_task above threshold');
+  if (tools_degraded > 0) noteParts.push('degraded tools enabled');
+  if (rd_pct_complete_valid < 95) noteParts.push('rd_pct_complete_valid below 95');
+  if (tools_missing_modes > 0) noteParts.push('enabled tools missing modes_json');
+  const isRed = rd_missing_cost > 0 || rd_missing_latency > 0 || rd_unknown_model > 5;
+  const isYellow = rd_unclassified_task > 10 || tools_degraded > 0 || rd_pct_complete_valid < 95;
+  const health_status = isRed ? 'red' : isYellow ? 'yellow' : 'green';
+  const health_notes = noteParts.join(', ');
+  const snapId = 'snap_' + crypto.randomUUID().replace(/-/g, '').slice(0, 24).toLowerCase();
+  const snapshot_at = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(
+    `INSERT INTO system_health_snapshots (
+      id, triggered_by, snapshot_at,
+      rd_total, rd_unclassified_task, rd_unknown_model, rd_unknown_rule_source, rd_completed,
+      rd_missing_latency, rd_missing_cost, rd_missing_tokens, rd_pct_complete_valid,
+      tel_total_24h, tel_total_7d, tel_cost_24h, tel_cost_7d, tel_providers_json,
+      tools_total, tools_degraded, tools_missing_modes, tool_top_failures_json,
+      intents_total, intents_wired, intents_top_json,
+      routing_rules_active, routing_rules_with_google, provider_fragments_active,
+      health_status, health_notes, created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(
+    snapId, tb, snapshot_at,
+    rd_total, rd_unclassified_task, rd_unknown_model, rd_unknown_rule_source, rd_completed,
+    rd_missing_latency, rd_missing_cost, rd_missing_tokens, rd_pct_complete_valid,
+    tel_total_24h, tel_total_7d, tel_cost_24h, tel_cost_7d, tel_providers_json,
+    tools_total, tools_degraded, tools_missing_modes, tool_top_failures_json,
+    intents_total, intents_wired, intents_top_json,
+    routing_rules_active, routing_rules_with_google, provider_fragments_active,
+    health_status, health_notes, snapshot_at
+  ).run();
+  return await env.DB.prepare('SELECT * FROM system_health_snapshots WHERE id = ?').bind(snapId).first();
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
-async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null) {
+async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null) {
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
   const safeOutput = outputTokens ?? 0;
@@ -5324,8 +6024,34 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
     amountUsd = Math.round((safeInput * rateIn + safeOutput * rateOut) * 1e8) / 1e8;
   }
-  const inputRateCol = typeof rowForTelemetry?.input_rate_per_mtok === 'number' ? rowForTelemetry.input_rate_per_mtok : null;
-  const outputRateCol = typeof rowForTelemetry?.output_rate_per_mtok === 'number' ? rowForTelemetry.output_rate_per_mtok : null;
+  let inputRateCol = typeof rowForTelemetry?.input_rate_per_mtok === 'number' ? rowForTelemetry.input_rate_per_mtok : null;
+  let outputRateCol = typeof rowForTelemetry?.output_rate_per_mtok === 'number' ? rowForTelemetry.output_rate_per_mtok : null;
+  const fbRates = getTelemetryFallbackRates(safeModelKey);
+  inputRateCol = inputRateCol ?? fbRates.in;
+  outputRateCol = outputRateCol ?? fbRates.out;
+  if ((!amountUsd || amountUsd === 0) && (safeInput > 0 || safeOutput > 0)) {
+    amountUsd = Math.round(((safeInput * inputRateCol + safeOutput * outputRateCol) / 1_000_000) * 1e8) / 1e8;
+  }
+  // Neuron cost for Workers AI (CF bills neurons, not tokens)
+  const NEURON_MULTIPLIERS = {
+    '@cf/meta/llama-3.1-8b-instruct': 0.4,
+    '@cf/meta/llama-4-scout-17b-16e-instruct': 0.6,
+    '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 1.8,
+    '@cf/moonshotai/kimi-k2.5': 1.2,
+    '@cf/nvidia/nemotron-3-120b-a12b': 2.0,
+    '@cf/zai-org/glm-4.7-flash': 0.5,
+  };
+  const NEURON_RATE = 0.000011; // $0.011 per 1,000 neurons
+  let neuronsUsed = 0;
+  let neuronCostUsd = 0;
+  if (safeProvider === 'workers_ai' || safeModelKey?.startsWith('@cf/')) {
+    const mult = NEURON_MULTIPLIERS[safeModelKey] ?? 0.8;
+    neuronsUsed = Math.round((safeInput + safeOutput) * mult);
+    neuronCostUsd = neuronsUsed * NEURON_RATE;
+    if (!amountUsd || amountUsd === 0) amountUsd = neuronCostUsd;
+  }
+  const telemetryEventType = 'chat_completion';
+  const telemetrySeverity = (amountUsd != null && Number(amountUsd) > 0.01) ? 'warning' : 'info';
   let googleServiceName = null;
   let googlePricingSource = null;
   if (safeProvider === 'google') {
@@ -5340,18 +6066,48 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
+  let telemetryRowId = null;
   try {
+    telemetryRowId = crypto.randomUUID();
     await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch())`
-    ).bind(crypto.randomUUID(), 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol).run();
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
+    ).bind(telemetryRowId, 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol, neuronCostUsd, neuronsUsed, telemetryEventType, telemetrySeverity).run();
   } catch (e) {
     console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
   }
   const spendAndUsage = async () => {
     try {
+      const spendTenantId = String(routingOpts?.tenantId || '').trim() || 'tenant_sam_primeaux';
+      const spendWorkspaceId = String(routingOpts?.workspaceId || '').trim() || 'default';
+      const ledgerProviderRaw = spendLedgerProvider(safeProvider);
+      const spProvider = ledgerProviderRaw === 'workers_ai' ? 'cloudflare_workers_ai' : ledgerProviderRaw;
       await env.DB.prepare(
         `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind('sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(), 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(safeProvider), 'api_direct', Math.floor(Date.now() / 1000), amountUsd, safeModelKey, safeInput, safeOutput, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
+      ).bind('sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(), spendTenantId, spendWorkspaceId, 'inneranimalmedia', spProvider, 'api_direct', Math.floor(Date.now() / 1000), amountUsd, safeModelKey, safeInput, safeOutput, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
+      if (conversationId && telemetryRowId) {
+        await env.DB.prepare(
+          `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, neurons_used, neuron_cost_usd, description, session_tag, project_id, ref_table, ref_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).bind(
+          'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(),
+          spendTenantId,
+          spendWorkspaceId,
+          'inneranimalmedia',
+          spProvider,
+          'api_direct',
+          Math.floor(Date.now() / 1000),
+          amountUsd ?? 0,
+          safeModelKey,
+          safeInput,
+          safeOutput,
+          neuronsUsed,
+          neuronCostUsd,
+          'Agent chat completion',
+          conversationId,
+          'proj_inneranimalmedia_main_prod_013',
+          'agent_telemetry',
+          telemetryRowId
+        ).run();
+      }
     } catch (e) {
       console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
     }
@@ -5389,6 +6145,9 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   if (agentsamAgentRunId) {
     await completeAgentsamAgentRun(env, agentsamAgentRunId, conversationId, safeInput, safeOutput, amountUsd);
+  }
+  if (telemetryRowId) {
+    await completeRoutingDecisionTelemetry(env, conversationId, telemetryRowId, safeInput, safeOutput, amountUsd, routingOpts);
   }
 }
 
@@ -5893,6 +6652,18 @@ async function logAgentIntentExecution(env, userText, intentDetected, confidence
   }
 }
 
+/** Increment pattern execution counters for routing feedback (agent_intent_patterns). */
+async function bumpAgentIntentPatternExecutions(env, intentSlug) {
+  if (!env?.DB || !intentSlug) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE agent_intent_patterns SET total_executions = total_executions + 1, last_executed_at = unixepoch() WHERE intent_slug = ?`
+    ).bind(intentSlug).run();
+  } catch (e) {
+    console.warn('[bumpAgentIntentPatternExecutions]', e?.message ?? e);
+  }
+}
+
 async function insertQualityCheckRagIngest(env, chunkCount) {
   if (!env?.DB) return;
   const met = chunkCount >= 3;
@@ -6065,6 +6836,7 @@ Reply ONLY with JSON: {"intent":"sql"|"shell"|"question"|"mixed"}` }] }],
         const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
         if (parsed?.intent) {
           await logAgentIntentExecution(env, lastMessageText, parsed.intent, 0.9);
+          await bumpAgentIntentPatternExecutions(env, parsed.intent);
           return parsed;
         }
       }
@@ -6112,6 +6884,7 @@ Reply with only the JSON object.`;
     const parsed = JSON.parse(text.replace(/^[\s\S]*?(\{[\s\S]*\})[\s\S]*$/, '$1'));
     if (parsed && typeof parsed.intent === 'string') {
       await logAgentIntentExecution(env, lastMessageText, parsed.intent, 0.85);
+      await bumpAgentIntentPatternExecutions(env, parsed.intent);
       return parsed;
     }
   } catch (_) {}
@@ -6309,17 +7082,6 @@ async function singleRoundNoTools(env, provider, modelKey, systemWithBlurb, mess
     return data.choices?.[0]?.message?.content ?? '';
   }
   if (provider === 'google') {
-    const gatewayModel = getGatewayModel('google', modelKey);
-    if (env.AI_GATEWAY_BASE_URL && gatewayModel) {
-      const openAiMessages = messages.map(m => ({
-        role: m.role === 'model' ? 'assistant' : m.role,
-        content: typeof m.content === 'string' ? m.content : (Array.isArray(m.parts) ? m.parts.filter(p => p.text).map(p => p.text).join('\n') : JSON.stringify(m.content || '')),
-      }));
-      const gw = await callGatewayChat(env, systemWithBlurb, openAiMessages, gatewayModel, []);
-      if (gw && gw.ok && gw.data) return (gw.data.choices?.[0]?.message?.content ?? '').trim() || '';
-      if (gw && !gw.ok) console.log('[singleRoundNoTools] Google gateway error:', gw.status, gw.data);
-      return '';
-    }
     const toParts = (m) => {
       if (Array.isArray(m.parts)) return m.parts;
       if (typeof m.content === 'string') return [{ text: m.content }];
@@ -6377,6 +7139,95 @@ async function singleRoundNoTools(env, provider, modelKey, systemWithBlurb, mess
     return textOut;
   }
   return '';
+}
+
+/** Terminal assist: one non-stream completion from `model_routing_rules` + system text; retry once with fallback_model. */
+async function invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage, maxTokensOverride) {
+  const maxTok = Math.min(Math.max(Number(maxTokensOverride ?? rule.max_output_tokens) || 300, 1), 8192);
+  const primary = rule.primary_model;
+  const fallback = rule.fallback_model;
+  const provider = String(rule.provider || '').toLowerCase();
+
+  async function once(modelKey) {
+    if (!modelKey) return { ok: false, text: '' };
+    if (provider === 'anthropic') {
+      if (!env.ANTHROPIC_API_KEY) return { ok: false, text: '' };
+      const mk = resolveAnthropicModelKey(modelKey);
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: mk,
+          max_tokens: maxTok,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return { ok: false, text: '' };
+      const content = data.content ?? [];
+      const text = content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim() || '';
+      return { ok: !!text, text };
+    }
+    if (provider === 'openai') {
+      if (!env.OPENAI_API_KEY) return { ok: false, text: '' };
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: modelKey,
+          max_tokens: maxTok,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+          ],
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) return { ok: false, text: '' };
+      const text = (data.choices?.[0]?.message?.content ?? '').trim();
+      return { ok: !!text, text };
+    }
+    if (provider === 'google') {
+      const text = await singleRoundNoTools(env, 'google', modelKey, systemPrompt, [{ role: 'user', content: userMessage }]);
+      const t = (text || '').trim();
+      return { ok: !!t, text: t };
+    }
+    if (provider === 'workers_ai' || provider === 'cloudflare_workers_ai') {
+      if (!env.AI) return { ok: false, text: '' };
+      try {
+        const result = await env.AI.run(modelKey, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage },
+          ],
+        });
+        const fullText =
+          (typeof result?.response === 'string' ? result.response : null) ??
+          (typeof result?.text === 'string' ? result.text : null) ??
+          (result?.choices?.[0]?.message?.content != null ? String(result.choices[0].message.content) : '') ??
+          '';
+        const t = String(fullText).trim();
+        return { ok: !!t, text: t };
+      } catch (_) {
+        return { ok: false, text: '' };
+      }
+    }
+    return { ok: false, text: '' };
+  }
+
+  let r = await once(primary);
+  if (r.ok && r.text) return r.text;
+  const fb = fallback != null ? String(fallback).trim() : '';
+  if (fb && fb !== String(primary).trim()) {
+    r = await once(fb);
+    if (r.ok && r.text) return r.text;
+  }
+  return 'assist unavailable';
 }
 
 /** Execute mixed tasks in order, persist to agent_tasks, aggregate results and return one response. */
@@ -6751,6 +7602,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
 
     const toolResults = [];
     for (const tc of toolCalls) {
+      const tToolStart = Date.now();
+      const toolDurationMs = () => Math.max(0, Date.now() - tToolStart);
       const toolName = tc.name ?? tc.function?.name ?? tc.functionCall?.name;
       const functionCall = tc.functionCall;
       let params = {};
@@ -6791,6 +7644,19 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = `Terminal error: ${e.message}`;
         }
+        const runLoopUserId = request?.user?.id || request?.user_id || 'sam_primeaux';
+        const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+        console.log('[cmd_audit] runToolLoop terminal_execute identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
+        insertAgentCommandAuditLog(env, {
+          userId: runLoopUserId,
+          workspaceId: runLoopWorkspaceId,
+          commandKey: 'terminal_execute',
+          target: command.slice(0, 500),
+          success: !String(resultText || '').startsWith('Terminal error:'),
+          output: resultText,
+          errorMessage: String(resultText || '').startsWith('Terminal error:') ? String(resultText).slice(0, 200) : null,
+          requestId: request?.headers?.get?.('cf-ray') || null,
+        });
       } else if (toolName === 'd1_query') {
         const sql = (params.query ?? params.sql ?? '').trim();
         const normalized = sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '').trim().toUpperCase();
@@ -6814,6 +7680,19 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         const blocked = /\bdrop\s+table\b|\btruncate\b/i;
         if (blocked.test(sql)) {
           resultText = 'Blocked: DROP TABLE and TRUNCATE require manual approval';
+          const runLoopUserId = request?.user?.id || request?.user_id || 'sam_primeaux';
+          const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+          console.log('[cmd_audit] runToolLoop d1_write blocked identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
+          insertAgentCommandAuditLog(env, {
+            userId: runLoopUserId,
+            workspaceId: runLoopWorkspaceId,
+            commandKey: 'd1_write',
+            target: sql.slice(0, 500),
+            success: false,
+            output: null,
+            errorMessage: resultText.slice(0, 200),
+            requestId: request?.headers?.get?.('cf-ray') || null,
+          });
         } else {
           try {
             const stmt = env.DB.prepare(sql);
@@ -6821,8 +7700,34 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             const changes = result.meta?.changes ?? result.changes ?? 0;
             resultText = JSON.stringify({ changes, success: true });
             void writeAuditLog(env, { event_type: 'd1_write', message: 'D1 write executed', metadata: { changes } }).catch(() => {});
+            const runLoopUserId = request?.user?.id || request?.user_id || 'sam_primeaux';
+            const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+            console.log('[cmd_audit] runToolLoop d1_write success identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
+            insertAgentCommandAuditLog(env, {
+              userId: runLoopUserId,
+              workspaceId: runLoopWorkspaceId,
+              commandKey: 'd1_write',
+              target: sql.slice(0, 500),
+              success: true,
+              output: resultText,
+              errorMessage: null,
+              requestId: request?.headers?.get?.('cf-ray') || null,
+            });
           } catch (e) {
             resultText = `D1 error: ${e.message}`;
+            const runLoopUserId = request?.user?.id || request?.user_id || 'sam_primeaux';
+            const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+            console.log('[cmd_audit] runToolLoop d1_write error identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
+            insertAgentCommandAuditLog(env, {
+              userId: runLoopUserId,
+              workspaceId: runLoopWorkspaceId,
+              commandKey: 'd1_write',
+              target: sql.slice(0, 500),
+              success: false,
+              output: null,
+              errorMessage: String(resultText).slice(0, 200),
+              requestId: request?.headers?.get?.('cf-ray') || null,
+            });
           }
         }
       } else if (toolName === 'r2_read') {
@@ -7152,12 +8057,18 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           } else if (toolName.startsWith('r2_')) {
             category = 'r2';
           }
-          const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-          await env.DB.prepare(
-            `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at)
-             VALUES (?, 'tenant_sam_primeaux', ?, ?, ?, ?, ?, 'completed', 'agent_sam', ?, ?, ?, ?)`
-          ).bind(crypto.randomUUID(), conversationId ?? '', toolName, category, JSON.stringify(params), resultText.slice(0, 50000), now, now, now, now).run();
-        } catch (e) { console.warn('[runToolLoop] mcp_tool_calls INSERT', e?.message ?? e); }
+          await recordMcpToolCall(env, {
+            conversationId,
+            toolName,
+            // TODO: Wire provider-native per-tool token counts when available; defaults are 0/0 today.
+            toolCategory: category,
+            toolInput: params,
+            result: resultText.slice(0, 50000),
+            error: null,
+            serviceName: 'runToolLoop',
+            durationMs: toolDurationMs(),
+          });
+        } catch (e) { console.warn('[runToolLoop] recordMcpToolCall', e?.message ?? e); }
       }
 
       let geminiToolOutput = resultText;
@@ -7466,7 +8377,7 @@ function intentToVerbosity(intent) {
   if (intent === 'sql' || intent === 'shell') return 'low';
   return 'medium';
 }
-async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = [], _agentIntentFinal = 'mixed', agentsamAgentRunId = null) {
+async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, toolDefinitions = [], _agentIntentFinal = 'mixed', agentsamAgentRunId = null, routingOpts = null) {
   const modelKey = modelRow.model_key || 'gpt-5.4-mini';
   // Build input array: system as developer message + user/assistant turns
   const inputMsgs = [
@@ -7620,7 +8531,7 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
         currentInputMsgs = [...currentInputMsgs, ...outputItems, ...toolOutputItems];
       }
       const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
+      await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
       controller.close();
     },
@@ -7632,7 +8543,7 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
  * OpenAI streaming: same SSE contract as Anthropic.
  * POST to chat/completions with stream: true, stream_options: { include_usage: true }.
  */
-async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
+async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null, routingOpts = null) {
   const modelKey = modelRow.model_key || 'gpt-4o';
   const openAiMessages = apiMessages.map((m, i) => {
     const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
@@ -7706,7 +8617,7 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
           }
         }
         const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
-        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
+        await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
         emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
         controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}\n\n`));
       } catch (e) {
@@ -7816,7 +8727,11 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
   // Load tools in Google format
   let toolDeclarations = [];
   try {
-    const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1').all();
+    const r = await env.DB.prepare(
+      `SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1
+       AND (modes_json LIKE '%"' || ? || '"%')
+       AND is_degraded = 0`
+    ).bind(mode).all();
     const filtered = filterToolRowsByPanel(agent_id, r.results || []);
     const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
     const modeNames = new Set(modeFiltered.map(t => t.tool_name || t.name));
@@ -7956,9 +8871,14 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
         const toolResults = [];
         for (const part of fnCalls) {
           const { name, args } = part.functionCall;
-          await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'tool_start', tool: name })}
-
-`));
+          try {
+            const toolStartPayload = 'data: ' + JSON.stringify({ type: 'tool_start', tool: name, label: name }) + '\n\n';
+            if (opts?.streamWriter && opts.streamEnc) {
+              await opts.streamWriter.write(opts.streamEnc.encode(toolStartPayload));
+            } else {
+              await writer.write(enc.encode(toolStartPayload));
+            }
+          } catch (_) {}
           let result = {};
           try {
             const out = await invokeMcpToolFromChat(env, name, args || {}, conversationId, { agent_id });
@@ -7983,7 +8903,8 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       }
 
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
+      const routingOpts = opts.routingOpts || null;
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
       await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name })}
 
 `));
@@ -8000,7 +8921,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 }
 
 
-async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
+async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images, conversationId, agent_id, ctx, agentsamAgentRunId = null, routingOpts = null) {
   const modelKey = modelRow.model_key || 'gemini-2.5-flash';
   const googleContents = apiMessages.map((m, i) => {
     const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
@@ -8107,7 +9028,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
         } catch (_) {}
       }
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
-      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name }) + '\n\n'));
     } catch (e) {
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
@@ -8123,7 +9044,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
  * Cloudflare Workers AI streaming: env.AI.run(model_key, { messages, stream: true }).
  * Same SSE contract; cost_usd: 0 (neurons). Handle all chunk shapes; null-coerce before D1.
  */
-async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, agentsamAgentRunId = null) {
+async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, agentsamAgentRunId = null, routingOpts = null) {
   const messages = [{ role: 'system', content: systemWithBlurb }, ...apiMessages];
   const modelKey = (modelRow && modelRow.model_key) ? modelRow.model_key : '@cf/meta/llama-3.1-8b-instruct';
   const inputCharCount = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
@@ -8170,7 +9091,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       const safeModel = (modelRow && modelRow.model_key != null) ? modelRow.model_key : 'unknown';
       const safeRow   = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
 
-      await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId);
+      await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
@@ -9256,14 +10177,14 @@ async function reindexCodebaseFromDocsBucket(env) {
   }
 }
 
-async function handleAgentApi(request, url, env, ctx) {
+async function handleAgentApi(request, url, env, ctx, secretFn) {
   const pathLower = url.pathname.replace(/\/$/, '').toLowerCase();
   const method = (request.method || 'GET').toUpperCase();
 
   try {
     if (pathLower === '/api/agent/browse' && method === 'POST') {
       const _browseSess = await getSession(env, request).catch(() => null);
-      const _browseIngest = isIngestSecretAuthorized(request, env);
+      const _browseIngest = isIngestSecretAuthorized(request, env, secretFn);
       if (!_browseSess?.user_id && !_browseIngest) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.MYBROWSER) return jsonResponse({ error: 'MYBROWSER not configured' }, 503);
       const _browseBody = await request.json().catch(() => ({}));
@@ -9306,7 +10227,7 @@ async function handleAgentApi(request, url, env, ctx) {
     }
 
     if (pathLower === '/api/agent/vertex-test' && method === 'POST') {
-      const _vtIngest = isIngestSecretAuthorized(request, env);
+      const _vtIngest = isIngestSecretAuthorized(request, env, secretFn);
       if (!_vtIngest) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
         return jsonResponse({ ok: false, error: 'GOOGLE_SERVICE_ACCOUNT_JSON not configured' }, 503);
@@ -9888,6 +10809,7 @@ async function handleAgentApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
       const session = await getSession(env, request);
       if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const authUser = await getAuthUser(request, env);
       const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
       const secret = (env.TERMINAL_SECRET || '').trim();
       if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
@@ -9896,7 +10818,15 @@ async function handleAgentApi(request, url, env, ctx) {
       else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
       else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
       const sep = wssUrl.includes('?') ? '&' : '?';
-      const url = `${wssUrl}${sep}token=${encodeURIComponent(secret)}`;
+      let themeSlug = 'meaux-storm-gray';
+      if (authUser?.id && env.DB) {
+        try {
+          const row = await env.DB.prepare('SELECT theme FROM user_settings WHERE user_id = ? LIMIT 1').bind(authUser.id).first();
+          const t = row?.theme ? normalizeThemeSlug(row.theme) : null;
+          if (t) themeSlug = t;
+        } catch (_) {}
+      }
+      const url = `${wssUrl}${sep}token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
       return jsonResponse({ url });
     }
 
@@ -10045,6 +10975,117 @@ async function handleAgentApi(request, url, env, ctx) {
       }
 
       return jsonResponse({ ok: true });
+    }
+
+    if (pathLower === '/api/terminal/assist' && method === 'POST') {
+      const raw = request.headers.get('Authorization') ?? '';
+      const token = raw.replace(/^Bearer\s*/i, '').replace(/\s/g, '');
+      const expected = (env.PTY_AUTH_TOKEN ?? '').replace(/\s/g, '');
+      if (!token || token !== expected) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!env.DB) {
+        return jsonResponse({ error: 'terminal_assist routing not configured' }, 503);
+      }
+      let body;
+      try {
+        body = await request.json();
+      } catch (_) {
+        return jsonResponse({ error: 'invalid json' }, 400);
+      }
+      const { mode, command, context, output, exit_code, session_id } = body || {};
+      const rule = await env.DB.prepare(
+        `SELECT primary_model, fallback_model, provider, max_output_tokens
+         FROM model_routing_rules
+         WHERE task_type = 'terminal_assist' AND is_active = 1
+         LIMIT 1`
+      ).first();
+      if (!rule) {
+        return jsonResponse({ error: 'terminal_assist routing not configured' }, 503);
+      }
+      const fragment = await env.DB.prepare(
+        `SELECT fragment_text FROM provider_prompt_fragments
+         WHERE id = 'ppf_terminal' AND is_active = 1
+         LIMIT 1`
+      ).first();
+      const systemPrompt = fragment?.fragment_text ?? 'You are a terminal assistant. Be concise.';
+      const prompts = {
+        error: `Command: ${command ?? 'unknown'}\nExit code: ${exit_code ?? 1}\nOutput:\n${output ?? ''}\nExplain the error and give the exact fix command.`,
+        explain: `Explain concisely for a terminal user: ${context ?? ''}`,
+        fix: `Command failed:\n${command ?? ''}\nOutput:\n${output ?? ''}\nGive only the corrected command. Nothing else.`,
+        ask: `Question: ${context ?? ''}\nRecent terminal output:\n${output ?? ''}`,
+      };
+      const m = typeof mode === 'string' ? mode : 'ask';
+      const userMessage = prompts[m] ?? prompts.ask;
+      const text = await invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage);
+      if (session_id && typeof session_id === 'string' && env.DB) {
+        const now = Math.floor(Date.now() / 1000);
+        const histId = 'th_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+        try {
+          const seqRow = await env.DB.prepare(
+            'SELECT COALESCE(MAX(sequence), 0) AS m FROM terminal_history WHERE terminal_session_id = ?'
+          ).bind(session_id).first();
+          const seq = Number(seqRow?.m ?? 0) + 1;
+          await env.DB.prepare(
+            `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)`
+          ).bind(
+            histId,
+            session_id,
+            'tenant_sam_primeaux',
+            seq,
+            'output',
+            String(text).slice(0, 50000),
+            null,
+            'terminal_assist_' + m,
+            null,
+            now
+          ).run();
+        } catch (e) {
+          console.warn('[terminal/assist] terminal_history', e?.message ?? e);
+        }
+      }
+      return jsonResponse({ text });
+    }
+
+    if (pathLower === '/api/monaco/complete' && method === 'POST') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!env.DB) {
+        return jsonResponse({ error: 'monaco_complete not configured' }, 503);
+      }
+      let body;
+      try {
+        body = await request.json();
+      } catch (_) {
+        return jsonResponse({ error: 'invalid json' }, 400);
+      }
+      const { context, language, mode } = body || {};
+      const rule = await env.DB.prepare(
+        `SELECT primary_model, fallback_model, provider, max_output_tokens
+         FROM model_routing_rules
+         WHERE task_type = 'terminal_assist' AND is_active = 1
+         LIMIT 1`
+      ).first();
+      if (!rule) {
+        return jsonResponse({ error: 'monaco_complete routing not configured' }, 503);
+      }
+      const fragment = await env.DB.prepare(
+        `SELECT fragment_text FROM provider_prompt_fragments
+         WHERE id = 'ppf_terminal' AND is_active = 1
+         LIMIT 1`
+      ).first();
+      const systemPrompt = fragment?.fragment_text ?? 'You are a terminal assistant. Be concise.';
+      const ctx = String(context ?? '').trim();
+      const lang = typeof language === 'string' && language.trim() ? language.trim() : 'text';
+      const m = typeof mode === 'string' ? mode : 'explain';
+      const userMessage =
+        m === 'fix'
+          ? `Give only the next line or short snippet to continue this ${lang} code. No explanation.\n${ctx.slice(0, 4000)}`
+          : `Concise inline completion for ${lang} (one line or short continuation only):\n${ctx.slice(0, 4000)}`;
+      const text = await invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage, 150);
+      return jsonResponse({ text: String(text || '').trim() });
     }
 
     const sessionIdMatch = pathLower.match(/^\/api\/agent\/sessions\/([^/]+)$/);
@@ -10591,8 +11632,9 @@ async function handleAgentApi(request, url, env, ctx) {
 
     if (pathLower === '/api/agent/chat' && method === 'POST') {
       const chatStartTime = Date.now();
+      const routingOptsForChat = { chatStartMs: chatStartTime };
       const body = await request.json();
-      const { model_id, messages: msgList, agent_id, session_id, images: bodyImages, attached_files: bodyFiles, use_ai_gateway: bodyUseGateway, compiled_context: bodyCompiledContext, mode: bodyMode, fileContext: bodyFileContext, audit: bodyAudit, context_refs: bodyContextRefsRaw, context_mentions: bodyContextMentionsLegacy } = body;
+      const { model_id, messages: msgList, agent_id, session_id, images: bodyImages, attached_files: bodyFiles, compiled_context: bodyCompiledContext, mode: bodyMode, fileContext: bodyFileContext, audit: bodyAudit, context_refs: bodyContextRefsRaw, context_mentions: bodyContextMentionsLegacy } = body;
       const bodyContextRefs = Array.isArray(bodyContextRefsRaw)
         ? bodyContextRefsRaw
         : Array.isArray(bodyContextMentionsLegacy)
@@ -10602,7 +11644,7 @@ async function handleAgentApi(request, url, env, ctx) {
       console.log('[agent/chat] model_id:', model_id);
       const bodyCompiledContextTrim = typeof bodyCompiledContext === 'string' ? bodyCompiledContext.trim() : '';
       if (!msgList || !Array.isArray(msgList) || msgList.length === 0) return jsonResponse({ error: 'messages required' }, 400);
-      const ingestBypass = isIngestSecretAuthorized(request, env);
+      const ingestBypass = isIngestSecretAuthorized(request, env, secretFn);
       let chatUserId, chatWorkspaceId, chatTenantId;
       if (ingestBypass) {
         chatUserId = 'sam_primeaux';
@@ -10619,7 +11661,10 @@ async function handleAgentApi(request, url, env, ctx) {
         mode: chatMode,
         message_count: msgList.length,
       });
+      routingOptsForChat.workspaceId = chatWorkspaceId || 'default';
+      routingOptsForChat.tenantId = chatTenantId || 'tenant_sam_primeaux';
 
+      let _routingClassifySnapshot = null;
       let model;
       if (model_id === 'auto') {
         console.log('[agent/chat] Auto mode activated - selecting optimal model');
@@ -10627,6 +11672,7 @@ async function handleAgentApi(request, url, env, ctx) {
         const autoResult = await selectAutoModel(env, autoUserText, true);
         model = autoResult?.model ?? autoResult;
         const autoIntent = autoResult?.intent ?? null;
+        if (autoIntent) _routingClassifySnapshot = { intent: autoIntent };
         if (model && autoIntent) model = { ...model, _intent: autoIntent };
         console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null', 'intent:', autoIntent);
       } else {
@@ -10634,7 +11680,11 @@ async function handleAgentApi(request, url, env, ctx) {
         if (model) {
           try {
             const _mt = getLatestUserPlainText(msgList);
-            if (_mt) { const _mc = await classifyIntent(env, _mt); if (_mc?.intent) model = { ...model, _intent: _mc.intent }; }
+            if (_mt) {
+              const _mc = await classifyIntent(env, _mt);
+              _routingClassifySnapshot = _mc;
+              if (_mc?.intent) model = { ...model, _intent: _mc.intent };
+            }
           } catch (_) {}
         }
         if (!model) {
@@ -10784,6 +11834,24 @@ async function handleAgentApi(request, url, env, ctx) {
         }
       }
       conversationId = conversationId || crypto.randomUUID();
+
+      const bodySkillRaw = body.skill_ids ?? body.skill_id;
+      const skillIdsForInv = Array.isArray(bodySkillRaw)
+        ? bodySkillRaw
+        : (bodySkillRaw != null && String(bodySkillRaw).trim() !== '' ? [bodySkillRaw] : []);
+      if (skillIdsForInv.length && env.DB) {
+        const runSkillInv = () => recordAgentsamSkillInvocationsFromChat(env, {
+          skillIds: skillIdsForInv.map((x) => String(x)),
+          userId: chatUserId,
+          workspaceId: chatWorkspaceId,
+          conversationId,
+          inputSummary: latestUserPlain,
+          modelUsed: model?.model_key != null ? String(model.model_key) : null,
+          durationMs: null,
+        });
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(Promise.resolve().then(runSkillInv));
+        else runSkillInv();
+      }
 
       let ragContext = '';
       const RAG_MIN_QUERY_WORDS = 4;
@@ -11174,6 +12242,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       if (!_agentIntent && lastUserContent) {
         try {
           const _mc = await classifyIntent(env, lastUserContent);
+          _routingClassifySnapshot = _mc;
           if (_mc?.intent) model = { ...model, _intent: _mc.intent };
         } catch (_) {}
       }
@@ -11233,10 +12302,59 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         console.warn('[agent/chat] draw_libraries system prompt', e?.message ?? e);
       }
 
-      const gatewayModel = getGatewayModel(model.provider, model.model_key);
-      const useGateway = bodyUseGateway !== false && !!env.AI_GATEWAY_BASE_URL;
-      const canStreamAnthropic = model.provider === 'anthropic' && !(useGateway && gatewayModel) && !!env.ANTHROPIC_API_KEY;
-      const canStreamOpenAI = model.provider === 'openai' && !(useGateway && gatewayModel) && !!env.OPENAI_API_KEY;
+      let projectContextBlurb = '';
+      try {
+        const wsId = chatWorkspaceId || 'ws_samprimeaux';
+        const wsToProjectKey = {
+          'ws_samprimeaux': 'iam-dashboard-sprint',
+          'ws_inneranimal': 'iam-dashboard-sprint',
+        };
+        const projectKey = wsToProjectKey[wsId];
+        if (projectKey) {
+          const ctx = await env.DB.prepare(
+            `SELECT description, goals, constraints, current_blockers, primary_tables,
+                    workers_involved, r2_buckets_involved, domains_involved, key_files, related_routes
+             FROM agentsam_project_context
+             WHERE project_key = ? AND status = 'active'
+             LIMIT 1`
+          ).bind(projectKey).first();
+          if (ctx) {
+            projectContextBlurb = [
+              '## Active Project Context',
+              ctx.description,
+              ctx.goals ? `Goals: ${ctx.goals}` : '',
+              ctx.constraints ? `Constraints: ${ctx.constraints}` : '',
+              ctx.current_blockers ? `Current blockers: ${ctx.current_blockers}` : '',
+              ctx.primary_tables ? `Primary tables: ${ctx.primary_tables}` : '',
+              ctx.workers_involved ? `Workers: ${ctx.workers_involved}` : '',
+              ctx.r2_buckets_involved ? `R2 buckets: ${ctx.r2_buckets_involved}` : '',
+              ctx.domains_involved ? `Domains: ${ctx.domains_involved}` : '',
+              ctx.key_files ? `Key files: ${ctx.key_files}` : '',
+              ctx.related_routes ? `Related routes: ${ctx.related_routes}` : '',
+            ].filter(Boolean).join('\n');
+          }
+        }
+      } catch (e) {
+        console.warn('[project-ctx] non-fatal:', e?.message);
+        projectContextBlurb = '';
+      }
+      if (projectContextBlurb) {
+        finalSystem = finalSystem + '\n\n' + projectContextBlurb;
+      }
+
+      try {
+        const fragment = await env.DB.prepare(
+          'SELECT fragment_text FROM provider_prompt_fragments WHERE provider=? AND is_active=1'
+        ).bind(model.provider).first();
+        if (fragment?.fragment_text) finalSystem = finalSystem + '\n\n' + fragment.fragment_text;
+      } catch (e) {
+        console.warn('[agent/chat] provider_prompt_fragments', e?.message ?? e);
+      }
+
+      const canStreamAnthropic = model.provider === 'anthropic'
+        && !!env.ANTHROPIC_API_KEY;
+      const canStreamOpenAI = model.provider === 'openai'
+        && !!env.OPENAI_API_KEY;
       const canStreamGoogle = model.provider === 'google' && (!!env.GOOGLE_AI_API_KEY || shouldUseVertexForGoogleModel(env, model.model_key || ''));
       const canStreamWorkersAI = (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && !!env.AI;
       const wantStream = body.stream === true && (canStreamAnthropic || canStreamOpenAI || canStreamGoogle || canStreamWorkersAI);
@@ -11247,8 +12365,10 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       if (supportsTools) {
         try {
           const toolRows = await env.DB.prepare(
-            'SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1'
-          ).all();
+            `SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1
+             AND (modes_json LIKE '%"' || ? || '"%')
+             AND is_degraded = 0`
+          ).bind(chatMode).all();
           const filteredToolRows = filterToolRowsByPanel(agent_id, toolRows.results ?? []);
           toolDefinitions = filteredToolRows.map(t => {
             let rawSchema = {};
@@ -11291,6 +12411,34 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           description: 'Get the base64 content and size of a binary file the user attached to this message. Call with filename matching one of the attached binary files.',
           input_schema: { type: 'object', properties: { filename: { type: 'string', description: 'Exact filename of the attached binary file' } }, required: ['filename'] },
         }];
+      }
+
+      const _routingRawIntent = _routingClassifySnapshot
+        ? JSON.stringify({
+          intent: _routingClassifySnapshot.intent,
+          tasks: _routingClassifySnapshot.tasks || [],
+        }).slice(0, 4000)
+        : String(_agentIntentFinal);
+      const _routingTaskType = (_routingClassifySnapshot?.tasks?.[0]?.type) || intentToModelRoutingTaskType(_agentIntentFinal);
+      if (conversationId && env.DB) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO routing_decisions (id, session_id, mode, raw_intent, task_type, model_selected, provider_selected, rule_source, tool_count_sent, created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,unixepoch())`
+          ).bind(
+            crypto.randomUUID(),
+            conversationId,
+            chatMode,
+            _routingRawIntent,
+            _routingTaskType,
+            model.model_key,
+            model.provider,
+            'model_routing_rules',
+            toolDefinitions.length
+          ).run();
+        } catch (e) {
+          console.warn('[agent/chat] routing_decisions INSERT', e?.message ?? e);
+        }
       }
 
       const messageContentChars = (m) => {
@@ -11370,16 +12518,16 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           model.model_key === 'o1'
         );
         if (_needsResponsesAPI) {
-          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId);
+          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId, routingOptsForChat);
         }
-        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId);
+        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId, routingOptsForChat);
         }
         console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
         if (canStreamGoogle) {
-          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode, agentsamAgentRunId: agentsamRunId });
+          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat });
         }
         if (canStreamWorkersAI) {
-          return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, agentsamRunId);
+          return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, agentsamRunId, routingOptsForChat);
         }
         if (toolDefinitions.length > 0) {
           if (canStreamAnthropic) {
@@ -11388,7 +12536,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
               const au = await getAuthUser(request, env);
               oauthUserIdForTools = au ? (au.email || au.id) : undefined;
             } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId }, toolDefinitions);
+            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat }, toolDefinitions);
             if (toolsResp) return toolsResp;
             return jsonResponse({ error: 'Tool loop returned no response' }, 500);
           }
@@ -11473,12 +12621,17 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                       } catch (e) {
                         console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
                       }
+                      let telemetryInlineId = null;
                       try {
+                        telemetryInlineId = crypto.randomUUID();
                         await envRef.DB.prepare(
                           `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,unixepoch())`
-                        ).bind(crypto.randomUUID(), envRef.TENANT_ID || 'system', conversationIdRef, 'llm_call', 'chat_completion', 1, modelRef.model_key, modelRef.provider, inputTokens, outputTokens, amountUsd).run();
+                        ).bind(telemetryInlineId, envRef.TENANT_ID || 'system', conversationIdRef, 'llm_call', 'chat_completion', 1, modelRef.model_key, modelRef.provider, inputTokens, outputTokens, amountUsd).run();
                       } catch (e) {
                         console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
+                      }
+                      if (telemetryInlineId) {
+                        await completeRoutingDecisionTelemetry(envRef, conversationIdRef, telemetryInlineId, inputTokens, outputTokens, amountUsd, routingOptsForChat);
                       }
                       if (ctx && typeof ctx.waitUntil === 'function') {
                         const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
@@ -11569,7 +12722,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
             oauthUserIdForTools = au ? (au.email || au.id) : undefined;
           } catch (_) { oauthUserIdForTools = undefined; }
           console.log(`[TOKEN_AUDIT] intent=${_agentIntentFinal} toolCount=${toolDefinitions.length} systemChars=${finalSystem.length} historyChars=${historyChars} toolDefChars=${toolDefChars}`);
-          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId }, toolDefinitions);
+          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat }, toolDefinitions);
           if (toolsResp) return toolsResp;
         }
         const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
@@ -11579,7 +12732,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const resolvedModelForTools = model.provider === 'google' ? await resolveGoogleModelRowForVertexAi(env, model) : model;
         const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
         try {
-          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId);
+          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId, routingOptsForChat);
         } catch (e) {
           console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
         }
@@ -11611,11 +12764,6 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
 
       let result;
-      if (useGateway && gatewayModel && (model.provider === 'openai' || model.provider === 'anthropic')) {
-        const gw = await callGatewayChat(env, finalSystem, apiMessages, gatewayModel, images);
-        if (gw && !gw.ok) return jsonResponse(gw.data || { error: 'AI Gateway request failed' }, gw.status || 502);
-        if (gw && gw.ok) result = gw.data;
-      }
       if (result === undefined && model.provider === 'anthropic' && env.ANTHROPIC_API_KEY) {
         const anthropicMessages = apiMessages.map((m, i) => {
           const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
@@ -11885,29 +13033,35 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       try {
         const body = await request.json().catch(() => ({}));
         const query = body.query || body.q || '';
-        if (!query.trim()) return jsonResponse({ error: 'query required', matches: [], ragDebug: null }, 400);
-        const out = await vectorizeRagSearch(env, query.trim(), { topK: 5 });
-        const rawResults = out?.results ?? out?.data ?? [];
-        const chunks = rawResults.map(r =>
-          typeof r === 'string' ? r :
-          r.text ?? r.content?.[0]?.text ?? ''
-        ).filter(Boolean);
-        const payload = { matches: chunks, count: chunks.length };
-        if (out._debug) payload.ragDebug = out._debug;
+        if (!query.trim()) return jsonResponse({ error: 'query required', matches: [], results: [], count: 0, ragDebug: null }, 400);
+        const out = await unifiedRagSearch(env, query.trim(), {
+          topK: 8,
+          conversation_id: body.conversation_id ?? null,
+          mode: body.mode ?? null,
+          intent: body.intent ?? null,
+        });
+        const payload = {
+          matches: out.matches || [],
+          results: out.results || [],
+          count: out.count ?? 0,
+        };
+        if (out._error) payload.ragDebug = { error: out._error };
+        else if (out._meta) payload.ragDebug = out._meta;
         return jsonResponse(payload);
       } catch (e) {
-        return jsonResponse({ error: String(e?.message || e), matches: [], ragDebug: { error: String(e?.message || e) } }, 500);
+        return jsonResponse({ error: String(e?.message || e), matches: [], results: [], count: 0, ragDebug: { error: String(e?.message || e) } }, 500);
       }
     }
 
     if (pathLower === '/api/agent/rag/status' && method === 'GET') {
+      const counts = await getRagStatusPayload(env);
       const bindings = {
         VECTORIZE_INDEX: !!env.VECTORIZE_INDEX,
         VECTORIZE: !!env.VECTORIZE,
         AI: !!env.AI,
         R2: !!env.R2,
       };
-      return jsonResponse({ rag: 'vectorize', bindings });
+      return jsonResponse({ rag: 'unified_d1', ...(counts || {}), bindings });
     }
 
     if (pathLower === '/api/agent/rag/index-memory' && method === 'POST') {
@@ -13444,26 +14598,18 @@ async function handleAgentsamApi(request, url, env) {
           vectorize: !!env.VECTORIZE,
           r2: !!(env.R2 || env.ASSETS),
           workers_ai: !!env.AI,
-          autorag: !!(env.AI_SEARCH_TOKEN && env.CLOUDFLARE_ACCOUNT_ID),
+          autorag_legacy_deprecated: true,
+          ai_search_token_configured: !!(env.AI_SEARCH_TOKEN && env.CLOUDFLARE_ACCOUNT_ID),
         },
       });
     }
 
     if (pathLower === '/api/agentsam/autorag/stats' && method === 'GET') {
-      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
-      const token = env.AI_SEARCH_TOKEN;
-      if (!accountId || !token) {
-        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
-      }
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search`,
-        { headers: { Authorization: `Bearer ${token}` } }
+      void env.AI_SEARCH_TOKEN;
+      return new Response(
+        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+        { status: 410, headers: { 'Content-Type': 'application/json' } }
       );
-      const data = await res.json().catch(() => ({}));
-      return jsonResponse({
-        ok: res.ok,
-        stats: data?.result ?? data,
-      });
     }
 
     if (pathLower === '/api/agentsam/autorag/files' && method === 'GET') {
@@ -13488,27 +14634,11 @@ async function handleAgentsamApi(request, url, env) {
     }
 
     if (pathLower === '/api/agentsam/autorag/sync' && method === 'POST') {
-      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
-      const token = env.AI_SEARCH_TOKEN;
-      if (!accountId || !token) {
-        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
-      }
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search/jobs`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({}),
-        }
+      void env.AI_SEARCH_TOKEN;
+      return new Response(
+        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+        { status: 410, headers: { 'Content-Type': 'application/json' } }
       );
-      const data = await res.json().catch(() => ({}));
-      return jsonResponse({
-        ok: res.ok,
-        job: data?.result ?? data,
-      });
     }
 
     if (pathLower === '/api/agentsam/autorag/files' && method === 'DELETE') {
@@ -13536,31 +14666,11 @@ async function handleAgentsamApi(request, url, env) {
     }
 
     if (pathLower === '/api/agentsam/autorag/search' && method === 'POST') {
-      const body = await request.json().catch(() => ({}));
-      const query = body?.query;
-      if (!query) return jsonResponse({ error: 'query required' }, 400);
-      const accountId = env.CLOUDFLARE_ACCOUNT_ID;
-      const token = env.AI_SEARCH_TOKEN;
-      if (!accountId || !token) {
-        return jsonResponse({ error: 'AutoRAG not configured' }, 503);
-      }
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/iam-docs-search/search`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messages: [{ content: query, role: 'user' }],
-            ai_search_options: { retrieval: { max_num_results: 5 } },
-          }),
-        }
+      void env.AI_SEARCH_TOKEN;
+      return new Response(
+        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+        { status: 410, headers: { 'Content-Type': 'application/json' } }
       );
-      const data = await res.json().catch(() => ({}));
-      const chunks = data?.result?.chunks ?? data?.chunks ?? [];
-      return jsonResponse({ ok: res.ok, chunks });
     }
 
     if (pathLower === '/api/agentsam/runs' && method === 'GET') {
@@ -14470,7 +15580,12 @@ async function handleCidiApi(request, url, env, ctx) {
 
 /** Record MCP tool call to mcp_tool_calls, mcp_usage_log, and mcp_services. All DB writes in try/catch so missing tables/columns do not break flow. */
 async function recordMcpToolCall(env, opts) {
-  const { conversationId, toolName, toolCategory, toolInput, result, error, serviceName } = opts;
+  const {
+    conversationId, toolName, toolCategory, toolInput, result, error, serviceName,
+    durationMs = 0,
+    inputTokens: optInTok = 0,
+    outputTokens: optOutTok = 0,
+  } = opts;
   if (!env.DB) return;
   const tenant = 'tenant_sam_primeaux';
   const sessionId = conversationId ?? '';
@@ -14479,16 +15594,32 @@ async function recordMcpToolCall(env, opts) {
   const outputSlice = output.slice(0, 50000);
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   const id = crypto.randomUUID();
+  const cat = toolCategory || 'mcp';
+  const catLower = String(cat).toLowerCase();
+  let toolCostUsd = 0;
+  const zeroCostCats = new Set(['terminal', 'd1', 'r2', 'browser']);
+  if (!zeroCostCats.has(catLower)) {
+    try {
+      const telRow = await env.DB.prepare(
+        `SELECT computed_cost_usd FROM agent_telemetry
+         WHERE session_id = ? AND created_at >= unixepoch() - 10
+         ORDER BY created_at DESC LIMIT 1`
+      ).bind(sessionId).first();
+      if (telRow?.computed_cost_usd != null) toolCostUsd = Number(telRow.computed_cost_usd) || 0;
+    } catch (_) {}
+  }
+  const inTok = Number(optInTok) || 0;
+  const outTok = Number(optOutTok) || 0;
   try {
     await env.DB.prepare(
-      `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent_sam', ?, ?, ?, ?, ?)`
+      `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message, cost_usd, input_tokens, output_tokens)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent_sam', ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id,
       tenant,
       sessionId,
       toolName,
-      toolCategory || 'mcp',
+      cat,
       JSON.stringify(toolInput || {}),
       outputSlice,
       status,
@@ -14496,8 +15627,21 @@ async function recordMcpToolCall(env, opts) {
       now,
       now,
       now,
-      error ? String(error).slice(0, 8000) : null
+      error ? String(error).slice(0, 8000) : null,
+      toolCostUsd,
+      inTok,
+      outTok
     ).run();
+    appendMcpAuditLogAndStats(env, {
+      conversationId: sessionId,
+      toolName,
+      toolCategory: cat,
+      toolInput,
+      result: outputSlice,
+      error,
+      durationMs,
+      costUsd: toolCostUsd,
+    });
   } catch (e) { console.warn('[recordMcpToolCall] mcp_tool_calls', e?.message ?? e); }
   /* mcp_usage_log: rolled up by trg_mcp_tool_calls_usage (migration 161) after INSERT into mcp_tool_calls */
   if (serviceName) {
@@ -14723,6 +15867,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     if (suppressTelemetry) return;
     await recordMcpToolCall(env, o);
   };
+  const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'sam_primeaux');
+  const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_samprimeaux');
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
   if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && (!needsScreenshotBucket || env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
@@ -15154,14 +16300,37 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
     const command = params.command ?? '';
+    const termT0 = Date.now();
     try {
       const termResult = await runTerminalCommand(env, null, command, params.conversation_id ?? null, opts.executionCtx ?? null);
       const out = { result: termResult.output ?? 'No output' };
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: out.result, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: out.result, error: null, serviceName: 'builtin', durationMs: Date.now() - termT0 });
+      console.log('[cmd_audit] invoke terminal_execute success identity', { userId: cmdAuditUserId, workspaceId: cmdAuditWorkspaceId });
+      insertAgentCommandAuditLog(env, {
+        userId: cmdAuditUserId,
+        workspaceId: cmdAuditWorkspaceId,
+        commandKey: 'terminal_execute',
+        target: String(command).slice(0, 500),
+        success: true,
+        output: out.result,
+        errorMessage: null,
+        requestId: null,
+      });
       return out;
     } catch (err) {
       const errMsg = String(err?.message || err);
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'terminal', toolInput: params, result: null, error: errMsg, serviceName: 'builtin', durationMs: Date.now() - termT0 });
+      console.log('[cmd_audit] invoke terminal_execute error identity', { userId: cmdAuditUserId, workspaceId: cmdAuditWorkspaceId });
+      insertAgentCommandAuditLog(env, {
+        userId: cmdAuditUserId,
+        workspaceId: cmdAuditWorkspaceId,
+        commandKey: 'terminal_execute',
+        target: String(command).slice(0, 500),
+        success: false,
+        output: null,
+        errorMessage: errMsg.slice(0, 200),
+        requestId: null,
+      });
       return { error: errMsg };
     }
   }
@@ -15251,18 +16420,52 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const blocked = /\bdrop\s+table\b|\btruncate\b/i;
     if (blocked.test(sql)) {
       await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: 'Blocked: DROP TABLE and TRUNCATE require manual approval', serviceName: 'builtin' });
+      console.log('[cmd_audit] invoke d1_write blocked identity', { userId: cmdAuditUserId, workspaceId: cmdAuditWorkspaceId });
+      insertAgentCommandAuditLog(env, {
+        userId: cmdAuditUserId,
+        workspaceId: cmdAuditWorkspaceId,
+        commandKey: 'd1_write',
+        target: sql.slice(0, 500),
+        success: false,
+        output: null,
+        errorMessage: 'Blocked: DROP TABLE and TRUNCATE require manual approval',
+        requestId: null,
+      });
       return { error: 'Blocked: DROP TABLE and TRUNCATE require manual approval' };
     }
+    const d1wT0 = Date.now();
     try {
       const stmt = env.DB.prepare(sql);
       const result = bindParams.length ? await stmt.bind(...bindParams).run() : await stmt.run();
       const changes = result.meta?.changes ?? result.changes ?? 0;
       const resultText = JSON.stringify({ changes, success: true });
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: resultText, error: null, serviceName: 'builtin', durationMs: Date.now() - d1wT0 });
+      console.log('[cmd_audit] invoke d1_write success identity', { userId: cmdAuditUserId, workspaceId: cmdAuditWorkspaceId });
+      insertAgentCommandAuditLog(env, {
+        userId: cmdAuditUserId,
+        workspaceId: cmdAuditWorkspaceId,
+        commandKey: 'd1_write',
+        target: sql.slice(0, 500),
+        success: true,
+        output: resultText,
+        errorMessage: null,
+        requestId: null,
+      });
       return { result: resultText };
     } catch (e) {
       const errMsg = `D1 error: ${e?.message ?? e}`;
-      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'd1', toolInput: params, result: null, error: errMsg, serviceName: 'builtin', durationMs: Date.now() - d1wT0 });
+      console.log('[cmd_audit] invoke d1_write error identity', { userId: cmdAuditUserId, workspaceId: cmdAuditWorkspaceId });
+      insertAgentCommandAuditLog(env, {
+        userId: cmdAuditUserId,
+        workspaceId: cmdAuditWorkspaceId,
+        commandKey: 'd1_write',
+        target: sql.slice(0, 500),
+        success: false,
+        output: null,
+        errorMessage: errMsg.slice(0, 200),
+        requestId: null,
+      });
       return { error: errMsg };
     }
   }
@@ -15891,6 +17094,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     return { error: 'MCP auth not configured' };
   }
   try {
+    const mcpRemoteT0 = Date.now();
     const targetMcpUrl = (() => {
       const configured = String(toolRow.mcp_service_url || '').trim();
       if (!configured || configured.toLowerCase() === 'builtin') return 'https://mcp.inneranimalmedia.com/mcp';
@@ -15914,7 +17118,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     if (!mcpRes.ok) {
       console.warn('[invokeMcpToolFromChat] MCP non-OK', mcpRes.status, rawText?.slice(0, 500));
       const errMsg = `MCP ${mcpRes.status}: ${rawText?.slice(0, 200) || mcpRes.statusText}`;
-      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errMsg, serviceName: 'mcp_remote', durationMs: Date.now() - mcpRemoteT0 });
       return { error: errMsg };
     }
     const dataLine = rawText.split('\n').find(l => l.startsWith('data:'));
@@ -15922,12 +17126,12 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     const errMsg = parsed?.error?.message ?? parsed?.error;
     if (errMsg) {
       const errStr = String(errMsg);
-      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errStr, serviceName: 'mcp_remote' });
+      await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: null, error: errStr, serviceName: 'mcp_remote', durationMs: Date.now() - mcpRemoteT0 });
       return { error: errStr };
     }
     const content = parsed?.result?.content ?? parsed;
     const out = { result: content };
-    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: content, error: null, serviceName: 'mcp_remote' });
+    await rec( { conversationId, toolName: tool_name, toolCategory: toolRow.tool_category || 'mcp', toolInput: params, result: content, error: null, serviceName: 'mcp_remote', durationMs: Date.now() - mcpRemoteT0 });
     return out;
   } catch (err) {
     const errMsg = String(err?.message || err);
@@ -17799,7 +19003,12 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       });
       console.log('[chatWithToolsAnthropic] Using pre-filtered tools:', tools.length);
     } else {
-    const r = await env.DB.prepare('SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1 ORDER BY tool_name').all();
+    const r = await env.DB.prepare(
+      `SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1
+       AND (modes_json LIKE '%"' || ? || '"%')
+       AND is_degraded = 0
+       ORDER BY tool_name`
+    ).bind(mode).all();
     const filtered = filterToolRowsByPanel(agent_id, r.results || []);
     // Apply mode-based tool filter to cap tokens per LLM call
     const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
@@ -17999,7 +19208,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         } catch (_) {}
         return;
       }
-      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null);
+      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null);
       enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       return jsonResponse({
         content: [{ type: 'text', text: lastContent }],
@@ -18122,7 +19331,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalInputTokens = lastUsage.input_tokens || 0;
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
-        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null);
+        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null);
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({
           type: 'done',
@@ -18418,6 +19627,74 @@ async function runWebhookEventsMaintenanceCron(env) {
   }
 }
 
+async function runSpendLedgerRollup(env) {
+  if (!env?.DB) return;
+  const now = Math.floor(Date.now() / 1000);
+  const currentMonth = new Date().toISOString().slice(0, 7);
+
+  const { results: months = [] } = await env.DB.prepare(
+    `SELECT
+      tenant_id, workspace_id, brand_id, provider, provider_slug,
+      strftime('%Y-%m', occurred_at, 'unixepoch') as month,
+      COUNT(*) as row_count,
+      ROUND(SUM(amount_usd), 6) as total_usd,
+      SUM(tokens_in) as tokens_in,
+      SUM(tokens_out) as tokens_out
+    FROM spend_ledger
+    WHERE strftime('%Y-%m', occurred_at, 'unixepoch') < ?
+    GROUP BY tenant_id, provider, month`
+  ).bind(currentMonth).all();
+
+  if (!months.length) {
+    console.log('[rollup] No completed months to roll up.');
+    return;
+  }
+
+  for (const row of months) {
+    const id = `slr_${row.tenant_id}_${row.provider}_${row.month}`.replace(/[^a-z0-9_]/gi, '_');
+    await env.DB.prepare(
+      `INSERT INTO spend_ledger_monthly_rollup
+        (id, tenant_id, workspace_id, brand_id, provider, provider_slug, month,
+         row_count, total_usd, tokens_in, tokens_out, source_deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(tenant_id, provider, month) DO UPDATE SET
+        row_count = excluded.row_count,
+        total_usd = excluded.total_usd,
+        tokens_in = excluded.tokens_in,
+        tokens_out = excluded.tokens_out,
+        updated_at = excluded.updated_at`
+    ).bind(
+      id,
+      row.tenant_id,
+      row.workspace_id,
+      row.brand_id,
+      row.provider,
+      row.provider_slug,
+      row.month,
+      row.row_count,
+      row.total_usd,
+      row.tokens_in,
+      row.tokens_out,
+      now,
+      now
+    ).run();
+  }
+
+  await env.DB.prepare(
+    `DELETE FROM spend_ledger
+    WHERE strftime('%Y-%m', occurred_at, 'unixepoch') < ?
+      AND source = 'api_direct'`
+  ).bind(currentMonth).run();
+
+  await env.DB.prepare(
+    `UPDATE spend_ledger_monthly_rollup
+     SET source_deleted = 1, updated_at = ?
+     WHERE month < ?`
+  ).bind(now, currentMonth).run();
+
+  console.log(`[rollup] Completed. ${months.length} provider/month combos rolled up.`);
+}
+
 worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '*/30 * * * *') {
     ctx.waitUntil(processQueues(env));
@@ -18425,6 +19702,13 @@ worker.scheduled = async function scheduled(event, env, ctx) {
   }
   if (event.cron === '0 0 * * *') {
     if (env?.DB) ctx.waitUntil(runRetentionPurge(env));
+    if (env?.DB && env?.R2) {
+      ctx.waitUntil(
+        archiveOldConversations(env).then((r) => {
+          console.log('[archive]', JSON.stringify(r));
+        })
+      );
+    }
     if (!env?.DB) return;
     const today = new Date().toISOString().slice(0, 10);
     const already = await env.DB.prepare(
@@ -18433,6 +19717,7 @@ worker.scheduled = async function scheduled(event, env, ctx) {
        AND created_at >= ? LIMIT 1`
     ).bind(`${today}T00:00:00`).first().catch(() => null);
     if (already) return;
+    ctx.waitUntil(writeDailySnapshot(env, 'cron_midnight').catch(() => {}));
     ctx.waitUntil(sendDailyDigest(env));
     return;
   }
@@ -18456,12 +19741,21 @@ worker.scheduled = async function scheduled(event, env, ctx) {
         .catch((e) => console.error('[cron] RAG sync failed:', e?.message || e))
     );
     ctx.waitUntil(runWebhookEventsMaintenanceCron(env));
+    ctx.waitUntil(writeDailySnapshot(env, 'cron_6am').catch(() => {}));
   }
   if (event.cron === '0 9 * * *') {
     ctx.waitUntil(runFinancialCommandCron(env, ctx));
   }
+  if (event.cron === '0 9 * * 1') {
+    ctx.waitUntil(
+      runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
+    );
+  }
   if (event.cron === '30 13 * * *') {
     ctx.waitUntil(sendDailyPlanEmail(env));
+  }
+  if (event.cron === '0 0 1 * *') {
+    ctx.waitUntil(runSpendLedgerRollup(env));
   }
 };
 export default worker;
@@ -18471,10 +19765,11 @@ const DEFAULT_TENANT = 'system';
 const PROJECT_ID = 'inneranimalmedia';
 function origin(url) { return url.origin; }
 
-/** True when X-Ingest-Secret matches env.INGEST_SECRET (MCP / trusted automation). */
-function isIngestSecretAuthorized(request, env) {
+/** True when X-Ingest-Secret matches vault/env INGEST_SECRET (MCP / trusted automation). */
+function isIngestSecretAuthorized(request, env, secretFn) {
   const h = request.headers.get('X-Ingest-Secret');
-  return !!(env.INGEST_SECRET && h && h === env.INGEST_SECRET);
+  const ingestSecret = secretFn('INGEST_SECRET') ?? env.INGEST_SECRET;
+  return !!(ingestSecret && h && h === ingestSecret);
 }
 
 /** spend_ledger CHECK expects cloudflare_workers_ai; ai_models may still say workers_ai. */
@@ -18524,88 +19819,27 @@ async function handleFederatedSearch(request, env) {
   } catch (_) {}
   const query = (body?.query || '').toString().trim();
   if (!query) return jsonResponse({ error: 'query required' }, 400);
-  const limit = Math.max(1, Math.min(10, Number(body?.limit || 6)));
-  const sources = Array.isArray(body?.sources) && body.sources.length
-    ? body.sources.map((s) => String(s).toLowerCase())
-    : ['ai', 'chats', 'deployments', 'projects', 'github', 'drive', 'r2'];
+  const limit = Math.max(1, Math.min(20, Number(body?.limit || 8)));
 
-  const out = { ai: [], chats: [], deployments: [], projects: [], github: [], drive: [], r2: [] };
-
-  if (sources.includes('ai')) {
-    try {
-      const rag = await vectorizeRagSearch(env, query, { topK: limit });
-      const rows = rag?.results ?? rag?.data ?? [];
-      out.ai = rows.slice(0, limit).map((r, idx) => ({
-        id: r.id || `ai_${idx}`,
-        title: (r.title || r.source || 'AI result').toString(),
-        snippet: (r.content || r.text || '').toString().slice(0, 180),
-        url: (r.url || '/dashboard/agent').toString(),
-      }));
-    } catch (_) {}
+  try {
+    const out = await unifiedRagSearch(env, query, { topK: limit, federated: true });
+    const results = (out.results || []).map((r) => ({
+      text: r.text,
+      source: r.source,
+      source_type: r.source_type,
+      score: r.score,
+      doc_type: r.doc_type,
+      url: r.url != null && r.url !== '' ? r.url : null,
+    }));
+    return jsonResponse({
+      results,
+      sources_searched: out._meta?.sources_searched || [],
+      query,
+      count: out.count ?? 0,
+    });
+  } catch (e) {
+    return jsonResponse({ error: e?.message || String(e) }, 500);
   }
-
-  if (sources.includes('chats')) {
-    try {
-      const rows = await env.DB.prepare(
-        `SELECT conversation_id, content, created_at
-         FROM agent_messages
-         WHERE content LIKE ?
-         ORDER BY created_at DESC
-         LIMIT ?`
-      ).bind(`%${query}%`, limit).all();
-      out.chats = (rows?.results || []).map((r, idx) => ({
-        id: `chat_${idx}`,
-        title: 'Chat match',
-        snippet: (r.content || '').toString().slice(0, 180),
-        subtitle: r.created_at || '',
-        url: r.conversation_id ? `/dashboard/chats?conversation=${encodeURIComponent(r.conversation_id)}` : '/dashboard/chats',
-      }));
-    } catch (_) {}
-  }
-
-  if (sources.includes('deployments')) {
-    try {
-      const rows = await env.DB.prepare(
-        `SELECT worker_name, status, timestamp AS deployed_at, notes AS deployment_notes
-         FROM deployments
-         WHERE COALESCE(worker_name, '') LIKE ? OR COALESCE(notes, '') LIKE ?
-         ORDER BY timestamp DESC
-         LIMIT ?`
-      ).bind(`%${query}%`, `%${query}%`, limit).all();
-      out.deployments = (rows?.results || []).map((r, idx) => ({
-        id: `dep_${idx}`,
-        title: `${r.worker_name || 'worker'} - ${r.status || 'unknown'}`,
-        subtitle: r.deployed_at || '',
-        snippet: (r.deployment_notes || '').toString().slice(0, 180),
-        url: '/dashboard/cloud',
-      }));
-    } catch (_) {}
-  }
-
-  if (sources.includes('projects')) {
-    try {
-      const rows = await env.DB.prepare(
-        `SELECT id, name, status
-         FROM projects
-         WHERE name LIKE ? OR status LIKE ?
-         ORDER BY created_at DESC
-         LIMIT ?`
-      ).bind(`%${query}%`, `%${query}%`, limit).all();
-      out.projects = (rows?.results || []).map((r) => ({
-        id: r.id,
-        title: r.name || 'Project',
-        subtitle: r.status || '',
-        url: '/dashboard/projects',
-      }));
-    } catch (_) {}
-  }
-
-  // Integration-backed sources are returned as capability placeholders if no direct index exists yet.
-  if (sources.includes('github')) out.github = [];
-  if (sources.includes('drive')) out.drive = [];
-  if (sources.includes('r2')) out.r2 = [];
-
-  return jsonResponse({ ok: true, query, results: out, meta: { limit, sources } });
 }
 
 async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, source, payload) {
@@ -18852,6 +20086,7 @@ function vaultRegistry() {
     { name: 'INTERNAL_WEBHOOK_SECRET', type: 'secret', description: '/api/webhooks/internal X-IAM-Signature HMAC' },
     { name: 'MCP_AUTH_TOKEN', type: 'secret', description: 'MCP server auth' },
     { name: 'OPENAI_API_KEY', type: 'secret', description: 'OpenAI API' },
+    { name: 'OPENAI_WEBHOOK_SECRET', type: 'secret', description: 'OpenAI webhooks (X-OpenAI-Signature HMAC)' },
     { name: 'PTY_AUTH_TOKEN', type: 'secret', description: 'PTY / terminal' },
     { name: 'R2_ACCESS_KEY_ID', type: 'secret', description: 'R2 storage' },
     { name: 'R2_SECRET_ACCESS_KEY', type: 'secret', description: 'R2 storage' },
@@ -19164,6 +20399,417 @@ function formatPgvectorRowsForPrompt(rows) {
       return `[${i + 1}] (row)`;
     }
   }).join('\n\n---\n\n');
+}
+
+/** Unified RAG: D1 cosine over ai_knowledge_chunks + keyword sources; optional VECTORIZE_INDEX secondary (never AI_SEARCH / VECTORIZE_DOCS). */
+const UNIFIED_RAG_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+const VECTORIZE_INDEX_KNOWN_VECTOR_COUNT = 34;
+
+function sanitizeUnifiedRagLike(q) {
+  return String(q || '').slice(0, 120).replace(/[%_\[\]^]/g, ' ').trim();
+}
+
+function unifiedRagContentHash(s) {
+  const t = String(s || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return String(h);
+}
+
+function unifiedRagRecency01(ts) {
+  const now = Math.floor(Date.now() / 1000);
+  let sec = 0;
+  if (ts == null || ts === '') return 0.5;
+  if (typeof ts === 'number' && Number.isFinite(ts)) {
+    sec = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
+  } else {
+    const parsed = Date.parse(String(ts));
+    if (Number.isFinite(parsed)) sec = Math.floor(parsed / 1000);
+    else return 0.5;
+  }
+  if (!sec || sec <= 0) return 0.5;
+  const ageDays = Math.max(0, (now - sec) / 86400);
+  return Math.max(0, Math.min(1, 1 - Math.min(ageDays, 365) / 365));
+}
+
+function unifiedRagCosine(a, b) {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
+}
+
+/**
+ * @param {*} env
+ * @param {string} query
+ * @param {{ topK?: number, federated?: boolean, skipLogging?: boolean, conversation_id?: string|null, mode?: string|null, intent?: string|null }} [opts]
+ */
+async function unifiedRagSearch(env, query, opts = {}) {
+  const q = String(query || '').trim();
+  if (!q || !env.DB || !env.AI) {
+    return {
+      matches: [],
+      results: [],
+      count: 0,
+      _error: !env.DB ? 'no_db' : !env.AI ? 'no_ai' : 'empty_query',
+    };
+  }
+  const topK = Math.min(Math.max(1, opts.topK || 8), 24);
+  const federated = !!opts.federated;
+  const skipLogging = !!opts.skipLogging;
+  const conversationId = opts.conversation_id ?? null;
+  const mode = opts.mode ?? null;
+  const intent = opts.intent ?? null;
+  const _t0 = Date.now();
+  const likePct = `%${sanitizeUnifiedRagLike(q)}%`;
+
+  const emb = await env.AI.run(UNIFIED_RAG_EMBED_MODEL, { text: q });
+  const qVec = emb?.data?.[0] ?? emb?.result?.data?.[0];
+  if (!qVec || !Array.isArray(qVec)) {
+    return { matches: [], results: [], count: 0, _error: 'embedding_failed' };
+  }
+
+  const runVec = async () => {
+    if (!env.VECTORIZE_INDEX) return [];
+    try {
+      const res = await env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all' });
+      return res?.matches ?? res ?? [];
+    } catch (e) {
+      console.warn('[unifiedRagSearch] VECTORIZE_INDEX', e?.message ?? e);
+      return [];
+    }
+  };
+
+  const autoPromise = federated
+    ? env.DB.prepare(
+        `SELECT object_key, content_preview
+         FROM autorag
+         WHERE index_status = 'indexed'
+           AND (object_key LIKE ? OR IFNULL(content_preview,'') LIKE ?)
+         LIMIT 40`
+      )
+        .bind(likePct, likePct)
+        .all()
+        .catch(() => ({ results: [] }))
+    : Promise.resolve({ results: [] });
+
+  const r2Promise = federated
+    ? env.DB.prepare(
+        `SELECT bucket_name, key, content_type, created_at
+         FROM r2_objects
+         WHERE key LIKE ? OR bucket_name LIKE ?
+         LIMIT 40`
+      )
+        .bind(likePct, likePct)
+        .all()
+        .catch(() => ({ results: [] }))
+    : Promise.resolve({ results: [] });
+
+  const [
+    chunkRes,
+    ctxRes,
+    platRes,
+    projRes,
+    vecMatches,
+    autoRes,
+    r2Res,
+  ] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, content, token_count, embedding_vector, created_at, knowledge_id
+       FROM ai_knowledge_chunks
+       WHERE is_indexed = 1 AND embedding_vector IS NOT NULL
+       LIMIT 300`
+    )
+      .all()
+      .catch(() => ({ results: [] })),
+    env.DB.prepare(
+      `SELECT id, title, doc_type, summary, inline_content, keywords, tags
+       FROM context_index
+       WHERE is_active = 1 AND is_stale = 0
+         AND (title LIKE ? OR summary LIKE ? OR keywords LIKE ? OR tags LIKE ?)
+       LIMIT 30`
+    )
+      .bind(likePct, likePct, likePct, likePct)
+      .all()
+      .catch(() => ({ results: [] })),
+    env.DB.prepare(
+      `SELECT id, memory_key, memory_value, category, updated_at
+       FROM agent_platform_context
+       WHERE category IN ('deployment','config','note')
+         AND memory_value LIKE ?
+       LIMIT 50`
+    )
+      .bind(likePct)
+      .all()
+      .catch(() => ({ results: [] })),
+    env.DB.prepare(
+      `SELECT id, project_key, description, goals, updated_at
+       FROM agentsam_project_context
+       WHERE status = 'active' AND (description LIKE ? OR goals LIKE ?)
+       LIMIT 30`
+    )
+      .bind(likePct, likePct)
+      .all()
+      .catch(() => ({ results: [] })),
+    runVec(),
+    autoPromise,
+    r2Promise,
+  ]);
+
+  const sourcesSearched = ['ai_knowledge_chunks', 'context_index', 'agent_platform_context', 'agentsam_project_context'];
+  if (env.VECTORIZE_INDEX) sourcesSearched.push('vectorize_index');
+  if (federated) {
+    sourcesSearched.push('autorag', 'r2_objects');
+  }
+
+  /** @type {Array<{ text: string, source: string, source_type: string, score: number, doc_type: string, url?: string|null }>} */
+  const raw = [];
+
+  const chunkRows = chunkRes.results ?? [];
+  for (const c of chunkRows) {
+    let vec;
+    try {
+      vec = JSON.parse(c.embedding_vector);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(vec)) continue;
+    const cos = unifiedRagCosine(qVec, vec);
+    const rec = unifiedRagRecency01(c.created_at);
+    const score = cos * 0.7 + rec * 0.3;
+    raw.push({
+      text: String(c.content || '').slice(0, 12000),
+      source: String(c.knowledge_id || c.id || ''),
+      source_type: 'ai_knowledge_chunks',
+      score,
+      doc_type: 'chunk',
+      url: null,
+    });
+  }
+
+  for (const r of ctxRes.results ?? []) {
+    const text = [r.title, r.summary, r.inline_content].filter(Boolean).join('\n').slice(0, 8000);
+    if (!text.trim()) continue;
+    const rec = 0.5;
+    const score = 0.5 * 0.7 + rec * 0.3;
+    raw.push({
+      text,
+      source: String(r.id || ''),
+      source_type: 'context_index',
+      score,
+      doc_type: r.doc_type ? String(r.doc_type) : 'context_rule',
+      url: null,
+    });
+  }
+
+  for (const r of platRes.results ?? []) {
+    const text = `${r.memory_key || ''}\n${r.memory_value || ''}`.trim();
+    if (!text) continue;
+    const rec = unifiedRagRecency01(r.updated_at);
+    const score = 0.48 * 0.7 + rec * 0.3;
+    raw.push({
+      text,
+      source: String(r.id || r.memory_key || ''),
+      source_type: 'agent_platform_context',
+      score,
+      doc_type: String(r.category || 'platform'),
+      url: null,
+    });
+  }
+
+  for (const r of projRes.results ?? []) {
+    const text = [r.project_key, r.description, r.goals].filter(Boolean).join('\n').slice(0, 8000);
+    if (!text.trim()) continue;
+    const rec = unifiedRagRecency01(r.updated_at);
+    const score = 0.47 * 0.7 + rec * 0.3;
+    raw.push({
+      text,
+      source: String(r.project_key || r.id || ''),
+      source_type: 'agentsam_project_context',
+      score,
+      doc_type: 'project_context',
+      url: null,
+    });
+  }
+
+  for (const m of vecMatches) {
+    let content = m?.metadata?.text ?? m?.metadata?.content ?? '';
+    if (!content && m?.metadata?.source && env.R2) {
+      try {
+        const obj = await env.R2.get(m.metadata.source);
+        if (obj) content = (await obj.text()).slice(0, 12000);
+      } catch (_) {}
+    }
+    if (!content) continue;
+    const rec = 0.5;
+    const vscore = typeof m.score === 'number' ? m.score : 0.25;
+    const proxy = vscore * 0.55;
+    const score = proxy * 0.7 + rec * 0.3;
+    raw.push({
+      text: String(content).slice(0, 12000),
+      source: String(m?.metadata?.source ?? m?.id ?? ''),
+      source_type: 'vectorize_index',
+      score,
+      doc_type: 'vectorize',
+      url: null,
+    });
+  }
+
+  if (federated) {
+    for (const r of autoRes.results ?? []) {
+      const ok = r.object_key ? String(r.object_key) : '';
+      if (!ok) continue;
+      const text = [r.content_preview, ok].filter(Boolean).join('\n').slice(0, 8000);
+      const rec = 0.5;
+      const score = 0.46 * 0.7 + rec * 0.3;
+      raw.push({
+        text,
+        source: ok,
+        source_type: 'autorag_registry',
+        score,
+        doc_type: 'autorag',
+        url: `https://autorag.inneranimalmedia.com/${String(ok).replace(/^\//, '')}`,
+      });
+    }
+    for (const r of r2Res.results ?? []) {
+      const bn = r.bucket_name != null ? String(r.bucket_name) : '';
+      const ky = r.key != null ? String(r.key) : '';
+      const text = `${bn}/${ky}`.trim();
+      if (!text || text === '/') continue;
+      const rec = unifiedRagRecency01(r.created_at);
+      const score = 0.44 * 0.7 + rec * 0.3;
+      raw.push({
+        text,
+        source: ky,
+        source_type: 'r2_objects',
+        score,
+        doc_type: r.content_type ? String(r.content_type) : 'r2_object',
+        url: null,
+      });
+    }
+  }
+
+  const byHash = new Map();
+  for (const item of raw) {
+    const h = unifiedRagContentHash(item.text);
+    const prev = byHash.get(h);
+    if (!prev || item.score > prev.score) byHash.set(h, item);
+  }
+  const merged = Array.from(byHash.values()).sort((a, b) => b.score - a.score);
+  const top = merged.slice(0, topK);
+  const matches = top.map((x) => x.text).filter(Boolean);
+  const results = top.map((row) => {
+    const o = {
+      text: row.text,
+      source: row.source,
+      source_type: row.source_type,
+      score: Math.round(row.score * 10000) / 10000,
+      doc_type: row.doc_type,
+    };
+    if (row.url != null && row.url !== '') o.url = row.url;
+    return o;
+  });
+
+  const _dur = Date.now() - _t0;
+  const topScore = top[0]?.score ?? 0;
+  const injectText = matches.join('\n\n');
+  const _qTokens = Math.ceil(q.length / 4);
+
+  if (!skipLogging) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO rag_query_log
+          (conversation_id,query_text,query_tokens,results_count,top_score,
+           chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+        .bind(
+          conversationId,
+          q.slice(0, 500),
+          _qTokens,
+          merged.length,
+          topScore,
+          top.length,
+          Math.ceil(injectText.length / 4),
+          injectText.length,
+          UNIFIED_RAG_EMBED_MODEL,
+          mode,
+          intent,
+          'unified_d1',
+          _dur,
+          0,
+          0,
+          0
+        )
+        .run();
+    } catch (e) {
+      console.warn('[unifiedRagSearch] rag_query_log', e?.message ?? e);
+    }
+    try {
+      const histId = crypto.randomUUID();
+      const chunkIds = top.filter((x) => x.source_type === 'ai_knowledge_chunks').map((x) => x.source);
+      const scoreMap = {};
+      for (const x of top) scoreMap[x.source] = x.score;
+      await env.DB.prepare(
+        `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at)
+         VALUES (?,?,?,?,?,?,unixepoch())`
+      )
+        .bind(
+          histId,
+          'tenant_sam_primeaux',
+          q.slice(0, 2000),
+          JSON.stringify(chunkIds),
+          JSON.stringify(scoreMap),
+          injectText.slice(0, 12000)
+        )
+        .run();
+      await insertQualityCheckRagQuery(env, topScore);
+    } catch (e) {
+      console.warn('[unifiedRagSearch] ai_rag_search_history', e?.message ?? e);
+    }
+  }
+
+  return {
+    matches,
+    results,
+    count: top.length,
+    _meta: { duration_ms: _dur, merged_candidates: merged.length, sources_searched: sourcesSearched },
+  };
+}
+
+async function getRagStatusPayload(env) {
+  if (!env.DB) return null;
+  const [
+    indexed_chunks,
+    autorag_docs,
+    context_index_docs,
+    platform_ctx_docs,
+  ] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM ai_knowledge_chunks WHERE is_indexed = 1 AND embedding_vector IS NOT NULL`
+    )
+      .first()
+      .catch(() => ({ c: 0 })),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM autorag WHERE index_status = 'indexed'`).first().catch(() => ({ c: 0 })),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM context_index WHERE is_active = 1`).first().catch(() => ({ c: 0 })),
+    env.DB.prepare(`SELECT COUNT(*) AS c FROM agent_platform_context`).first().catch(() => ({ c: 0 })),
+  ]);
+  return {
+    indexed_chunks: Number(indexed_chunks?.c ?? 0),
+    autorag_docs: Number(autorag_docs?.c ?? 0),
+    context_index_docs: Number(context_index_docs?.c ?? 0),
+    platform_ctx_docs: Number(platform_ctx_docs?.c ?? 0),
+    vectorize_index_vectors: VECTORIZE_INDEX_KNOWN_VECTOR_COUNT,
+  };
 }
 
 /**
@@ -19691,6 +21337,126 @@ async function compactAgentChatsToR2(env) {
 }
 
 /**
+ * Archive long conversations to R2 (iam-platform), stub marker in D1; does not delete message rows (review first).
+ * Writes: agent-sessions/archive/{conversation_id}.md
+ */
+async function archiveOldConversations(env) {
+  if (!env.DB || !env.R2) return { archived: 0, errors: [], total_candidates: 0 };
+  let candidates = { results: [] };
+  try {
+    candidates = await env.DB.prepare(
+      `SELECT am.conversation_id,
+        COUNT(*) AS msg_count,
+        SUM(LENGTH(COALESCE(am.content, ''))) AS size_bytes,
+        MAX(ac.title) AS title,
+        MAX(ac.user_id) AS user_id,
+        MIN(datetime(am.created_at, 'unixepoch')) AS first_msg,
+        MAX(datetime(am.created_at, 'unixepoch')) AS last_msg
+       FROM agent_messages am
+       LEFT JOIN agent_conversations ac ON ac.id = am.conversation_id
+       WHERE (ac.r2_context_key IS NULL OR ac.r2_context_key = '')
+       GROUP BY am.conversation_id
+       HAVING COUNT(*) > 10
+       ORDER BY size_bytes DESC
+       LIMIT 50`
+    ).all();
+  } catch (e) {
+    return { archived: 0, errors: [{ error: String(e?.message || e) }], total_candidates: 0 };
+  }
+
+  const errors = [];
+  let archived = 0;
+  const rows = candidates.results || [];
+
+  for (const convo of rows) {
+    const cid = convo.conversation_id;
+    if (!cid) continue;
+    try {
+      const msgs = await env.DB.prepare(
+        `SELECT role, content, provider,
+          datetime(created_at, 'unixepoch') AS ts
+         FROM agent_messages
+         WHERE conversation_id = ?
+         ORDER BY created_at ASC`
+      ).bind(cid).all();
+
+      const lines = [
+        '# Conversation Archive',
+        `id: ${cid}`,
+        `title: ${convo.title || 'Untitled'}`,
+        `messages: ${convo.msg_count}`,
+        `size_bytes: ${convo.size_bytes}`,
+        `first: ${convo.first_msg}`,
+        `last: ${convo.last_msg}`,
+        `archived_at: ${new Date().toISOString()}`,
+        '---',
+        '',
+      ];
+
+      for (const msg of msgs.results || []) {
+        lines.push(`## [${msg.ts}] ${String(msg.role || '').toUpperCase()}`);
+        if (msg.provider) lines.push(`_provider: ${msg.provider}_`);
+        lines.push('');
+        lines.push(String(msg.content || ''));
+        lines.push('');
+        lines.push('---');
+        lines.push('');
+      }
+
+      const markdown = lines.join('\n');
+      const r2Key = `agent-sessions/archive/${cid}.md`;
+
+      await env.R2.put(r2Key, markdown, {
+        httpMetadata: { contentType: 'text/markdown' },
+        customMetadata: {
+          conversation_id: cid,
+          msg_count: String(convo.msg_count),
+          archived_at: new Date().toISOString(),
+        },
+      });
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      await env.DB.prepare(
+        `UPDATE agent_conversations
+         SET r2_context_key = ?, is_archived = 1, updated_at = ?
+         WHERE id = ?`
+      ).bind(r2Key, nowSec, cid).run();
+
+      const markerId = `compact_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const markerText = `ARCHIVED: ${convo.msg_count} messages archived to R2. Key: ${r2Key}`;
+      try {
+        await env.DB.prepare(
+          `INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at, is_compaction_marker)
+           VALUES (?, ?, 'system', ?, 'archive', unixepoch(), 1)`
+        ).bind(markerId, cid, markerText).run();
+      } catch (e1) {
+        await env.DB.prepare(
+          `INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at)
+           VALUES (?, ?, 'system', ?, 'archive', unixepoch())`
+        ).bind(markerId, cid, markerText).run().catch(() => {});
+      }
+
+      const checkName = `archive_${String(cid).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)}`;
+      await env.DB.prepare(
+        `INSERT INTO quality_checks
+          (project_id, check_type, check_name, status,
+           actual_value, expected_value, threshold_met,
+           details, severity, automated, check_category, checked_at)
+         VALUES ('inneranimalmedia','performance',
+          ?, 'pass', ?, 'r2_archived', 1,
+          ?, 'low', 1, 'conversation_archive', datetime('now'))`
+      ).bind(checkName, r2Key, `Archived ${convo.msg_count} messages (${convo.size_bytes} bytes) to R2: ${r2Key}`).run();
+
+      archived++;
+    } catch (e) {
+      errors.push({ conversation_id: cid, error: String(e?.message || e) });
+    }
+  }
+
+  return { archived, errors, total_candidates: rows.length };
+}
+
+/**
  * Index R2 memory markdown (memory/daily/*.md, memory/schema-and-records.md) into Vectorize.
  * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-docs-search).
  * Returns { indexed: number of keys, chunks: number of vectors upserted, error?: string }.
@@ -19888,46 +21654,153 @@ async function handleReindexCodebase(request, env, ctx) {
   });
 }
 
-/** Daily digest: pull DB data, have Claude write summary, send email. Cron 0 0 * * * (6pm CST = midnight UTC). */
+/** Daily digest: live D1 queries at send time, HTML email, optional Claude blurb. Cron 0 0 * * * (6pm CST = midnight UTC). */
 async function sendDailyDigest(env) {
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
-  const todayStart = "datetime('now','-24 hours')";
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
-  let deployments = { results: [] };
-  let costs = { results: [] };
-  let totalCost = 0;
+  let telemetryToday = {};
+  let deploysToday = {};
+  let deploysFailed = { results: [] };
+  let mcpToday = {};
+  let mcpTopTools = { results: [] };
+  let ragToday = {};
+  let sseStatus = { results: [] };
+  let qualityFails = { results: [] };
+  let archiveStatus = {};
+  let msgTableSize = {};
+  let readyPrune = {};
+  let providerTop = { results: [] };
   let roadmap = { results: [] };
   let pending = { results: [{ count: 0 }] };
 
   if (env.DB) {
-    deployments = await safe(env.DB.prepare(
-      `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes, triggered_by FROM deployments WHERE timestamp >= ${todayStart} ORDER BY timestamp DESC LIMIT 20`
-    ).all()) || { results: [] };
-    const costRow = await safe(env.DB.prepare(
-      `SELECT COALESCE(SUM(amount_usd),0) as total FROM spend_ledger WHERE (occurred_at >= ${todayStart} OR (occurred_at IS NULL AND created_at >= ${todayStart})) AND (category IN ('ai_tools','usage') OR provider IS NOT NULL)`
-    ).first());
-    totalCost = Number(costRow?.total ?? 0);
-    costs = await safe(env.DB.prepare(
-      `SELECT provider_slug, provider, amount_usd, description FROM spend_ledger WHERE (occurred_at >= ${todayStart} OR (occurred_at IS NULL AND created_at >= ${todayStart})) AND (category IN ('ai_tools','usage') OR provider IS NOT NULL) ORDER BY amount_usd DESC LIMIT 20`
-    ).all()) || { results: [] };
-      roadmap = await safe(env.DB.prepare(
+    [
+      telemetryToday,
+      deploysToday,
+      deploysFailed,
+      mcpToday,
+      mcpTopTools,
+      ragToday,
+      sseStatus,
+      qualityFails,
+      archiveStatus,
+      msgTableSize,
+      readyPrune,
+      providerTop,
+      roadmap,
+      pending,
+    ] = await Promise.all([
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS calls,
+          COALESCE(SUM(input_tokens), 0) AS tokens_in,
+          COALESCE(SUM(output_tokens), 0) AS tokens_out,
+          ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd,
+          COUNT(DISTINCT model_used) AS models_used
+         FROM agent_telemetry
+         WHERE created_at >= unixepoch('now', 'start of day')`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS total,
+          COUNT(CASE WHEN environment = 'production' THEN 1 END) AS prod,
+          COUNT(CASE WHEN status = 'success' THEN 1 END) AS success,
+          COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed
+         FROM deployments
+         WHERE created_at >= unixepoch('now', 'start of day')`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT id, worker_name, environment, status, description
+         FROM deployments
+         WHERE created_at >= unixepoch('now', 'start of day') AND status = 'failed'
+         ORDER BY created_at DESC LIMIT 20`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS calls, COUNT(DISTINCT tool_name) AS unique_tools
+         FROM mcp_tool_calls
+         WHERE date(created_at) = date('now')`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT tool_name, COUNT(*) AS c
+         FROM mcp_tool_calls
+         WHERE date(created_at) = date('now')
+         GROUP BY tool_name
+         ORDER BY c DESC
+         LIMIT 3`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS queries, AVG(top_score) AS avg_score
+         FROM rag_query_log
+         WHERE date(created_at) = date('now')`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT memory_key, memory_value
+         FROM agent_platform_context
+         WHERE memory_key LIKE 'sse_audit_%'
+         ORDER BY updated_at DESC
+         LIMIT 20`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT check_name, severity, details
+         FROM quality_checks
+         WHERE status IN ('fail', 'failed', 'warn', 'warning') AND automated = 1
+         ORDER BY
+           CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+           checked_at DESC
+         LIMIT 10`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS archived_convos FROM agent_conversations WHERE is_archived = 1`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS total_msgs,
+          ROUND(SUM(LENGTH(COALESCE(content, ''))) / 1024.0 / 1024.0, 2) AS size_mb,
+          COUNT(DISTINCT conversation_id) AS convos
+         FROM agent_messages`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS ready FROM agent_conversations
+         WHERE is_archived = 1 AND r2_context_key IS NOT NULL AND r2_context_key != ''`
+      ).first()),
+      safe(env.DB.prepare(
+        `SELECT provider, ROUND(SUM(computed_cost_usd), 4) AS cost_usd
+         FROM agent_telemetry
+         WHERE created_at >= unixepoch('now', 'start of day') AND provider IS NOT NULL
+         GROUP BY provider
+         ORDER BY cost_usd DESC
+         LIMIT 3`
+      ).all()),
+      safe(env.DB.prepare(
         `SELECT id, title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v1' ORDER BY order_index ASC LIMIT 100`
-      ).all()) || { results: [] };
-    pending = await safe(env.DB.prepare(
-      `SELECT COUNT(*) as count FROM notification_outbox WHERE status = 'pending'`
-    ).all()) || { results: [{ count: 0 }] };
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM notification_outbox WHERE status = 'pending'`
+      ).all()),
+    ]);
   }
 
-  const steps = roadmap.results ?? [];
+  const tt = telemetryToday || {};
+  const dt = deploysToday || {};
+  const steps = roadmap?.results ?? [];
   const done = steps.filter((r) => r.status === 'completed').length;
   const total = steps.length || 1;
   const pct = total ? Math.round((done / total) * 100) : 0;
-  const completedTitles = steps.filter((r) => r.status === 'completed').map((r) => r.title).join(', ');
   const inProgressTitles = steps.filter((r) => r.status === 'in_progress').map((r) => r.title).join(', ');
   const notStartedTitles = steps.filter((r) => r.status === 'not_started').map((r) => r.title).join(', ');
-  const pendingCount = pending.results?.[0]?.count ?? pending.results?.[0] ?? 0;
+  const pendingCount = pending?.results?.[0]?.count ?? 0;
 
-  let digestText = 'Could not generate summary.';
+  const liveJson = JSON.stringify({
+    telemetryToday: tt,
+    deploysToday: dt,
+    mcpToday,
+    ragToday,
+    roadmapPct: { done, total, pct },
+    pendingCount,
+  });
+
+  let digestText = 'IAM daily digest (live metrics in HTML).';
   if (env.ANTHROPIC_API_KEY) {
     try {
       const aiSummary = await fetch('https://api.anthropic.com/v1/messages', {
@@ -19939,34 +21812,95 @@ async function sendDailyDigest(env) {
         },
         body: JSON.stringify({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1000,
+          max_tokens: 800,
           messages: [{
             role: 'user',
-            content: `You are writing a nightly digest email for Sam Primeaux, founder of Inner Animal Media.
+            content: `You are writing a short nightly digest blurb for Sam Primeaux (Inner Animal Media). Plain english, no emojis.
 
-Write in plain english, no jargon, no emojis. Two sections only:
+Live data (today, UTC window for telemetry = start of day):
+${liveJson}
 
-TODAY'S WORK:
-- Deployments today: ${JSON.stringify(deployments.results ?? [])}
-- AI spend today: $${totalCost} across ${(costs.results ?? []).length} providers
-- Build progress: ${done}/${total} steps complete (${pct}%)
-- Steps completed recently: ${completedTitles || 'none'}
-
-NEXT STEPS FOR TOMORROW:
-- In progress right now: ${inProgressTitles || 'none'}
-- Not started yet: ${notStartedTitles || 'none'}
-- Pending notifications: ${pendingCount}
-
-Write 3-5 sentences summarizing what got done today, then a numbered list of the top 3 priorities for tomorrow based on what is in_progress and not_started. Keep it under 200 words total.`,
+Write 3-5 sentences: AI spend and deploy activity, then one sentence on what to watch tomorrow. Under 120 words.`,
           }],
         }),
       });
       const aiResult = await aiSummary.json();
       digestText = aiResult.content?.[0]?.text ?? digestText;
     } catch (e) {
-      digestText = `Digest generation failed: ${e?.message ?? e}. Raw: deployments=${(deployments.results ?? []).length}, cost=$${totalCost}, roadmap ${done}/${total}.`;
+      digestText = `Digest narrative failed: ${e?.message ?? e}.`;
     }
   }
+
+  const failedList = (deploysFailed?.results ?? []).map((r) => `${r.worker_name || r.id} (${r.environment})`).join('; ') || 'none';
+  const provRows = providerTop?.results ?? [];
+  const provHtml = provRows.length
+    ? `<ul>${provRows.map((r) => `<li>${esc(r.provider)}: $${esc(r.cost_usd)}</li>`).join('')}</ul>`
+    : '<p>None</p>';
+  const toolsRows = mcpTopTools?.results ?? [];
+  const toolsHtml = toolsRows.length
+    ? `<ul>${toolsRows.map((r) => `<li>${esc(r.tool_name)}: ${esc(r.c)}</li>`).join('')}</ul>`
+    : '<p>None</p>';
+  const sseRows = sseStatus?.results ?? [];
+  const sseHtml = sseRows.length
+    ? `<ul>${sseRows.map((r) => `<li><strong>${esc(r.memory_key)}</strong>: ${esc(r.memory_value)}</li>`).join('')}</ul>`
+    : '<p>No sse_audit rows (defaults: Anthropic tools path may buffer; Workers AI may need stream; Gemini input_tokens may be 0; OpenAI streaming OK).</p>';
+  const qfRows = qualityFails?.results ?? [];
+  const qfHtml = qfRows.length
+    ? `<ul>${qfRows.map((r) => `<li>[${esc(r.severity)}] ${esc(r.check_name)}: ${esc((r.details || '').slice(0, 200))}</li>`).join('')}</ul>`
+    : '<p>None open.</p>';
+
+  const htmlBody = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAM Daily Digest</title></head><body style="font-family:system-ui,sans-serif;line-height:1.5">
+<h1>IAM Daily Digest</h1>
+<p>${esc(digestText)}</p>
+
+<h2>1. Today's AI spend (agent_telemetry)</h2>
+<p>Cost USD: <strong>${esc(tt.cost_usd)}</strong> | Calls: ${esc(tt.calls)} | Tokens in/out: ${esc(tt.tokens_in)} / ${esc(tt.tokens_out)} | Models used: ${esc(tt.models_used)}</p>
+<h3>Top providers</h3>${provHtml}
+
+<h2>2. Deployments (deployments)</h2>
+<p>Total ${esc(dt.total)} | Prod ${esc(dt.prod)} | Success ${esc(dt.success)} | Failed ${esc(dt.failed)}</p>
+<p>Failed: ${esc(failedList)}</p>
+
+<h2>3. MCP tool usage (mcp_tool_calls)</h2>
+<p>Calls: ${esc(mcpToday?.calls)} | Unique tools: ${esc(mcpToday?.unique_tools)}</p>
+<h3>Top 3 tools</h3>${toolsHtml}
+
+<h2>4. RAG (rag_query_log)</h2>
+<p>Queries: ${esc(ragToday?.queries)} | Avg top_score: ${esc(ragToday?.avg_score)}</p>
+
+<h2>5. Streaming status (agent_platform_context sse_audit_*)</h2>
+${sseHtml}
+<p>Reference: Anthropic tools SSE partial; Workers AI may need stream; Gemini input_tokens bug; OpenAI working.</p>
+
+<h2>6. Open quality issues</h2>
+${qfHtml}
+
+<h2>7. Conversation archive</h2>
+<p>Messages in D1: ${esc(msgTableSize?.total_msgs)} rows, ${esc(msgTableSize?.size_mb)} MB, ${esc(msgTableSize?.convos)} convos.</p>
+<p>Archived (is_archived): ${esc(archiveStatus?.archived_convos)} | Ready to prune (archived + R2 key): ${esc(readyPrune?.ready)}</p>
+
+<h2>8. Tomorrow priorities</h2>
+<ul>
+<li>P1: Anthropic tools SSE (chatWithToolsAnthropic stream:true)</li>
+<li>P1: spend_ledger INSERT in streamDoneDbWrites</li>
+<li>P2: Workers AI stream:true + async iterator</li>
+<li>P2: Gemini input_tokens fallback</li>
+<li>Run: scripts/model-smoke-test.sh and scripts/batch-api-test.sh</li>
+</ul>
+
+<h2>Roadmap snapshot</h2>
+<p>${done}/${total} steps (${pct}%). In progress: ${esc(inProgressTitles || 'none')}. Not started: ${esc(notStartedTitles || 'none')}. Pending notifications: ${esc(pendingCount)}</p>
+</body></html>`;
+
+  const textBody = [
+    digestText,
+    '',
+    `AI spend today: $${tt.cost_usd} (${tt.calls} calls, tokens ${tt.tokens_in}/${tt.tokens_out})`,
+    `Deploys: total ${dt.total} prod ${dt.prod} failed ${dt.failed}`,
+    `MCP: ${mcpToday?.calls} calls`,
+    `RAG queries: ${ragToday?.queries}`,
+    `Archived convos: ${archiveStatus?.archived_convos}; D1 messages: ${msgTableSize?.total_msgs}`,
+  ].join('\n');
 
   const toEmail = 'meauxbility@gmail.com';
   if (env.RESEND_API_KEY) {
@@ -19977,13 +21911,14 @@ Write 3-5 sentences summarizing what got done today, then a numbered list of the
         headers: {
           'Authorization': `Bearer ${env.RESEND_API_KEY}`,
           'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
+          'Accept': 'application/json, text/event-stream',
         },
         body: JSON.stringify({
           from: 'sam@inneranimalmedia.com',
           to: [toEmail],
           subject,
-          text: digestText,
+          text: textBody,
+          html: htmlBody,
         }),
       });
       if (!res.ok) {
@@ -20003,10 +21938,10 @@ Write 3-5 sentences summarizing what got done today, then a numbered list of the
         ).run().catch(() => {});
       }
       const today = new Date().toISOString().slice(0, 10);
-      await env.R2.put('memory/daily/' + today + '.md', digestText).catch(() => {});
+      await env.R2.put('memory/daily/' + today + '.md', textBody).catch(() => {});
       const memFacts = [
-        { key: 'active_priorities', value: 'Last digest: ' + today + '. ' + digestText.slice(0, 400), score: 0.9, type: 'user_context' },
-        { key: 'what_works_today', value: digestText.slice(0, 600), score: 1.0, type: 'execution_outcome' }
+        { key: 'active_priorities', value: 'Last digest: ' + today + '. ' + textBody.slice(0, 400), score: 0.9, type: 'user_context' },
+        { key: 'what_works_today', value: textBody.slice(0, 600), score: 1.0, type: 'execution_outcome' },
       ];
       for (const f of memFacts) {
         await env.DB.prepare(
@@ -20014,12 +21949,30 @@ Write 3-5 sentences summarizing what got done today, then a numbered list of the
         ).bind('tenant_sam_primeaux', 'agent-sam-primary', f.type, f.key, f.value, f.score).run().catch(() => {});
       }
       await env.DB.prepare('DELETE FROM ai_compiled_context_cache').run().catch(() => {});
+
+      const digestSummary = `Spend $${tt.cost_usd ?? 0} | Deploys ${dt.total ?? 0} | MCP ${mcpToday?.calls ?? 0} | RAG ${ragToday?.queries ?? 0}`;
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO daily_snapshots (
+          snapshot_date, deploy_count, tokens_in, tokens_out, cost_usd,
+          active_workflows, digest_text, created_at, updated_at
+        ) VALUES (
+          date('now'), ?, ?, ?, ?,
+          15, ?, unixepoch(), unixepoch()
+        )`
+      ).bind(
+        dt.total ?? 0,
+        tt.tokens_in ?? 0,
+        tt.tokens_out ?? 0,
+        tt.cost_usd ?? 0,
+        digestSummary
+      ).run().catch(() => {});
+
       return { ok: true, sent: true, to: toEmail };
     } catch (e) {
-      return { ok: false, error: String(e?.message ?? e), digestText };
+      return { ok: false, error: String(e?.message ?? e), digestText: textBody };
     }
   }
-  return { ok: true, sent: false, digestText };
+  return { ok: true, sent: false, digestText: textBody };
 }
 
 /** 8:30am CST (13:30 UTC) daily plan: LIVE D1 queries + Claude Haiku + Resend. Cron 30 13 * * * */

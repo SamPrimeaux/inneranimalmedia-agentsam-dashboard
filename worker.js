@@ -12583,6 +12583,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         let buffer = '';
         let inputTokens = 0;
         let outputTokens = 0;
+        let cacheCreateTokens = 0;
+        let cacheReadTokens = 0;
         let fullText = '';
         const envRef = env;
         const modelRef = model;
@@ -12613,6 +12615,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                       controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'text', text: data.delta.text })}\n\n`));
                     } else if (data.type === 'message_start' && data.message?.usage) {
                       inputTokens = data.message.usage.input_tokens ?? 0;
+                      cacheCreateTokens = data.message.usage.cache_creation_input_tokens ?? 0;
+                      cacheReadTokens = data.message.usage.cache_read_input_tokens ?? 0;
                     } else if (data.type === 'message_delta' && data.usage) {
                       if (data.usage.output_tokens != null) outputTokens = data.usage.output_tokens;
                       if (data.usage.input_tokens != null) inputTokens = data.usage.input_tokens;
@@ -12631,8 +12635,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
                       try {
                         telemetryInlineId = crypto.randomUUID();
                         await envRef.DB.prepare(
-                          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,unixepoch())`
-                        ).bind(telemetryInlineId, envRef.TENANT_ID || 'system', conversationIdRef, 'llm_call', 'chat_completion', 1, modelRef.model_key, modelRef.provider, inputTokens, outputTokens, amountUsd).run();
+                          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
+                        ).bind(telemetryInlineId, envRef.TENANT_ID || 'system', conversationIdRef, 'llm_call', 'chat_completion', 1, modelRef.model_key, modelRef.provider, inputTokens, cacheCreateTokens, cacheReadTokens, inputTokens + cacheCreateTokens + cacheReadTokens, outputTokens, amountUsd).run();
                       } catch (e) {
                         console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
                       }
@@ -12853,6 +12857,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 
       const inputTok = result?.usage?.input_tokens ?? result?.usage?.prompt_tokens ?? result?.usageMetadata?.promptTokenCount ?? 0;
       const outputTok = result?.usage?.output_tokens ?? result?.usage?.completion_tokens ?? result?.usageMetadata?.candidatesTokenCount ?? 0;
+      const cacheCreateTok = result?.usage?.cache_creation_input_tokens ?? 0;
+      const cacheReadTok = result?.usage?.cache_read_input_tokens ?? 0;
       const { rateIn, rateOut } = getSpendRates(model.provider, model.model_key);
       const amountUsd = Math.round((inputTok * rateIn + outputTok * rateOut) * 1e8) / 1e8;
       const computedCostUsd = amountUsd;
@@ -12889,8 +12895,8 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
       }
       try {
         await env.DB.prepare(
-          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
-        ).bind(crypto.randomUUID(), env.TENANT_ID || 'system', conversationId || null, 'llm_call', 'chat_completion', 1, model.model_key, model.provider, inputTok, outputTok, computedCostUsd, nsGoogleServiceName, nsGooglePricingSource).run();
+          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
+        ).bind(crypto.randomUUID(), env.TENANT_ID || 'system', conversationId || null, 'llm_call', 'chat_completion', 1, model.model_key, model.provider, inputTok, cacheCreateTok, cacheReadTok, inputTok + cacheCreateTok + cacheReadTok, outputTok, computedCostUsd, nsGoogleServiceName, nsGooglePricingSource).run();
       } catch (e) {
         console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
       }

@@ -6005,10 +6005,12 @@ async function runIntegritySnapshot(env, triggeredBy = 'cron') {
 }
 
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
-async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null) {
+async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0) {
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
   const safeOutput = outputTokens ?? 0;
+  const safeCacheCreate = cacheCreationInputTokens ?? 0;
+  const safeCacheRead = cacheReadInputTokens ?? 0;
   const safeProvider = (modelRow && modelRow.provider != null) ? String(modelRow.provider) : 'unknown';
   const safeModelKey = (modelRow && modelRow.model_key != null) ? String(modelRow.model_key) : 'unknown';
   let rowForTelemetry = modelRow;
@@ -6070,8 +6072,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   try {
     telemetryRowId = crypto.randomUUID();
     await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
-    ).bind(telemetryRowId, 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeInput, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol, neuronCostUsd, neuronsUsed, telemetryEventType, telemetrySeverity).run();
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
+    ).bind(telemetryRowId, 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeCacheCreate, safeCacheRead, safeInput + safeCacheCreate + safeCacheRead, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol, neuronCostUsd, neuronsUsed, telemetryEventType, telemetrySeverity).run();
   } catch (e) {
     console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
   }
@@ -7433,6 +7435,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
   let finalText = '';
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCacheCreateTokens = 0;
+  let totalCacheReadTokens = 0;
   let classification = null;
   const MAX_ROUNDS = 8;
   console.log('[runToolLoop] provider:', provider, 'model:', modelKey, 'tools:', toolDefinitions.length);
@@ -7559,6 +7563,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
     if (provider === 'anthropic') {
       if (data.usage?.input_tokens != null) totalInputTokens += data.usage.input_tokens;
       if (data.usage?.output_tokens != null) totalOutputTokens += data.usage.output_tokens;
+      if (data.usage?.cache_creation_input_tokens != null) totalCacheCreateTokens += data.usage.cache_creation_input_tokens;
+      if (data.usage?.cache_read_input_tokens != null) totalCacheReadTokens += data.usage.cache_read_input_tokens;
       const content = data.content ?? [];
       textContent = content.filter(b => b.type === 'text').map(b => b.text).join('');
       toolCalls = content.filter(b => b.type === 'tool_use');
@@ -8120,7 +8126,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       if (!finalText) finalText = 'Command executed. See terminal for output.';
     }
   }
-  return { content: [{ type: 'text', text: finalText }], input_tokens: totalInputTokens, output_tokens: totalOutputTokens };
+  return { content: [{ type: 'text', text: finalText }], input_tokens: totalInputTokens, output_tokens: totalOutputTokens, cache_creation_input_tokens: totalCacheCreateTokens, cache_read_input_tokens: totalCacheReadTokens };
 }
 
 /** Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8 (onData sends raw strings). */
@@ -12729,10 +12735,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const finalText = typeof toolLoopResult === 'string' ? toolLoopResult : (toolLoopResult?.content?.[0]?.text ?? '');
         const loopInTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.input_tokens != null ? Number(toolLoopResult.input_tokens) || 0 : 0;
         const loopOutTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.output_tokens != null ? Number(toolLoopResult.output_tokens) || 0 : 0;
+        const loopCacheCreate = typeof toolLoopResult === 'object' && toolLoopResult != null ? Number(toolLoopResult.cache_creation_input_tokens) || 0 : 0;
+        const loopCacheRead = typeof toolLoopResult === 'object' && toolLoopResult != null ? Number(toolLoopResult.cache_read_input_tokens) || 0 : 0;
         const resolvedModelForTools = model.provider === 'google' ? await resolveGoogleModelRowForVertexAi(env, model) : model;
         const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
         try {
-          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId, routingOptsForChat);
+          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId, routingOptsForChat, loopCacheCreate, loopCacheRead);
         } catch (e) {
           console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
         }
@@ -19052,7 +19060,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   let messages = apiMessages.map((m) => ({ role: m.role, content: m.content }));
   let iter = 0;
   let lastContent = '';
-  let lastUsage = { input_tokens: 0, output_tokens: 0 };
+  let lastUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
 
   const encoder = new TextEncoder();
   const enqueue = (controller, obj) => {
@@ -19141,7 +19149,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     }
     const data = await res.json();
     const content = data.content || [];
-    lastUsage = { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0 };
+    lastUsage = { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0, cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0, cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0 };
     const toolUseBlocks = content.filter((b) => b.type === 'tool_use');
     for (const b of toolUseBlocks) {
       console.log('[chatWithToolsAnthropic] Claude using tool', { tool_name: b.name, tool_id: b.id });
@@ -19208,7 +19216,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         } catch (_) {}
         return;
       }
-      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null);
+      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens);
       enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       return jsonResponse({
         content: [{ type: 'text', text: lastContent }],
@@ -19306,7 +19314,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const finalText = (finalData.content || []).filter((b) => b.type === 'text').map((b) => b.text).filter(Boolean).join('');
       if (finalText.trim()) {
         lastContent = finalText.trim();
-        lastUsage = { input_tokens: lastUsage.input_tokens + (finalData.usage?.input_tokens ?? 0), output_tokens: lastUsage.output_tokens + (finalData.usage?.output_tokens ?? 0) };
+        lastUsage = { input_tokens: lastUsage.input_tokens + (finalData.usage?.input_tokens ?? 0), output_tokens: lastUsage.output_tokens + (finalData.usage?.output_tokens ?? 0), cache_creation_input_tokens: lastUsage.cache_creation_input_tokens + (finalData.usage?.cache_creation_input_tokens ?? 0), cache_read_input_tokens: lastUsage.cache_read_input_tokens + (finalData.usage?.cache_read_input_tokens ?? 0) };
       }
     }
   }
@@ -19331,7 +19339,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalInputTokens = lastUsage.input_tokens || 0;
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
-        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null);
+        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens);
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({
           type: 'done',

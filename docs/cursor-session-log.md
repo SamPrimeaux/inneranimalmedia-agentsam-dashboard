@@ -1052,3 +1052,25 @@ Fix 404s on Vite code-split chunks under `/static/dashboard/agent/` by uploading
 ### Known issues / next steps
 - Promote requires a sandbox deploy that uploaded `.deploy-manifest`; older sandbox builds fall back to legacy two-file pull (chunks may still 404 on prod until a fresh sandbox cycle).
 
+## 2026-03-31 EOD — v231 deployed, P0 closed
+
+### What shipped
+- agent_telemetry INSERT placeholder mismatch fixed (21 -> 20 ?)
+- Promoted to prod as v231 (770deb30-6584-4f24-80dc-02b6ce871763)
+- 31/31 benchmark passed (all providers: Anthropic, OpenAI, Google, Workers AI)
+- benchmark-full.sh integer parse fixed (grep -c multiline bug)
+- wrangler.production.toml esbuild warning removed
+- deploy-sandbox.sh .deploy-manifest now uploads to R2
+
+### Not deployed (carry to next session)
+- P1: CORE_WORKSPACE_IDS -> getWorkspacesForUser() DB-driven
+- P2: POST /api/github/app/token installation token exchange
+- P3: handleGithubWebhook pull_request/dependabot branching
+
+### DB changes today (all live, do not re-run)
+- test_suite_runs, eval_results, test_suite_comparisons created
+- ws_aitestsuite workspace seeded
+- cidi_pipeline_runs CHECK expanded (local|preview|staging allowed)
+- cursor_costs_daily dropped, data migrated to ai_costs_daily
+- workspace_members, workspace_settings seeded for ws_inneranimalmedia
+

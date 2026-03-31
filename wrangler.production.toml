@@ -9,8 +9,7 @@ no_bundle = false
 [build]
 command = ""
 
-[esbuild]
-external = []
+# esbuild options belong in wrangler.jsonc / per-project build config; top-level [esbuild] is not valid and triggers Wrangler warnings.
 
 [[routes]]
 pattern = "inneranimalmedia.com/*"

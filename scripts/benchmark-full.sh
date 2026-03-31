@@ -56,6 +56,12 @@ test_model() {
   local has_error
   has_error=$(echo "$raw" | grep -c '"type":"error"' 2>/dev/null || echo 0)
 
+  # grep -c exits 1 when count is 0; "|| echo 0" duplicates the line -> multiline "0\n0"
+  chunks=$(echo "$chunks" | tr -d '[:space:]')
+  tool_hits=$(echo "$tool_hits" | tr -d '[:space:]')
+  has_done=$(echo "$has_done" | tr -d '[:space:]')
+  has_error=$(echo "$has_error" | tr -d '[:space:]')
+
   # Status determination
   local status="PASS"
   local status_color="$GREEN"

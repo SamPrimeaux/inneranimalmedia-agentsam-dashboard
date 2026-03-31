@@ -82,6 +82,12 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --file "$HTML_PATH" --content-type "text/html" \
     --config "$CFG" --remote
 
+  echo "  Uploading static/dashboard/agent/${MANIFEST_NAME}..."
+  npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/agent/${MANIFEST_NAME}" \
+    --file "$MANIFEST_PATH" \
+    --content-type "text/plain" \
+    --config "$CFG" --remote
+
   echo "  R2 uploads complete."
 
   # Log to dashboard_versions in D1 (is_production=0) — one row per dist asset + HTML

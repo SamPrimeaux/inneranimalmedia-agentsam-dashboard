@@ -27,6 +27,7 @@ This doc is the **operator index** for `cidi_*` and related audit tables. Agents
 | `migrations/204_project_memory_cidi_three_step_and_plan_steps.sql` | `project_memory` `CIDI_THREE_STEP_SYSTEM` + `plan_steps` for `proj_iam_tools_agent_workspace`. |
 | `migrations/205_cidi_cursor_sync_overnight_docs_20260401.sql` | Repo sync: overnight suite docs, morning-plan telemetry prompt, CIDI documentation index. |
 | `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` | AITestSuite (`SamPrimeaux/meauxcad`, Worker `aitestsuite`) shell **v1.2.0** — `cicd_runs` + `cidi_*` audit; commit `a8854e3`. |
+| `migrations/209_cidi_meauxcad_chat_log_builds_activity.sql` | `builds` + **3** `cidi_activity_log` rows: meauxcad `6b18e70` (chat to `ai_api_test_runs`), monorepo `329fd84` (migration 208 note), `builds` doc row `iam-build-meauxcad-aitestsuite-chatlog-6b18e70`. |
 
 ---
 

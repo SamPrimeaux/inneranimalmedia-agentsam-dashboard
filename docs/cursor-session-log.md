@@ -1074,3 +1074,409 @@ Fix 404s on Vite code-split chunks under `/static/dashboard/agent/` by uploading
 - cursor_costs_daily dropped, data migrated to ai_costs_daily
 - workspace_members, workspace_settings seeded for ws_inneranimalmedia
 
+## 2026-03-31 D1 ws_agentsandbox — workspaces + workspace_settings + workspace_projects
+
+### What was asked
+Add IAM workspace shell workspace `ws_agentsandbox` into `workspace_projects` and `workspace_settings` (TOOLS origin `https://tools.inneranimalmedia.com`).
+
+### Files changed
+- `migrations/186_ws_agentsandbox_workspace.sql`: `INSERT OR IGNORE` `workspaces` (`ws_agentsandbox`, FK parent for `workspace_projects`), `INSERT OR REPLACE` `workspace_settings` (theme `theme-solarized-dark`, `settings_json` with tools URL and shell R2 key), `INSERT OR IGNORE` `workspace_projects` (`wp_agentsandbox_iam_shell`, internal project).
+
+### Deploy status
+- Applied to remote D1 `inneranimalmedia-business` via wrangler `d1 execute --file` (migration 186).
+
+### What is live now
+- `ws_agentsandbox` row in `workspaces`; matching `workspace_settings` and `workspace_projects` rows.
+
+## 2026-03-31 D1 workspace_projects — wp_inneranimalmedia
+
+### What was asked
+Add one `workspace_projects` row: `ws_inneranimalmedia` + `wp_inneranimalmedia`.
+
+### Files changed
+- `migrations/187_workspace_projects_wp_inneranimalmedia.sql`: `INSERT OR IGNORE` `wp_inneranimalmedia` for `ws_inneranimalmedia`.
+
+### Deploy status
+- Applied to remote D1 via wrangler `d1 execute --file`.
+
+### What is live now
+- Row `wp_inneranimalmedia` under workspace `ws_inneranimalmedia`.
+
+## 2026-03-31 D1 workspace_audit_log — Cursor workspace seed (186–187)
+
+### What was asked
+Add an agent audit row for the workspace seeds.
+
+### Files changed
+- `migrations/188_workspace_audit_log_cursor_workspace_seed.sql`: `INSERT OR IGNORE` `wal_cursor_wp_seed_20260331` on `ws_inneranimalmedia`, action `SEED_WORKSPACE_ROWS`, `after_json` references migrations 186–187.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One `workspace_audit_log` row documenting `ws_agentsandbox` / `wp_*` inserts.
+
+## 2026-03-31 D1 workflows — IAM autonomous pipeline (6 rows)
+
+### What was asked
+Seed `workflows` on remote D1 with artifact → Monaco → Excalidraw → Playwright → approval → promote definitions.
+
+### Files changed
+- `migrations/189_workflows_iam_autonomous_pipeline.sql`: `INSERT OR IGNORE` six rows `wf_iam_artifact_init`, `wf_iam_monaco_save`, `wf_iam_excalidraw_save`, `wf_iam_playwright_validate`, `wf_iam_approval_gate`, `wf_iam_promote_prod` with JSON `steps` and `trigger_config`.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Six pipeline definitions in `workflows`; re-run safe (IGNORE preserves existing rows and counts).
+
+## 2026-03-31 D1 workspace_notes + workspace_projects (IAM plan, start date)
+
+### What was asked
+Insert plan into `workspace_notes`; improve `workspace_projects` descriptions; record start 2026-03-31 20:00.
+
+### Files changed
+- `migrations/190_workspace_notes_and_projects_iam_plan.sql`: INSERT `workspace_notes` for `ws_inneranimalmedia`; UPDATE `wp_agentsandbox_iam_shell` and `wp_inneranimalmedia` (description, `start_date`, `metadata_json`).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One note row; both workspace projects updated with richer copy and metadata.
+
+## 2026-03-31 D1 vectorize_index_registry — MANUAL_D1_RAG row
+
+### What was asked
+Add a row to `vectorize_index_registry`.
+
+### Files changed
+- `migrations/191_vectorize_index_registry_d1_rag.sql`: `INSERT OR IGNORE` `vidx_d1_cosine_knowledge` (`MANUAL_D1_RAG`, manual source, D1 cosine RAG documentation).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Registry entry for D1 `ai_knowledge_chunks` path (not a Vectorize binding).
+
+## 2026-03-31 D1 vectorize_index_registry — TOOLS agent workspace label (192)
+
+### What was asked
+Correct registry: not AutoRAG / not D1-only label; TOOLS bucket agent workspace.
+
+### Files changed
+- `migrations/192_vectorize_registry_tools_agent_workspace_label.sql`: UPDATE row to `vidx_tools_agent_workspace`, `MANUAL_TOOLS_AGENT_WORKSPACE`, `source_r2_bucket` tools.
+- `migrations/191_vectorize_index_registry_d1_rag.sql`: header note points to 192.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One registry row describes tools.inneranimalmedia.com workspace artifacts (Monaco, Excalidraw, shell), distinct from `vidx_autorag`.
+
+## 2026-03-31 D1 agent_workspace_state — IAM TOOLS workspace (194)
+
+### What was asked
+Add TOOLS/agent workspace into `agent_workspace_state`.
+
+### Files changed
+- `migrations/194_agent_workspace_state_iam_tools.sql`: `INSERT OR IGNORE` `agent_conversations` `conv_iam_tools_agent_workspace` + `agent_workspace_state` `state_iam_tools_agent_workspace` with `state_json` (registry id, `env.TOOLS`, URLs, prefixes).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Stable conversation + workspace state row for IAM TOOLS shell (not a chat thread).
+
+## 2026-03-31 D1 agentsam_code_index_job — IAM TOOLS workspace (195)
+
+### What was asked
+Add a row to `agentsam_code_index_job`.
+
+### Files changed
+- `migrations/195_agentsam_code_index_job_iam_tools.sql`: `INSERT OR IGNORE` `cij_iam_tools_agent_workspace` for `sam_primeaux` / `iam_tools_agent_workspace`.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Code index job slot for TOOLS bucket agent workspace (idle, d1_cosine).
+
+## 2026-03-31 D1 agentsam_project_context — IAM TOOLS workspace (196)
+
+### What was asked
+Add IAM TOOLS agent workspace into `agentsam_project_context`.
+
+### Files changed
+- `migrations/196_agentsam_project_context_iam_tools.sql`: `INSERT OR IGNORE` `ctx_iam_tools_agent_workspace` with goals, tables, routes, `started_at` 1775005200 (2026-03-31 20:00 Chicago).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Project context row linking registry, workflows, R2, and key files.
+
+## 2026-04-01 D1 agentsam_skill — IAM pipeline (6 rows, 197)
+
+### What was asked
+Add needed skills as multiple rows in `agentsam_skill`.
+
+### Files changed
+- `migrations/197_agentsam_skill_iam_pipeline.sql`: six `INSERT OR IGNORE` skills (TOOLS R2, CIDI, L1-L3 workflows, Playwright jobs, approval gate, project context) with slash_trigger iam-tools, iam-cidi, iam-workflow, iam-playwright, iam-approval, iam-context.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Six skills for Agent Sam; wire invocations to `agentsam_skill_invocation` when used.
+
+## 2026-03-31 ai_generation_logs — extend + IAM seed documentation (198, 199)
+
+### What was asked
+Use `ai_generation_logs` to document IAM D1 seeds (or redesign); table was empty and LMS-shaped.
+
+### Files changed
+- `migrations/198_ai_generation_logs_extend.sql`: `metadata_json`, `source_kind` (CHECK), `workspace_id`, `related_ids_json`.
+- `migrations/199_ai_generation_logs_iam_seed_rows.sql`: eight `INSERT OR IGNORE` rows (`aigl_seed_*`) covering migrations 186-197 and 190, with summaries and JSON pointers.
+
+### Files NOT changed (and why)
+- `worker.js`: no INSERT path yet (optional later).
+- `docs/d1-agentic-schema.md`: canonical CREATE snippet not updated; new columns live in DB and migration files.
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (D1 only)
+
+### What is live now
+- `ai_generation_logs` holds structured audit rows for the IAM workspace / workflows / registry / agent state / context / skills bundles; `generation_type` and `source_kind` both `migration_seed` for these rows.
+
+### Known issues / next steps
+- Optional: worker-side INSERT for future generations; keep chat metrics in `agent_telemetry` / `spend_ledger`, not duplicated here.
+
+## 2026-03-31 ai_generation_logs — docs + worker inserts
+
+### What was asked
+Sync `docs/d1-agentic-schema.md` with D1 columns for `ai_generation_logs`; add worker `INSERT` when AI creates images/files/assets (local or remote storage).
+
+### Files changed
+- `docs/d1-agentic-schema.md`: `ai_generation_logs` CREATE snippet extended with `metadata_json`, `source_kind`, `workspace_id`, `related_ids_json` and a short usage note.
+- `worker.js`: added `insertAiGenerationLog()`; wired non-fatal inserts on success for: draw tool `/api/tools/image/generate`, `/api/agent/workers-ai/image` (inline), `uploadImgxToDashboard` (OpenAI imgx paths), Workers AI imgx branch, `r2_write`, `cf_images_upload`, CloudConvert R2 export, Meshy GLB upload to `CAD_ASSETS`.
+
+### Deploy status
+- Not deployed (Sam runs CIDI / promote when ready).
+
+### What is live now
+- Schema doc matches migration 198; production worker behavior unchanged until next deploy.
+
+## 2026-03-31 ai_generation_logs — OpenAI/Google code paths + Gemini images + D1/draw
+
+### What was asked
+Extend `ai_generation_logs` for OpenAI/Google image and code-related flows, not only imgx/R2 tools.
+
+### Files changed
+- `worker.js`: `persistGeminiPartInlineImage` (Gemini/Vertex `inlineData` to DASHBOARD + log); `logAssistantCodeArtifactIfPresent` (first fenced code block, min 40 chars) after `streamDoneDbWrites` for OpenAI Chat, OpenAI Responses, `streamGoogle`, `chatWithToolsGoogle`, Workers AI, Anthropic streaming/non-stream, and agent tool-loop final text; `putAgentBrowserScreenshotToR2` logs each stored screenshot; `d1_write` success (invoke + runToolLoop); `render_to_canvas` SVG; `/api/draw/save` PNG export; `/api/r2/upload` binding upload.
+
+### Deploy status
+- Not deployed until Sam promotes worker.
+
+### What is live now
+- Repo-only; production unchanged until deploy.
+
+## 2026-03-31 D1 ai_integrations — OpenAI webhook URL (200)
+
+### What was asked
+Update `ai_integrations` with the new OpenAI API webhook endpoint `https://inneranimalmedia.com/api/webhooks/openai` (secret already rotated in worker).
+
+### Files changed
+- `migrations/200_ai_integrations_openai_webhook_url.sql`: `UPDATE ai_integrations` id `26` (`OPENAI_WEBHOOK_SECRET`): `metadata.endpoint` full URL, `path` `/api/webhooks/openai`, `legacy_path` `/api/hooks/openai`, refresh `configured_at`.
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+
+### What is live now
+- Marketplace / integrations metadata documents the public webhook URL registered with OpenAI.
+
+## 2026-03-31 Cursor Cloud Agents — agentsam_executions + ai_generation_logs
+
+### What was asked
+Log when `cursor_get_agent` reaches FINISHED with a PR URL; use `agentsam_*` tables (not deprecated `cursor_*`).
+
+### Files changed
+- `worker.js`: `insertAiGenerationLog` supports optional `explicitId` + `insertOrIgnore` for idempotent rows; `maybePersistCursorCloudAgentFinished` writes `INSERT OR IGNORE` to `agentsam_executions` (`execution_type` = `cursor_cloud_agent`, `task_id` = Cursor agent id, `output` JSON) and `ai_generation_logs` (`generation_type` = `cursor_cloud_agent_pr`) when status is `FINISHED` and `target.prUrl` is an http(s) URL; called from `cursor_get_agent` after successful API JSON parse.
+
+### Deploy status
+- Not deployed until worker promote.
+
+### What is live now
+- Repo-only.
+
+## 2026-03-31 D1 projects + ai_projects + ai_project_context_config — IAM TOOLS workspace (201)
+
+### What was asked
+Add platform project rows to `projects`, `ai_projects`, and `ai_project_context_config` for the IAM TOOLS agent workspace.
+
+### Files changed
+- `migrations/201_projects_ai_iam_tools_agent_workspace.sql`: `INSERT OR IGNORE` shared id `proj_iam_tools_agent_workspace` (tenant `tenant_sam_primeaux`, domain inneranimalmedia.com, metadata links to `ctx_iam_tools_agent_workspace` and workspace/registry ids); matching `ai_projects` row; `ai_project_context_config` id `ctx_iam_tools_dashboard_agent` for route `/dashboard/agent`. (Updated 201: `project_type`/`status` must be CHECK-valid; use `internal-tool` and `development`.)
+- `migrations/202_projects_iam_tools_fix_projects_check.sql`: same `projects` INSERT with valid CHECKs; applied after remote verification showed 201 skipped `projects`.
+
+### Deploy status
+- Applied to remote D1 (201 + 202).
+
+### What is live now
+- Three tables reference the same logical project for dashboard agent context and billing/metadata alignment.
+
+### Known issues / next steps
+- Migration 201 `projects` INSERT used `project_type='platform'` and `status='active'`, which violate `projects` CHECK constraints; the row was skipped until migration 202 (`internal-tool`, `development`).
+
+## 2026-03-31 tools/code core component READMEs
+
+### What was asked
+List core IAM components, explain how they wire to inneranimalmedia (UI redesign + backend bolt-on), and add `tools/code/` directories with short READMEs for agents.
+
+### Files changed
+- `tools/code/README.md`: index table and integration flow.
+- `tools/code/core-api-surface/README.md` through `core-realtime/README.md`: seven slices (worker API, React dashboard, static HTML, TOOLS R2, MCP, D1, realtime WS).
+
+### Deploy status
+- Docs only; no build or deploy.
+
+### What is live now
+- Repo-only documentation under `tools/code/`.
+
+## 2026-03-31 R2 upload — tools/code core READMEs
+
+### What was asked
+Store `tools/code/` READMEs on R2 (TOOLS bucket).
+
+### Files changed
+- None (upload only).
+
+### R2 uploaded
+- Bucket `tools`, keys: `code/README.md`, `code/core-api-surface/README.md`, `code/core-dashboard-react/README.md`, `code/core-dashboard-static/README.md`, `code/core-tools-r2/README.md`, `code/core-mcp/README.md`, `code/core-data-persistence/README.md`, `code/core-realtime/README.md` (`text/markdown`).
+
+### Deploy status
+- Worker not deployed.
+
+### What is live now
+- Public URLs under `https://tools.inneranimalmedia.com/code/...` (same paths as keys).
+
+## 2026-03-31 R2 upload — code/integration (providers, metrics, scripts)
+
+### What was asked
+Upload important/complex working components for multi-provider testing and batch workflows; explain and recommend in plain English.
+
+### Files changed (repo)
+- `tools/code/integration/README.md`: index for integration bundle.
+- `tools/code/integration/AI_PROVIDER_TESTING_AND_BATCH.md`: roles, order of testing, live vs batch, link to scripts/docs.
+- `tools/code/README.md`: pointer to `integration/`.
+
+### R2 uploaded (bucket `tools`)
+- `code/integration/README.md`, `AI_PROVIDER_TESTING_AND_BATCH.md`, `API_METRICS_AND_AGENT_COST_TRACKING.md`, `AGENT_MEMORY_SCHEMA_AND_RECORDS.md`
+- `code/integration/scripts/batch-api-test.sh`, `model-smoke-test.sh`, `compare-openai.sh`, `benchmark-providers.sh`, `benchmark-all-providers.sh`, `benchmark-full.sh`
+
+### Deploy status
+- R2 only; worker not deployed.
+
+### What is live now
+- https://tools.inneranimalmedia.com/code/integration/ (and paths under it).
+
+## 2026-03-31 Skills runbooks + R2 placement + Cursor skill
+
+### What was asked
+Upload components to correct buckets; add README/skill files to align humans and agents; incremental testing; advice on dedicated GitHub repo.
+
+### Files changed
+- `tools/code/skills/*.md`: WORKFLOW, R2-BUCKETS, DEPLOY-CIDI, D1-MIGRATIONS, AI-TESTING, AGENT-HUMAN-SYNC, README, SKILL.
+- `tools/code/README.md`: links to skills, autorag pointer.
+- `.cursor/skills/iam-platform-sync/SKILL.md`: Cursor-discoverable skill (same rules as repo SKILL).
+- `docs/autorag/context/iam-rag-index.md`: autorag bucket mirror source (RAG index linking to TOOLS URLs).
+
+### R2 uploaded
+- **tools:** `code/README.md`, `code/skills/*` (all skill files).
+- **autorag:** `context/iam-rag-index.md`.
+
+### Deploy status
+- R2 only; worker not deployed.
+
+### What is live now
+- TOOLS: `https://tools.inneranimalmedia.com/code/skills/README.md`
+- Autorag: `https://autorag.inneranimalmedia.com/context/iam-rag-index.md`
+
+## 2026-03-31 deploy-sandbox.sh — workspace shell R2
+
+### What was asked
+Extend `deploy-sandbox.sh` to upload `iam-workspace-shell.html` and `shell.css` to sandbox R2 on every sandbox deploy.
+
+### Files changed
+- `scripts/deploy-sandbox.sh` (after `agent.html` upload): `npx wrangler r2 object put` for `static/dashboard/iam-workspace-shell.html` from `dashboard/iam-workspace-shell.html` and `static/dashboard/shell.css` from `static/dashboard/shell.css` to `agent-sam-sandbox-cidi`.
+- `tools/code/skills/WORKFLOW.md`: note about shell uploads; re-uploaded to TOOLS R2 `code/skills/WORKFLOW.md`.
+
+### Deploy status
+- Script-only; run `./scripts/deploy-sandbox.sh` to apply uploads (not run by agent).
+
+### What is live now
+- Next sandbox deploy pushes workspace shell assets automatically.
+
+## 2026-03-31 Monaco TOOLS R2 — upload script + README
+
+### What was asked
+How to R2-install Monaco so it can integrate with TOOLS `code/` directory.
+
+### Files changed
+- `tools/code/monaco/README.md`: same-origin worker rules, `loader.config`, when TOOLS vs agent-sam vs Vite bundle.
+- `scripts/upload-monaco-to-tools-r2.sh`: uploads `agent-dashboard/node_modules/monaco-editor/min/vs` to bucket `tools` prefix `code/monaco/vs/`.
+- `tools/code/README.md`: link to monaco README.
+
+### Deploy status
+- Script not run (many R2 objects); user runs after `npm install` in agent-dashboard.
+
+### What is live now
+- Repo-only until `./scripts/upload-monaco-to-tools-r2.sh` is executed.
+
+## 2026-03-31 R2 CORS — tools bucket policy file
+
+### What was asked
+How to add CORS so Monaco / cross-origin use of TOOLS R2 works.
+
+### Files changed
+- `scripts/r2-cors-tools-bucket.json`: Wrangler `rules` for origins (prod, www, sandbox worker, localhost Vite), GET/HEAD, headers, expose ETag/length, maxAge 86400.
+- `tools/code/monaco/README.md`: apply/verify commands, dashboard path, CORS vs Web Worker limits.
+- `tools/code/skills/R2-BUCKETS.md`: pointer to CORS file.
+
+### Deploy status
+- CORS **not** applied to live bucket by agent (Sam runs `wrangler r2 bucket cors set tools --file=scripts/r2-cors-tools-bucket.json` when ready).
+
+### What is live now
+- Repo + TOOLS R2 copies of updated markdown.
+
+## 2026-03-31 R2 CORS — tools bucket applied
+
+### What was asked
+Run `wrangler r2 bucket cors set tools --file=scripts/r2-cors-tools-bucket.json`.
+
+### Files changed
+- None (command only).
+
+### Deploy status
+- CORS set on bucket `tools` (1 rule); verified with `wrangler r2 bucket cors list tools`.
+
+### What is live now
+- Cross-origin GET/HEAD from listed origins receive CORS headers for TOOLS R2 public objects.
+
+## 2026-03-31 Git — default branch main
+
+### What was asked
+Build on **main**; correct branch setup.
+
+### Files changed
+- None (git only).
+
+### What was done
+- Checked out **`main`**, ran **`git pull origin main`** (fast-forward to match `origin/main`, commit `57c6b0e`).
+- **`main`** and **`agentsam-clean`** now point at the **same** commit; **`main`** tracks **`origin/main`**.
+
+### What to do next
+- Keep committing and pushing from **`main`** (`git push origin main`). Optional: delete local **`agentsam-clean`** if you no longer need the extra name: `git branch -d agentsam-clean` (only after you are sure).
+

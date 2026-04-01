@@ -82,6 +82,16 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --file "$HTML_PATH" --content-type "text/html" \
     --config "$CFG" --remote
 
+  # Workspace shell — same keys worker serves for /dashboard/iam-workspace-shell + /static/dashboard/shell.css
+  echo "  Uploading static/dashboard/iam-workspace-shell.html..."
+  npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/iam-workspace-shell.html" \
+    --file "dashboard/iam-workspace-shell.html" --content-type "text/html" \
+    --config "$CFG" --remote
+  echo "  Uploading static/dashboard/shell.css..."
+  npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/shell.css" \
+    --file "static/dashboard/shell.css" --content-type "text/css" \
+    --config "$CFG" --remote
+
   echo "  Uploading static/dashboard/agent/${MANIFEST_NAME}..."
   npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/agent/${MANIFEST_NAME}" \
     --file "$MANIFEST_PATH" \

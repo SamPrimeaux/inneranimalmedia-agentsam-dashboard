@@ -16,7 +16,8 @@
     "ingest:d1-memory": "./scripts/with-cloudflare-env.sh node scripts/ingest-d1-memory.js",
     "deploy:full": "cd agent-dashboard && npm run build && cd .. && ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.js --file agent-dashboard/dist/agent-dashboard.js --content-type application/javascript -c wrangler.production.toml --remote && ./scripts/with-cloudflare-env.sh npx wrangler r2 object put agent-sam/static/dashboard/agent/agent-dashboard.css --file agent-dashboard/dist/agent-dashboard.css --content-type text/css -c wrangler.production.toml --remote && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
     "deploy:ingest": "npm run generate:route-map && npm run generate:d1-schema-doc && npm run ingest:docs && npm run ingest:d1-memory && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml",
-    "promote:prod": "./scripts/promote-to-prod.sh"
+    "promote:prod": "./scripts/promote-to-prod.sh",
+    "d1:workflows-audit": "./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./scripts/d1-workflows-audit.sql"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +37,7 @@
     "acorn": "^8.16.0",
     "acorn-jsx": "^5.3.2",
     "acorn-walk": "^8.3.5",
-    "wrangler": "^4.77.0"
+    "wrangler": "^4.79.0"
   },
   "type": "module"
 }

@@ -19,24 +19,43 @@ const DASHBOARD_SCREENSHOTS_PUBLIC_BASE = 'https://pub-b845a8f899834f0faf95dc83e
  */
 async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
   const ct = contentType || 'image/png';
+  const blen = buf?.byteLength ?? buf?.length ?? 0;
   if (env.DOCS_BUCKET) {
     const ts = Date.now();
     const id = crypto.randomUUID();
     const key = `screenshots/agent/${ts}-${id}.png`;
     await env.DOCS_BUCKET.put(key, buf, { httpMetadata: { contentType: ct } });
-    return { screenshot_url: `${DOCS_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+    const screenshot_url = `${DOCS_SCREENSHOTS_PUBLIC_BASE}/${key}`;
+    void insertAiGenerationLog(env, {
+      generationType: 'browser_screenshot_r2',
+      responseText: screenshot_url,
+      metadataJson: { bucket: 'DOCS_BUCKET', r2_key: key, byte_length: blen, content_type: ct },
+    });
+    return { screenshot_url, job_id: id };
   }
   if (env.DASHBOARD) {
     const id = crypto.randomUUID();
     const key = `screenshots/${id}.png`;
     await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: ct } });
-    return { screenshot_url: `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+    const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
+    void insertAiGenerationLog(env, {
+      generationType: 'browser_screenshot_r2',
+      responseText: screenshot_url,
+      metadataJson: { bucket: 'DASHBOARD', r2_key: key, byte_length: blen, content_type: ct },
+    });
+    return { screenshot_url, job_id: id };
   }
   if (env.R2) {
     const id = crypto.randomUUID();
     const key = `screenshots/${id}.png`;
     await env.R2.put(key, buf, { httpMetadata: { contentType: ct } });
-    return { screenshot_url: `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`, job_id: id };
+    const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
+    void insertAiGenerationLog(env, {
+      generationType: 'browser_screenshot_r2',
+      responseText: screenshot_url,
+      metadataJson: { bucket: 'R2', r2_key: key, byte_length: blen, content_type: ct },
+    });
+    return { screenshot_url, job_id: id };
   }
   throw new Error('No R2 bucket for screenshots');
 }
@@ -6004,6 +6023,219 @@ async function runIntegritySnapshot(env, triggeredBy = 'cron') {
   return await env.DB.prepare('SELECT * FROM system_health_snapshots WHERE id = ?').bind(snapId).first();
 }
 
+/**
+ * Persist AI-related asset events (images, R2 files, conversions, 3D) to ai_generation_logs.
+ * Non-fatal on failure. opts.metadataJson may be object or JSON string.
+ */
+async function insertAiGenerationLog(env, opts) {
+  if (!env?.DB || !opts || !opts.generationType) return;
+  const {
+    generationType,
+    prompt = null,
+    model = null,
+    responseText = null,
+    tokensUsed = null,
+    costCents = null,
+    qualityScore = null,
+    status = 'completed',
+    createdBy = 'worker',
+    tenantId = 'tenant_sam_primeaux',
+    metadataJson = {},
+    sourceKind = 'worker',
+    workspaceId = null,
+    relatedIdsJson = null,
+    courseId = null,
+    lessonId = null,
+    quizId = null,
+    explicitId = null,
+    insertOrIgnore = false,
+  } = opts;
+  const id =
+    explicitId != null && String(explicitId).trim()
+      ? String(explicitId).trim().slice(0, 120)
+      : 'aigl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 24);
+  const now = Math.floor(Date.now() / 1000);
+  let meta = metadataJson;
+  if (meta != null && typeof meta !== 'string') {
+    try {
+      meta = JSON.stringify(meta);
+    } catch (_) {
+      meta = '{}';
+    }
+  }
+  if (meta == null || meta === '') meta = '{}';
+  const rel =
+    relatedIdsJson == null
+      ? null
+      : typeof relatedIdsJson === 'string'
+        ? relatedIdsJson
+        : (() => {
+            try {
+              return JSON.stringify(relatedIdsJson);
+            } catch (_) {
+              return null;
+            }
+          })();
+  const insertSql = insertOrIgnore
+    ? `INSERT OR IGNORE INTO ai_generation_logs (
+        id, course_id, lesson_id, quiz_id, generation_type, prompt, model, response_text,
+        tokens_used, cost_cents, quality_score, status, created_by, created_at, completed_at, tenant_id,
+        metadata_json, source_kind, workspace_id, related_ids_json
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    : `INSERT INTO ai_generation_logs (
+        id, course_id, lesson_id, quiz_id, generation_type, prompt, model, response_text,
+        tokens_used, cost_cents, quality_score, status, created_by, created_at, completed_at, tenant_id,
+        metadata_json, source_kind, workspace_id, related_ids_json
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+  try {
+    await env.DB.prepare(insertSql)
+      .bind(
+        id,
+        courseId,
+        lessonId,
+        quizId,
+        generationType,
+        prompt,
+        model,
+        responseText,
+        tokensUsed,
+        costCents,
+        qualityScore,
+        status,
+        createdBy,
+        now,
+        now,
+        tenantId,
+        meta,
+        sourceKind,
+        workspaceId,
+        rel
+      )
+      .run();
+  } catch (e) {
+    console.warn('[insertAiGenerationLog]', e?.message ?? e);
+  }
+}
+
+/**
+ * Cursor Cloud Agent: when GET /v0/agents/:id returns FINISHED with a PR URL, persist once to
+ * agentsam_executions (execution_type cursor_cloud_agent) and ai_generation_logs (idempotent).
+ * Does not use deprecated cursor_* tables.
+ */
+async function maybePersistCursorCloudAgentFinished(env, apiBody, agentId) {
+  if (!env?.DB || !apiBody || typeof apiBody !== 'object' || !agentId) return;
+  const root = apiBody.result && typeof apiBody.result === 'object' ? apiBody.result : apiBody;
+  const st = String(root.status ?? '').trim().toUpperCase();
+  if (st !== 'FINISHED') return;
+  const t = root.target && typeof root.target === 'object' ? root.target : {};
+  const prUrl =
+    typeof t.prUrl === 'string'
+      ? t.prUrl.trim()
+      : typeof t.pr_url === 'string'
+        ? t.pr_url.trim()
+        : '';
+  if (!prUrl || !/^https?:\/\//i.test(prUrl)) return;
+  const safeAgent = String(agentId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+  if (!safeAgent) return;
+  const logId = `aigl_cca_${safeAgent}`;
+  const execId = `agentsam_exec_cca_${safeAgent}`;
+  const out = JSON.stringify({
+    provider: 'cursor_cloud',
+    status: root.status,
+    pr_url: prUrl,
+    branch: t.branchName ?? t.branch_name ?? null,
+    repo: root.source?.repository ?? root.source?.repositoryUrl ?? null,
+    name: root.name ?? null,
+  });
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO agentsam_executions (id, task_id, subagent_id, execution_type, command, output, created_at)
+       VALUES (?,?,?,?,?,?,unixepoch())`
+    )
+      .bind(execId, agentId, null, 'cursor_cloud_agent', 'cursor_get_agent', out)
+      .run();
+  } catch (e) {
+    console.warn('[maybePersistCursorCloudAgentFinished] agentsam_executions', e?.message ?? e);
+  }
+  await insertAiGenerationLog(env, {
+    generationType: 'cursor_cloud_agent_pr',
+    model: 'cursor_cloud',
+    prompt: typeof root.name === 'string' ? root.name.slice(0, 2000) : null,
+    responseText: prUrl,
+    metadataJson: {
+      cursor_agent_id: agentId,
+      branch: t.branchName ?? t.branch_name ?? null,
+      repository: root.source?.repository ?? root.source?.repositoryUrl ?? null,
+      agentsam_execution_id: execId,
+    },
+    sourceKind: 'worker',
+    relatedIdsJson: [agentId],
+    explicitId: logId,
+    insertOrIgnore: true,
+  });
+}
+
+/** Gemini image models return base64 in part.inlineData; persist to DASHBOARD and log. */
+async function persistGeminiPartInlineImage(env, part, modelKey, conversationId) {
+  const inl = part?.inlineData || part?.inline_data;
+  if (!inl || !inl.data || !env?.DASHBOARD) return;
+  const mime = String(inl.mimeType || inl.mime_type || 'image/png');
+  let bytes;
+  try {
+    bytes = Uint8Array.from(atob(String(inl.data).replace(/\s/g, '')), (c) => c.charCodeAt(0));
+  } catch {
+    return;
+  }
+  if (!bytes.byteLength) return;
+  const ext = mime.includes('jpeg') ? 'jpg' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'png';
+  const safeMk = String(modelKey || 'gemini').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+  const key = `generated/gemini/${safeMk}/${crypto.randomUUID()}.${ext}`;
+  try {
+    await env.DASHBOARD.put(key, bytes, { httpMetadata: { contentType: mime } });
+  } catch (e) {
+    console.warn('[persistGeminiPartInlineImage] put', e?.message ?? e);
+    return;
+  }
+  await insertAiGenerationLog(env, {
+    generationType: 'gemini_inline_image',
+    model: modelKey,
+    responseText: key,
+    metadataJson: {
+      api: 'google_gemini',
+      r2_key: key,
+      conversation_id: conversationId || null,
+      mime_type: mime,
+      byte_length: bytes.byteLength,
+    },
+    relatedIdsJson: conversationId ? [conversationId] : null,
+  });
+}
+
+/** First fenced code block in assistant text (OpenAI / Google / Anthropic / Workers AI chat). */
+async function logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider }) {
+  if (!env?.DB || typeof fullText !== 'string') return;
+  const re = /```(\w*)\s*([^\n]*)\n([\s\S]*?)```/;
+  const m = fullText.match(re);
+  if (!m) return;
+  const code = (m[3] || '').trim();
+  if (code.length < 40) return;
+  const language = (m[1] || '').trim() || 'text';
+  const rawFilename = (m[2] || '').trim().replace(/^(\/\/|#|\/\*)\s*/, '');
+  await insertAiGenerationLog(env, {
+    generationType: 'assistant_code_block',
+    model: modelKey,
+    responseText: `code:${language}:${code.length}c`,
+    metadataJson: {
+      provider: provider || 'unknown',
+      language,
+      filename_hint: rawFilename.slice(0, 120),
+      code_length: code.length,
+      conversation_id: conversationId || null,
+    },
+    relatedIdsJson: conversationId ? [conversationId] : null,
+  });
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
 async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0) {
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
@@ -7719,6 +7951,17 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
               errorMessage: null,
               requestId: request?.headers?.get?.('cf-ray') || null,
             });
+            void insertAiGenerationLog(env, {
+              generationType: 'd1_write_mutation',
+              prompt: sql.slice(0, 4000),
+              responseText: resultText,
+              metadataJson: {
+                tool: 'd1_write',
+                path: 'runToolLoop',
+                changes,
+                sql_preview: sql.slice(0, 800),
+              },
+            });
           } catch (e) {
             resultText = `D1 error: ${e.message}`;
             const runLoopUserId = request?.user?.id || request?.user_id || 'sam_primeaux';
@@ -8538,6 +8781,7 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
       }
       const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
+      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider: 'openai' });
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
       controller.close();
     },
@@ -8624,6 +8868,7 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
         }
         const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
         await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
+        await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider: 'openai' });
         emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
         controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}\n\n`));
       } catch (e) {
@@ -8677,6 +8922,7 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
       const msg = data?.error?.message || data?.message || data?.error || `Cursor API ${res.status}`;
       return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
     }
+    await maybePersistCursorCloudAgentFinished(env, data, agentId);
     return data;
   }
 
@@ -8849,6 +9095,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
                     fullText += part.text;
                     await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'text', text: part.text })}\n\n`));
                   }
+                  await persistGeminiPartInlineImage(env, part, effectiveModelRow.model_key || modelKey, conversationId);
                 }
               }
             }
@@ -8911,6 +9158,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
       const routingOpts = opts.routingOpts || null;
       await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
+      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: effectiveModelRow.model_key || modelKey, conversationId, provider: 'google' });
       await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name })}
 
 `));
@@ -9012,10 +9260,21 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
             const m = mergeGeminiStreamUsageFromChunk(chunk, inputTokens, outputTokens);
             inputTokens = m.inputTokens;
             outputTokens = m.outputTokens;
-            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (typeof text === 'string' && text) {
-              fullText += text;
-              await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text }) + '\n\n'));
+            const cparts = chunk.candidates?.[0]?.content?.parts;
+            if (Array.isArray(cparts)) {
+              for (const part of cparts) {
+                if (typeof part.text === 'string' && part.text) {
+                  fullText += part.text;
+                  await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text: part.text }) + '\n\n'));
+                }
+                await persistGeminiPartInlineImage(env, part, modelKey, conversationId);
+              }
+            } else {
+              const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (typeof text === 'string' && text) {
+                fullText += text;
+                await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'text', text }) + '\n\n'));
+              }
             }
           }
         }
@@ -9030,11 +9289,18 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
             const m = mergeGeminiStreamUsageFromChunk(chunk, inputTokens, outputTokens);
             inputTokens = m.inputTokens;
             outputTokens = m.outputTokens;
+            const tparts = chunk.candidates?.[0]?.content?.parts;
+            if (Array.isArray(tparts)) {
+              for (const part of tparts) {
+                await persistGeminiPartInlineImage(env, part, modelKey, conversationId);
+              }
+            }
           }
         } catch (_) {}
       }
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
+      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: effectiveModelRow.model_key, conversationId, provider: 'google' });
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name }) + '\n\n'));
     } catch (e) {
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
@@ -9098,6 +9364,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       const safeRow   = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
 
       await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
+      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: safeRow.model_key, conversationId, provider: 'cloudflare_workers_ai' });
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
@@ -9807,6 +10074,11 @@ FROM r2_bucket_summary`
       await env.DB.prepare(
         'INSERT INTO r2_objects (bucket_name, key, size_bytes, content_type, created_at) VALUES (?, ?, ?, ?, ?)'
       ).bind(name, key, body.byteLength, contentType, new Date().toISOString()).run().catch(() => {});
+      void insertAiGenerationLog(env, {
+        generationType: 'r2_http_upload',
+        responseText: `${name}:${key}`,
+        metadataJson: { route: '/api/r2/upload', bucket_binding: name, key, byte_length: body.byteLength, content_type: contentType },
+      });
       return jsonResponse({ ok: true, key, size: body.byteLength });
     }
 
@@ -9858,6 +10130,17 @@ async function handleDrawApi(request, url, env) {
             `INSERT INTO project_draws (project_id, r2_key, generation_type, created_at) VALUES (?, ?, ?, datetime('now'))`
           ).bind(projectId, r2Key, generationType).run();
           const newId = ins?.meta?.last_row_id;
+          void insertAiGenerationLog(env, {
+            generationType: 'draw_export_png',
+            prompt: generationType,
+            responseText: r2Key,
+            metadataJson: {
+              route: '/api/draw/save',
+              project_id: projectId,
+              r2_key: r2Key,
+              byte_length: parsed.bytes.byteLength,
+            },
+          });
           return jsonResponse({ ok: true, id: newId, project_id: projectId, r2_key: r2Key, generation_type: generationType });
         } catch (e) {
           console.error('[draw/save] D1 insert failed', e?.message);
@@ -10055,6 +10338,23 @@ async function handleDrawApi(request, url, env) {
              SET status='completed', progress=1, final_artifact_id=?,
                  current_preview_artifact_id=?, updated_at=? WHERE id=?`
           ).bind(artId, artId, new Date().toISOString(), jobId).run();
+
+          await insertAiGenerationLog(env, {
+            generationType: 'draw_tool_image_generation',
+            prompt,
+            model,
+            responseText: pubUrl,
+            tenantId,
+            metadataJson: {
+              route: '/api/tools/image/generate',
+              job_id: jobId,
+              artifact_id: artId,
+              r2_key: artKey,
+              session_id: sessionId,
+              conversation_id: imgBody.conversation_id || null,
+            },
+            relatedIdsJson: [jobId, artId],
+          });
 
           await broadcastImg('final_ready', { job_id: jobId, session_id: sessionId,
             artifact_id: artId, public_url: pubUrl, mime_type: 'image/png',
@@ -11384,6 +11684,16 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
             raw_keys: result && typeof result === 'object' ? Object.keys(result) : [],
           }, 502);
         }
+        await insertAiGenerationLog(env, {
+          generationType: 'image_inline_workers_ai',
+          prompt: prompt.trim(),
+          model: modelKey,
+          responseText: 'inline response (no R2 persistence)',
+          metadataJson: {
+            route: '/api/agent/workers-ai/image',
+            byte_length: bytes.length,
+          },
+        });
         return new Response(bytes, {
           headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' },
         });
@@ -12745,6 +13055,12 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
         try {
           await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId, routingOptsForChat, loopCacheCreate, loopCacheRead);
+          await logAssistantCodeArtifactIfPresent(env, {
+            fullText: finalText,
+            modelKey: resolvedModelForTools.model_key,
+            conversationId,
+            provider: String(resolvedModelForTools.provider || 'unknown'),
+          });
         } catch (e) {
           console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
         }
@@ -15757,7 +16073,14 @@ async function runCfImagesEnvBuiltinTool(env, toolName, params) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { error: data.errors?.[0]?.message || 'Upload failed' };
-      return { ok: true, result: data.result || {} };
+      const cfRes = data.result || {};
+      await insertAiGenerationLog(env, {
+        generationType: 'cf_images_ingest',
+        prompt: url.trim(),
+        responseText: typeof cfRes.id === 'string' ? cfRes.id : 'cf_images_ok',
+        metadataJson: { tool: 'cf_images_upload', source_url: url.trim(), cf_images: cfRes },
+      });
+      return { ok: true, result: cfRes };
     }
     if (toolName === 'cf_images_delete') {
       const id = p.id;
@@ -16402,6 +16725,11 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         httpMetadata: { contentType: 'image/svg+xml' },
       });
       const publicUrl = 'https://docs.inneranimalmedia.com/' + filename;
+      void insertAiGenerationLog(env, {
+        generationType: 'render_to_canvas_svg',
+        responseText: publicUrl,
+        metadataJson: { tool: 'render_to_canvas', filename, byte_length: svg.length, bucket: env.DASHBOARD ? 'DASHBOARD' : 'R2' },
+      });
       return { result: { ok: true, canvas_url: publicUrl, filename } };
     } catch (e) {
       return { error: String(e.message || e) };
@@ -16464,6 +16792,18 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         output: resultText,
         errorMessage: null,
         requestId: null,
+      });
+      void insertAiGenerationLog(env, {
+        generationType: 'd1_write_mutation',
+        prompt: sql.slice(0, 4000),
+        responseText: resultText,
+        metadataJson: {
+          tool: 'd1_write',
+          conversation_id: conversationId || null,
+          changes,
+          sql_preview: sql.slice(0, 800),
+        },
+        relatedIdsJson: conversationId ? [conversationId] : null,
       });
       return { result: resultText };
     } catch (e) {
@@ -16631,6 +16971,23 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       await bucket.put(key, body ?? '', { httpMetadata: { contentType: ct } });
       const publicUrl = bucketName === 'TOOLS' ? `https://tools.inneranimalmedia.com/${key}` : null;
       const resultText = JSON.stringify({ ok: true, key, bucket: bucketName, public_url: publicUrl });
+      let byteLen = 0;
+      if (typeof body === 'string') byteLen = body.length;
+      else if (body && typeof body.byteLength === 'number') byteLen = body.byteLength;
+      await insertAiGenerationLog(env, {
+        generationType: 'r2_write_asset',
+        responseText: `${bucketName}:${key}`,
+        metadataJson: {
+          tool: 'r2_write',
+          bucket: bucketName,
+          r2_key: key,
+          content_type: ct,
+          byte_length: byteLen,
+          conversation_id: conversationId || null,
+          public_url: publicUrl,
+        },
+        relatedIdsJson: conversationId ? [conversationId] : null,
+      });
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
@@ -18570,13 +18927,34 @@ async function runCdpBuiltinTool(env, toolName, params) {
   }
 }
 
-async function uploadImgxToDashboard(env, bytes, contentType, baseName) {
+async function uploadImgxToDashboard(env, bytes, contentType, baseName, logCtx = null) {
   if (!env.DASHBOARD || !bytes) return { ok: false, error: 'DASHBOARD bucket not configured' };
   const safeBase = String(baseName || 'imgx').replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80) || 'imgx';
   const id = crypto.randomUUID();
   const ext = contentType && contentType.includes('webp') ? 'webp' : contentType && contentType.includes('jpeg') ? 'jpg' : 'png';
   const key = `generated/imgx/${safeBase}-${id}.${ext}`;
   await env.DASHBOARD.put(key, bytes, { httpMetadata: { contentType: contentType || 'image/png' } });
+  if (logCtx) {
+    const blen = bytes.byteLength ?? bytes.length ?? 0;
+    await insertAiGenerationLog(env, {
+      generationType: logCtx.generationType || 'image_asset',
+      prompt: logCtx.prompt ?? null,
+      model: logCtx.model ?? null,
+      responseText: logCtx.responseText ?? `DASHBOARD:${key}`,
+      tenantId: logCtx.tenantId || 'tenant_sam_primeaux',
+      createdBy: logCtx.createdBy || 'worker',
+      metadataJson: {
+        r2_key: key,
+        bucket: 'DASHBOARD',
+        byte_length: blen,
+        content_type: contentType || 'image/png',
+        ...(logCtx.metadata || {}),
+      },
+      sourceKind: 'worker',
+      workspaceId: logCtx.workspaceId ?? null,
+      relatedIdsJson: logCtx.relatedIdsJson ?? null,
+    });
+  }
   return { ok: true, key, url: `https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev/${key}` };
 }
 
@@ -18658,6 +19036,19 @@ async function runImgxBuiltinTool(env, toolName, params) {
       if (!bucket) return { error: 'No R2 bucket for image storage' };
       await bucket.put(key, imageData, { httpMetadata: { contentType: 'image/png' } });
       const image_url = 'https://docs.inneranimalmedia.com/' + key;
+      await insertAiGenerationLog(env, {
+        generationType: 'imgx_workers_ai_generate',
+        prompt,
+        model: '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+        responseText: image_url,
+        metadataJson: {
+          r2_key: key,
+          bucket: env.DOCS_BUCKET ? 'DOCS_BUCKET' : 'DASHBOARD',
+          tool: 'imgx_generate_image',
+          provider: 'cloudflare',
+          byte_length: imageData.byteLength ?? imageData.length ?? 0,
+        },
+      });
       return {
         ok: true,
         image_url,
@@ -18714,7 +19105,12 @@ async function runImgxBuiltinTool(env, toolName, params) {
       }
     }
     if (!bytes || !bytes.length) return { error: 'No image data returned by provider' };
-    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename);
+    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename, {
+      generationType: 'imgx_openai_generate',
+      prompt,
+      model: String(params.model || 'dall-e-3'),
+      metadata: { tool: 'imgx_generate_image', provider: 'openai' },
+    });
     if (!stored.ok) return { error: stored.error || 'Image storage failed' };
     return { ok: true, provider: 'openai', model: String(params.model || 'dall-e-3'), image_url: stored.url, key: stored.key };
   }
@@ -18760,7 +19156,12 @@ async function runImgxBuiltinTool(env, toolName, params) {
       } catch (_) {}
     }
     if (!bytes || !bytes.length) return { error: 'No edited image data returned by provider' };
-    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename + '-edit');
+    const stored = await uploadImgxToDashboard(env, bytes, 'image/png', filename + '-edit', {
+      generationType: 'imgx_openai_edit',
+      prompt,
+      model: String(params.model || 'dall-e-3'),
+      metadata: { tool: 'imgx_edit_image', provider: 'openai' },
+    });
     if (!stored.ok) return { error: stored.error || 'Image storage failed' };
     return { ok: true, provider: 'openai', model: String(params.model || 'dall-e-3'), image_url: stored.url, key: stored.key };
   }
@@ -18868,6 +19269,18 @@ async function runCloudConvertBuiltinTool(env, toolName, params) {
   const buf = await fileRes.arrayBuffer();
   const ct = fileRes.headers.get('content-type') || 'application/octet-stream';
   await env.DASHBOARD.put(output_r2_key, buf, { httpMetadata: { contentType: ct } });
+  await insertAiGenerationLog(env, {
+    generationType: 'cloudconvert_file_export',
+    model: `cloudconvert:${String(params.output_format || '').trim() || 'unknown'}`,
+    responseText: output_r2_key,
+    metadataJson: {
+      tool: 'cloudconvert_create_job',
+      job_id,
+      output_r2_key,
+      content_type: ct,
+      byte_length: buf.byteLength,
+    },
+  });
   return { job_id, status: last.status, created_at, output_r2_key };
 }
 
@@ -18942,6 +19355,20 @@ async function runMeshyBuiltinTool(env, toolName, params) {
           const buf = await f.arrayBuffer();
           await env.CAD_ASSETS.put(r2_key, buf, { httpMetadata: { contentType: 'model/gltf-binary' } });
           out.r2_key = r2_key;
+          await insertAiGenerationLog(env, {
+            generationType: 'meshy_3d_glb_export',
+            model: 'meshy_api',
+            responseText: r2_key,
+            metadataJson: {
+              tool: 'meshyai_get_task',
+              task_id,
+              r2_key,
+              glb_url: glbUrl,
+              byte_length: buf.byteLength,
+              bucket: 'CAD_ASSETS',
+            },
+            relatedIdsJson: [task_id, r2_key],
+          });
         }
       }
     }
@@ -19223,6 +19650,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         return;
       }
       await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens);
+      await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
       enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       return jsonResponse({
         content: [{ type: 'text', text: lastContent }],
@@ -19346,6 +19774,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
         await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens);
+        await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await _streamWriter.write(_streamEnc.encode('data: ' + JSON.stringify({
           type: 'done',

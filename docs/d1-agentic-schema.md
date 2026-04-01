@@ -1273,9 +1273,17 @@ CREATE TABLE ai_generation_logs (
   status TEXT DEFAULT 'pending',
   created_by TEXT,
   created_at INTEGER NOT NULL,
-  completed_at INTEGER
-, tenant_id TEXT NOT NULL DEFAULT 'system')
+  completed_at INTEGER,
+  tenant_id TEXT NOT NULL DEFAULT 'system',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  source_kind TEXT DEFAULT 'unknown'
+    CHECK(source_kind IN ('unknown','lms','migration_seed','worker','cursor_agent','api_batch')),
+  workspace_id TEXT,
+  related_ids_json TEXT
+)
 ```
+
+Worker code logs completed asset generations (`source_kind` = `worker`) for images, R2 writes, CloudConvert exports, Meshy GLB uploads, and CF Images ingests. Migration seeds use `migration_seed` (see migrations `198` / `199`).
 
 ## ai_guardrails
 

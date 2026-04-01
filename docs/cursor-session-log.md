@@ -1886,3 +1886,22 @@ Every deployment bumps `v=`; document in `cidi_*` tables; status bar shows v1.2.
 ### What is live now
 - meauxcad `main` has single-source `SHELL_VERSION` and semver+timestamp cache bust; next Cloudflare build shows status **v1.2.0** after deploy.
 
+## 2026-04-01 AITestSuite — Settings gear + status bar workspace IDE wiring
+
+### What was asked
+Keep settings gear; bottom status bar reflects real workspace / IDE plans.
+
+### Files changed (SamPrimeaux/meauxcad `c475045`)
+- `App.tsx`: Top bar **Settings** after terminal cluster; `ideWorkspace` + `formatWorkspaceStatusLine`; Welcome `onWorkspacePick`; LocalExplorer `onWorkspaceRootChange`; Monaco `onCursorPositionChange`; `StatusBar` props.
+- `src/ideWorkspace.ts`: localStorage `meauxcad_ide_workspace` + `meauxcad_git_branch`.
+- `components/StatusBar.tsx`: CSS vars (no hex); `showCursor`; `cursorText` placeholder when not in editor.
+- `components/WelcomeLauncher.tsx`, `LocalExplorer.tsx`, `MonacoEditorView.tsx`: callbacks as above.
+- `README.md`: status bar / workspace notes.
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` (march1st): status bar row.
+
+### Deploy status
+- Cloudflare: push triggers CI; D1 unchanged.
+
+### What is live now
+- Settings in **top bar** and **activity rail**; status bar shows workspace line, branch, live cursor in Code tab.
+

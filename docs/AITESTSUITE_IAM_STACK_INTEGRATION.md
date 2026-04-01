@@ -12,6 +12,7 @@
 | **Cache-bust `?v=` on `index.html` assets** | `npm run deploy` runs `scripts/bump-cache.js` which sets `?v=<semver>-<unix_ms>` so every deploy gets a unique query string. |
 | **Worker API version string** | `worker.ts` imports `SHELL_VERSION` from `src/shellVersion.ts`. |
 | **D1 CIDI audit after a deploy** | Apply migration `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` to `inneranimalmedia-business` (see `docs/CIDI_TABLES_AND_MIGRATIONS.md`). Update `207` or add `208+` when you bump past **v1.2.0**. |
+| **Status bar workspace** | meauxcad `src/ideWorkspace.ts` — pinned welcome workspace vs **Connect Native Folder** (local wins); branch from `localStorage` `meauxcad_git_branch` (default `main`); Monaco cursor when **Code** tab has a file. |
 
 ---
 

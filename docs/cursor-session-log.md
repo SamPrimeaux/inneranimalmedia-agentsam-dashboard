@@ -1509,3 +1509,180 @@ Store canonical 3-step CIDI in one queryable row; add plan_steps for completed +
 - Agents: `SELECT value FROM project_memory WHERE project_id='inneranimalmedia' AND key='CIDI_THREE_STEP_SYSTEM';`
 - Plan board data: `SELECT * FROM plan_steps WHERE project_id='proj_iam_tools_agent_workspace' ORDER BY step_index;`
 
+## 2026-03-31 docs — CIDI shell master handoff README
+
+### What was asked
+Single master README for another Claude chat: full gates for React/TS shell, no stubs/routing gaps, R2/zip artifacts, 3-step CIDI alignment.
+
+### Files changed
+- `docs/CIDI_SHELL_MASTER_README.md`: new document — gates (G1–G7), canonical facts, target architecture, API pointers, CIDI steps, R2/zip commands, anti-patterns, paste-ready master prompt block.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+
+### What is live now
+- Repo-only doc; handoff to Claude via file copy or path reference.
+
+## 2026-04-01 D1 verify — TOOLS_IAM_EDITOR_ASSETS_v1 + plan_steps 11
+
+### What was asked
+Confirm Gemini D1 registration; note stable working directory and Antigravity UX reference.
+
+### Remote D1 verification (Cursor ran)
+From `/Users/samprimeaux/Downloads/march1st-inneranimalmedia`:
+`./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml`
+
+- `project_memory`: `id=pmem_tools_iam_editor_assets_v1`, `key=TOOLS_IAM_EDITOR_ASSETS_v1`, `project_id=inneranimalmedia`, `length(value)=828`.
+- `plan_steps`: `id=ps_meauxcad_tools_bundle_v1`, `step_index=11`, title MeauxCAD TOOLS bundle v1 + Monaco AMD on TOOLS, `status=complete`. Steps 7–10 still `not_started` (expected until CIDI run).
+
+### Workspace notes for future sessions
+- **Wrangler / R2 / remote D1:** repo root `march1st-inneranimalmedia` (Downloads path above); use `with-cloudflare-env.sh` + `wrangler.production.toml`.
+- **MeauxCAD bundle + Antigravity:** iterative build/upload context may live under Desktop `antigravity`; D1 execution should `cd` to IAM monorepo as above (Gemini corrected path after `../inneranimalmedia` miss).
+- **Operator UX:** plan doc + agent pane + wrangler output in one view (Antigravity/Cursor-style) worked well for Phase 7 D1 sign-off.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry only).
+
+## 2026-04-01 repo — CLAUDE.md for Claude Code CLI
+
+### What was asked
+/init-style setup: instructions for Agent Sam using GitHub, Claude Code, Cursor, gcloud, wrangler, DB; what to reply to Claude Code MCP prompt.
+
+### Files changed
+- `CLAUDE.md` (new): canonical paths, wrangler/D1 patterns, locked files, CIDI summary, TOOLS R2 prefixes, D1 keys, Monaco merge goal, session hygiene.
+
+### Deploy status
+- Not applicable (docs only).
+
+## 2026-04-01 Phase 1 Monaco connect — agent-dashboard workspace + Vite
+
+### What was asked
+Continue Phase 1: connect TOOLS R2 `code/monaco/` workspace layer into `agent-dashboard` (Claude Code had poor path/tool results; public curl 403 on several objects).
+
+### Files changed
+- `agent-dashboard/src/main.jsx`: import and call `configureMonacoLoader` before render; import `workspace/workspace.css`; keep `AgentDashboard` mount.
+- `agent-dashboard/vite.config.js`: `vite-plugin-monaco-editor` with editor/ts/json/html/css workers; CJS default interop (`monacoEditorPluginModule.default`).
+- `agent-dashboard/package.json` + `package-lock.json`: `monaco-editor@0.55.1`, `vite-plugin-monaco-editor@^1.1.0`.
+- `agent-dashboard/src/workspace/IamCodeSurface.jsx`: fix theme import `./monacoTheme.js` (was broken `../`).
+- `agent-dashboard/src/workspace/IamEditorTabBar.jsx` + `workspace.css`: language icon colors via `--iam-tab-icon-*` CSS vars (no hex in JSX).
+- `agent-dashboard/src/workspace/main.jsx`: comment that Vite entry is `src/main.jsx`, not this sample.
+- `CLAUDE.md`: bucket `tools`, wrangler `r2 object get` when public GET is 403; `NODE_ENV=production` vs devDependencies note.
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `worker.js`, `agent.html`: not touched.
+- No mount of `IamEditorArea` in dashboard UI yet (optional next: feature flag / route).
+
+### Operational notes
+- Pulled blocked R2 files with: `wrangler r2 object get tools/code/monaco/<file> --remote --file=... -c wrangler.production.toml`.
+- Local `npx vite build` requires devDependencies installed; if `NODE_ENV=production`, run `npm ci` after unsetting or use `NODE_ENV=development`.
+
+### Deploy status
+- Built: yes (`npx vite build` in `agent-dashboard` after `npm ci` with dev deps).
+- R2 uploaded: no.
+- Worker deployed: no — Sam runs CIDI when ready.
+
+### What is live now
+- Changes are repo-only until sandbox build + promote.
+
+## 2026-04-01 CIDI session 1 — code workspace shell + sandbox deploy
+
+### What was asked
+Fully wire sandbox Step 1 so the new Monaco workspace shell and refined bundle are visible on the sandbox worker (3-step CIDI workflow).
+
+### Files changed
+- `agent-dashboard/src/workspace/IamWorkspaceShellHost.jsx` (new): local tab state + `IamEditorArea` + header Close.
+- `agent-dashboard/src/AgentDashboard.jsx`: import `IamWorkspaceShellHost`; `code_workspace` URL param + popstate + Escape; header button (code brackets); full-screen overlay; fixed stray `whimport` typo on `AgentBottomPanel` import.
+- `docs/CIDI_SHELL_MASTER_README.md`: Step 1 verify line documents `?code_workspace=1` and header control.
+- `dashboard/agent.html`: `v=` bumped to **213** by `deploy-sandbox.sh` (script edit).
+
+### Deploy status
+- Built: yes (`deploy-sandbox.sh` ran `npm run build:vite-only`).
+- R2 uploaded: yes — `agent-sam-sandbox-cidi` (`static/dashboard/agent/*`, `agent.html`, iam-workspace-shell, shell.css, manifest).
+- Worker deployed: yes — `inneranimal-dashboard` version `f7c250f3-f1da-4199-9ca2-704aa151a22a`.
+- D1: `dashboard_versions` + `deployments` rows updated by script (non-fatal warnings only if any).
+
+### What is live now
+- Sandbox: `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` serves **v=213**. Open **Code workspace** via the new header control (after Settings) or `?code_workspace=1`. Bundled Monaco + IAM tab chrome.
+
+### Next (CIDI)
+- Step 2: `./scripts/benchmark-full.sh sandbox`.
+- Step 3: Sam runs `./scripts/promote-to-prod.sh` after benchmark gate.
+
+## 2026-04-01 Overnight batch docs — OpenAI + Gemini E2E instructions
+
+### What was asked
+Confirm whether Cursor overnight testing properly instructs end-to-end batch testing for OpenAI and Google (not only Anthropic); ensure Claude Code can execute.
+
+### Files changed
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: new section *Provider batch APIs* with OpenAI (`/v1/batches`, Files API JSONL) and Gemini (ai.google.dev batch-mode) E2E flows, `quality_checks` categories, orchestration snippet; clarified Anthropic is only implemented script today.
+- `CLAUDE.md`: new *Overnight testing* bullets pointing to brief + `batch-api-test.sh`.
+- `scripts/overnight-api-suite.mjs`: Tier D wrangler target fixed from wrong DB name `iam-platform-db` to **`inneranimalmedia-business`**.
+
+### What is live now
+- Documentation and local script fix only; **`batch-api-openai.sh` / `batch-api-gemini.sh`** still to be implemented (brief describes exact steps).
+
+## 2026-04-01 Claude Code overnight handoff doc
+
+### What was asked
+Single paste-ready instructions for Claude Code before end of day: validated/gated test order, anti-loop rules, reconciliation with prior Claude Code worker/brief work.
+
+### Files changed
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md` (new): execution order (dry run → A+B → D → C), max retries, fail-soft provider batch, forbidden actions, success checklist, note on brief length and `inneranimalmedia-business`.
+
+## 2026-04-01 Overnight email doc + Tier C SESSION_COOKIE
+
+### What was asked
+Document morning/digest email vs overnight metrics; wire sandbox chat canary to accept `Cookie: session=...` (no secret committed).
+
+### Files changed
+- `docs/OVERNIGHT_EMAIL_AND_METRICS.md` (new): which cron email includes what; `quality_checks` only failures in digest; `reports/` local-only; Tier C cookie; optional `project_memory` for morning visibility.
+- `scripts/overnight-api-suite.mjs`: `sessionCookieHeaders()` for Tier C; warn if `SESSION_COOKIE` unset; probe error path returns `text: ''`.
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: env table note for Tier C + pointer to email doc.
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md`: Step 0 SESSION_COOKIE; source-of-truth table link.
+- `CLAUDE.md`: pointer to `OVERNIGHT_EMAIL_AND_METRICS.md`.
+
+## 2026-03-31 Morning plan: overnight metrics + prod Tier C
+
+### What was asked
+Prod session URL with `?session=` — expect full metrics in morning summary; Tier C should work against production when using prod cookie.
+
+### Files changed
+- `scripts/overnight-api-suite.mjs`: `OVERNIGHT_TIER_C_PROD=1` posts Tier C to prod; Tier B uses `sessionCookieHeaders()`; `WRITE_OVERNIGHT_TO_D1=1` upserts `project_memory` key `OVERNIGHT_API_SUITE_LAST`; env docs in header comment.
+- `worker.js` (`sendDailyPlanEmail`): `safe()` + SELECT `OVERNIGHT_API_SUITE_LAST` + same-day `agent_telemetry` rollup (UTC start-of-day, aligned with digest); prompt sections for overnight JSON, telemetry, and **OVERNIGHT METRICS** section; word limit 450.
+- `docs/OVERNIGHT_EMAIL_AND_METRICS.md`: table + Tier C prod + implemented path via `WRITE_OVERNIGHT_TO_D1`.
+
+### Deploy status
+- Worker change not deployed until Sam runs CIDI promote with `deploy approved`.
+
+### What is live now
+- Repo only; production morning email unchanged until worker deploy.
+
+## 2026-04-01 INTERNAL_API_SECRET env documentation
+
+### What was asked
+Where `INTERNAL_API_SECRET` is set (`.env`-wise) so handoff / Claude can finish Tier B.
+
+### Files changed
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md` Step 0: Wrangler secret on prod worker + same value in `.env.cloudflare` for local scripts; `.env.cloudflare.example` is name-only.
+
+## 2026-04-01 Git main sync + CIDI D1 205 + documentation index
+
+### What was asked
+Push main up to date; fill `cidi_*` audit tables from agent; improve documentation discipline.
+
+### Files changed
+- `migrations/205_cidi_cursor_sync_overnight_docs_20260401.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for 2026-04-01 repo sync (overnight suite, daily-plan metrics, handoff docs).
+- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: operator index for CIDI tables and migrations 175/203/204/205.
+- `.gitignore`: `reports/` (overnight JSON may reference sessions).
+- `CLAUDE.md`: pointer to `CIDI_TABLES_AND_MIGRATIONS.md`.
+- Staged commit: workspace shell, overnight script, overnight/CIDI docs, `worker.js` morning plan, `dashboard/agent.html`, `agent-dashboard` sources, `package.json` / lockfile — not `agent-dashboard/dist/` (restore or leave unstaged).
+
+### Deploy status
+- D1 migration 205: apply with `wrangler d1 execute ... --file=migrations/205_...` after push (remote).
+- Worker: not deployed until Sam promotes.
+
+### What is live now
+- After push: `main` on origin includes migration file; D1 rows live after Sam or CI runs the apply command.
+

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import FloatingPreviewPanel from "./FloatingPreviewPanel";
+import IamWorkspaceShellHost from "./workspace/IamWorkspaceShellHost.jsx";
 import AgentBottomPanel from "./AgentBottomPanel";
 import AnimatedStatusText from "./AnimatedStatusText";
 import ExecutionPlanCard from "./ExecutionPlanCard";
@@ -1263,6 +1264,35 @@ export default function AgentDashboard() {
 
   const [activeTab, setActiveTab] = useState("terminal");
 
+  const readCodeWorkspaceFromUrl = useCallback(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return new URLSearchParams(window.location.search).get("code_workspace") === "1";
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const [codeWorkspaceOpen, setCodeWorkspaceOpen] = useState(() => readCodeWorkspaceFromUrl());
+
+  const openCodeWorkspace = useCallback(() => {
+    setCodeWorkspaceOpen(true);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("code_workspace", "1");
+      window.history.replaceState({}, "", u);
+    } catch (_) {}
+  }, []);
+
+  const closeCodeWorkspace = useCallback(() => {
+    setCodeWorkspaceOpen(false);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("code_workspace");
+      window.history.replaceState({}, "", u);
+    } catch (_) {}
+  }, []);
+
   // Connect directly to draw DO room on mount — receives ui.panel.open (native Excalidraw draw tab)
   useEffect(() => {
     let ws;
@@ -1660,6 +1690,21 @@ export default function AgentDashboard() {
     const urlSession = params.get("session");
     if (urlSession) setCurrentSessionId(urlSession);
   }, []);
+
+  useEffect(() => {
+    const onPop = () => setCodeWorkspaceOpen(readCodeWorkspaceFromUrl());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [readCodeWorkspaceFromUrl]);
+
+  useEffect(() => {
+    if (!codeWorkspaceOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") closeCodeWorkspace();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [codeWorkspaceOpen, closeCodeWorkspace]);
 
   // ── Boot data ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -3954,6 +3999,39 @@ export default function AgentDashboard() {
               >
                 <ViewerPanelStripIcon tab="settings" size={18} />
               </button>
+              <button
+                type="button"
+                title={codeWorkspaceOpen ? "Close code workspace" : "Open code workspace"}
+                onClick={() => (codeWorkspaceOpen ? closeCodeWorkspace() : openCodeWorkspace())}
+                style={{
+                  width: 36,
+                  height: 36,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: codeWorkspaceOpen ? "var(--bg-canvas)" : "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  color: codeWorkspaceOpen ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -5993,6 +6071,24 @@ export default function AgentDashboard() {
               Click outside or press Esc to close
             </span>
           </div>
+        </div>
+      )}
+
+      {codeWorkspaceOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Code workspace"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10050,
+            display: "flex",
+            flexDirection: "column",
+            background: "var(--bg-elevated)",
+          }}
+        >
+          <IamWorkspaceShellHost themeSlug={activeThemeSlug} onClose={closeCodeWorkspace} />
         </div>
       )}
 

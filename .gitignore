@@ -32,6 +32,9 @@ agent-dashboard/dist-debug/
 # Deploy temp logs
 /tmp/deploy-*.log
 
+# Local overnight / canary JSON (may reference sessions)
+reports/
+
 # Local marker: last git HEAD used for incremental doc uploads in deploy-with-record.sh
 .deploy-docs-baseline
 *.tmp

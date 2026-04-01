@@ -5889,6 +5889,33 @@ async function completeRoutingDecisionTelemetry(env, conversationId, telemetryId
   } catch (e) {
     console.warn('[routing_decisions] telemetry completion', e?.message ?? e);
   }
+  // EMA write-back: update model_routing_rules with observed latency + success signal (α=0.15).
+  // isSuccess: error paths emit done with 0 tokens; treat that as failure signal toward 0.0.
+  const taskType = routingOpts.taskType;
+  if (taskType && env.DB) {
+    try {
+      const isSuccess = Number(inputTokens) > 0;
+      if (isSuccess) {
+        await env.DB.prepare(
+          `UPDATE model_routing_rules SET
+            avg_latency_ms    = ROUND(COALESCE(avg_latency_ms, ?) * 0.85 + ? * 0.15, 1),
+            success_rate      = ROUND(COALESCE(success_rate, 1.0) * 0.85 + 1.0 * 0.15, 4),
+            last_evaluated_at = unixepoch()
+          WHERE task_type = ? AND is_active = 1`
+        ).bind(latencyMs, latencyMs, taskType).run();
+      } else {
+        // Failure: drive success_rate toward 0.0; latency is meaningless on failed calls
+        await env.DB.prepare(
+          `UPDATE model_routing_rules SET
+            success_rate      = ROUND(COALESCE(success_rate, 1.0) * 0.85 + 0.0 * 0.15, 4),
+            last_evaluated_at = unixepoch()
+          WHERE task_type = ? AND is_active = 1`
+        ).bind(taskType).run();
+      }
+    } catch (e) {
+      console.warn('[model_routing_rules] perf write-back', e?.message ?? e);
+    }
+  }
 }
 
 /** Parallel D1 reads + INSERT into system_health_snapshots; returns the inserted row. */
@@ -12525,6 +12552,14 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
           'SELECT key, value, memory_type, importance_score FROM agent_memory_index WHERE importance_score >= 0.9 AND tenant_id = \'tenant_sam_primeaux\' ORDER BY importance_score DESC LIMIT 50'
         ).all();
         unifiedAgentContextBlock = buildUnifiedAgentContextBlock(d1UnifiedRows || [], pgMatchRows || []);
+        if (d1UnifiedRows?.length && ctx && typeof ctx.waitUntil === 'function') {
+          ctx.waitUntil(
+            env.DB.prepare(
+              `UPDATE agent_memory_index SET access_count = access_count + 1, last_accessed_at = unixepoch()
+               WHERE tenant_id = 'tenant_sam_primeaux' AND importance_score >= 0.9`
+            ).run().catch((e) => console.warn('[agent_memory_index] access_count update', e?.message ?? e))
+          );
+        }
       } catch (e) {
         console.warn('[agent/chat] unified agent context', e?.message ?? e);
       }
@@ -12736,6 +12771,7 @@ ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
         }).slice(0, 4000)
         : String(_agentIntentFinal);
       const _routingTaskType = (_routingClassifySnapshot?.tasks?.[0]?.type) || intentToModelRoutingTaskType(_agentIntentFinal);
+      routingOptsForChat.taskType = _routingTaskType;
       if (conversationId && env.DB) {
         try {
           await env.DB.prepare(
@@ -19839,6 +19875,23 @@ async function processQueues(env) {
   }
 }
 
+/** Close terminal_sessions idle > 24h so active-count stays accurate. */
+async function sweepStaleTerminalSessions(env) {
+  if (!env.DB) return;
+  try {
+    const r = await env.DB.prepare(
+      `UPDATE terminal_sessions
+       SET status = 'closed', closed_at = unixepoch(), updated_at = unixepoch()
+       WHERE status = 'active'
+         AND updated_at < unixepoch() - 86400`
+    ).run();
+    const closed = r.meta?.changes ?? r.changes ?? 0;
+    if (closed > 0) console.log('[cron] terminal_sessions swept:', closed, 'stale sessions closed');
+  } catch (e) {
+    console.warn('[cron] sweepStaleTerminalSessions', e?.message ?? e);
+  }
+}
+
 async function runAgentMemoryDecay(env) {
   if (!env.DB) return;
   try {
@@ -20142,6 +20195,7 @@ worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '*/30 * * * *') {
     ctx.waitUntil(processQueues(env));
     ctx.waitUntil(runOvernightCronStep(env));
+    ctx.waitUntil(sweepStaleTerminalSessions(env));
   }
   if (event.cron === '0 0 * * *') {
     if (env?.DB) ctx.waitUntil(runRetentionPurge(env));
@@ -22421,8 +22475,9 @@ ${qfHtml}
 /** 8:30am CST (13:30 UTC) daily plan: LIVE D1 queries + Claude Haiku + Resend. Cron 30 13 * * * */
 async function sendDailyPlanEmail(env) {
   if (!env.DB || !env.RESEND_API_KEY) return;
+  const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
   try {
-    const [tasks, roadmap, deployments, velocity, projects, memory, proposals] = await Promise.all([
+    const [tasks, roadmap, deployments, velocity, projects, memory, proposals, overnightSuite, telemetryToday] = await Promise.all([
       env.DB.prepare(`SELECT title, description, priority, status, tags FROM tasks
         WHERE tenant_id='tenant_sam_primeaux' AND status IN ('todo','in_progress','blocked')
         ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, updated_at DESC LIMIT 10`).all(),
@@ -22440,6 +22495,17 @@ async function sendDailyPlanEmail(env) {
         WHERE project_id='inneranimalmedia' ORDER BY updated_at DESC LIMIT 8`).all(),
       env.DB.prepare(`SELECT command_name, rationale, risk_level FROM agent_command_proposals
         WHERE status='pending' ORDER BY created_at DESC LIMIT 4`).all(),
+      safe(env.DB.prepare(`SELECT key, value, updated_at FROM project_memory
+        WHERE project_id='inneranimalmedia' AND key='OVERNIGHT_API_SUITE_LAST' LIMIT 1`).first()),
+      safe(env.DB.prepare(
+        `SELECT COUNT(*) AS calls,
+          COALESCE(SUM(input_tokens), 0) AS tokens_in,
+          COALESCE(SUM(output_tokens), 0) AS tokens_out,
+          ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd,
+          COUNT(DISTINCT model_used) AS models_used
+         FROM agent_telemetry
+         WHERE created_at >= unixepoch('now', 'start of day')`
+      ).first()),
     ]);
     console.log('[daily-plan] D1 queries complete — tasks:', tasks?.results?.length, 'roadmap:', roadmap?.results?.length);
 
@@ -22467,6 +22533,12 @@ ${JSON.stringify(memory.results)}
 PENDING AGENT PROPOSALS:
 ${JSON.stringify(proposals.results)}
 
+OVERNIGHT API SUITE (last run; written by scripts/overnight-api-suite.mjs with WRITE_OVERNIGHT_TO_D1=1):
+${JSON.stringify(overnightSuite || {})}
+
+AI TELEMETRY TODAY (UTC calendar day; same window as daily digest):
+${JSON.stringify(telemetryToday || {})}
+
 Write a plain-text morning briefing email with these exact sections:
 
 TOP 3 MUST-DO TODAY
@@ -22487,7 +22559,10 @@ DELEGATE TO AGENT SAM
 CLIENT PROJECTS
 [One line each on any active client needing attention today.]
 
-Rules: Under 400 words. No fluff. No emojis. Direct and actionable. Treat Sam like a technical founder with limited time and limited AI spend this week.`;
+OVERNIGHT METRICS
+[If OVERNIGHT SUITE row has JSON in value, summarize tier pass/fail, ab_fails, and tier_c_target. If empty or missing, say no overnight row yet. Include AI TELEMETRY TODAY numbers: calls, tokens_in/out, cost_usd, models_used.]
+
+Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam like a technical founder with limited time and limited AI spend this week.`;
 
     let emailBody = '';
     if (env.ANTHROPIC_API_KEY) {

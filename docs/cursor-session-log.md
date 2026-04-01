@@ -1480,3 +1480,17 @@ Build on **main**; correct branch setup.
 ### What to do next
 - Keep committing and pushing from **`main`** (`git push origin main`). Optional: delete local **`agentsam-clean`** if you no longer need the extra name: `git branch -d agentsam-clean` (only after you are sure).
 
+## 2026-03-31 D1 — CIDI/CI log for git push 393a9c0
+
+### What was asked
+Log commit/push in `cidi_activity_log`, `cidi_pipeline_runs`, `cicd_runs`, `cidi_run_results`.
+
+### Files changed
+- `migrations/203_cidi_log_git_push_main_393a9c0.sql`: INSERT `cicd_runs` (`run_id` gh_manual_push_main_20260331_393a9c0); `cidi_activity_log` (`cidi_id` 4, workflow CIDI-IAM-AGENTSAM-20260322); `cidi_pipeline_runs` (`pip_cidi_20260331_393a9c0`, sandbox, pending); `cidi_run_results` (git pass, sandbox+benchmark skip).
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+
+### What is live now
+- Push 393a9c0 recorded; pipeline row pending sandbox deploy + benchmark.
+

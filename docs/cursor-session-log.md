@@ -1494,3 +1494,18 @@ Log commit/push in `cidi_activity_log`, `cidi_pipeline_runs`, `cicd_runs`, `cidi
 ### What is live now
 - Push 393a9c0 recorded; pipeline row pending sandbox deploy + benchmark.
 
+## 2026-03-31 D1 — project_memory CIDI_THREE_STEP_SYSTEM + plan_steps
+
+### What was asked
+Store canonical 3-step CIDI in one queryable row; add plan_steps for completed + proposed work.
+
+### Files changed
+- `migrations/204_project_memory_cidi_three_step_and_plan_steps.sql`: `INSERT OR REPLACE` `project_memory` id `pmem_cidi_three_step_v1`, key `CIDI_THREE_STEP_SYSTEM` (JSON: steps 1-3, D1 table refs, docs); `DELETE`+`INSERT` ten `plan_steps` for `project_id` `proj_iam_tools_agent_workspace` (1-6 complete, 7-10 not_started).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Agents: `SELECT value FROM project_memory WHERE project_id='inneranimalmedia' AND key='CIDI_THREE_STEP_SYSTEM';`
+- Plan board data: `SELECT * FROM plan_steps WHERE project_id='proj_iam_tools_agent_workspace' ORDER BY step_index;`
+

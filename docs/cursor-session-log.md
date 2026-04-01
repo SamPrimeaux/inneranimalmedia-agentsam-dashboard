@@ -1686,3 +1686,28 @@ Push main up to date; fill `cidi_*` audit tables from agent; improve documentati
 ### What is live now
 - **Git:** `main` at `47e9410` (pushed). **D1:** migration `205_cidi_cursor_sync_overnight_docs_20260401.sql` executed (cicd_runs + cidi_activity_log + cidi_pipeline_runs + cidi_run_results).
 
+## 2026-04-01 SESSION_COOKIE in .env.cloudflare + overnight suite green
+
+### What was asked
+Set `SESSION_COOKIE` for session `3bf853f9-...` in `.env.cloudflare` and execute the overnight workflow successfully.
+
+### Files changed
+- `.env.cloudflare` (gitignored): added `export SESSION_COOKIE='session=...'` so `overnight-api-suite.mjs` `loadEnv()` loads it.
+
+### Outcome
+- `node scripts/overnight-api-suite.mjs`: exit **0**, **8 pass / 0 fail**, Tier C sandbox canary **200** (~4–6s).
+- `WRITE_OVERNIGHT_TO_D1=1`: remote D1 **`project_memory` `OVERNIGHT_API_SUITE_LAST`** upsert succeeded.
+- Tier B skipped (no `INTERNAL_API_SECRET` in env); expected per prior docs.
+
+### Deploy status
+- No worker deploy; D1 write only for `project_memory` row.
+
+## 2026-04-01 OVERNIGHT_BATCH_API_TEST_BRIEF — E2E map + $5/provider cap
+
+### What was asked
+Document end-to-end testing scope for AI providers, MCP, workflows, Agent Sam D1; **$5 USD per provider hard stop**; fix Tier C auth row and prod-chat env clarification.
+
+### Files changed
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: new sections **End-to-end coverage map and cost governance** (when tests run, spend buckets, hard-stop rules, layer table, gaps); env `OVERNIGHT_CAP_USD_PER_PROVIDER`; Tier C auth column; `quality_checks` wrangler example uses `inneranimalmedia-business`; orchestration + cap notes; hard limits + `OVERNIGHT_TIER_C_PROD` vs `OVERNIGHT_INCLUDE_PROD` clarification.
+
+

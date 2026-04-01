@@ -1680,9 +1680,9 @@ Push main up to date; fill `cidi_*` audit tables from agent; improve documentati
 - Staged commit: workspace shell, overnight script, overnight/CIDI docs, `worker.js` morning plan, `dashboard/agent.html`, `agent-dashboard` sources, `package.json` / lockfile — not `agent-dashboard/dist/` (restore or leave unstaged).
 
 ### Deploy status
-- D1 migration 205: apply with `wrangler d1 execute ... --file=migrations/205_...` after push (remote).
+- D1 migration 205: applied to **remote** `inneranimalmedia-business` (2026-04-01).
 - Worker: not deployed until Sam promotes.
 
 ### What is live now
-- After push: `main` on origin includes migration file; D1 rows live after Sam or CI runs the apply command.
+- **Git:** `main` at `47e9410` (pushed). **D1:** migration `205_cidi_cursor_sync_overnight_docs_20260401.sql` executed (cicd_runs + cidi_activity_log + cidi_pipeline_runs + cidi_run_results).
 

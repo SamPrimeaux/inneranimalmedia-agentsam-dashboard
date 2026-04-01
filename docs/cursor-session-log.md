@@ -1686,6 +1686,26 @@ Push main up to date; fill `cidi_*` audit tables from agent; improve documentati
 ### What is live now
 - **Git:** `main` at `47e9410` (pushed). **D1:** migration `205_cidi_cursor_sync_overnight_docs_20260401.sql` executed (cicd_runs + cidi_activity_log + cidi_pipeline_runs + cidi_run_results).
 
+## 2026-04-01 E2E overnight orchestrator + spec
+
+### What was asked
+Design a real end-to-end test; user pasted INTERNAL_API_SECRET in chat (must rotate).
+
+### Files changed
+- `docs/E2E_OVERNIGHT_TEST_SPEC.md`: gates G1–G6 (health, internal auth, chat, D1 tokens hard-fail, TOOLS R2 artifact URL, per-provider cap).
+- `scripts/e2e-overnight.sh`: build → `tools/code/e2e-nightly/<run_id>/agent-dashboard.js` → verify `tools.inneranimalmedia.com` → `overnight-api-suite.mjs` → D1 gate on latest haiku `agent_telemetry` row in time window (session_id column is **conversation** id, not cookie).
+
+### Deploy status
+- Docs + script only; no worker deploy.
+
+## 2026-04-01 overnight-api-suite: pass=0 fix + D1 24h metrics
+
+### What was asked
+Suite showed `pass=0 fail=0` despite green checkmarks; output felt useless.
+
+### Files changed
+- `scripts/overnight-api-suite.mjs`: result rows use **`check_status`** (not `status`) to avoid ambiguity with HTTP status; **`rowStatus()`** supports legacy `status`; **`summary`** block in JSON (`checks_pass`, `by_tier_pass`, etc.); **Tier D** adds `agent_telemetry` last-24h calls + `computed_cost_usd` sum; **`OVERNIGHT_SUMMARY_JSON=...`** one-line for piping; Tier C pass if **200 + body length** when SSE lacks `done`; warn if checks exist but no PASS/FAIL.
+
 ## 2026-04-01 SESSION_COOKIE in .env.cloudflare + overnight suite green
 
 ### What was asked
@@ -1710,4 +1730,159 @@ Document end-to-end testing scope for AI providers, MCP, workflows, Agent Sam D1
 ### Files changed
 - `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: new sections **End-to-end coverage map and cost governance** (when tests run, spend buckets, hard-stop rules, layer table, gaps); env `OVERNIGHT_CAP_USD_PER_PROVIDER`; Tier C auth column; `quality_checks` wrangler example uses `inneranimalmedia-business`; orchestration + cap notes; hard limits + `OVERNIGHT_TIER_C_PROD` vs `OVERNIGHT_INCLUDE_PROD` clarification.
 
+## 2026-04-01 TOOLS live preview.html + Vite base for E2E
+
+### What was asked
+Wire the nightly TOOLS bundle into a real browser UI instead of viewing raw `agent-dashboard.js`.
+
+### Files changed
+- `agent-dashboard/vite.config.js`: `base` from **`E2E_TOOLS_VITE_BASE`** (default `/static/dashboard/agent/`) so full E2E uploads resolve chunk URLs to the TOOLS prefix.
+- `scripts/e2e-overnight.sh`: export `E2E_TOOLS_VITE_BASE` when skip-tools is off and mode is **full**; unset after build; generate **`reports/<run_id>-preview.html`** from `dashboard/agent.html` (rewrite agent CSS/JS + `shell.css` to prod); upload **`tools/.../preview.html`**; banner notes `/api/` may fail on tools origin; artifact echo for preview URL.
+- `docs/E2E_OVERNIGHT_TEST_SPEC.md`: G5 + full-mode + rebuild-without-E2E note for prod R2.
+
+### Deploy status
+- No worker deploy; TOOLS R2 only on next `./scripts/e2e-overnight.sh` run.
+
+### What is live now
+- Existing TOOLS runs still have entry + manifest only; **new** runs get `preview.html` after the script changes are used locally.
+
+## 2026-04-01 aitesting worker deploy (TOOLS R2 playground)
+
+### What was asked
+Deploy approved: ship `/Users/samprimeaux/Downloads/aitesting-worker` so `https://aitesting.meauxbility.workers.dev` serves the `tools` R2 bucket (`/`, `/docs`, `/api/ls`, `/api/file`, path by key).
+
+### Files changed
+- External project only: `aitesting-worker/wrangler.toml`, `aitesting-worker/src/worker.js` (no monorepo edits).
+
+### Deploy status
+- Worker deployed: **aitesting** version `8a764181-2f3b-4e2f-bad4-7e3de4269a6b`, URL `https://aitesting.meauxbility.workers.dev`
+- Wrangler warned remote dashboard had **D1 `DB` binding**, **observability**, different **compatibility_date**; local wrangler.toml replaced remote (R2 `TOOLS` + vars only).
+
+### What is live now
+- `GET /` returns `code/iam-workspace-shell.html`; `/api/ls?prefix=code/` returns objects + 12 subdirectory prefixes; `/api/file?key=code/README.md` returns markdown body.
+
+## 2026-04-01 D1: ws_aitestsandbox + aitesting workers / worker_registry
+
+### What was asked
+Register AITesting playground in `workers`, `worker_registry`, and `workspaces` (`ws_aitestsandbox`). User pasted an OpenAI API key in chat — **not** stored in D1 (rotate key at OpenAI).
+
+### Files changed
+- `migrations/206_ws_aitestsandbox_aitesting_worker.sql`: `workers` row `aitesting`; `worker_registry` `wr_aitesting_sandbox`; `workspaces` `ws_aitestsandbox`; `workspace_settings` + `workspace_projects` `wp_aitestsandbox_tools_playground`. Applied to prod D1 via wrangler.
+
+### Deploy status
+- D1 migration executed remotely: success (5 statements).
+
+### What is live now
+- Cloud tab `/api/workers` includes **aitesting** (active); workspace **ws_aitestsandbox** and project slug **aitesting-tools-playground** for IAM tooling.
+
+## 2026-04-01 aitesting full integration (Monaco, agent chat, Draw, Playwright list)
+
+### What was asked
+Wire `aitesting.meauxbility.workers.dev`: worker routes (ls, file, save, SSE chat), patch `iam-workspace-shell.html` in R2 (Monaco tree, agent streaming, Excalidraw iframe, Playwright jobs from D1). Set `OPENAI_API_KEY` via wrangler secret (user rotates exposed key). Do not touch main `inneranimalmedia` worker or `wrangler.production.toml`.
+
+### Files changed
+- `/Users/samprimeaux/Downloads/aitesting-worker/src/worker.js`: POST `/api/file/save`, POST `/api/agent/chat` (OpenAI SSE passthrough), GET `/api/playwright/jobs` (D1 `playwright_jobs`), `/api/ls` delimiter param, CORS for POST.
+- `/Users/samprimeaux/Downloads/aitesting-worker/wrangler.toml`: `SHELL`, `[[d1_databases]]` binding `inneranimalmedia-business`.
+- `tools` R2 `code/iam-workspace-shell.html`: Monaco AMD + R2 tree + agent panel + Browser + Draw tabs (uploaded via wrangler).
+
+### Deploy status
+- **aitesting** deployed version `e5d4755b-b057-401f-b859-7d5f4d14bb9b`; R2 shell uploaded.
+- `OPENAI_API_KEY` must be set by Sam: `cd aitesting-worker && ../march1st-inneranimalmedia/scripts/with-cloudflare-env.sh npx wrangler secret put OPENAI_API_KEY` (after rotating the leaked key).
+
+### What is live now
+- `/api/ls`, `/api/file`, `/api/playwright/jobs` return data; `/api/agent/chat` returns 500 until secret is set.
+
+## 2026-04-01 aitesting shell remaster v0.2.0 (UI/UX, Monaco theme, Excalidraw, registry, ai_api log)
+
+### What was asked
+Remaster playground shell: full tabbed UI/UX (stubs polished), Monaco theme-aware from CSS vars, Excalidraw embedded (ESM + iframe fallback), live D1 registry for `mcp_registered_tools` / `agentsam_skill` / `agentsam_project_context`, AI runs table from `ai_api_test_runs`, redeploy worker + R2 shell; summarize three-lane CIDI flow.
+
+### Files changed
+- `/Users/samprimeaux/Downloads/aitesting-worker/iam-workspace-shell.html`: `setTab` drives all centers; `applyIamMonacoTheme` + `data-theme` observer; registry + `/api/ai-runs` loaders; Excalidraw dynamic import; chat shows `X-AI-Run-Id`; shell `v0.2.0`; CSS for registry rows and excalidraw inner wrapper.
+
+### Deploy status
+- R2: `tools/code/iam-workspace-shell.html` uploaded (prod wrangler `wrangler.production.toml`).
+- Worker **aitesting** deployed (`0a243fee-63c9-4d5d-a0be-9a9cafc9775d`).
+
+### What is live now
+- `https://aitesting.meauxbility.workers.dev` serves updated shell from TOOLS R2; OpenAI chat + `ai_api_test_runs` logging unchanged in worker (prior session).
+
+## 2026-04-01 AITestSuite stack integration doc (meauxcad repo, aitestsuite worker)
+
+### What was asked
+Document how `https://aitestsuite.meauxbility.workers.dev/` integrates as Step 1 dedicated AI development zone; keep using `https://github.com/SamPrimeaux/meauxcad.git`; explain flow to sandbox then production.
+
+### Files changed
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` (new): Git vs Worker naming, three-layer ASCII + Mermaid, secrets/observability notes, D1 `aitesting` → `aitestsuite` follow-up.
+
+### Files NOT changed
+- `meauxcad` repo / `wrangler.jsonc` (separate repo; user updates Cloudflare Build settings there).
+
+### Deploy status
+- Built: N/A
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: N/A
+
+### What is live now
+- Canonical runbook for AITestSuite + IAM sandbox + prod pipeline lives in `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`.
+
+## 2026-04-01 meauxcad GitHub README + wrangler name (remote repo)
+
+### What was asked
+Rewrite/expand README and push to https://github.com/SamPrimeaux/meauxcad to confirm AITestSuite setup.
+
+### Files changed (SamPrimeaux/meauxcad on GitHub)
+- `README.md`: Expanded stack role (lab vs CIDI sandbox vs prod), live URL `aitestsuite.meauxbility.workers.dev`, features, tech table, build/deploy, layout, no emojis.
+- `wrangler.jsonc`: `"name": "meauxcad"` to `"name": "aitestsuite"` to match Cloudflare Worker.
+
+### Deploy status
+- Commits pushed: `5e86f76` (README), `9a22dcd` (wrangler).
+- IAM monorepo: not deployed.
+
+### What is live now
+- Default branch on GitHub reflects new README and Worker name; Cloudflare Builds should auto-deploy if connected.
+
+## 2026-04-01 AITestSuite terminal toolbar + IAM shell assets (meauxcad repo)
+
+### What was asked
+Top-right terminal icon next to three layout icons; bottom drawer terminal with drag resize; tie to inneranimalmedia.com assets for smooth pt2 sandbox port.
+
+### Files changed (SamPrimeaux/meauxcad, pushed `1ff1e43`)
+- `App.tsx`: Four-icon cluster (split, agent side, bottom aux strip, terminal); main column `min-h-0` flex stack; optional bottom panel strip; `XTermShell` with `iamOrigin`.
+- `components/XTermShell.tsx`: `iamOrigin` prop; xterm theme from CSS variables; flex `min-h-0` content; banner lines for shell.css + `/api/agent/terminal/ws`.
+- `index.html`: Title IAM Explorer; preconnect + `shell.css` from inneranimalmedia.com; JetBrains Mono; body uses `var(--bg-app)` / `var(--text-main)`.
+- `index.css`: body margin/overflow/font aligned with shell.
+
+### Deploy status
+- Built locally: `npx vite build` OK (after `NODE_ENV=development npm install`).
+- IAM monorepo: not deployed.
+
+### What is live now
+- Pushed to `main`; Cloudflare Workers Builds should deploy `aitestsuite` when connected.
+
+## 2026-04-01 AITestSuite shell v1.2.0 + CIDI migration 207 + cache v=
+
+### What was asked
+Every deployment bumps `v=`; document in `cidi_*` tables; status bar shows v1.2.0 (was v1.1.0).
+
+### Files changed
+**SamPrimeaux/meauxcad (pushed `a5036fc`, code v1.2.0 `a8854e3`):**
+- `src/shellVersion.ts`: `SHELL_VERSION = '1.2.0'`.
+- `package.json`: version `1.2.0`.
+- `worker.ts`, `App.tsx`, `components/StatusBar.tsx`, `components/XTermShell.tsx`: import `SHELL_VERSION`.
+- `scripts/bump-cache.js`: `?v=<semver>-<unix_ms>` from `package.json` + timestamp.
+- `README.md`: Versioning / CIDI pointer.
+- `index.html`: updated by bump-cache (committed after bump).
+
+**march1st-inneranimalmedia:**
+- `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for meauxcad `a8854e3` / shell v1.2.0.
+- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: row for migration 207.
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`: shell version + CIDI table.
+
+### Deploy status
+- D1 migration 207: **not executed** — Sam runs `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` when ready.
+
+### What is live now
+- meauxcad `main` has single-source `SHELL_VERSION` and semver+timestamp cache bust; next Cloudflare build shows status **v1.2.0** after deploy.
 

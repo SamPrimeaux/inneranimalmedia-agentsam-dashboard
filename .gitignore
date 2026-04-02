@@ -5,8 +5,13 @@
 .env.cloudflare
 .env.secrets.recovery
 
-# Cursor MCP config (may contain MCP_AUTH_TOKEN)
-.cursor/mcp.json
+# AppleDouble / macOS metadata
+._*
+.DS_Store
+**/.DS_Store
+
+# Cursor AI (local editor config; MCP token lives in ~/.cursor/mcp.json for prod)
+.cursor/
 
 # Dependencies
 node_modules/
@@ -14,9 +19,6 @@ node_modules/
 # Wrangler
 .wrangler/
 .dev.vars
-
-# OS
-.DS_Store
 
 .dev.vars*
 !.dev.vars.example
@@ -35,6 +37,9 @@ agent-dashboard/dist-debug/
 
 # Local overnight / canary JSON (may reference sessions)
 reports/
+
+# Local reports / overnight outputs
+*.log
 
 # Local marker: last git HEAD used for incremental doc uploads in deploy-with-record.sh
 .deploy-docs-baseline

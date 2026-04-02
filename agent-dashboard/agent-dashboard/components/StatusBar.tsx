@@ -14,6 +14,7 @@ interface StatusBarProps {
     showCursor?: boolean;
     activeTab?: string;
     version?: string;
+    spendCount?: string;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -29,6 +30,22 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     spendCount = '$0.00'
 }) => {
     const cursorText = showCursor ? `Ln ${line}, Col ${col}` : 'Ln --, Col --';
+    const versionDisplay =
+        version && String(version).trim() !== ''
+            ? String(version).startsWith('v')
+                ? version
+                : `v${version}`
+            : '';
+    const [chatModeLabel, setChatModeLabel] = React.useState<string>('');
+
+    React.useEffect(() => {
+        const onMode = (ev: Event) => {
+            const d = (ev as CustomEvent<{ label?: string }>).detail;
+            if (d?.label != null) setChatModeLabel(String(d.label));
+        };
+        window.addEventListener('iam-chat-mode', onMode as EventListener);
+        return () => window.removeEventListener('iam-chat-mode', onMode as EventListener);
+    }, []);
     
     // IAM Stubs: log future status endpoints
     React.useEffect(() => {
@@ -77,9 +94,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 <div className="flex items-center hover:text-[var(--solar-yellow)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors font-bold text-[10px] tracking-tight">
                     {spendCount}
                 </div>
-                {version && (
+                {chatModeLabel && (
+                    <div
+                        className="hidden min-[1000px]:flex items-center px-2 h-full text-[var(--text-muted)] font-semibold border-x border-[var(--border-subtle)]/20 max-w-[120px] truncate"
+                        title={chatModeLabel}
+                    >
+                        {chatModeLabel}
+                    </div>
+                )}
+                {versionDisplay && (
                     <div className="hidden min-[1100px]:flex items-center px-2 h-full bg-[var(--solar-green)]/15 text-[var(--solar-green)] font-bold border-x border-[var(--border-subtle)]/20">
-                        v{version}
+                        {versionDisplay}
                     </div>
                 )}
                 <div className="hidden items-center gap-1 hover:text-[var(--text-main)] cursor-pointer px-1 transition-colors">

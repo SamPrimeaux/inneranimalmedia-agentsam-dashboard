@@ -6,9 +6,20 @@
 
 import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { 
-  Send, User, Bot, Loader2, 
-  ChevronRight, Sparkles, Plus, ChevronDown, Mic, FileCode, FileText, Image as ImageIcon
+import {
+  Send,
+  User,
+  Bot,
+  Loader2,
+  ChevronRight,
+  Paperclip,
+  Image as ImageIconLucide,
+  AtSign,
+  Slash,
+  FileText,
+  FileCode,
+  X,
+  ChevronDown,
 } from 'lucide-react';
 import { ProjectType } from '../types';
 
@@ -22,93 +33,126 @@ interface ChatAssistantProps {
   activeFileContent?: string;
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  onFileSelect?: (file: { name: string, content: string }) => void;
+  onFileSelect?: (file: { name: string; content: string }) => void;
   onRunInTerminal?: (cmd: string) => void;
   activeFileName?: string;
 }
 
-// Detect language => file extension and icon
+type StagedAttachment = {
+  id: string;
+  file: File;
+  type: 'image' | 'file';
+  previewUrl: string | null;
+};
+
+type PickerItem = { id: string; label: string; kind: string };
+type SlashCmd = { slug: string; description: string | null };
+
+const LS_CONV = 'iam-agent-chat-conversation-id';
+
+function formatFileSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function measureAboveAnchor(el: HTMLElement | null, minW: number): React.CSSProperties | null {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const gap = 8;
+  return {
+    position: 'fixed',
+    left: r.left,
+    bottom: window.innerHeight - r.top + gap,
+    zIndex: 9999,
+    maxHeight: Math.min(280, Math.max(100, r.top - gap - 8)),
+    minWidth: minW,
+  };
+}
+
 const getLangMeta = (lang: string) => {
   const map: Record<string, { ext: string; icon: React.ReactNode }> = {
     tsx: { ext: 'tsx', icon: <FileCode size={15} /> },
     jsx: { ext: 'jsx', icon: <FileCode size={15} /> },
-    ts:  { ext: 'ts',  icon: <FileCode size={15} /> },
-    js:  { ext: 'js',  icon: <FileCode size={15} /> },
+    ts: { ext: 'ts', icon: <FileCode size={15} /> },
+    js: { ext: 'js', icon: <FileCode size={15} /> },
     css: { ext: 'css', icon: <FileText size={15} /> },
-    html:{ ext: 'html',icon: <FileText size={15} /> },
-    json:{ ext: 'json',icon: <FileText size={15} /> },
-    py:  { ext: 'py',  icon: <FileText size={15} /> },
-    sh:  { ext: 'sh',  icon: <FileText size={15} /> },
+    html: { ext: 'html', icon: <FileText size={15} /> },
+    json: { ext: 'json', icon: <FileText size={15} /> },
+    py: { ext: 'py', icon: <FileText size={15} /> },
+    sh: { ext: 'sh', icon: <FileText size={15} /> },
   };
   return map[lang] ?? { ext: lang || 'txt', icon: <FileText size={15} /> };
 };
 
-export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, activeFileContent, activeFileName, messages, setMessages, onFileSelect, onRunInTerminal }) => {
+export const ChatAssistant: React.FC<ChatAssistantProps> = ({
+  activeProject,
+  activeFileContent,
+  activeFileName,
+  messages,
+  setMessages,
+  onFileSelect,
+  onRunInTerminal,
+}) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const attachButtonRef = useRef<HTMLButtonElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
-  const [modelMenuStyle, setModelMenuStyle] = useState<React.CSSProperties | null>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [attachMenuStyle, setAttachMenuStyle] = useState<React.CSSProperties | null>(null);
   const [modeMenuStyle, setModeMenuStyle] = useState<React.CSSProperties | null>(null);
 
-  const measureModelMenu = useCallback(() => {
-    const el = modelButtonRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const gap = 8;
-    setModelMenuStyle({
-      position: 'fixed',
-      left: r.left,
-      bottom: window.innerHeight - r.top + gap,
-      zIndex: 9999,
-      maxHeight: Math.min(192, Math.max(80, r.top - gap - 8)),
-      minWidth: 180,
-    });
+  const [modes, setModes] = useState<{ slug: string; label: string }[]>([]);
+  const [mode, setMode] = useState<string>('agent');
+  const [isModeOpen, setIsModeOpen] = useState(false);
+
+  const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
+  const [conversationId, setConversationId] = useState<string>(() =>
+    typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
+  );
+
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionItems, setMentionItems] = useState<PickerItem[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionStyle, setMentionStyle] = useState<React.CSSProperties | null>(null);
+  const mentionQueryRef = useRef<{ start: number; end: number } | null>(null);
+
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashItems, setSlashItems] = useState<SlashCmd[]>([]);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashStyle, setSlashStyle] = useState<React.CSSProperties | null>(null);
+  const slashQueryRef = useRef<{ start: number; end: number } | null>(null);
+
+  const catalogCacheRef = useRef<{ at: number; items: PickerItem[] } | null>(null);
+  const commandsCacheRef = useRef<{ at: number; items: SlashCmd[] } | null>(null);
+
+  const measureAttachMenu = useCallback(() => {
+    setAttachMenuStyle(measureAboveAnchor(attachButtonRef.current, 200));
   }, []);
 
   const measureModeMenu = useCallback(() => {
-    const el = modeButtonRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const gap = 8;
-    setModeMenuStyle({
-      position: 'fixed',
-      left: r.left,
-      bottom: window.innerHeight - r.top + gap,
-      zIndex: 9999,
-      maxHeight: Math.min(240, Math.max(80, r.top - gap - 8)),
-      minWidth: 120,
-    });
+    setModeMenuStyle(measureAboveAnchor(modeButtonRef.current, 120));
   }, []);
 
-  const [models, setModels] = useState<{id: string, name: string}[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('Gemini 3 Flash (AITestSuite)');
-  const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3-flash-preview');
-  const [modes, setModes] = useState<{ slug: string; label: string }[]>([]);
-  /** Selected mode slug (matches agent_mode_configs.slug). */
-  const [mode, setMode] = useState<string>('auto');
-  const [isModelOpen, setIsModelOpen] = useState(false);
-  const [isModeOpen, setIsModeOpen] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-
   useLayoutEffect(() => {
-    if (!isModelOpen) {
-      setModelMenuStyle(null);
+    if (!attachMenuOpen) {
+      setAttachMenuStyle(null);
       return;
     }
-    measureModelMenu();
-    const handler = () => measureModelMenu();
-    window.addEventListener('resize', handler);
-    window.addEventListener('scroll', handler, true);
+    measureAttachMenu();
+    const h = () => measureAttachMenu();
+    window.addEventListener('resize', h);
+    window.addEventListener('scroll', h, true);
     return () => {
-      window.removeEventListener('resize', handler);
-      window.removeEventListener('scroll', handler, true);
+      window.removeEventListener('resize', h);
+      window.removeEventListener('scroll', h, true);
     };
-  }, [isModelOpen, measureModelMenu]);
+  }, [attachMenuOpen, measureAttachMenu]);
 
   useLayoutEffect(() => {
     if (!isModeOpen) {
@@ -116,102 +160,251 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
       return;
     }
     measureModeMenu();
-    const handler = () => measureModeMenu();
-    window.addEventListener('resize', handler);
-    window.addEventListener('scroll', handler, true);
+    const h = () => measureModeMenu();
+    window.addEventListener('resize', h);
+    window.addEventListener('scroll', h, true);
     return () => {
-      window.removeEventListener('resize', handler);
-      window.removeEventListener('scroll', handler, true);
+      window.removeEventListener('resize', h);
+      window.removeEventListener('scroll', h, true);
     };
   }, [isModeOpen, measureModeMenu]);
 
+  useLayoutEffect(() => {
+    if (!mentionOpen && !slashOpen) return;
+    const st = measureAboveAnchor(textareaRef.current, 220);
+    if (mentionOpen) setMentionStyle(st);
+    if (slashOpen) setSlashStyle(st);
+    const h = () => {
+      const s = measureAboveAnchor(textareaRef.current, 220);
+      if (mentionOpen) setMentionStyle(s);
+      if (slashOpen) setSlashStyle(s);
+    };
+    window.addEventListener('resize', h);
+    window.addEventListener('scroll', h, true);
+    return () => {
+      window.removeEventListener('resize', h);
+      window.removeEventListener('scroll', h, true);
+    };
+  }, [mentionOpen, slashOpen, input]);
+
   useEffect(() => {
-    // Fetch Modes
     fetch('/api/agent/modes')
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setModes(data.map((row: { slug: string; label: string }) => ({ slug: row.slug, label: row.label })));
-          const preferred = data.find((row: { slug: string }) => row.slug === 'auto');
+          const preferred = data.find((row: { slug: string }) => row.slug === 'agent' || row.slug === 'auto');
           setMode(preferred ? preferred.slug : data[0].slug);
         }
       })
-      .catch(console.error);
-    
-    // Fetch Models
-    fetch('/api/agent/models')
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setModels(data);
-          const preferred = data.find((m: { id: string }) => m.id === 'gemini-3-flash-preview');
-          if (preferred) {
-            setSelectedModel(preferred.name);
-            setSelectedModelId(preferred.id);
-          } else {
-            setSelectedModel(data[0].name);
-            setSelectedModelId(data[0].id);
-          }
-        }
-      })
-      .catch(console.error);
-
-    // IAM Stubs: Registry of future agent endpoints
-    const stubs = [
-      '/api/agent/memory/list',
-      '/api/agent/context-picker/catalog',
-      '/api/agent/notifications',
-      '/api/agent/keyboard-shortcuts',
-      '/api/agent/proposals/pending',
-      '/api/agent/queue',
-      '/api/agent/queue/status',
-      '/api/agent/today-todo',
-      '/api/agent/rules',
-      '/api/agent/sessions'
-    ];
-    stubs.forEach(url => {
-      console.log('TODO: wire', url);
-    });
+      .catch(() => {});
   }, []);
 
-  // Scroll to bottom on new messages
+  const modeLabel = modes.find((m) => m.slug === mode)?.label ?? mode;
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('iam-chat-mode', { detail: { label: modeLabel, slug: mode } }));
+  }, [modeLabel, mode]);
+
+  async function loadCatalog(): Promise<PickerItem[]> {
+    const now = Date.now();
+    if (catalogCacheRef.current && now - catalogCacheRef.current.at < 60000) {
+      return catalogCacheRef.current.items;
+    }
+    const res = await fetch('/api/agent/context-picker/catalog');
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items: PickerItem[] = [];
+    (data.tables || []).forEach((t: string) => {
+      items.push({ id: `table:${t}`, label: t, kind: 'table' });
+    });
+    (data.workflows || []).forEach((w: { id?: string; name?: string }) => {
+      items.push({ id: `wf:${w.id}`, label: w.name || w.id || '', kind: 'workflow' });
+    });
+    (data.commands || []).forEach((c: { slug?: string; name?: string }) => {
+      items.push({ id: `cmd:${c.slug}`, label: c.name || c.slug || '', kind: 'command' });
+    });
+    (data.memory_keys || []).forEach((k: string) => {
+      items.push({ id: `mem:${k}`, label: k, kind: 'memory' });
+    });
+    (data.workspaces || []).forEach((w: { id?: string; name?: string }) => {
+      items.push({ id: `ws:${w.id}`, label: w.name || w.id || '', kind: 'workspace' });
+    });
+    catalogCacheRef.current = { at: now, items };
+    return items;
+  }
+
+  async function loadCommands(): Promise<SlashCmd[]> {
+    const now = Date.now();
+    if (commandsCacheRef.current && now - commandsCacheRef.current.at < 60000) {
+      return commandsCacheRef.current.items;
+    }
+    const res = await fetch('/api/agent/commands');
+    if (!res.ok) return [];
+    const data = await res.json();
+    const arr = Array.isArray(data) ? data : [];
+    const items = arr.map((r: { slug: string; description?: string }) => ({
+      slug: r.slug,
+      description: r.description ?? null,
+    }));
+    commandsCacheRef.current = { at: now, items };
+    return items;
+  }
+
+  const syncPickers = useCallback(
+    async (value: string, cursor: number) => {
+      const before = value.slice(0, cursor);
+      const atMatch = before.match(/@([^\s@]*)$/);
+      if (atMatch) {
+        const q = atMatch[1];
+        const start = cursor - atMatch[0].length;
+        mentionQueryRef.current = { start, end: cursor };
+        const all = await loadCatalog();
+        const f = all.filter((it) => it.label.toLowerCase().includes(q.toLowerCase())).slice(0, 40);
+        setMentionItems(f);
+        setMentionIndex(0);
+        setMentionOpen(f.length > 0);
+        setSlashOpen(false);
+        return;
+      }
+      setMentionOpen(false);
+      mentionQueryRef.current = null;
+
+      const slashMatch = before.match(/(?:^|\s)(\/[\w-]*)$/);
+      if (slashMatch) {
+        const full = slashMatch[1];
+        const q = full.slice(1);
+        const start = cursor - full.length;
+        slashQueryRef.current = { start, end: cursor };
+        const all = await loadCommands();
+        const f = all
+          .filter((c) => c.slug.toLowerCase().includes(q.toLowerCase()))
+          .slice(0, 40);
+        setSlashItems(f);
+        setSlashIndex(0);
+        setSlashOpen(f.length > 0);
+        return;
+      }
+      setSlashOpen(false);
+      slashQueryRef.current = null;
+    },
+    []
+  );
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-    }
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    setInput(v);
+    const el = e.target;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    syncPickers(v, el.selectionStart);
+  };
+
+  const addFilesFromList = (list: FileList | null, asImage: boolean) => {
+    if (!list?.length) return;
+    Array.from(list).forEach((file) => {
+      const id = crypto.randomUUID();
+      const isImg = asImage || file.type.startsWith('image/');
+      const previewUrl = isImg ? URL.createObjectURL(file) : null;
+      setAttachments((prev) => [
+        ...prev,
+        { id, file, type: isImg ? 'image' : 'file', previewUrl },
+      ]);
+    });
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => {
+      const a = prev.find((x) => x.id === id);
+      if (a?.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      return prev.filter((x) => x.id !== id);
+    });
+  };
+
+  const clearAttachments = () => {
+    attachments.forEach((a) => {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    });
+    setAttachments([]);
+  };
+
+  const insertAtCursor = (newValue: string, selStart: number, selEnd: number) => {
+    setInput(newValue);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(selStart, selEnd);
+      }
+    });
+  };
+
+  const applyMention = (item: PickerItem) => {
+    const el = textareaRef.current;
+    const q = mentionQueryRef.current;
+    if (!el || !q) return;
+    const v = input;
+    const before = v.slice(0, q.start);
+    const after = v.slice(q.end);
+    const insert = `@${item.label} `;
+    const next = before + insert + after;
+    const pos = before.length + insert.length;
+    setMentionOpen(false);
+    mentionQueryRef.current = null;
+    insertAtCursor(next, pos, pos);
+  };
+
+  const applySlash = (cmd: SlashCmd) => {
+    const el = textareaRef.current;
+    const q = slashQueryRef.current;
+    if (!el || !q) return;
+    const v = input;
+    const before = v.slice(0, q.start);
+    const after = v.slice(q.end);
+    const insert = `/${cmd.slug} `;
+    const next = before + insert + after;
+    const pos = before.length + insert.length;
+    setSlashOpen(false);
+    slashQueryRef.current = null;
+    insertAtCursor(next, pos, pos);
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    const text = input.trim();
+    if ((!text && attachments.length === 0) || isLoading) return;
 
-    const userMessage = input.trim();
+    const userMessage = text || '(attachment)';
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
     setMessages(newMessages);
     setIsLoading(true);
+    setMentionOpen(false);
+    setSlashOpen(false);
+
+    const form = new FormData();
+    form.append('message', userMessage);
+    form.append('mode', mode);
+    form.append('conversationId', conversationId || '');
+    form.append('model_id', 'auto');
+    form.append(
+      'messages_json',
+      JSON.stringify(newMessages.map((m) => ({ role: m.role, content: m.content })))
+    );
+    form.append('contextMode', String(activeProject));
+    if (activeFileContent != null) form.append('contextCode', activeFileContent);
+    if (activeFileName) form.append('contextFile', activeFileName);
+    attachments.forEach((a) => form.append('files', a.file));
 
     try {
-      const response = await fetch('/api/agent/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              messages: newMessages,
-              contextMode: activeProject,
-              contextCode: activeFileContent,
-              contextFile: activeFileName,
-              model: selectedModelId,
-          })
-      });
-      
+      const response = await fetch('/api/agent/chat', { method: 'POST', body: form });
+
       if (!response.ok) throw new Error('Network response was not ok');
       if (!response.body) throw new Error('No body in response');
 
@@ -219,35 +412,44 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
       const decoder = new TextDecoder();
       let assistantContent = '';
 
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
       while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
 
-          for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                  const dataStr = line.replace('data: ', '').trim();
-                  if (dataStr === '[DONE]') continue;
-                  try {
-                      const data = JSON.parse(dataStr);
-                      if (data.text) {
-                          assistantContent += data.text;
-                          setMessages(prev => {
-                              const last = [...prev];
-                              last[last.length - 1].content = assistantContent;
-                              return last;
-                          });
-                      }
-                  } catch (e) {}
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.replace('data: ', '').trim();
+            if (dataStr === '[DONE]') continue;
+            try {
+              const data = JSON.parse(dataStr);
+              const cid =
+                data.conversation_id != null && typeof data.conversation_id === 'string'
+                  ? data.conversation_id
+                  : null;
+              if (cid) {
+                setConversationId(cid);
+                localStorage.setItem(LS_CONV, cid);
               }
+              if (data.text) {
+                assistantContent += data.text;
+                setMessages((prev) => {
+                  const last = [...prev];
+                  last[last.length - 1].content = assistantContent;
+                  return last;
+                });
+              }
+            } catch {
+              /* ignore */
+            }
           }
+        }
       }
 
-      // Auto-inject the FIRST detected large code block to Monaco (skip shell blocks)
       const codeBlockRegex2 = /```(\w+)?\n([\s\S]*?)\n```/g;
       let firstMatch = codeBlockRegex2.exec(assistantContent);
       if (firstMatch) {
@@ -260,85 +462,17 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
         }
       }
     } catch (error) {
-      console.error("Chat proxy failed:", error);
-      setMessages(prev => [...prev, { role: 'assistant', content: "Connection error to Studio Proxy. Please try again." }]);
+      console.error('Chat proxy failed:', error);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Connection error to Studio Proxy. Please try again.' },
+      ]);
     } finally {
       setIsLoading(false);
-      console.log('TODO: wire', '/api/agent/telemetry');
+      clearAttachments();
     }
   };
 
-  /**
-   * IAM Action Stubs for Agent interactions
-   */
-  const executeApprovedTool = async (toolId: string) => {
-    const url = '/api/agent/chat/execute-approved-tool';
-    console.log('TODO: wire', url, { toolId });
-    return { success: true };
-  };
-
-  const managePlan = async (action: 'approve' | 'reject', planId: string) => {
-    const url = `/api/agent/plan/${action}`;
-    console.log('TODO: wire', url, { planId });
-    return { success: true };
-  };
-
-  const proposeChange = async (change: any) => {
-    const url = '/api/agent/propose';
-    console.log('TODO: wire', url, change);
-    return { success: true };
-  };
-
-  const triggerWorkflow = async (workflowId: string) => {
-    const url = '/api/agent/workflows/trigger';
-    console.log('TODO: wire', url, { workflowId });
-    return { success: true };
-  };
-
-  const saveToR2 = async (data: any) => {
-    const url = '/api/agent/r2-save';
-    console.log('TODO: wire', url, data);
-    return { success: true };
-  };
-
-
-  const toggleRecording = async () => {
-    if (isRecording) {
-      mediaRecorderRef.current?.stop();
-      setIsRecording(false);
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      const chunks: Blob[] = [];
-
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        const formData = new FormData();
-        formData.append('file', audioBlob, 'recording.webm');
-        
-        try {
-          const res = await fetch('/api/agent/workers-ai/stt', { method: 'POST', body: formData });
-          const data = await res.json();
-          if (data.text) setInput(prev => prev + (prev.endsWith(' ') ? '' : ' ') + data.text);
-        } catch (err) {
-          console.error("STT Failed:", err);
-        }
-        stream.getTracks().forEach(t => t.stop());
-      };
-
-      recorder.start();
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Mic access denied:", err);
-    }
-  };
-
-  // Render message content — parse code blocks, show artifacts for large ones
   const renderMessageContent = (content: string, msgIndex: number) => {
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)\n```/g;
     const parts: React.ReactNode[] = [];
@@ -349,9 +483,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
     while ((match = codeBlockRegex.exec(content)) !== null) {
       if (match.index > lastIndex) {
         const text = content.substring(lastIndex, match.index);
-        parts.push(
-          <span key={`text-${lastIndex}`} className="whitespace-pre-wrap">{text}</span>
-        );
+        parts.push(<span key={`text-${lastIndex}`} className="whitespace-pre-wrap">{text}</span>);
       }
 
       const lang = match[1] || 'text';
@@ -362,7 +494,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
 
       if (code.split('\n').length > 5 || code.length > 200) {
         if (isShell) {
-          // Shell block — show as terminal artifact
           parts.push(
             <div
               key={`code-${match.index}`}
@@ -374,18 +505,24 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
                 </div>
                 <div>
                   <span className="text-[12px] font-bold text-[var(--text-heading)] tracking-tight">Shell Script</span>
-                  <span className="text-[10px] text-[var(--text-muted)] ml-2">{code.split('\n').length} lines · {lang}</span>
+                  <span className="text-[10px] text-[var(--text-muted)] ml-2">
+                    {code.split('\n').length} lines · {lang}
+                  </span>
                 </div>
               </div>
-              <pre className="text-[11px] font-mono text-[var(--solar-green)] bg-[#030a0d] rounded-lg p-3 overflow-x-auto whitespace-pre border border-[#1e3e4a]">{code}</pre>
+              <pre className="text-[11px] font-mono text-[var(--solar-green)] bg-[#030a0d] rounded-lg p-3 overflow-x-auto whitespace-pre border border-[#1e3e4a]">
+                {code}
+              </pre>
               <div className="flex gap-2 mt-2">
                 <button
+                  type="button"
                   onClick={() => onRunInTerminal?.(code)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--solar-green)]/10 hover:bg-[var(--solar-green)]/20 border border-[var(--solar-green)]/30 text-[var(--solar-green)] rounded-lg text-[11px] font-bold transition-colors"
                 >
                   <span className="font-mono">$</span> Run in Terminal
                 </button>
                 <button
+                  type="button"
                   onClick={() => onFileSelect?.({ name: `script_${msgIndex}_${codeCount}.${ext}`, content: code })}
                   className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-panel)] border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)]/40 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] rounded-lg text-[11px] transition-colors"
                 >
@@ -395,7 +532,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
             </div>
           );
         } else {
-          // Code block — Monaco artifact card
           parts.push(
             <div
               key={`code-${match.index}`}
@@ -408,20 +544,26 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[12px] font-bold text-[var(--text-heading)] tracking-tight">agent_output.{ext}</span>
-                  <span className="text-[10px] text-[var(--text-muted)] mt-0.5">{code.split('\n').length} lines &middot; {lang}</span>
+                  <span className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                    {code.split('\n').length} lines · {lang}
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-[var(--solar-cyan)] opacity-0 group-hover:opacity-100 transition-opacity font-bold uppercase tracking-wider">Open in Monaco</span>
+                <span className="text-[10px] text-[var(--solar-cyan)] opacity-0 group-hover:opacity-100 transition-opacity font-bold uppercase tracking-wider">
+                  Open in Monaco
+                </span>
                 <ChevronRight size={14} className="text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors" />
               </div>
             </div>
           );
         }
       } else {
-        // Short snippet — inline code block
         parts.push(
-          <pre key={`code-${match.index}`} className="my-2 p-3 bg-[#060e14] rounded-lg border border-[#1e3e4a] overflow-x-auto text-[12px] font-mono whitespace-pre text-[var(--solar-cyan)]">
+          <pre
+            key={`code-${match.index}`}
+            className="my-2 p-3 bg-[#060e14] rounded-lg border border-[#1e3e4a] overflow-x-auto text-[12px] font-mono whitespace-pre text-[var(--solar-cyan)]"
+          >
             <code>{code}</code>
           </pre>
         );
@@ -431,18 +573,69 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
     }
 
     if (lastIndex < content.length) {
-      parts.push(
-        <span key={`text-end`} className="whitespace-pre-wrap">{content.substring(lastIndex)}</span>
-      );
+      parts.push(<span key="text-end" className="whitespace-pre-wrap">{content.substring(lastIndex)}</span>);
     }
 
     return parts.length > 0 ? <>{parts}</> : <span className="whitespace-pre-wrap">{content}</span>;
   };
 
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isLoading;
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentionOpen && mentionItems.length) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(i + 1, mentionItems.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyMention(mentionItems[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionOpen(false);
+        return;
+      }
+    }
+    if (slashOpen && slashItems.length) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIndex((i) => Math.min(i + 1, slashItems.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applySlash(slashItems[slashIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashOpen(false);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
   return (
     <>
-    <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full overflow-hidden min-h-0">
-      <style>{`
+      <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full overflow-hidden min-h-0">
+        <style>{`
         .agent-content strong { color: var(--solar-cyan); font-weight: 700; }
         .agent-content h1, .agent-content h2, .agent-content h3 { color: var(--text-heading); font-weight: 700; margin-bottom: 0.75rem; }
         .agent-content ul, .agent-content ol { padding-left: 1.5rem; margin-bottom: 1rem; }
@@ -451,163 +644,334 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
         .chat-hide-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
-      {/* ── MESSAGES AREA (scrolls) ───────────────────────── */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
-      >
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
-              {/* Avatar */}
-              <div className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${msg.role === 'user' ? 'bg-[#1e3e4a]' : 'bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30'}`}>
-                {msg.role === 'user' ? <User size={11} className="text-[var(--text-muted)]" /> : <Bot size={11} className="text-[var(--solar-cyan)]" />}
-              </div>
-
-              {/* Bubble */}
-              <div className={`agent-content text-[13px] leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-[#060e14] border border-[#1e3e4a] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
-                  : 'text-[var(--text-main)] w-full'
-              }`}>
-                {renderMessageContent(msg.content, i)}
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="flex gap-2.5">
-              <div className="flex-shrink-0 w-6 h-6 rounded-md bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30 flex items-center justify-center">
-                <Loader2 size={11} className="text-[var(--solar-cyan)] animate-spin" />
-              </div>
-              <div className="px-4 py-3 bg-[#060e14] border border-[#1e3e4a] rounded-2xl rounded-tl-sm">
-                <div className="flex gap-1.5">
-                  <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce" />
-                  <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce [animation-delay:0.15s]" />
-                  <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce [animation-delay:0.3s]" />
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
+        >
+          {messages.map((msg, i) => (
+            <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
+                <div
+                  className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${
+                    msg.role === 'user'
+                      ? 'bg-[#1e3e4a]'
+                      : 'bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30'
+                  }`}
+                >
+                  {msg.role === 'user' ? (
+                    <User size={11} className="text-[var(--text-muted)]" />
+                  ) : (
+                    <Bot size={11} className="text-[var(--solar-cyan)]" />
+                  )}
+                </div>
+                <div
+                  className={`agent-content text-[13px] leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-[#060e14] border border-[#1e3e4a] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
+                      : 'text-[var(--text-main)] w-full'
+                  }`}
+                >
+                  {renderMessageContent(msg.content, i)}
                 </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          ))}
 
-      {/* ── PREMIUM INPUT FOOTER ────────────────────── */}
-      <div className="shrink-0 w-full p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)]">
-
-        {/* Input box — premium frosted card */}
-        <div className="flex flex-col bg-[#060e14] border border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60 rounded-xl transition-all shadow-inner overflow-visible">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleInput}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Ask the Agent anything..."
-            rows={1}
-            className="w-full bg-transparent px-3.5 pt-3 pb-1 text-[13px] focus:outline-none text-[var(--text-main)] placeholder:text-[#2e5464] resize-none font-sans leading-relaxed rounded-t-xl"
-            style={{ minHeight: '44px', maxHeight: '160px' }}
-          />
-          {/* Action row below textarea */}
-          <div className="flex items-center justify-between px-2 pb-2 rounded-b-xl">
-            <div className="flex items-center gap-1">
-              <button className="p-1.5 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5 rounded-lg transition-all" title="Attach file">
-                <Plus size={14} />
-              </button>
-              <button 
-                onClick={toggleRecording}
-                className={`p-1.5 rounded-lg transition-all ${isRecording ? 'text-[var(--solar-red)] bg-[var(--solar-red)]/10 animate-pulse' : 'text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5'}`} 
-                title={isRecording ? 'Stop recording...' : 'Voice input'}
-              >
-                <Mic size={14} />
-              </button>
-              
-              {/* Discrete Inline Model/Mode Selectors */}
-              <div className="flex items-center gap-1.5 ml-2 border-l border-[#1e3e4a] pl-2">
-                  <button
-                    type="button"
-                    ref={modelButtonRef}
-                    onClick={() => { setIsModelOpen(!isModelOpen); setIsModeOpen(false); }}
-                    className="flex items-center gap-1 text-[9px] font-mono font-bold tracking-tight text-[var(--text-muted)] hover:text-[var(--solar-cyan)] transition-colors uppercase truncate max-w-[100px]"
-                  >
-                    {selectedModel} <ChevronDown size={8} />
-                  </button>
-
-                  <button
-                    type="button"
-                    ref={modeButtonRef}
-                    onClick={() => { setIsModeOpen(!isModeOpen); setIsModelOpen(false); }}
-                    className="flex items-center gap-1 text-[9px] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase"
-                  >
-                    ∞ {modes.find(m => m.slug === mode)?.label ?? mode} <ChevronDown size={8} />
-                  </button>
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="flex gap-2.5">
+                <div className="flex-shrink-0 w-6 h-6 rounded-md bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30 flex items-center justify-center">
+                  <Loader2 size={11} className="text-[var(--solar-cyan)] animate-spin" />
+                </div>
+                <div className="px-4 py-3 bg-[#060e14] border border-[#1e3e4a] rounded-2xl rounded-tl-sm">
+                  <div className="flex gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce" />
+                    <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce [animation-delay:0.15s]" />
+                    <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce [animation-delay:0.3s]" />
+                  </div>
+                </div>
               </div>
             </div>
-            
-            <div className="flex items-center gap-2">
-              <span className="hidden sm:inline text-[9px] text-[#2e5464] font-mono select-none">⏎ send · ⇧⏎ newline</span>
+          )}
+        </div>
+
+        <div className="shrink-0 w-full p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2">
+          {attachments.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1 chat-hide-scroll">
+              {attachments.map((a) => (
+                <div
+                  key={a.id}
+                  className="relative flex-shrink-0 flex items-center gap-2 bg-[#060e14] border border-[#1e3e4a] rounded-lg pl-1 pr-7 py-1"
+                >
+                  {a.type === 'image' && a.previewUrl ? (
+                    <img
+                      src={a.previewUrl}
+                      alt=""
+                      className="w-12 h-12 rounded-md object-cover"
+                      style={{ width: 48, height: 48, borderRadius: 6 }}
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-md bg-[#0a2d38] flex items-center justify-center border border-[#1e3e4a]">
+                      <FileText size={18} className="text-[var(--text-muted)]" />
+                    </div>
+                  )}
+                  {a.type === 'file' && (
+                    <div className="min-w-0 max-w-[140px]">
+                      <div className="text-[10px] font-mono text-[var(--text-main)] truncate">
+                        {a.file.name.length > 24 ? `${a.file.name.slice(0, 21)}...` : a.file.name}
+                      </div>
+                      <div className="text-[9px] text-[var(--text-muted)]">{formatFileSize(a.file.size)}</div>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Remove attachment"
+                    className="absolute top-0.5 right-0.5 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] hover:bg-white/5"
+                    onClick={() => removeAttachment(a.id)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="*/*"
+            className="hidden"
+            onChange={(e) => {
+              addFilesFromList(e.target.files, false);
+              e.target.value = '';
+            }}
+          />
+          <input
+            ref={imageInputRef}
+            type="file"
+            multiple
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              addFilesFromList(e.target.files, true);
+              e.target.value = '';
+            }}
+          />
+
+          <div className="flex flex-col bg-[#060e14] border border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60 rounded-xl transition-all shadow-inner overflow-visible">
+            <div className="flex items-end gap-1.5 px-2 pt-2 pb-2">
               <button
+                type="button"
+                ref={attachButtonRef}
+                className="flex-shrink-0 p-2 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5 rounded-lg transition-all"
+                title="Attach"
+                onClick={() => {
+                  setAttachMenuOpen((o) => !o);
+                  setIsModeOpen(false);
+                }}
+              >
+                <Paperclip size={16} strokeWidth={2} />
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={onKeyDown}
+                onSelect={(ev) => syncPickers(ev.currentTarget.value, ev.currentTarget.selectionStart)}
+                onClick={(ev) => syncPickers(ev.currentTarget.value, ev.currentTarget.selectionStart)}
+                placeholder="Message Agent Sam..."
+                rows={1}
+                className="flex-1 min-w-0 bg-transparent px-1 py-2 text-[13px] focus:outline-none text-[var(--text-main)] placeholder:text-[#2e5464] resize-none font-sans leading-relaxed rounded-lg"
+                style={{ minHeight: '44px', maxHeight: '200px' }}
+              />
+              <button
+                type="button"
+                ref={modeButtonRef}
+                onClick={() => {
+                  setIsModeOpen((o) => !o);
+                  setAttachMenuOpen(false);
+                }}
+                className="flex-shrink-0 flex items-center gap-0.5 px-2 py-1.5 text-[9px] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase border border-[#1e3e4a] rounded-lg"
+              >
+                {modeLabel} <ChevronDown size={8} />
+              </button>
+              <button
+                type="button"
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                  input.trim() && !isLoading
-                    ? 'bg-[var(--solar-cyan)] text-[#00212b] shadow-[0_0_16px_rgba(45,212,191,0.25)] hover:brightness-110 hover:shadow-[0_0_20px_rgba(45,212,191,0.4)]'
+                disabled={!canSend}
+                className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-[11px] font-bold transition-all ${
+                  canSend
+                    ? 'bg-[var(--solar-cyan)] text-[#00212b] shadow-[0_0_16px_rgba(45,212,191,0.25)] hover:brightness-110'
                     : 'text-[#2a4d58] bg-[#0a1c22] cursor-not-allowed'
                 }`}
               >
                 {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                {isLoading ? 'Sending' : 'Send'}
               </button>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    {typeof document !== 'undefined' && isModelOpen && modelMenuStyle && createPortal(
-      <div
-        className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[11px] overflow-y-auto p-1"
-        style={modelMenuStyle}
-      >
-        {models.map(m => (
-          <button
-            key={m.id}
-            type="button"
-            className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg truncate transition-colors ${selectedModel === m.name ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`}
-            onClick={() => { setSelectedModel(m.name); setSelectedModelId(m.id); setIsModelOpen(false); }}
+      {typeof document !== 'undefined' &&
+        attachMenuOpen &&
+        attachMenuStyle &&
+        createPortal(
+          <div
+            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[11px] overflow-y-auto py-1 min-w-[200px]"
+            style={attachMenuStyle}
+            role="menu"
           >
-            {m.name}
-          </button>
-        ))}
-      </div>,
-      document.body
-    )}
+            <button
+              type="button"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              onClick={() => {
+                setAttachMenuOpen(false);
+                fileInputRef.current?.click();
+              }}
+            >
+              <Paperclip size={14} className="text-[var(--text-muted)] shrink-0" />
+              <span>Upload File</span>
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              onClick={() => {
+                setAttachMenuOpen(false);
+                imageInputRef.current?.click();
+              }}
+            >
+              <ImageIconLucide size={14} className="text-[var(--text-muted)] shrink-0" />
+              <span>Upload Image</span>
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              onClick={() => {
+                setAttachMenuOpen(false);
+                const el = textareaRef.current;
+                if (!el) return;
+                const start = el.selectionStart;
+                const v = input.slice(0, start) + '@' + input.slice(start);
+                const pos = start + 1;
+                setInput(v);
+                requestAnimationFrame(() => {
+                  el.focus();
+                  el.setSelectionRange(pos, pos);
+                  syncPickers(v, pos);
+                });
+              }}
+            >
+              <AtSign size={14} className="text-[var(--text-muted)] shrink-0" />
+              <span>Mention</span>
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              onClick={() => {
+                setAttachMenuOpen(false);
+                const el = textareaRef.current;
+                if (!el) return;
+                const start = el.selectionStart;
+                const v = input.slice(0, start) + '/' + input.slice(start);
+                const pos = start + 1;
+                setInput(v);
+                requestAnimationFrame(() => {
+                  el.focus();
+                  el.setSelectionRange(pos, pos);
+                  syncPickers(v, pos);
+                });
+              }}
+            >
+              <Slash size={14} className="text-[var(--text-muted)] shrink-0" />
+              <span>Command</span>
+            </button>
+          </div>,
+          document.body
+        )}
 
-    {typeof document !== 'undefined' && isModeOpen && modeMenuStyle && createPortal(
-      <div
-        className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl p-1 flex flex-col text-[11px] overflow-y-auto"
-        style={modeMenuStyle}
-      >
-        {modes.map(m => (
-          <button
-            key={m.slug}
-            type="button"
-            className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg flex items-center justify-between transition-colors ${mode === m.slug ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`}
-            onClick={() => { setMode(m.slug); setIsModeOpen(false); }}
+      {typeof document !== 'undefined' &&
+        isModeOpen &&
+        modeMenuStyle &&
+        createPortal(
+          <div
+            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl p-1 flex flex-col text-[11px] overflow-y-auto"
+            style={modeMenuStyle}
           >
-            {m.label}
-          </button>
-        ))}
-      </div>,
-      document.body
-    )}
+            {modes.map((m) => (
+              <button
+                key={m.slug}
+                type="button"
+                className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg transition-colors ${
+                  mode === m.slug ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'
+                }`}
+                onClick={() => {
+                  setMode(m.slug);
+                  setIsModeOpen(false);
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+
+      {typeof document !== 'undefined' &&
+        mentionOpen &&
+        mentionStyle &&
+        mentionItems.length > 0 &&
+        createPortal(
+          <div
+            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[11px] overflow-y-auto p-1"
+            style={mentionStyle}
+          >
+            {mentionItems.map((it, i) => (
+              <button
+                key={it.id}
+                type="button"
+                className={`px-3 py-1.5 text-left rounded-lg truncate ${
+                  i === mentionIndex ? 'bg-[#0a2d38] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[#0a2d38]'
+                }`}
+                onMouseEnter={() => setMentionIndex(i)}
+                onClick={() => applyMention(it)}
+              >
+                <span className="text-[9px] uppercase text-[var(--text-muted)] mr-2">{it.kind}</span>
+                {it.label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+
+      {typeof document !== 'undefined' &&
+        slashOpen &&
+        slashStyle &&
+        slashItems.length > 0 &&
+        createPortal(
+          <div
+            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[11px] overflow-y-auto p-1 max-w-[320px]"
+            style={slashStyle}
+          >
+            {slashItems.map((c, i) => (
+              <button
+                key={c.slug}
+                type="button"
+                className={`px-3 py-1.5 text-left rounded-lg ${
+                  i === slashIndex ? 'bg-[#0a2d38] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[#0a2d38]'
+                }`}
+                onMouseEnter={() => setSlashIndex(i)}
+                onClick={() => applySlash(c)}
+              >
+                <div className="font-mono font-bold">/{c.slug}</div>
+                {c.description && (
+                  <div className="text-[10px] text-[var(--text-muted)] truncate">{c.description}</div>
+                )}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </>
   );
 };
-

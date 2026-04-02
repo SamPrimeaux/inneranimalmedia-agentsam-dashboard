@@ -11175,6 +11175,28 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }
     }
 
+    if (pathLower === '/api/agent/commands' && method === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const tenantId = 'tenant_sam_primeaux';
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT slug, description FROM agent_commands
+           WHERE tenant_id = ? AND COALESCE(status, 'active') = 'active'
+           ORDER BY slug`
+        ).bind(tenantId).all();
+        return jsonResponse(results || []);
+      } catch (e) {
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT slug, description FROM agent_commands WHERE COALESCE(status, 'active') = 'active' ORDER BY slug`
+          ).all();
+          return jsonResponse(results || []);
+        } catch (e2) {
+          return jsonResponse({ error: String(e2?.message || e2) }, 500);
+        }
+      }
+    }
+
     if (pathLower === '/api/agent/session/mode' && method === 'POST') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
@@ -12597,7 +12619,86 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/agent/chat' && method === 'POST') {
       const chatStartTime = Date.now();
       const routingOptsForChat = { chatStartMs: chatStartTime };
-      const body = await request.json();
+      const contentTypeHdr = (request.headers.get('content-type') || '').toLowerCase();
+      let body = {};
+      if (contentTypeHdr.includes('multipart/form-data')) {
+        const fd = await request.formData();
+        const message = String(fd.get('message') || '').trim();
+        const modeRaw = String(fd.get('mode') || 'agent').trim().toLowerCase();
+        const convRaw = fd.get('conversationId');
+        const session_id =
+          convRaw != null && String(convRaw).trim() !== '' ? String(convRaw).trim() : undefined;
+        let msgList = [];
+        const mj = fd.get('messages_json');
+        if (mj != null && String(mj).trim() !== '') {
+          try {
+            msgList = JSON.parse(String(mj));
+          } catch (_) {
+            msgList = [];
+          }
+        }
+        if (!Array.isArray(msgList) || msgList.length === 0) {
+          if (!message) return jsonResponse({ error: 'messages_json or message required' }, 400);
+          msgList = [{ role: 'user', content: message }];
+        }
+        const model_id = String(fd.get('model_id') || 'auto');
+        const contextMode = fd.get('contextMode');
+        const contextCode = fd.get('contextCode');
+        const contextFile = fd.get('contextFile');
+        const fileEntries = fd.getAll('files');
+        const imagesArr = [];
+        const attachedFilesArr = [];
+        const metaLines = [];
+        const abToB64 = (ab) => {
+          const bytes = new Uint8Array(ab);
+          let bin = '';
+          const step = 8192;
+          for (let i = 0; i < bytes.length; i += step) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+          }
+          return btoa(bin);
+        };
+        for (const entry of fileEntries) {
+          if (!entry || typeof entry.arrayBuffer !== 'function') continue;
+          const name = entry.name || 'file';
+          const size = entry.size || 0;
+          const mime = entry.type || 'application/octet-stream';
+          const isImage = mime.startsWith('image/');
+          if (isImage && size > 0 && size < 5 * 1024 * 1024) {
+            const ab = await entry.arrayBuffer();
+            imagesArr.push({ dataUrl: `data:${mime};base64,${abToB64(ab)}` });
+          } else {
+            metaLines.push(`- ${name} (${size} bytes, ${mime})`);
+            attachedFilesArr.push({
+              name,
+              content: `[User attached file — metadata only, content not loaded: ${name}, ${size} bytes, ${mime}]`,
+            });
+          }
+        }
+        let _stagedAttachmentSystemText = '';
+        if (metaLines.length) {
+          _stagedAttachmentSystemText =
+            `[User staged attachments (metadata only; large or non-image files)]\n${metaLines.join('\n')}`;
+        }
+        body = {
+          model_id,
+          messages: msgList,
+          mode: modeRaw,
+          session_id,
+          images: imagesArr,
+          attached_files: attachedFilesArr,
+          _stagedAttachmentSystemText,
+        };
+        if (contextFile != null && contextCode != null) {
+          body.fileContext = { filename: String(contextFile), content: String(contextCode) };
+        }
+      } else {
+        try {
+          body = await request.json();
+        } catch (_) {
+          return jsonResponse({ error: 'Invalid JSON body' }, 400);
+        }
+      }
       const { model_id, messages: msgList, agent_id, session_id, images: bodyImages, attached_files: bodyFiles, compiled_context: bodyCompiledContext, mode: bodyMode, fileContext: bodyFileContext, audit: bodyAudit, context_refs: bodyContextRefsRaw, context_mentions: bodyContextMentionsLegacy } = body;
       const bodyContextRefs = Array.isArray(bodyContextRefsRaw)
         ? bodyContextRefsRaw
@@ -13166,6 +13267,9 @@ Content (first ${maxChars} chars${truncated ? ', truncated' : ''}${startLine != 
 ${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
 \`\`\`
 `;
+      }
+      if (body._stagedAttachmentSystemText) {
+        fileBlock += `\n\n${String(body._stagedAttachmentSystemText)}`;
       }
       let unifiedAgentContextBlock = '';
       try {

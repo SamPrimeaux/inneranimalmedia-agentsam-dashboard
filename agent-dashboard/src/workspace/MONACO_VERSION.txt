@@ -1,8 +1,0 @@
-monaco-editor@0.55.1
-@monaco-editor/react@4.7.0
-
-Source of truth: agent-dashboard/package.json (lockfile)
-Checked: 2026-03-31
-
-Any static HTML still referencing a CDN pin (e.g. monaco-editor@0.44.0) must be
-updated to match or the CDN reference removed. See MONACO_DELIVERY.md §4.

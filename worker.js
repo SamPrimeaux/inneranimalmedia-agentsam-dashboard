@@ -9633,6 +9633,81 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
+  const tenantIdChatSse = 'tenant_sam_primeaux';
+  let chatSseSystemPrompt = AGENT_SAM_CHAT_SYSTEM;
+  try {
+    const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+    const [skillRows, commandRows, mcpToolRows] = await Promise.all([
+      env.DB.prepare(
+        `SELECT name, description, slash_trigger
+         FROM agentsam_skill
+         WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
+         ORDER BY sort_order`
+      )
+        .bind(tenantIdChatSse)
+        .all(),
+      env.DB.prepare(
+        `SELECT slug, name, description, category
+         FROM agent_commands
+         WHERE tenant_id = ? AND COALESCE(status, 'active') = 'active'
+         ORDER BY category, slug`
+      )
+        .bind(tenantIdChatSse)
+        .all(),
+      env.DB.prepare(
+        `SELECT tool_name, tool_category, description
+         FROM mcp_registered_tools
+         WHERE enabled = 1
+         ORDER BY tool_category, tool_name`
+      ).all(),
+    ]);
+
+    const mcpByCategory = {};
+    for (const t of mcpToolRows.results || []) {
+      const cat = promptLine(t.tool_category) || 'Other';
+      if (!mcpByCategory[cat]) mcpByCategory[cat] = [];
+      mcpByCategory[cat].push(`  - \`${t.tool_name}\`: ${promptLine(t.description)}`);
+    }
+    const mcpBlock = Object.keys(mcpByCategory)
+      .sort()
+      .map((cat) => `**${cat}**\n${mcpByCategory[cat].join('\n')}`)
+      .join('\n\n');
+
+    const skillsBlock = (skillRows.results || [])
+      .map((s) => {
+        const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
+        const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
+        return `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
+      })
+      .join('\n');
+
+    const commandsBlock = (commandRows.results || [])
+      .map((c) => `- \`/${promptLine(c.slug)}\` (${promptLine(c.category)}): ${promptLine(c.description)}`)
+      .join('\n');
+
+    const toolsBlock = `## Your MCP Tools (mcp.inneranimalmedia.com)
+Call any tool by name via POST /api/mcp/stream. All tools below are live.
+
+${mcpBlock || '(none registered)'}
+
+## Skills
+${skillsBlock || '(none)'}
+
+## Commands
+${commandsBlock || '(none)'}
+
+## IDE State
+- Monaco: file currently open is passed as contextFile in this message
+- Excalidraw: use excalidraw_open → excalidraw_load_library → excalidraw_add_elements
+- Terminal: use terminal_execute for shell commands
+- Browser: use cdt_navigate_page → cdt_take_screenshot for browser control. No Playwright needed — cdt_* tools are your browser.
+- Cursor Cloud Agents: use cursor_run_agent to spawn async coding agents on a branch`;
+
+    chatSseSystemPrompt = `${AGENT_SAM_CHAT_SYSTEM}\n\n${toolsBlock}`;
+  } catch (e) {
+    console.warn('[agent/chat-sse] dynamic tools block failed', e?.message ?? e);
+  }
+
   const apiPlatform = String(modelRow.api_platform || '').trim();
   const modelKey = String(modelRow.model_key || modelParam);
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
@@ -9660,7 +9735,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
         model: modelKey,
         max_tokens: 8192,
         stream: true,
-        system: AGENT_SAM_CHAT_SYSTEM,
+        system: chatSseSystemPrompt,
         messages: [{ role: 'user', content: message }],
       }),
     });
@@ -9684,7 +9759,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: message }] }],
-        systemInstruction: { parts: [{ text: AGENT_SAM_CHAT_SYSTEM }] },
+        systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
       }),
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'google');
@@ -9701,7 +9776,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   if (apiPlatform === 'vertex_ai') {
     const geminiBody = {
       contents: [{ role: 'user', parts: [{ text: message }] }],
-      systemInstruction: { parts: [{ text: AGENT_SAM_CHAT_SYSTEM }] },
+      systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
     };
     let upstream;
     if (modelRow.secret_key_name === 'GOOGLE_AI_API_KEY') {
@@ -9749,7 +9824,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
         stream: true,
         stream_options: { include_usage: true },
         messages: [
-          { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+          { role: 'system', content: chatSseSystemPrompt },
           { role: 'user', content: message },
         ],
       }),
@@ -9781,7 +9856,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
         stream: true,
         stream_options: { include_usage: true },
         messages: [
-          { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+          { role: 'system', content: chatSseSystemPrompt },
           { role: 'user', content: message },
         ],
       }),
@@ -9819,7 +9894,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
           streamOrResult = await env.AI.run(modelKey, {
             stream: true,
             messages: [
-              { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+              { role: 'system', content: chatSseSystemPrompt },
               { role: 'user', content: message },
             ],
           });

@@ -2284,3 +2284,18 @@ Apply `shellVersion.ts` (`import.meta.env.VITE_SHELL_VERSION ?? 'v6'`), inject `
 ### Known issues / next steps
 Re-run `./scripts/deploy-sandbox.sh` from a clone whose `agent-dashboard` resolves to stable local disk (or remount Expansion), then run the `cicd_runs` INSERT (208-style columns) documented in chat.
 
+## 2026-04-02 Dynamic MCP / skills / commands in agent chat SSE system prompt
+
+### What was asked
+Replace any static tool copy in `agentChatDirectSseHandler` with a D1-backed block: `mcp_registered_tools` (grouped by `tool_category`), workspace `agentsam_skill`, and `agent_commands`; append IDE state hints; use the result as the system prompt for all providers in that handler.
+
+### Files changed
+- `worker.js` (~9634–9710): after model resolve, `Promise.all` for skills, commands, MCP tools; build `toolsBlock` and `chatSseSystemPrompt`; fall back to `AGENT_SAM_CHAT_SYSTEM` on query failure.
+- `worker.js` (Anthropic / Gemini / Vertex / OpenAI / Cursor / Workers AI branches in same handler): `AGENT_SAM_CHAT_SYSTEM` replaced with `chatSseSystemPrompt` for upstream system messages.
+
+### Deploy status
+- Built: no — R2 uploaded: no — Worker deployed: no — Deploy approved by Sam: no
+
+### Known issues / next steps
+Large tool lists increase prompt tokens per `/api/agent/chat` SSE request; monitor telemetry if needed.
+

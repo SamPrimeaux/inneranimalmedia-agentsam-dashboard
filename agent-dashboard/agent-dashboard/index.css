@@ -1,0 +1,123 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Solarized Dark Primitive Colors */
+  --solar-base03:  #00212b; /* Deepest background — slightly richer navy */
+  --solar-base02:  #0a2d38; /* Panel background — warmer dark teal */
+  --solar-base01:  #4a7a87; /* Borders, inactive — raised for legibility */
+  --solar-base00:  #6e8d96; /* Secondary text */
+  --solar-base0:   #9cb5bc; /* Primary text — raised for better contrast */
+  --solar-base1:   #b0ccd2; /* Heading text — brighter */
+
+  /* Accents */
+  --solar-yellow:  #e6ac00;
+  --solar-orange:  #d95f1c;
+  --solar-red:     #e63333;
+  --solar-magenta: #d33682;
+  --solar-violet:  #7c83d4;
+  --solar-blue:    #3a9fe8;
+  --solar-cyan:    #2dd4bf;
+  --solar-green:   #a3b800;
+
+  /* IDE UI Layout Semantic Tokens */
+  --bg-app:        var(--solar-base03);
+  --bg-panel:      var(--solar-base02);
+  --bg-hover:      rgba(42, 161, 152, 0.08);
+  --border-subtle: #1e3e4a;
+  --border-focus:  var(--solar-cyan);
+
+  /* Typography */
+  --text-main:     var(--solar-base0);
+  --text-muted:    #7a9aaa;
+  --text-heading:  var(--solar-base1);
+
+  /* Scene / 3D */
+  --scene-bg:      #060e14;
+
+  /* Interactive / Brand */
+  --accent-primary:   var(--solar-blue);
+  --accent-secondary: var(--solar-cyan);
+  --accent-warning:   var(--solar-yellow);
+  --accent-danger:    var(--solar-red);
+}
+
+body {
+    background: var(--bg-app);
+    color: var(--text-main);
+    margin: 0;
+    overflow: hidden;
+    font-family: 'Nunito', system-ui, sans-serif;
+}
+
+::selection {
+    background: rgba(42, 161, 152, 0.2); /* Cyan tint */
+    color: var(--solar-cyan);
+}
+
+/* Custom IDE scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg-app);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--bg-panel);
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-subtle);
+}
+
+/* Hide scrollbar but keep scroll functionality (for tab strip) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+
+/* --- Custom IDE Effects & Micro-animations --- */
+
+@keyframes pulse-dirty {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.animate-pulse-dirty {
+    animation: pulse-dirty 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Glassmorphism utility overlay */
+.glass-panel {
+    background: rgba(10, 45, 56, 0.7); /* match --solar-base02 with opacity */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+/* Glowing drag border */
+.glow-border {
+    position: relative;
+}
+.glow-border::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.2s ease, background-color 0.2s ease;
+    pointer-events: none;
+}
+.glow-border:hover::after, .glow-border:active::after {
+    box-shadow: 0 0 10px var(--solar-cyan);
+    background-color: rgba(45, 212, 191, 0.5); /* cyan with opacity */
+}
+
+@keyframes slide-up {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-slide-up {
+    animation: slide-up 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+

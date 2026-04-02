@@ -2150,3 +2150,70 @@ GitHub `inneranimalmedia-agentsam-dashboard` includes submodule; clones must use
 ### Known issues / next steps
 - Cloudflare Workers Builds: set build root or `cd meauxcad && npm ci && npm run build` for `aitestsuite` worker when switching repo to monorepo; update dashboard Git connection if Sam moves off standalone meauxcad remote.
 
+## 2026-04-02 Canonical Agent Dashboard deploy scripts
+
+### What was asked
+Align sandbox/prod pipeline with the new `agent-dashboard/` Vite app (replace legacy IAM bundle as the mental model), fix missing `dist/assets/*` uploads that caused 404s, and document.
+
+### Files changed
+- `docs/AGENT_DASHBOARD.md`: canonical source layout, build/deploy notes, legacy folder note
+- `agent-dashboard/index.html`: same-origin `/static/dashboard/shell.css`, numeric `?v=0` placeholders for dev
+- `agent-dashboard/vite.config.ts`: `base: '/static/dashboard/agent/'`
+- `agent-dashboard/package.json`: `build` uses `npx vite build`, added `build:vite-only`
+- `agent-dashboard/.sandbox-deploy-version`: initial counter `0` for `<!-- dashboard-v:N -->` injection
+- `scripts/deploy-sandbox.sh`: `npm ci --include=dev`, recursive manifest + R2 upload under `static/dashboard/agent/`, inject `dashboard-v` comment, upload `dist/index.html` as `agent.html`, use `with-cloudflare-env` for wrangler
+- `scripts/promote-to-prod.sh`: mkdir for nested manifest paths, require manifest, recursive prod upload, version read from `dashboard-v` comment
+
+### Files NOT changed (and why)
+- `worker.js`, `wrangler.production.toml`: not in scope for this pass
+
+### Deploy status
+- Built: yes (local `npm ci --include=dev` + `npm run build` in `agent-dashboard/`)
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until Sam runs `./scripts/deploy-sandbox.sh` (and promote when ready).
+
+### Known issues / next steps
+- Push monorepo + submodule when satisfied; verify `grep dashboard-v` on sandbox `/dashboard/agent` after first sandbox deploy.
+
+## 2026-04-02 Sandbox blank page: wrong dist path for workspace layout
+
+### What was asked
+Sandbox `/dashboard/agent` was a black screen; user expects full IAM Explorer SPA after next deploy.
+
+### Root cause
+The `meauxcad` submodule uses npm workspaces: Vite output is **`agent-dashboard/agent-dashboard/dist`**, but **`wrangler.jsonc`** `assets.directory` and deploy scripts still pointed at **`agent-dashboard/dist`**, so the Worker could serve an empty/stale bundle.
+
+### Files changed
+- `wrangler.jsonc`: `assets.directory` → `agent-dashboard/agent-dashboard/dist`
+- `scripts/deploy-sandbox.sh`, `scripts/promote-to-prod.sh`, `scripts/deploy-gate.sh`: `DIST_DIR` aligned
+- `docs/AGENT_DASHBOARD.md`: documented path
+- Submodule `agent-dashboard/package.json` (meauxcad root): `build` / `build:vite-only` → `npm run build --workspace=agent-dashboard`
+- Monorepo submodule pointer updated to commit with root scripts
+
+### Deploy status
+- Deploy not run here (Sam approval / pipeline)
+
+### Next step
+Run `./scripts/deploy-sandbox.sh` then reload `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent`.
+
+## 2026-04-02 Vendor agent-dashboard into monorepo (remove submodules)
+
+### What was asked
+Stop using git submodules; build from a **single** repository so Cloudflare Workers Builds does not need submodule fetch.
+
+### Files changed
+- Removed **`.gitmodules`** and submodule gitlinks **`agent-dashboard`**, **`meauxcad`**
+- Added full **`agent-dashboard/`** tree (npm workspace: `agent-dashboard/agent-dashboard/`) as normal tracked files
+- **`.gitignore`**: ignore `agent-dashboard/agent-dashboard/dist/`
+- **`docs/AGENT_DASHBOARD.md`**, **`docs/SANDBOX_WORKERS_BUILDS.md`**, **`docs/meauxcad-submodule.md`**: no-submodule workflow
+
+### Deploy status
+- Not run here
+
+### What is live now
+Unchanged until push + deploy; CI can clone without submodule errors.
+

@@ -2,6 +2,8 @@
 
 Worker name: **inneranimal-dashboard** (`wrangler.jsonc`). Production uses **`wrangler.production.toml`** only; do not point production Builds at this file.
 
+**No git submodules:** the dashboard app lives under **`agent-dashboard/`** in this repo. Workers Builds only needs a normal clone (no `submodule update`).
+
 ## Deploy command (recommended)
 
 Use the npm script so the entry script path is explicit (avoids Wrangler “Missing entry-point” when the dashboard config or cwd is ambiguous):

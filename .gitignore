@@ -24,6 +24,7 @@ node_modules/
 
 # Built artifacts — deploy via R2, not git
 agent-dashboard/dist/
+agent-dashboard/agent-dashboard/dist/
 agent-dashboard/dist-debug/
 
 # Cursor AI index binaries

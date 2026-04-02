@@ -1,0 +1,12 @@
+{
+  "name": "inneranimalmedia-agentsam-dashboard-root",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "agent-dashboard"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=agent-dashboard",
+    "build:vite-only": "npm run build --workspace=agent-dashboard"
+  }
+}

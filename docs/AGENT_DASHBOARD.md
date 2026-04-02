@@ -11,13 +11,13 @@
 
 ## Git
 
-- **`agent-dashboard/`** is a **submodule** pointing at `https://github.com/SamPrimeaux/meauxcad.git` until that remote is renamed. The **path in this monorepo** is always **`agent-dashboard/`**.
+- **`agent-dashboard/`** is **vendored in this repository** (single clone; no submodule). **Upstream** history may still exist at `https://github.com/SamPrimeaux/meauxcad.git` for reference or cherry-picks.
 
 ## Build and deploy
 
 - Build: `cd agent-dashboard && npm ci --include=dev && npm run build` (use `--include=dev` when `NODE_ENV=production` so `vite` is installed).
 - Deploy scripts inject `<!-- dashboard-v:N -->` before `</html>` in `dist/index.html` for version checks (`grep dashboard-v` on `/dashboard/agent`).
-- Output (submodule workspace): `agent-dashboard/agent-dashboard/dist/` (including `assets/` chunks). Sandbox: `./scripts/deploy-sandbox.sh` uploads **all** files under that `dist/` to R2 key prefix `static/dashboard/agent/` and uploads `dist/index.html` as **`static/dashboard/agent.html`** (what the worker serves for `/dashboard/agent`).
+- Output (npm workspace): `agent-dashboard/agent-dashboard/dist/` (including `assets/` chunks). Sandbox: `./scripts/deploy-sandbox.sh` uploads **all** files under that `dist/` to R2 key prefix `static/dashboard/agent/` and uploads `dist/index.html` as **`static/dashboard/agent.html`** (what the worker serves for `/dashboard/agent`).
 - Worker: `worker.js` resolves `/static/dashboard/agent/assets/...` to keys under the Vite `dist/` layout.
 
 ## Workers

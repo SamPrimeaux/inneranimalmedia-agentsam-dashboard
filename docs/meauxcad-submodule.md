@@ -1,32 +1,17 @@
-# MeauxCAD in this monorepo
+# MeauxCAD / agent-dashboard (deprecated doc)
 
-The [meauxcad](https://github.com/SamPrimeaux/meauxcad) app is included as a **git submodule** at `meauxcad/` (see `.gitmodules`).
+**Update:** The Agent Dashboard **source is no longer a git submodule**. It is **fully vendored** under **`agent-dashboard/`** in `inneranimalmedia-agentsam-dashboard` so CI and Cloudflare Workers Builds clone **one repository** with no submodule fetch.
 
-## Clone with submodule
+The standalone repo **https://github.com/SamPrimeaux/meauxcad** may still be used for **AITestSuite** / lab experiments or as a reference fork; **do not** rely on submodule bump workflows for the IAM monorepo.
+
+## Clone (current)
 
 ```bash
-git clone --recurse-submodules https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
+git clone https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git
 cd inneranimalmedia-agentsam-dashboard
 ```
 
-If you already cloned without submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-## Pull upstream MeauxCAD changes
-
-```bash
-cd meauxcad && git fetch origin && git checkout main && git pull
-cd .. && git add meauxcad && git commit -m "chore: bump meauxcad submodule"
-```
-
-## CI / Workers Builds
-
-Point build commands at `meauxcad/` when building the AITestSuite / lab worker (e.g. `cd meauxcad && npm ci && npm run build`). The standalone repo remains the canonical remote; this submodule tracks a pinned commit until you bump it.
-
 ## Related
 
+- [`docs/AGENT_DASHBOARD.md`](AGENT_DASHBOARD.md) — canonical layout and build paths
 - [`docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`](AITESTSUITE_IAM_STACK_INTEGRATION.md) — lab worker vs sandbox vs prod
-- Stub folder `aitestsuite/` (minimal wrangler placeholder) is **not** the full MeauxCAD tree; use **`meauxcad/`** for the real source.

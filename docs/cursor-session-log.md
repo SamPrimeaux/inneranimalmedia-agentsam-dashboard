@@ -2131,3 +2131,22 @@ Unchanged until worker deploy.
 ### Known issues / next steps
 - Keep one Vite config (`vite.config.js` for IAM flat `agent-dashboard.js` vs default chunking); remove duplicate `vite.config.ts` if it causes wrong build. Run `./scripts/deploy-sandbox.sh` after `build:vite-only` alias exists in `agent-dashboard/package.json`.
 
+## 2026-04-02 Add meauxcad as git submodule
+
+### What was asked
+Clone SamPrimeaux/meauxcad into the IAM monorepo to end split-repo / CI confusion.
+
+### Files changed
+- `.gitmodules`: submodule `meauxcad` -> `https://github.com/SamPrimeaux/meauxcad.git`
+- `meauxcad/`: submodule pointer (commit pinned at add time)
+- `docs/meauxcad-submodule.md`: clone `--recurse-submodules`, update, CI note
+
+### Deploy status
+- Pushed: `git push dashboard main` (commit `7962d23`)
+
+### What is live now
+GitHub `inneranimalmedia-agentsam-dashboard` includes submodule; clones must use `git submodule update --init --recursive`.
+
+### Known issues / next steps
+- Cloudflare Workers Builds: set build root or `cd meauxcad && npm ci && npm run build` for `aitestsuite` worker when switching repo to monorepo; update dashboard Git connection if Sam moves off standalone meauxcad remote.
+

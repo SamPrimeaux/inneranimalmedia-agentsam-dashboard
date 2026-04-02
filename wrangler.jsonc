@@ -18,6 +18,10 @@
   "workers_dev": true,
   "preview_urls": true,
   "no_bundle": false,
+  "assets": {
+    "directory": "agent-dashboard/dist",
+    "binding": "ASSETS"
+  },
   "build": {
     "command": ""
   },

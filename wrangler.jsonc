@@ -18,10 +18,10 @@
   "workers_dev": true,
   "preview_urls": true,
   "no_bundle": false,
-  // Vite SPA: submodule workspace outputs to agent-dashboard/agent-dashboard/dist (not agent-dashboard/dist).
+  // Vite SPA bundle (must not use binding name "ASSETS" — that is the R2 bucket below).
   "assets": {
     "directory": "agent-dashboard/agent-dashboard/dist",
-    "binding": "ASSETS"
+    "binding": "STATIC_ASSETS"
   },
   "build": {
     "command": ""

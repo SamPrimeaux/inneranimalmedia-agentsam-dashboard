@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FolderOpen, Github, TerminalSquare, Box, ChevronRight, LayoutTemplate, X, Clock, Star, HardDrive, Search } from 'lucide-react';
 
 interface WelcomeLauncherProps {

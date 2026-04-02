@@ -1,0 +1,196 @@
+/**
+ * workspace.css
+ * IAM Workspace Shell — CSS token layer.
+ *
+ * Rules:
+ * - All colors are CSS variables only. No hex literals in this file.
+ * - :root[data-theme="iam-storm"] is the single fallback source.
+ * - In production, variables are overwritten by GET /api/settings/theme
+ *   which writes matching vars onto document.documentElement.style.
+ * - Monaco editor hex colors live ONLY in monacoTheme.js — not here.
+ * - Syntax token classes (.k, .s, .f, etc.) use --iam-token-* vars below.
+ */
+
+/* ─── IAM Storm theme tokens ─────────────────────────────────────────── */
+
+:root,
+:root[data-theme="iam-storm"],
+:root[data-theme="meaux-storm-gray"],
+:root[data-theme="meaux-glass-blue"],
+:root[data-theme="inneranimal-slate"],
+:root[data-theme="meaux-mono"],
+:root[data-theme="meaux-ocean-soft"] {
+  /* Surfaces */
+  --iam-base:           #0d1117;
+  --iam-surface:        #161b24;
+  --iam-panel:          #111318;
+  --iam-sidebar:        #13171f;
+  --iam-activity:       #0f1219;
+  --iam-tab-bg:         #0d1117;
+  --iam-tab-active:     #161b24;
+
+  /* Borders */
+  --iam-border:         #21293d;
+  --iam-border-soft:    #1a2235;
+
+  /* Text */
+  --iam-text:           #c9d1e0;
+  --iam-muted:          #4a5a7a;
+  --iam-dim:            #2d3b58;
+
+  /* Brand accent */
+  --iam-accent:         #22b8cf;
+  --iam-accent-dim:     #0e3a45;
+  --iam-accent-glow:    #22b8cf22;
+
+  /* Semantic */
+  --iam-green:          #3fb950;
+  --iam-red:            #f85149;
+  --iam-yellow:         #d29922;
+  --iam-purple:         #a371f7;
+  --iam-orange:         #e06c2d;
+
+  /* Statusbar */
+  --iam-statusbar:      #0a2233;
+  --iam-statusbar-text: #7dbfd4;
+  --iam-statusbar-border:#0e3044;
+
+  /* Typography */
+  --iam-mono: 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+  --iam-ui:   'Geist', 'Inter', system-ui, sans-serif;
+
+  /* Syntax token colors (used by static code surfaces, maps to monacoTheme.js) */
+  --iam-token-keyword:  #c792ea;
+  --iam-token-string:   #c3e88d;
+  --iam-token-function: #82aaff;
+  --iam-token-comment:  #546e7a;
+  --iam-token-number:   #f78c6c;
+  --iam-token-tag:      #22b8cf;
+  --iam-token-attr:     #ffcb6b;
+  --iam-token-punct:    #89ddff;
+  --iam-token-var:      #f78c6c;
+
+  /* Tab strip language icon strokes (JSX uses var() only) */
+  --iam-tab-icon-javascript: var(--iam-orange);
+  --iam-tab-icon-typescript: var(--iam-accent);
+  --iam-tab-icon-html:       var(--iam-orange);
+  --iam-tab-icon-css:        var(--iam-token-punct);
+  --iam-tab-icon-json:       var(--iam-token-function);
+  --iam-tab-icon-sql:        var(--iam-token-function);
+  --iam-tab-icon-toml:       var(--iam-token-function);
+  --iam-tab-icon-bash:       var(--iam-green);
+  --iam-tab-icon-markdown:   var(--iam-text);
+  --iam-tab-icon-jsx:        var(--iam-token-tag);
+  --iam-tab-icon-tsx:        var(--iam-token-tag);
+}
+
+/* ─── Solarized Dark overrides ───────────────────────────────────────── */
+
+:root[data-theme="solarized-dark"] {
+  --iam-base:           #002b36;
+  --iam-surface:        #073642;
+  --iam-panel:          #002b36;
+  --iam-sidebar:        #073642;
+  --iam-activity:       #002b36;
+  --iam-tab-bg:         #002b36;
+  --iam-tab-active:     #073642;
+  --iam-border:         #073642;
+  --iam-border-soft:    #073642;
+  --iam-text:           #839496;
+  --iam-muted:          #586e75;
+  --iam-dim:            #073642;
+  --iam-accent:         #268bd2;
+  --iam-accent-dim:     #073642;
+  --iam-accent-glow:    #268bd222;
+  --iam-green:          #859900;
+  --iam-red:            #dc322f;
+  --iam-yellow:         #b58900;
+  --iam-purple:         #6c71c4;
+  --iam-orange:         #cb4b16;
+  --iam-statusbar:      #002b36;
+  --iam-statusbar-text: #268bd2;
+  --iam-statusbar-border:#073642;
+  --iam-token-keyword:  #859900;
+  --iam-token-string:   #2aa198;
+  --iam-token-function: #268bd2;
+  --iam-token-comment:  #586e75;
+  --iam-token-number:   #d33682;
+  --iam-token-tag:      #268bd2;
+  --iam-token-attr:     #93a1a1;
+  --iam-token-punct:    #93a1a1;
+  --iam-token-var:      #839496;
+}
+
+/* ─── Shell layout ───────────────────────────────────────────────────── */
+
+.iam-workspace-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--iam-base);
+  color: var(--iam-text);
+  font-family: var(--iam-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.iam-ide-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ─── Monaco surface container ───────────────────────────────────────── */
+
+.iam-code-surface {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--iam-base);
+}
+
+/* Force Monaco to fill container — required when parent is flex */
+.iam-code-surface .monaco-editor,
+.iam-code-surface .monaco-editor-background,
+.iam-code-surface .overflow-guard {
+  height: 100% !important;
+}
+
+/* ─── Static syntax highlight classes ───────────────────────────────── */
+/* Used by IamCodeSurface in non-Monaco static preview mode only.        */
+/* In Monaco mode, monacoTheme.js handles token colors via defineTheme.  */
+
+.iam-code { font-family: var(--iam-mono); font-size: 12px; line-height: 20px; }
+.iam-code .k  { color: var(--iam-token-keyword); }
+.iam-code .s  { color: var(--iam-token-string); }
+.iam-code .f  { color: var(--iam-token-function); }
+.iam-code .c  { color: var(--iam-token-comment); font-style: italic; }
+.iam-code .n  { color: var(--iam-text); }
+.iam-code .v  { color: var(--iam-token-var); }
+.iam-code .t  { color: var(--iam-token-tag); }
+.iam-code .at { color: var(--iam-token-attr); }
+.iam-code .p  { color: var(--iam-token-punct); }
+.iam-code .num{ color: var(--iam-token-number); }
+
+/* ─── Editor tab dirty indicator ─────────────────────────────────────── */
+
+.iam-tab-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--iam-text);
+  flex-shrink: 0;
+}
+
+/* ─── Scrollbars ────────────────────────────────────────────────────── */
+
+* {
+  scrollbar-color: var(--iam-border) transparent;
+  scrollbar-width: thin;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: var(--iam-border); border-radius: 3px; }
+::-webkit-scrollbar-track { background: transparent; }

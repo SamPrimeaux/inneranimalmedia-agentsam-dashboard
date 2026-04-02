@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Send, User, Bot, Loader2, 
   ChevronRight, Sparkles, Plus, ChevronDown, Mic, FileCode, FileText, Image as ImageIcon
@@ -47,22 +48,94 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelButtonRef = useRef<HTMLButtonElement>(null);
+  const modeButtonRef = useRef<HTMLButtonElement>(null);
+
+  const [modelMenuStyle, setModelMenuStyle] = useState<React.CSSProperties | null>(null);
+  const [modeMenuStyle, setModeMenuStyle] = useState<React.CSSProperties | null>(null);
+
+  const measureModelMenu = useCallback(() => {
+    const el = modelButtonRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const gap = 8;
+    setModelMenuStyle({
+      position: 'fixed',
+      left: r.left,
+      bottom: window.innerHeight - r.top + gap,
+      zIndex: 9999,
+      maxHeight: Math.min(192, Math.max(80, r.top - gap - 8)),
+      minWidth: 180,
+    });
+  }, []);
+
+  const measureModeMenu = useCallback(() => {
+    const el = modeButtonRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const gap = 8;
+    setModeMenuStyle({
+      position: 'fixed',
+      left: r.left,
+      bottom: window.innerHeight - r.top + gap,
+      zIndex: 9999,
+      maxHeight: Math.min(240, Math.max(80, r.top - gap - 8)),
+      minWidth: 120,
+    });
+  }, []);
 
   const [models, setModels] = useState<{id: string, name: string}[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('Gemini 3 Flash (AITestSuite)');
   const [selectedModelId, setSelectedModelId] = useState<string>('gemini-3-flash-preview');
-  const [modes, setModes] = useState<string[]>(['Auto', 'Agent', 'Plan', 'Debug', 'Research']);
-  const [mode, setMode] = useState<string>('Auto');
+  const [modes, setModes] = useState<{ slug: string; label: string }[]>([]);
+  /** Selected mode slug (matches agent_mode_configs.slug). */
+  const [mode, setMode] = useState<string>('auto');
   const [isModelOpen, setIsModelOpen] = useState(false);
   const [isModeOpen, setIsModeOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
+  useLayoutEffect(() => {
+    if (!isModelOpen) {
+      setModelMenuStyle(null);
+      return;
+    }
+    measureModelMenu();
+    const handler = () => measureModelMenu();
+    window.addEventListener('resize', handler);
+    window.addEventListener('scroll', handler, true);
+    return () => {
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('scroll', handler, true);
+    };
+  }, [isModelOpen, measureModelMenu]);
+
+  useLayoutEffect(() => {
+    if (!isModeOpen) {
+      setModeMenuStyle(null);
+      return;
+    }
+    measureModeMenu();
+    const handler = () => measureModeMenu();
+    window.addEventListener('resize', handler);
+    window.addEventListener('scroll', handler, true);
+    return () => {
+      window.removeEventListener('resize', handler);
+      window.removeEventListener('scroll', handler, true);
+    };
+  }, [isModeOpen, measureModeMenu]);
+
   useEffect(() => {
     // Fetch Modes
     fetch('/api/agent/modes')
       .then(r => r.json())
-      .then(data => { if (Array.isArray(data)) setModes(data); })
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setModes(data.map((row: { slug: string; label: string }) => ({ slug: row.slug, label: row.label })));
+          const preferred = data.find((row: { slug: string }) => row.slug === 'auto');
+          setMode(preferred ? preferred.slug : data[0].slug);
+        }
+      })
       .catch(console.error);
     
     // Fetch Models
@@ -367,7 +440,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
   };
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full overflow-hidden">
+    <>
+    <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full overflow-hidden min-h-0">
       <style>{`
         .agent-content strong { color: var(--solar-cyan); font-weight: 700; }
         .agent-content h1, .agent-content h2, .agent-content h3 { color: var(--text-heading); font-weight: 700; margin-bottom: 0.75rem; }
@@ -424,7 +498,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
       <div className="shrink-0 w-full p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)]">
 
         {/* Input box — premium frosted card */}
-        <div className="flex flex-col bg-[#060e14] border border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60 rounded-xl transition-all shadow-inner overflow-hidden">
+        <div className="flex flex-col bg-[#060e14] border border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60 rounded-xl transition-all shadow-inner overflow-visible">
           <textarea
             ref={textareaRef}
             value={input}
@@ -437,11 +511,11 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
             }}
             placeholder="Ask the Agent anything..."
             rows={1}
-            className="w-full bg-transparent px-3.5 pt-3 pb-1 text-[13px] focus:outline-none text-[var(--text-main)] placeholder:text-[#2e5464] resize-none font-sans leading-relaxed"
+            className="w-full bg-transparent px-3.5 pt-3 pb-1 text-[13px] focus:outline-none text-[var(--text-main)] placeholder:text-[#2e5464] resize-none font-sans leading-relaxed rounded-t-xl"
             style={{ minHeight: '44px', maxHeight: '160px' }}
           />
           {/* Action row below textarea */}
-          <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center justify-between px-2 pb-2 rounded-b-xl">
             <div className="flex items-center gap-1">
               <button className="p-1.5 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5 rounded-lg transition-all" title="Attach file">
                 <Plus size={14} />
@@ -456,41 +530,23 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
               
               {/* Discrete Inline Model/Mode Selectors */}
               <div className="flex items-center gap-1.5 ml-2 border-l border-[#1e3e4a] pl-2">
-                <div className="relative">
-                  <button 
+                  <button
+                    type="button"
+                    ref={modelButtonRef}
                     onClick={() => { setIsModelOpen(!isModelOpen); setIsModeOpen(false); }}
                     className="flex items-center gap-1 text-[9px] font-mono font-bold tracking-tight text-[var(--text-muted)] hover:text-[var(--solar-cyan)] transition-colors uppercase truncate max-w-[100px]"
                   >
                     {selectedModel} <ChevronDown size={8} />
                   </button>
-                  {isModelOpen && (
-                    <div className="absolute bottom-full mb-2 left-0 bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col min-w-[180px] text-[11px] z-[100] max-h-48 overflow-y-auto p-1">
-                      {models.map(m => (
-                        <button key={m.id} className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg truncate transition-colors ${selectedModel === m.name ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`} onClick={() => { setSelectedModel(m.name); setSelectedModelId(m.id); setIsModelOpen(false); }}>
-                          {m.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
-                <div className="relative">
-                  <button 
+                  <button
+                    type="button"
+                    ref={modeButtonRef}
                     onClick={() => { setIsModeOpen(!isModeOpen); setIsModelOpen(false); }}
                     className="flex items-center gap-1 text-[9px] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase"
                   >
-                    ∞ {mode} <ChevronDown size={8} />
+                    ∞ {modes.find(m => m.slug === mode)?.label ?? mode} <ChevronDown size={8} />
                   </button>
-                  {isModeOpen && (
-                    <div className="absolute bottom-full mb-2 left-0 bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl p-1 flex flex-col min-w-[120px] text-[11px] z-[100]">
-                      {modes.map(m => (
-                        <button key={m} className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg flex items-center justify-between transition-colors ${mode === m ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`} onClick={() => { setMode(m); setIsModeOpen(false); }}>
-                          {m}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             </div>
             
@@ -513,6 +569,45 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({ activeProject, act
         </div>
       </div>
     </div>
+
+    {typeof document !== 'undefined' && isModelOpen && modelMenuStyle && createPortal(
+      <div
+        className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[11px] overflow-y-auto p-1"
+        style={modelMenuStyle}
+      >
+        {models.map(m => (
+          <button
+            key={m.id}
+            type="button"
+            className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg truncate transition-colors ${selectedModel === m.name ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`}
+            onClick={() => { setSelectedModel(m.name); setSelectedModelId(m.id); setIsModelOpen(false); }}
+          >
+            {m.name}
+          </button>
+        ))}
+      </div>,
+      document.body
+    )}
+
+    {typeof document !== 'undefined' && isModeOpen && modeMenuStyle && createPortal(
+      <div
+        className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl p-1 flex flex-col text-[11px] overflow-y-auto"
+        style={modeMenuStyle}
+      >
+        {modes.map(m => (
+          <button
+            key={m.slug}
+            type="button"
+            className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg flex items-center justify-between transition-colors ${mode === m.slug ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'}`}
+            onClick={() => { setMode(m.slug); setIsModeOpen(false); }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>,
+      document.body
+    )}
+    </>
   );
 };
 

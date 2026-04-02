@@ -20,20 +20,7 @@
         color: var(--text-main);
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.553.0",
-    "three/": "https://aistudiocdn.com/three@^0.181.1/",
-    "three": "https://aistudiocdn.com/three@^0.181.1",
-    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/+esm",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1"
-  }
-}
-</script>
+    <!-- No importmap: bare-specifier maps to CDN caused a second React copy at runtime (minified error #525) alongside the Vite bundle. -->
 <link rel="stylesheet" href="/index.css?v=1.2.0-1775059639394">
 </head>
   <body>

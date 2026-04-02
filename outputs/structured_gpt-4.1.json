@@ -1,0 +1,51 @@
+{
+  "components": [
+    {
+      "name": "User Authentication UI",
+      "tech_stack": [
+        "React",
+        "Material-UI"
+      ],
+      "estimated_hours": 16,
+      "complexity": "medium"
+    },
+    {
+      "name": "Dashboard Layout & Navigation",
+      "tech_stack": [
+        "React",
+        "React Router",
+        "Material-UI"
+      ],
+      "estimated_hours": 20,
+      "complexity": "medium"
+    },
+    {
+      "name": "Data Visualization Widgets",
+      "tech_stack": [
+        "React",
+        "Recharts",
+        "D3.js"
+      ],
+      "estimated_hours": 32,
+      "complexity": "high"
+    },
+    {
+      "name": "Filter & Search Panel",
+      "tech_stack": [
+        "React",
+        "Material-UI"
+      ],
+      "estimated_hours": 16,
+      "complexity": "medium"
+    },
+    {
+      "name": "Settings & User Profile",
+      "tech_stack": [
+        "React",
+        "Material-UI"
+      ],
+      "estimated_hours": 12,
+      "complexity": "low"
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dark Theme Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500&display=swap');
+  body {
+    margin: 0;
+    background-color: #121212;
+    color: #e0e0e0;
+    font-family: 'Inter', sans-serif;
+  }
+  .dashboard {
+    max-width: 960px;
+    margin: 2rem auto;
+    padding: 0 1rem 3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+  .kpi-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit,minmax(160px,1fr));
+    gap: 1.5rem;
+  }
+  .card {
+    background: #1e1e1e;
+    border-radius: 12px;
+    padding: 1.5rem 1.5rem 1.8rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    transition: background 0.3s ease;
+  }
+  .card:hover {
+    background: #2c2c2c;
+  }
+  .kpi-value {
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 1;
+    margin: 0 0 0.3rem;
+    color: #4dd0e1;
+  }
+  .kpi-label {
+    font-weight: 500;
+    font-size: 1rem;
+    color: #a0a0a0;
+  }
+  .chart-container {
+    background: #1e1e1e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.7);
+  }
+  .chart-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: #4dd0e1;
+    user-select: none;
+  }
+  .bar-chart {
+    display: flex;
+    align-items: flex-end;
+    height: 180px;
+    gap: 1rem;
+  }
+  .bar {
+    background: #4dd0e1;
+    border-radius: 6px 6px 0 0;
+    width: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    cursor: default;
+    transition: background-color 0.3s ease;
+  }
+  .bar:hover {
+    background: #26a9b5;
+  }
+  .bar[data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    background: #333;
+    color: #eee;
+    padding: 4px 8px;
+    border-radius: 4px;
+    bottom: 100%;
+    margin-bottom: 6px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .bar-chart-wrapper {
+    position: relative;
+  }
+</style>
+</head>
+<body>
+  <main class="dashboard" role="main" aria-label="Dashboard with key performance indicators and chart">
+    <section class="kpi-cards" aria-label="Key performance indicators">
+      <article class="card" tabindex="0" aria-live="polite" aria-atomic="true">
+        <p class="kpi-value" aria-label="Total Revenue">$124.8K</p>
+        <p class="kpi-label">Total Revenue</p>
+      </article>
+      <article class="card" tabindex="0" aria-live="polite" aria-atomic="true">
+        <p class="kpi-value" aria-label="New Users">3,452</p>
+        <p class="kpi-label">New Users</p>
+      </article>
+      <article class="card" tabindex="0" aria-live="polite" aria-atomic="true">
+        <p class="kpi-value" aria-label="Conversions">1,125</p>
+        <p class="kpi-label">Conversions</p>
+      </article>
+      <article class="card" tabindex="0" aria-live="polite" aria-atomic="true">
+        <p class="kpi-value" aria-label="Bounce Rate">27%</p>
+        <p class="kpi-label">Bounce Rate</p>
+      </article>
+    </section>
+
+    <section class="chart-container" aria-label="Placeholder bar chart">
+      <h2 class="chart-title">Monthly Sales Overview</h2>
+      <div class="bar-chart-wrapper">
+        <div class="bar-chart" role="img" aria-label="Bar chart showing sales by month">
+          <div class="bar" style="height:60%;" data-tooltip="Jan: $60K" aria-hidden="true"></div>
+          <div class="bar" style="height:75%;" data-tooltip="Feb: $75K" aria-hidden="true"></div>
+          <div class="bar" style="height:50%;" data-tooltip="Mar: $50K" aria-hidden="true"></div>
+          <div class="bar" style="height:90%;" data-tooltip="Apr: $90K" aria-hidden="true"></div>
+          <div class="bar" style="height:80%;" data-tooltip="May: $80K" aria-hidden="true"></div>
+          <div class="bar" style="height:70%;" data-tooltip="Jun: $70K" aria-hidden="true"></div>
+          <div class="bar" style="height:65%;" data-tooltip="Jul: $65K" aria-hidden="true"></div>
+          <div class="bar" style="height:85%;" data-tooltip="Aug: $85K" aria-hidden="true"></div>
+          <div class="bar" style="height:55%;" data-tooltip="Sep: $55K" aria-hidden="true"></div>
+          <div class="bar" style="height:95%;" data-tooltip="Oct: $95K" aria-hidden="true"></div>
+          <div class="bar" style="height:75%;" data-tooltip="Nov: $75K" aria-hidden="true"></div>
+          <div class="bar" style="height:80%;" data-tooltip="Dec: $80K" aria-hidden="true"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

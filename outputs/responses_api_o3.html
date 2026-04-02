@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dark Theme Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    :root{
+        --bg:#121212;
+        --card-bg:#1e1e1e;
+        --text:#e0e0e0;
+        --accent:#4fc3f7;
+        --positive:#66bb6a;
+        --negative:#ef5350;
+        --radius:12px;
+    }
+
+    *{box-sizing:border-box;margin:0;padding:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+
+    body{
+        background:var(--bg);
+        color:var(--text);
+        padding:2rem;
+    }
+
+    h1{
+        margin-bottom:1.5rem;
+        font-size:1.75rem;
+        text-align:center;
+    }
+
+    /* KPI CARDS */
+    .kpi-wrapper{
+        display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+        gap:1.2rem;
+        margin-bottom:2rem;
+    }
+
+    .kpi-card{
+        background:var(--card-bg);
+        padding:1.5rem;
+        border-radius:var(--radius);
+        box-shadow:0 2px 6px rgba(0,0,0,.4);
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+    }
+
+    .kpi-title{
+        font-size:.9rem;
+        letter-spacing:.5px;
+        color:#aaaaaa;
+        text-transform:uppercase;
+        margin-bottom:.6rem;
+    }
+
+    .kpi-value{
+        font-size:2rem;
+        font-weight:600;
+        margin-bottom:.4rem;
+        color:var(--accent);
+    }
+
+    .kpi-change{
+        font-size:.85rem;
+    }
+
+    .up   {color:var(--positive);}
+    .down {color:var(--negative);}
+
+    /* CHART CONTAINER */
+    .chart-card{
+        background:var(--card-bg);
+        padding:1.5rem;
+        border-radius:var(--radius);
+        box-shadow:0 2px 6px rgba(0,0,0,.4);
+    }
+
+    canvas{max-height:320px;}
+</style>
+</head>
+<body>
+
+<h1>Executive Summary Dashboard</h1>
+
+<section class="kpi-wrapper">
+    <div class="kpi-card">
+        <div>
+            <div class="kpi-title">Revenue</div>
+            <div class="kpi-value">$124K</div>
+        </div>
+        <div class="kpi-change up">▲ 8.5% vs last month</div>
+    </div>
+
+    <div class="kpi-card">
+        <div>
+            <div class="kpi-title">New Users</div>
+            <div class="kpi-value">2,430</div>
+        </div>
+        <div class="kpi-change up">▲ 3.2% vs last month</div>
+    </div>
+
+    <div class="kpi-card">
+        <div>
+            <div class="kpi-title">Conversion Rate</div>
+            <div class="kpi-value">4.7%</div>
+        </div>
+        <div class="kpi-change down">▼ 0.6% vs last month</div>
+    </div>
+
+    <div class="kpi-card">
+        <div>
+            <div class="kpi-title">Bounce Rate</div>
+            <div class="kpi-value">38%</div>
+        </div>
+        <div class="kpi-change up">▲ 1.1% vs last month</div>
+    </div>
+</section>
+
+<section class="chart-card">
+    <canvas id="barChart"></canvas>
+</section>
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+    // Placeholder bar chart data
+    const ctx = document.getElementById('barChart');
+
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+            datasets: [{
+                label: 'Weekly Sales ($)',
+                data: [18, 12, 9, 14, 20, 25, 22],
+                backgroundColor: 'rgba(79,195,247,0.6)',
+                borderColor: 'rgba(79,195,247,1)',
+                borderWidth:1,
+                borderRadius:6
+            }]
+        },
+        options: {
+            responsive:true,
+            maintainAspectRatio:false,
+            scales: {
+                y: {
+                    ticks:{color: '#777'},
+                    grid:{color:'#2a2a2a'}
+                },
+                x: {
+                    ticks:{color: '#777'},
+                    grid:{display:false}
+                }
+            },
+            plugins: {
+                legend: {labels:{color:'#aaa'}},
+                tooltip: {
+                    backgroundColor:'#2a2a2a',
+                    borderColor:'#555',
+                    borderWidth:1,
+                    titleColor:'#fff',
+                    bodyColor:'#ddd'
+                }
+            }
+        }
+    });
+</script>
+</body>
+</html>

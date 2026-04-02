@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cyberpunk Neon Snake</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: #0d0d0d;
+    color: #0ff;
+    font-family: 'Share Tech Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+  }
+  h1 {
+    margin: 1rem 0 0.5rem;
+    color: #0ff;
+    text-shadow:
+      0 0 5px #0ff,
+      0 0 10px #0ff,
+      0 0 20px #0ff,
+      0 0 40px #0ff;
+  }
+  #score {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.1em;
+    text-shadow:
+      0 0 5px #ff00ff,
+      0 0 10px #ff00ff,
+      0 0 20px #ff00ff;
+  }
+  #gameContainer {
+    position: relative;
+    width: 480px;
+    height: 480px;
+    background:
+      radial-gradient(circle at center, #111111 0%, #000000 80%);
+    border: 3px solid #0ff;
+    box-shadow:
+      0 0 10px #0ff,
+      0 0 20px #0ff,
+      0 0 40px #0ff,
+      inset 0 0 15px #0ff;
+    border-radius: 12px;
+  }
+  canvas {
+    display: block;
+    background: #050505;
+    border-radius: 12px;
+    image-rendering: pixelated;
+    box-shadow:
+      0 0 10px #00ffff,
+      0 0 20px #00ffff inset;
+  }
+  #gameOverScreen {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(15, 0, 30, 0.9);
+    color: #ff00ff;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: 2rem;
+    text-shadow:
+      0 0 8px #ff00ff,
+      0 0 15px #ff00ff,
+      0 0 30px #ff00ff;
+    border-radius: 12px;
+    z-index: 10;
+    user-select: none;
+  }
+  #gameOverScreen button {
+    margin-top: 1.5rem;
+    padding: 0.5rem 1.5rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1rem;
+    color: #ff00ff;
+    background: transparent;
+    border: 2px solid #ff00ff;
+    border-radius: 6px;
+    cursor: pointer;
+    text-shadow:
+      0 0 5px #ff00ff;
+    transition: background-color 0.3s, color 0.3s;
+  }
+  #gameOverScreen button:hover {
+    background: #ff00ff;
+    color: #1a001a;
+    box-shadow:
+      0 0 10px #ff00ff,
+      0 0 20px #ff00ff;
+  }
+</style>
+</head>
+<body>
+<h1>CYBERPUNK NEON SNAKE</h1>
+<div id="score">SCORE: 0</div>
+<div id="gameContainer">
+  <canvas id="game" width="480" height="480"></canvas>
+  <div id="gameOverScreen" style="display:none;">
+    <div>GAME OVER</div>
+    <div id="finalScore" style="margin-top:0.5rem; font-size:1.2rem; color:#0ff; text-shadow: 0 0 8px #0ff;">SCORE: 0</div>
+    <button id="restartBtn">RESTART</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreEl = document.getElementById('finalScore');
+  const restartBtn = document.getElementById('restartBtn');
+
+  const gridSize = 20; // size of one square in px
+  const tileCount = canvas.width / gridSize; // 24x24 grid
+
+  let snake = [];
+  let direction = { x: 1, y: 0 };
+  let nextDirection = { x: 1, y: 0 };
+  let food = { x: 0, y: 0 };
+  let score = 0;
+  let gameOver = false;
+  let speed = 8; // moves per second
+  let lastFrameTime = 0;
+
+  // Colors for neon effect
+  const colors = {
+    bg: '#050505',
+    snakeBody: '#0ff',
+    snakeGlow: '#00ffff',
+    food: '#ff00ff',
+    foodGlow: '#ff33ff',
+    gridLines: '#111111',
+  };
+
+  function resetGame() {
+    snake = [
+      { x: 12, y: 12 },
+      { x: 11, y: 12 },
+      { x: 10, y: 12 },
+    ];
+    direction = { x: 1, y: 0 };
+    nextDirection = { x: 1, y: 0 };
+    placeFood();
+    score = 0;
+    gameOver = false;
+    speed = 8;
+    scoreEl.textContent = `SCORE: ${score}`;
+    gameOverScreen.style.display = 'none';
+  }
+
+  function placeFood() {
+    let valid = false;
+    while (!valid) {
+      food.x = Math.floor(Math.random() * tileCount);
+      food.y = Math.floor(Math.random() * tileCount);
+      valid = !snake.some(s => s.x === food.x && s.y === food.y);
+    }
+  }
+
+  function drawRect(x, y, color, glowColor) {
+    const px = x * gridSize;
+    const py = y * gridSize;
+
+    // Neon glow effect with shadow
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = color;
+    ctx.fillRect(px + 1, py + 1, gridSize - 2, gridSize - 2);
+    ctx.shadowBlur = 0;
+  }
+
+  function drawGrid() {
+    ctx.strokeStyle = colors.gridLines;
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= tileCount; i++) {
+      // vertical lines
+      ctx.beginPath();
+      ctx.moveTo(i * gridSize + 0.5, 0);
+      ctx.lineTo(i * gridSize + 0.5, canvas.height);
+      ctx.stroke();
+
+      // horizontal lines
+      ctx.beginPath();
+      ctx.moveTo(0, i * gridSize + 0.5);
+      ctx.lineTo(canvas.width, i * gridSize + 0.5);
+      ctx.stroke();
+    }
+  }
+
+  function draw() {
+    // Clear canvas with bg color and subtle glow
+    ctx.fillStyle = colors.bg;
+    ctx.shadowColor = '#00ffff';
+    ctx.shadowBlur = 20;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.shadowBlur = 0;
+
+    drawGrid();
+
+    // Draw food
+    drawRect(food.x, food.y, colors.food, colors.foodGlow);
+
+    // Draw snake
+    for (let i = 0; i < snake.length; i++) {
+      const s = snake[i];
+      // Head glows stronger
+      if (i === 0) {
+        drawRect(s.x, s.y, colors.snakeBody, colors.snakeGlow);
+        // extra glow for head
+        ctx.shadowColor = colors.snakeGlow;
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = colors.snakeBody;
+        ctx.fillRect(s.x * gridSize + 4, s.y * gridSize + 4, gridSize - 8, gridSize - 8);
+        ctx.shadowBlur = 0;
+      } else {
+        drawRect(s.x, s.y, colors.snakeBody, colors.snakeGlow);
+      }
+    }
+  }
+
+  function update() {
+    if (gameOver) return;
+
+    direction = nextDirection;
+
+    // New head position
+    const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
+
+    // Wrap around edges (classic snake usually dies on wall, but cyberpunk style - let's keep classic)
+    if (
+      head.x < 0 ||
+      head.x >= tileCount ||
+      head.y < 0 ||
+      head.y >= tileCount
+    ) {
+      endGame();
+      return;
+    }
+
+    // Check collision with self
+    if (snake.some(s => s.x === head.x && s.y === head.y)) {
+      endGame();
+      return;
+    }
+
+    snake.unshift(head);
+
+    // Check if ate food
+    if (head.x === food.x && head.y === food.y) {
+      score++;
+      scoreEl.textContent = `SCORE: ${score}`;
+      placeFood();
+
+      // Optional: speed up every 5 points to increase challenge
+      if (score % 5 === 0) {
+        speed = Math.min(speed + 1, 20);
+      }
+    } else {
+      snake.pop();
+    }
+  }
+
+  function endGame() {
+    gameOver = true;
+    finalScoreEl.textContent = `SCORE: ${score}`;
+    gameOverScreen.style.display = 'flex';
+  }
+
+  function gameLoop(timestamp = 0) {
+    if (!lastFrameTime) lastFrameTime = timestamp;
+    const delta = timestamp - lastFrameTime;
+    const interval = 1000 / speed;
+
+    if (delta > interval) {
+      update();
+      draw();
+      lastFrameTime = timestamp;
+    }
+    requestAnimationFrame(gameLoop);
+  }
+
+  function onKeyDown(e) {
+    if (gameOver) return;
+
+    const key = e.key.toLowerCase();
+    switch (key) {
+      case 'arrowup':
+      case 'w':
+        if (direction.y === 1) break;
+        nextDirection = { x: 0, y: -1 };
+        break;
+      case 'arrowdown':
+      case 's':
+        if (direction.y === -1) break;
+        nextDirection = { x: 0, y: 1 };
+        break;
+      case 'arrowleft':
+      case 'a':
+        if (direction.x === 1) break;
+        nextDirection = { x: -1, y: 0 };
+        break;
+      case 'arrowright':
+      case 'd':
+        if (direction.x === -1) break;
+        nextDirection = { x: 1, y: 0 };
+        break;
+    }
+  }
+
+  restartBtn.addEventListener('click', () => {
+    resetGame();
+  });
+
+  window.addEventListener('keydown', onKeyDown);
+
+  resetGame();
+  requestAnimationFrame(gameLoop);
+})();
+</script>
+</body>
+</html>

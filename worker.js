@@ -3748,6 +3748,10 @@ const worker = {
         return handleCidiApi(request, url, env, ctx);
       }
 
+      // ── IAM EXPLORER ROUTES (added session_1) ──────────────────────────
+      const iamExplorerRes = await handleIamExplorerApi(request, url, env, ctx);
+      if (iamExplorerRes) return iamExplorerRes;
+
       // ----- API: R2 DevOps (buckets, objects, sync, upload, stats, bulk-action) -----
       if (pathLower.startsWith('/api/r2/')) {
         return handleR2Api(request, url, env);
@@ -9546,6 +9550,7 @@ function getR2Binding(env, bucketName) {
     'inneranimalmedia-assets': env.ASSETS,
     autorag: env.AUTORAG_BUCKET,
     'agent-sam': env.DASHBOARD,
+    'agent-sam-sandbox-cicd': env.ASSETS,
     'iam-platform': env.R2,
   };
   return map[bucketName] || null;
@@ -9673,6 +9678,531 @@ function buildR2Query(params) {
   return keys.map((k) => k + '=' + encodeURIComponent(params[k])).join('&');
 }
 
+const IAM_EXPLORER_DEFAULT_R2_BUCKET = 'agent-sam-sandbox-cicd';
+const IAM_EXPLORER_WS_SANDBOX = 'ws_sandbox';
+const IAM_EXPLORER_FALLBACK_MODES = ['agent', 'ask', 'plan', 'debug'];
+
+async function loadWorkspaceSandboxModes(env) {
+  if (!env.DB) return IAM_EXPLORER_FALLBACK_MODES;
+  try {
+    const row = await env.DB.prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?')
+      .bind(IAM_EXPLORER_WS_SANDBOX).first();
+    if (!row?.settings_json) return IAM_EXPLORER_FALLBACK_MODES;
+    const j = JSON.parse(String(row.settings_json));
+    if (Array.isArray(j.agent_modes) && j.agent_modes.length) {
+      return j.agent_modes.map((m) => String(m).toLowerCase());
+    }
+  } catch (_) {}
+  return IAM_EXPLORER_FALLBACK_MODES;
+}
+
+function iamExplorerAssetsBinding(env, bucketName) {
+  const b = bucketName || IAM_EXPLORER_DEFAULT_R2_BUCKET;
+  if (b === IAM_EXPLORER_DEFAULT_R2_BUCKET) return env.ASSETS || null;
+  return getR2Binding(env, b);
+}
+
+/** IAM Explorer: version, workspace shell, R2 aliases, GitHub/Drive proxies. Returns Response or null. */
+async function handleIamExplorerApi(request, url, env, _ctx) {
+  const path = url.pathname.replace(/\/$/, '') || '/';
+  const pathLower = path.toLowerCase();
+  const method = (request.method || 'GET').toUpperCase();
+
+  if (pathLower === '/api/version' && method === 'GET') {
+    if (!env.DB) {
+      return jsonResponse({
+        version: null,
+        workspace_id: IAM_EXPLORER_WS_SANDBOX,
+        shell_version: env.SHELL_VERSION ?? 'v6',
+        deployed_at: null,
+      });
+    }
+    try {
+      const row = await env.DB.prepare(
+        'SELECT version, description, created_at FROM deployments ORDER BY created_at DESC LIMIT 1'
+      ).first();
+      return jsonResponse({
+        version: row?.version ?? null,
+        workspace_id: IAM_EXPLORER_WS_SANDBOX,
+        shell_version: env.SHELL_VERSION ?? 'v6',
+        deployed_at: row?.created_at != null ? row.created_at : null,
+        description: row?.description ?? null,
+      });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/workspaces/current/shell' && method === 'GET') {
+    if (!env.DB) {
+      return new Response(
+        JSON.stringify({ workspace_id: IAM_EXPLORER_WS_SANDBOX, product_name: 'IAM Explorer', version: 'v6' }),
+        { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+      );
+    }
+    try {
+      const row = await env.DB.prepare(
+        'SELECT settings_json, theme_id FROM workspace_settings WHERE workspace_id = ?'
+      ).bind(IAM_EXPLORER_WS_SANDBOX).first();
+      if (!row) {
+        return new Response(
+          JSON.stringify({ workspace_id: IAM_EXPLORER_WS_SANDBOX, product_name: 'IAM Explorer', version: 'v6' }),
+          { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } },
+        );
+      }
+      let parsed = {};
+      try {
+        parsed = row.settings_json ? JSON.parse(String(row.settings_json)) : {};
+      } catch (_) {
+        parsed = {};
+      }
+      const out = {
+        workspace_id: IAM_EXPLORER_WS_SANDBOX,
+        theme_id: row.theme_id ?? null,
+        ...parsed,
+      };
+      return new Response(JSON.stringify(out), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/workspaces/list' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT w.id, w.name, w.domain, w.status, w.theme_id, w.handle,
+          (SELECT p.id FROM workspace_projects p WHERE p.workspace_id = w.id LIMIT 1) AS project_id
+         FROM workspaces w WHERE COALESCE(w.is_archived, 0) = 0 ORDER BY w.created_at DESC`
+      ).all();
+      const rows = (results || []).map((r) => ({ ...r, worker_id: null }));
+      return jsonResponse({ workspaces: rows });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  const wsIdMatch = path.match(/^\/api\/workspaces\/([^/]+)$/i);
+  if (wsIdMatch && (method === 'GET' || method === 'PATCH')) {
+    const wsId = decodeURIComponent(wsIdMatch[1] || '').trim();
+    if (!wsId || wsId === 'current') {
+      return jsonResponse({ error: 'Not found' }, 404);
+    }
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    if (method === 'GET') {
+      try {
+        const row = await env.DB.prepare(
+          `SELECT w.*, ws.settings_json AS workspace_settings_json, ws.theme_id AS settings_theme_id
+           FROM workspaces w
+           LEFT JOIN workspace_settings ws ON ws.workspace_id = w.id
+           WHERE w.id = ?`
+        ).bind(wsId).first();
+        if (!row) return jsonResponse({ error: 'Not found' }, 404);
+        return jsonResponse({ workspace: row });
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
+      }
+    }
+    if (method === 'PATCH') {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const name = body.name != null ? String(body.name) : undefined;
+        const theme_id = body.theme_id != null ? body.theme_id : undefined;
+        const status = body.status != null ? String(body.status) : undefined;
+        const sets = [];
+        const binds = [];
+        if (name !== undefined) {
+          sets.push('name = ?');
+          binds.push(name);
+        }
+        if (theme_id !== undefined) {
+          sets.push('theme_id = ?');
+          binds.push(theme_id);
+        }
+        if (status !== undefined) {
+          sets.push('status = ?');
+          binds.push(status);
+        }
+        if (sets.length === 0) return jsonResponse({ error: 'No patchable fields (name, theme_id, status)' }, 400);
+        binds.push(wsId);
+        await env.DB.prepare(`UPDATE workspaces SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...binds).run();
+        return jsonResponse({ ok: true, id: wsId });
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
+      }
+    }
+  }
+
+  if (pathLower === '/api/r2/list' && method === 'GET') {
+    const u = new URL(url.toString());
+    if (!u.searchParams.get('bucket')) u.searchParams.set('bucket', IAM_EXPLORER_DEFAULT_R2_BUCKET);
+    const req2 = new Request(u.toString(), { method: request.method, headers: request.headers });
+    return handleR2Api(req2, u, env);
+  }
+
+  if (pathLower === '/api/r2/get' && method === 'GET') {
+    const bucket = url.searchParams.get('bucket') || IAM_EXPLORER_DEFAULT_R2_BUCKET;
+    const key = url.searchParams.get('key');
+    if (!key) return jsonResponse({ error: 'key required' }, 400);
+    const binding = iamExplorerAssetsBinding(env, bucket);
+    if (!binding || !binding.get) return jsonResponse({ error: 'Bucket not available' }, 400);
+    try {
+      const obj = await binding.get(key);
+      if (!obj) return jsonResponse({ error: 'Not found' }, 404);
+      let contentType = obj.httpMetadata?.contentType || null;
+      if (!contentType || contentType === 'application/octet-stream') {
+        contentType = getContentTypeFromKey(key) || contentType || 'application/octet-stream';
+      }
+      return new Response(obj.body, {
+        status: 200,
+        headers: { 'Content-Type': contentType, 'Content-Disposition': 'inline', 'Cache-Control': 'no-store' },
+      });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/r2/upload' && method === 'POST') {
+    const ct = (request.headers.get('Content-Type') || '').toLowerCase();
+    let bucket = IAM_EXPLORER_DEFAULT_R2_BUCKET;
+    let key;
+    let bytes;
+    let contentType = 'application/octet-stream';
+    try {
+      if (ct.includes('multipart/form-data')) {
+        const fd = await request.formData();
+        key = fd.get('key') != null ? String(fd.get('key')) : '';
+        const bf = fd.get('bucket');
+        if (bf) bucket = String(bf);
+        const file = fd.get('file');
+        if (!key || !file) return jsonResponse({ error: 'key and file required in FormData' }, 400);
+        if (typeof file === 'string') {
+          bytes = new TextEncoder().encode(file);
+        } else {
+          bytes = new Uint8Array(await file.arrayBuffer());
+          const fn = file && typeof file === 'object' && 'name' in file ? String(file.name || '') : '';
+          contentType = (file && typeof file === 'object' && 'type' in file && file.type) ? String(file.type) : getContentTypeFromKey(key) || 'application/octet-stream';
+          if (!contentType || contentType === 'application/octet-stream') contentType = getContentTypeFromKey(fn || key) || contentType;
+        }
+      } else {
+        const body = await request.json().catch(() => ({}));
+        key = body.key != null ? String(body.key) : '';
+        if (body.bucket) bucket = String(body.bucket);
+        if (!key || !body.base64) return jsonResponse({ error: 'key and base64 required' }, 400);
+        contentType = body.contentType != null ? String(body.contentType) : getContentTypeFromKey(key) || 'application/octet-stream';
+        const bin = atob(String(body.base64).replace(/\s/g, ''));
+        bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      }
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 400);
+    }
+    const binding = iamExplorerAssetsBinding(env, bucket);
+    if (!binding || !binding.put) return jsonResponse({ error: 'Bucket not available' }, 400);
+    try {
+      await binding.put(key, bytes, { httpMetadata: { contentType } });
+      return jsonResponse({ ok: true, key, bucket });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/r2/delete' && method === 'DELETE') {
+    let body = {};
+    try {
+      body = await request.json();
+    } catch (_) {
+      return jsonResponse({ error: 'JSON body required' }, 400);
+    }
+    const bucket = body.bucket != null ? String(body.bucket) : IAM_EXPLORER_DEFAULT_R2_BUCKET;
+    const key = body.key != null ? String(body.key) : '';
+    if (!key) return jsonResponse({ error: 'key required' }, 400);
+    const binding = iamExplorerAssetsBinding(env, bucket);
+    if (!binding || !binding.delete) return jsonResponse({ error: 'Bucket not available' }, 400);
+    try {
+      await binding.delete(key);
+      return jsonResponse({ deleted: true, key });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/r2/move' && method === 'PUT') {
+    const body = await request.json().catch(() => ({}));
+    const bucket = body.bucket != null ? String(body.bucket) : IAM_EXPLORER_DEFAULT_R2_BUCKET;
+    const fromKey = body.fromKey != null ? String(body.fromKey) : '';
+    const toKey = body.toKey != null ? String(body.toKey) : '';
+    if (!fromKey || !toKey) return jsonResponse({ error: 'fromKey and toKey required' }, 400);
+    const binding = iamExplorerAssetsBinding(env, bucket);
+    if (!binding || !binding.get || !binding.put || !binding.delete) {
+      return jsonResponse({ error: 'Bucket not available' }, 400);
+    }
+    try {
+      const obj = await binding.get(fromKey);
+      if (!obj) return jsonResponse({ error: 'Source not found' }, 404);
+      const ct = obj.httpMetadata?.contentType || getContentTypeFromKey(toKey) || 'application/octet-stream';
+      const buf = typeof obj.arrayBuffer === 'function'
+        ? await obj.arrayBuffer()
+        : await new Response(obj.body).arrayBuffer();
+      await binding.put(toKey, buf, { httpMetadata: { contentType: ct } });
+      await binding.delete(fromKey);
+      return jsonResponse({ moved: true, from: fromKey, to: toKey });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/github/repos' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const githubAccount = url.searchParams.get('account') || '';
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(
+      'https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member',
+      { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } },
+    );
+    const data = await res.json();
+    return jsonResponse(data, res.ok ? 200 : res.status);
+  }
+
+  const ghContentsMatch = path.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)\/contents$/i);
+  if (ghContentsMatch) {
+    const owner = decodeURIComponent(ghContentsMatch[1]);
+    const repoName = decodeURIComponent(ghContentsMatch[2]);
+    const repo = `${owner}/${repoName}`;
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const githubAccount = url.searchParams.get('account') || '';
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const ghHeaders = { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' };
+    const filePath = url.searchParams.get('path') || '';
+    const ghContentsPath = (p) => (p ? p.split('/').map((seg) => encodeURIComponent(seg)).join('/') : '');
+    if (method === 'GET') {
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${ghContentsPath(filePath)}`,
+        { headers: ghHeaders },
+      );
+      const data = await res.json();
+      return jsonResponse(data, res.ok ? 200 : res.status);
+    }
+    if (method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const pathSeg = body.path != null ? String(body.path) : '';
+      const message = body.message != null ? String(body.message) : '';
+      const content = body.content != null ? String(body.content) : '';
+      if (!pathSeg || !message || !content) return jsonResponse({ error: 'path, message, content required' }, 400);
+      const payload = { message, content, branch: body.branch };
+      if (body.sha) payload.sha = body.sha;
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${ghContentsPath(pathSeg)}`,
+        {
+          method: 'PUT',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await res.json();
+      return jsonResponse(data, res.ok ? 200 : res.status);
+    }
+    if (method === 'DELETE') {
+      const body = await request.json().catch(() => ({}));
+      const pathSeg = body.path != null ? String(body.path) : '';
+      const message = body.message != null ? String(body.message) : '';
+      const sha = body.sha != null ? String(body.sha) : '';
+      if (!pathSeg || !message || !sha) return jsonResponse({ error: 'path, message, sha required' }, 400);
+      const res = await fetch(
+        `https://api.github.com/repos/${repo}/contents/${ghContentsPath(pathSeg)}`,
+        {
+          method: 'DELETE',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, sha, branch: body.branch }),
+        },
+      );
+      if (res.status === 204) return jsonResponse({ deleted: true });
+      const data = await res.json().catch(() => ({}));
+      return jsonResponse(data, res.ok ? 200 : res.status);
+    }
+  }
+
+  const ghBranchesMatch = path.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)\/branches$/i);
+  if (ghBranchesMatch && method === 'GET') {
+    const owner = decodeURIComponent(ghBranchesMatch[1]);
+    const repoName = decodeURIComponent(ghBranchesMatch[2]);
+    const repo = `${owner}/${repoName}`;
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const githubAccount = url.searchParams.get('account') || '';
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/branches`, {
+      headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' },
+    });
+    const data = await res.json();
+    return jsonResponse(data, res.ok ? 200 : res.status);
+  }
+
+  const ghCommitsMatch = path.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)\/commits$/i);
+  if (ghCommitsMatch && method === 'GET') {
+    const owner = decodeURIComponent(ghCommitsMatch[1]);
+    const repoName = decodeURIComponent(ghCommitsMatch[2]);
+    const repo = `${owner}/${repoName}`;
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const githubAccount = url.searchParams.get('account') || '';
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const q = new URLSearchParams();
+    const p = url.searchParams.get('path');
+    const pp = url.searchParams.get('per_page');
+    if (p) q.set('path', p);
+    if (pp) q.set('per_page', pp);
+    const qs = q.toString();
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(repo)}/commits${qs ? `?${qs}` : ''}`,
+      { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } },
+    );
+    const data = await res.json();
+    return jsonResponse(data, res.ok ? 200 : res.status);
+  }
+
+  if (pathLower === '/api/drive/list' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const folderId = url.searchParams.get('folderId') || 'root';
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name`,
+      { headers: { Authorization: `Bearer ${tokenRow.access_token}` } },
+    );
+    const data = await res.json();
+    return jsonResponse(data, res.ok ? 200 : res.status);
+  }
+
+  if (pathLower === '/api/drive/get' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const fileId = url.searchParams.get('fileId');
+    if (!fileId) return jsonResponse({ error: 'fileId required' }, 400);
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+      { headers: { Authorization: `Bearer ${tokenRow.access_token}` } },
+    );
+    const text = await res.text();
+    return jsonResponse({ content: text }, res.ok ? 200 : res.status);
+  }
+
+  if (pathLower === '/api/drive/search' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const q = url.searchParams.get('q');
+    if (!q) return jsonResponse({ error: 'q required' }, 400);
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,modifiedTime),nextPageToken`,
+      { headers: { Authorization: `Bearer ${tokenRow.access_token}` } },
+    );
+    const data = await res.json();
+    return jsonResponse(data, res.ok ? 200 : res.status);
+  }
+
+  if (pathLower === '/api/drive/upload' && method === 'POST') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const body = await request.json().catch(() => ({}));
+    const name = body.name != null ? String(body.name) : '';
+    const mimeType = body.mimeType != null ? String(body.mimeType) : 'application/octet-stream';
+    const folderId = body.folderId != null ? String(body.folderId) : null;
+    const base64 = body.base64 != null ? String(body.base64) : '';
+    if (!name || !base64) return jsonResponse({ error: 'name and base64 required' }, 400);
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const bin = atob(base64.replace(/\s/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const boundary = 'iam_explorer_' + crypto.randomUUID().replace(/-/g, '');
+    const meta = { name, mimeType };
+    if (folderId) meta.parents = [folderId];
+    const headStr = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`;
+    const tailStr = `\r\n--${boundary}--`;
+    const te = new TextEncoder();
+    const head = te.encode(headStr);
+    const tail = te.encode(tailStr);
+    const bodyBuf = new Uint8Array(head.length + bytes.length + tail.length);
+    bodyBuf.set(head, 0);
+    bodyBuf.set(bytes, head.length);
+    bodyBuf.set(tail, head.length + bytes.length);
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokenRow.access_token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: bodyBuf,
+      },
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return jsonResponse(data, res.status);
+    return jsonResponse({
+      id: data.id,
+      name: data.name,
+      mimeType: data.mimeType,
+      webViewLink: data.webViewLink ?? data.webContentLink ?? null,
+    });
+  }
+
+  if (pathLower === '/api/drive/delete' && method === 'DELETE') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const body = await request.json().catch(() => ({}));
+    const fileId = body.fileId != null ? String(body.fileId) : '';
+    if (!fileId) return jsonResponse({ error: 'fileId required' }, 400);
+    const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${tokenRow.access_token}` },
+    });
+    if (res.ok) return jsonResponse({ deleted: true, fileId });
+    const err = await res.text();
+    return jsonResponse({ error: err || res.status }, res.status);
+  }
+
+  return null;
+}
+
 async function handleR2Api(request, url, env) {
   const path = url.pathname.replace(/\/$/, '') || '/';
   const pathLower = path.toLowerCase();
@@ -9778,6 +10308,7 @@ FROM r2_bucket_summary`
       const bucket = url.searchParams.get('bucket');
       const prefix = url.searchParams.get('prefix') || '';
       const recursive = url.searchParams.get('recursive') === '1' || url.searchParams.get('recursive') === 'true';
+      const limitParam = Math.min(5000, Math.max(1, parseInt(url.searchParams.get('limit') || '1000', 10) || 1000));
       if (!bucket) return jsonResponse({ error: 'bucket required' }, 400);
       const binding = getR2Binding(env, bucket);
       if (binding && binding.list) {
@@ -9785,7 +10316,9 @@ FROM r2_bucket_summary`
           const allObjects = [];
           let cursor;
           do {
-            const list = await binding.list({ prefix, limit: 1000, cursor });
+            const pageLimit = Math.min(1000, Math.max(1, limitParam - allObjects.length));
+            if (pageLimit <= 0) break;
+            const list = await binding.list({ prefix, limit: pageLimit, cursor });
             const rawObjects = list.objects || [];
             for (const o of rawObjects) {
               if (o.key.endsWith('/')) continue;
@@ -9795,12 +10328,14 @@ FROM r2_bucket_summary`
                 lastModified: o.uploaded ? new Date(o.uploaded).toISOString() : null,
                 last_modified: o.uploaded ? new Date(o.uploaded).toISOString() : null,
               });
+              if (allObjects.length >= limitParam) break;
             }
+            if (allObjects.length >= limitParam) break;
             cursor = list.truncated ? list.cursor : undefined;
           } while (cursor);
           return jsonResponse({ objects: allObjects, prefixes: [] });
         }
-        const list = await binding.list({ prefix, delimiter: '/', limit: 1000 });
+        const list = await binding.list({ prefix, delimiter: '/', limit: limitParam });
         const rawObjects = list.objects || [];
         const objects = rawObjects.filter((o) => !o.key.endsWith('/')).map((o) => ({
           key: o.key,
@@ -9818,8 +10353,8 @@ FROM r2_bucket_summary`
         bucket,
         '',
         recursive
-          ? buildR2Query({ 'list-type': '2', prefix, 'max-keys': '1000' })
-          : buildR2Query({ 'list-type': '2', prefix, delimiter: '/', 'max-keys': '200' }),
+          ? buildR2Query({ 'list-type': '2', prefix, 'max-keys': String(Math.min(1000, limitParam)) })
+          : buildR2Query({ 'list-type': '2', prefix, delimiter: '/', 'max-keys': String(Math.min(1000, limitParam)) }),
         env
       );
       if (!signed) {
@@ -10626,15 +11161,43 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/modes' && method === 'GET') {
-      if (!env.DB) return jsonResponse([]);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       try {
         const { results } = await env.DB.prepare(
-          `SELECT slug, display_name, color_hex, color_hex_dark, color_var, icon FROM agent_mode_configs WHERE is_active = 1 ORDER BY sort_order`
+          `SELECT slug, display_name AS label, description, color_hex AS color, icon
+           FROM agent_mode_configs
+           WHERE is_active = 1
+           ORDER BY sort_order`
         ).all();
         return jsonResponse(results || []);
-      } catch (_) {
-        return jsonResponse([]);
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
       }
+    }
+
+    if (pathLower === '/api/agent/session/mode' && method === 'POST') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const body = await request.json().catch(() => ({}));
+      const mode = String(body.mode || '').toLowerCase().trim();
+      const conversationId = body.conversation_id != null ? String(body.conversation_id) : (body.session_id != null ? String(body.session_id) : '');
+      if (!conversationId) return jsonResponse({ error: 'conversation_id required' }, 400);
+      const allowed = await loadWorkspaceSandboxModes(env);
+      if (!allowed.includes(mode)) return jsonResponse({ error: 'Invalid mode', allowed }, 400);
+      if (env.SESSION_CACHE) {
+        try {
+          await env.SESSION_CACHE.put(
+            `session_mode:${conversationId}`,
+            JSON.stringify({ mode, updated_at: Date.now() }),
+            { expirationTtl: 86400 * 14 },
+          );
+        } catch (e) {
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      } else {
+        return jsonResponse({ error: 'SESSION_CACHE not configured' }, 503);
+      }
+      return jsonResponse({ mode, persisted: true });
     }
 
     /** Agent bottom panel Problems tab: MCP tool failures + audit rows that look like failures + recent worker 5xx log. */
@@ -11658,12 +12221,18 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/models') {
-      const provider = url.searchParams.get('provider');
-      const query = provider
-        ? env.DB.prepare("SELECT * FROM ai_models WHERE is_active=1 AND provider=? ORDER BY display_name").bind(provider)
-        : env.DB.prepare("SELECT * FROM ai_models WHERE is_active=1 ORDER BY provider, display_name");
-      const { results } = await query.all();
-      return jsonResponse(results);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT id, display_name AS name, provider, supports_tools, supports_vision, size_class
+           FROM ai_models
+           WHERE is_active = 1 AND show_in_picker = 1
+           ORDER BY provider, display_name`
+        ).all();
+        return jsonResponse(results || []);
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
+      }
     }
 
     const agentMcpSessionPatch = pathLower.match(/^\/api\/agent\/sessions\/([^/]+)$/);

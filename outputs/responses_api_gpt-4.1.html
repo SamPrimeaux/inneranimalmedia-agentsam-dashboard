@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dark Theme Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --background: #181a20;
+      --card: #232634;
+      --accent: #2d91f2;
+      --text: #f2f3f7;
+      --text-light: #a1a6b3;
+      --green: #2ecc71;
+      --orange: #f39c12;
+      --red: #e74c3c;
+      --blue: #2980b9;
+    }
+    body {
+      background: var(--background);
+      font-family: 'Segoe UI', Arial, sans-serif;
+      color: var(--text);
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 1040px;
+      margin: 36px auto;
+      padding: 0 20px;
+    }
+    h2 {
+      margin: 0 0 24px 0;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: .5px;
+    }
+    .kpi-cards {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 40px;
+      flex-wrap: wrap;
+    }
+    .kpi-card {
+      background: var(--card);
+      flex: 1 1 200px;
+      min-width: 220px;
+      padding: 24px 20px;
+      border-radius: 14px;
+      box-shadow: 0 2px 12px rgba(18,22,37,0.23);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .kpi-title {
+      font-size: .98rem;
+      color: var(--text-light);
+      font-weight: 500;
+      letter-spacing: 0.08em;
+    }
+    .kpi-value {
+      font-size: 2.15rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .kpi-trend.positive { color: var(--green); }
+    .kpi-trend.negative { color: var(--red); }
+    .kpi-trend.neutral { color: var(--accent); }
+    .kpi-icon {
+      font-size: 1.5em;
+    }
+    .chart-card {
+      background: var(--card);
+      padding: 32px;
+      border-radius: 14px;
+      box-shadow: 0 2px 12px rgba(18,22,37,0.23);
+      min-height: 320px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: flex-start;
+    }
+    .chart-placeholder {
+      width: 100%;
+      height: 240px;
+      display: block;
+      margin-top: 10px;
+    }
+    @media (max-width: 920px) {
+      .kpi-cards {
+        flex-direction: column;
+        gap: 16px;
+      }
+      .kpi-card {
+        min-width: unset;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Dashboard Overview</h2>
+    <div class="kpi-cards">
+      <div class="kpi-card">
+        <span class="kpi-title">Total Users</span>
+        <span class="kpi-value">12,487</span>
+        <span class="kpi-trend positive"><span class="kpi-icon">▲</span> +4.8%</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Active Sessions</span>
+        <span class="kpi-value">1,021</span>
+        <span class="kpi-trend neutral"><span class="kpi-icon">●</span> 0.0%</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Revenue</span>
+        <span class="kpi-value">$24,300</span>
+        <span class="kpi-trend positive"><span class="kpi-icon">▲</span> +6.1%</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Error Rate</span>
+        <span class="kpi-value">0.34%</span>
+        <span class="kpi-trend negative"><span class="kpi-icon">▼</span> -1.2%</span>
+      </div>
+    </div>
+    <div class="chart-card">
+      <span style="color:var(--text-light);font-size:1.05em;font-weight:500;letter-spacing:.06em;">Monthly Performance</span>
+      <!-- Placeholder bar chart using SVG -->
+      <svg class="chart-placeholder" viewBox="0 0 590 240">
+        <rect x="40" y="40" width="510" height="180" rx="8" fill="#181a20" stroke="#292e40" stroke-width="2"/>
+        <!-- Y-axis lines -->
+        <g opacity="0.17">
+          <line x1="40" y1="80" x2="550" y2="80" stroke="#fff" stroke-width="1"/>
+          <line x1="40" y1="120" x2="550" y2="120" stroke="#fff" stroke-width="1"/>
+          <line x1="40" y1="160" x2="550" y2="160" stroke="#fff" stroke-width="1"/>
+          <line x1="40" y1="200" x2="550" y2="200" stroke="#fff" stroke-width="1"/>
+        </g>
+        <!-- Bars -->
+        <rect x="65" y="150" width="36" height="50" rx="4" fill="#2d91f2"/>
+        <rect x="125" y="110" width="36" height="90" rx="4" fill="#2ecc71"/>
+        <rect x="185" y="80"  width="36" height="120" rx="4" fill="#f39c12"/>
+        <rect x="245" y="130" width="36" height="70"  rx="4" fill="#2980b9"/>
+        <rect x="305" y="100" width="36" height="100" rx="4" fill="#2d91f2"/>
+        <rect x="365" y="170" width="36" height="30" rx="4" fill="#e74c3c"/>
+        <rect x="425" y="140" width="36" height="60" rx="4" fill="#2dccd8"/>
+        <rect x="485" y="90"  width="36" height="110" rx="4" fill="#2ecc71"/>
+        <!-- X-axis markers -->
+        <text x="83" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Jan</text>
+        <text x="143" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Feb</text>
+        <text x="203" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Mar</text>
+        <text x="263" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Apr</text>
+        <text x="323" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">May</text>
+        <text x="383" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Jun</text>
+        <text x="443" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Jul</text>
+        <text x="503" y="225" fill="#a1a6b3" font-size="13" font-family="inherit">Aug</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

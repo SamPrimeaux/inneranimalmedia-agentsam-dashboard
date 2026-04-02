@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Neon Arcade - Retro Game Store</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600&display=swap');
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: #181823;
+      color: #e7e7e7;
+      font-family: 'Orbitron', monospace, Arial, sans-serif;
+      min-height: 100vh;
+    }
+
+    a {
+      color: #38fff7;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    a:hover {
+      color: #ff4edb;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      padding: 80px 0 50px 0;
+      background: linear-gradient(180deg, #181823 60%, #23233e 100%);
+      position: relative;
+      box-shadow: 0 4px 32px 0 rgba(56,255,247,0.08);
+    }
+
+    .hero-title {
+      font-size: 3rem;
+      text-shadow: 0 0 16px #38fff7, 0 0 6px #ff4edb;
+      color: #38fff7;
+      letter-spacing: 2px;
+      margin-bottom: 20px;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+      color: #ff4edb;
+      text-shadow: 0 0 8px #ff4edb88;
+      margin-bottom: 40px;
+    }
+
+    .hero-btn {
+      padding: 16px 42px;
+      border: none;
+      border-radius: 30px;
+      background: linear-gradient(90deg, #38fff7 10%, #ff4edb 90%);
+      color: #181823;
+      font-size: 1.1rem;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 0 16px #38fff7, 0 0 24px #ff4edb66;
+      transition: box-shadow 0.2s, transform 0.2s;
+      outline: none;
+      margin-top: 15px;
+      letter-spacing: 1.5px;
+    }
+
+    .hero-btn:hover {
+      box-shadow: 0 0 32px #ff4edb, 0 0 48px #38fff799;
+      transform: scale(1.05);
+    }
+
+    /* Featured Games */
+    .section-title {
+      font-size: 2rem;
+      color: #38fff7;
+      text-shadow: 0 0 12px #38fff7cc, 0 0 8px #ff4edb55;
+      text-align: center;
+      margin: 60px 0 30px 0;
+      letter-spacing: 1px;
+    }
+
+    .games-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 32px;
+      margin-bottom: 60px;
+    }
+
+    .game-card {
+      background: #222239;
+      border-radius: 18px;
+      box-shadow: 0 0 20px #38fff733, 0 0 8px #ff4edb44;
+      overflow: hidden;
+      transition: transform 0.18s, box-shadow 0.18s;
+      position: relative;
+      border: 2px solid transparent;
+    }
+
+    .game-card:hover {
+      transform: translateY(-7px) scale(1.03);
+      box-shadow: 0 0 36px #ff4edb88, 0 0 24px #38fff744;
+      border-color: #38fff7;
+    }
+
+    .game-img {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      display: block;
+      background: #191929;
+      border-bottom: 2px solid #ff4edb;
+    }
+
+    .game-info {
+      padding: 18px 16px 14px 16px;
+    }
+
+    .game-title {
+      font-size: 1.22rem;
+      color: #ff4edb;
+      margin-bottom: 8px;
+      text-shadow: 0 0 6px #ff4edb88;
+      letter-spacing: 0.5px;
+    }
+
+    .game-desc {
+      font-size: 0.98rem;
+      color: #b8f7ff;
+      opacity: 0.9;
+      margin-bottom: 10px;
+      min-height: 42px;
+    }
+
+    .game-cta {
+      display: inline-block;
+      padding: 6px 16px;
+      background: linear-gradient(90deg, #38fff7 8%, #ff4edb 92%);
+      color: #181823;
+      font-weight: bold;
+      border-radius: 12px;
+      font-size: 0.97rem;
+      box-shadow: 0 0 8px #38fff7,0 0 5px #ff4edb77;
+      text-shadow: none;
+      transition: background 0.2s;
+    }
+
+    .game-cta:hover {
+      background: linear-gradient(90deg, #ff4edb 8%, #38fff7 92%);
+      color: #181823;
+    }
+
+    /* Newsletter Signup */
+    .newsletter-section {
+      background: #181823;
+      border-top: 2px solid #38fff7;
+      box-shadow: 0 -2px 24px #ff4edb44;
+      padding: 48px 0 56px 0;
+      text-align: center;
+    }
+
+    .newsletter-title {
+      font-size: 1.5rem;
+      color: #38fff7;
+      text-shadow: 0 0 8px #38fff7cc, 0 0 6px #ff4edb55;
+      margin-bottom: 13px;
+    }
+
+    .newsletter-desc {
+      color: #ff4edb;
+      font-size: 1rem;
+      margin-bottom: 22px;
+      opacity: 0.88;
+    }
+
+    .newsletter-form {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      max-width: 430px;
+      margin: 0 auto;
+    }
+
+    .newsletter-input {
+      padding: 12px 16px;
+      border: 2px solid #ff4edb;
+      border-radius: 20px;
+      background: #222239;
+      color: #e7e7e7;
+      font-size: 1rem;
+      outline: none;
+      transition: border 0.2s, box-shadow 0.2s;
+      width: 230px;
+      box-shadow: 0 0 8px #ff4edb44;
+    }
+
+    .newsletter-input:focus {
+      border: 2px solid #38fff7;
+      box-shadow: 0 0 12px #38fff7aa;
+      background: #191929;
+    }
+
+    .newsletter-btn {
+      padding: 12px 26px;
+      border: none;
+      border-radius: 20px;
+      background: linear-gradient(90deg, #38fff7 10%, #ff4edb 90%);
+      color: #181823;
+      font-size: 1.08rem;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 0 10px #ff4edb,0 0 8px #38fff744;
+      transition: box-shadow 0.2s, transform 0.2s;
+      letter-spacing: 1px;
+      outline: none;
+    }
+
+    .newsletter-btn:hover {
+      box-shadow: 0 0 20px #38fff7, 0 0 18px #ff4edb;
+      transform: scale(1.04);
+    }
+
+    .newsletter-success {
+      color: #38fff7;
+      margin-top: 18px;
+      font-size: 1.02rem;
+      text-shadow: 0 0 8px #38fff7cc;
+      display: none;
+      animation: fadeIn 0.8s;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px);}
+      to { opacity: 1; transform: translateY(0);}
+    }
+
+    /* Responsive */
+    @media (max-width: 700px) {
+      .hero {
+        padding: 56px 0 36px 0;
+      }
+      .hero-title {
+        font-size: 2.1rem;
+      }
+      .section-title {
+        font-size: 1.3rem;
+      }
+      .games-grid {
+        gap: 20px;
+      }
+      .newsletter-section {
+        padding: 36px 0 36px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <h1 class="hero-title">NEON ARCADE</h1>
+      <div class="hero-subtitle">Step into the glow—where classic fun never fades.<br>Retro arcade games, consoles, and collectibles.</div>
+      <a href="#featured-games"><button class="hero-btn">Browse Games</button></a>
+    </div>
+  </section>
+
+  <!-- Featured Games Grid -->
+  <main class="container">
+    <h2 class="section-title" id="featured-games">Featured Games</h2>
+    <div class="games-grid">
+      <!-- Game 1 -->
+      <div class="game-card">
+        <img class="game-img" src="https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=400&q=80" alt="Galactic Invaders Arcade">
+        <div class="game-info">
+          <div class="game-title">Galactic Invaders</div>
+          <div class="game-desc">Defend Earth from pixelated alien swarms in this 1980s classic shooter cabinet.</div>
+          <a href="#"><span class="game-cta">Play Now</span></a>
+        </div>
+      </div>
+      <!-- Game 2 -->
+      <div class="game-card">
+        <img class="game-img" src="https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80" alt="Neon Racer Arcade">
+        <div class="game-info">
+          <div class="game-title">Neon Racer</div>
+          <div class="game-desc">Speed through cyberpunk cityscapes with retro synthwave vibes. 2-player support!</div>
+          <a href="#"><span class="game-cta">See Details</span></a>
+        </div>
+      </div>
+      <!-- Game 3 -->
+      <div class="game-card">
+        <img class="game-img" src="https://images.unsplash.com/photo-1519125323398-675f0ddb6308?auto=format&fit=crop&w=400&q=80" alt="Pixel Quest Arcade">
+        <div class="game-info">
+          <div class="game-title">Pixel Quest</div>
+          <div class="game-desc">Embark on a heroic adventure through 8-bit dungeons, monsters, and neon treasures.</div>
+          <a href="#"><span class="game-cta">Explore</span></a>
+        </div>
+      </div>
+      <!-- Game 4 -->
+      <div class="game-card">
+        <img class="game-img" src="https://images.unsplash.com/photo-1464983953574-0892a716854b?auto=format&fit=crop&w=400&q=80" alt="Retro Fighter Arcade">
+        <div class="game-info">
+          <div class="game-title">Retro Fighter</div>
+          <div class="game-desc">Classic versus fighting action with iconic pixel warriors and glowing arenas!</div>
+          <a href="#"><span class="game-cta">Join Battle</span></a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Newsletter Signup -->
+  <section class="newsletter-section">
+    <div class="container">
+      <div class="newsletter-title">Join the Neon Arcade Club</div>
+      <div class="newsletter-desc">Get exclusive deals, new arrivals &amp; event invites—straight to your inbox!</div>
+      <form class="newsletter-form" id="newsletterForm" autocomplete="off">
+        <input class="newsletter-input" type="email" id="newsletterEmail" required placeholder="Your email address">
+        <button class="newsletter-btn" type="submit">Subscribe</button>
+      </form>
+      <div class="newsletter-success" id="newsletterSuccess">Thanks for joining the club! Check your inbox for a welcome bonus 🎮</div>
+    </div>
+  </section>
+
+  <script>
+    // Simple newsletter form handler
+    document.getElementById('newsletterForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var email = document.getElementById('newsletterEmail').value;
+      var success = document.getElementById('newsletterSuccess');
+      if(validateEmail(email)){
+        success.style.display = 'block';
+        document.getElementById('newsletterEmail').value = '';
+      } else {
+        success.style.display = 'none';
+        alert('Please enter a valid email address.');
+      }
+    });
+
+    function validateEmail(email) {
+      // Basic email regex
+      return /\S+@\S+\.\S+/.test(email);
+    }
+  </script>
+</body>
+</html>

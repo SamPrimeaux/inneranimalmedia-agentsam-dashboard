@@ -24,3 +24,9 @@
 
 - **Sandbox dashboard:** `inneranimal-dashboard` — `wrangler.jsonc`, `assets.directory` = `agent-dashboard/agent-dashboard/dist` (monorepo path; Vite app is the nested npm workspace package).
 - **Lab worker** historically named `aitestsuite` is separate; do not confuse with the **Agent Dashboard** app source in this repo.
+
+## Sandbox version truth (IAM Explorer)
+
+- **Live URL:** `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent`
+- **Authoritative UI marker:** `<!-- dashboard-v:N -->` in served `agent.html` / `dist/index.html` (check with `curl ... | grep dashboard-v`). **`agent-dashboard/.sandbox-deploy-version`** is the monotonic counter used by `deploy-sandbox.sh` (currently aligned with that `N` after each sandbox deploy).
+- **Do not confuse** older **`deployments.version`** values like **v214–v218** on historical D1 rows (earlier counter / different epoch) with the **current** shell; the **current** live worker deployment row for this surface should carry **v6** (or whatever the latest `dashboard-v` is) and is documented in D1 migration **213** on the row `c6d57808-ebf2-4dec-8e3d-a6d585bebef9` unless superseded by a newer deploy.

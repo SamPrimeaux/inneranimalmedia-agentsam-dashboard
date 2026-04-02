@@ -1,0 +1,50 @@
+{
+  "components": [
+    {
+      "name": "User Authentication",
+      "tech_stack": [
+        "React",
+        "Firebase Auth"
+      ],
+      "estimated_hours": 20,
+      "complexity": "medium"
+    },
+    {
+      "name": "Dashboard Layout",
+      "tech_stack": [
+        "React",
+        "CSS Grid",
+        "Material-UI"
+      ],
+      "estimated_hours": 30,
+      "complexity": "medium"
+    },
+    {
+      "name": "Data Visualization",
+      "tech_stack": [
+        "D3.js",
+        "Chart.js"
+      ],
+      "estimated_hours": 40,
+      "complexity": "high"
+    },
+    {
+      "name": "API Integration",
+      "tech_stack": [
+        "Axios",
+        "REST API"
+      ],
+      "estimated_hours": 25,
+      "complexity": "medium"
+    },
+    {
+      "name": "Settings and Preferences",
+      "tech_stack": [
+        "React",
+        "Redux"
+      ],
+      "estimated_hours": 15,
+      "complexity": "low"
+    }
+  ]
+}

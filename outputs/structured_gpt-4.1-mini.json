@@ -1,0 +1,53 @@
+{
+  "components": [
+    {
+      "name": "Login and Authentication",
+      "tech_stack": [
+        "React",
+        "OAuth",
+        "JWT"
+      ],
+      "estimated_hours": 20,
+      "complexity": "medium"
+    },
+    {
+      "name": "Data Visualization Panel",
+      "tech_stack": [
+        "React",
+        "D3.js",
+        "Chart.js"
+      ],
+      "estimated_hours": 40,
+      "complexity": "high"
+    },
+    {
+      "name": "User Settings and Preferences",
+      "tech_stack": [
+        "React",
+        "Redux"
+      ],
+      "estimated_hours": 15,
+      "complexity": "medium"
+    },
+    {
+      "name": "Real-time Notifications",
+      "tech_stack": [
+        "React",
+        "WebSocket",
+        "Node.js"
+      ],
+      "estimated_hours": 25,
+      "complexity": "high"
+    },
+    {
+      "name": "Dashboard Layout and Navigation",
+      "tech_stack": [
+        "React",
+        "React Router",
+        "CSS Modules"
+      ],
+      "estimated_hours": 30,
+      "complexity": "medium"
+    }
+  ]
+}

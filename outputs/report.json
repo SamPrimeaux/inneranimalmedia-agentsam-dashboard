@@ -1,0 +1,402 @@
+[
+  {
+    "test_name": "html_landing_page",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 33594,
+    "tokens_used": 3136,
+    "output_file": "outputs/landing_gpt-4.1.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "html_landing_page",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 104630,
+    "tokens_used": 3288,
+    "output_file": "outputs/landing_gpt-4.1-mini.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "html_landing_page",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 17493,
+    "tokens_used": 1014,
+    "output_file": "outputs/landing_gpt-4o.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "html_landing_page",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "html_landing_page",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "snake_game",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 29992,
+    "tokens_used": 2945,
+    "output_file": "outputs/snake_gpt-4.1.html",
+    "error": null,
+    "notes": "9495 chars"
+  },
+  {
+    "test_name": "snake_game",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 35589,
+    "tokens_used": 2619,
+    "output_file": "outputs/snake_gpt-4.1-mini.html",
+    "error": null,
+    "notes": "8184 chars"
+  },
+  {
+    "test_name": "snake_game",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 23852,
+    "tokens_used": 1361,
+    "output_file": "outputs/snake_gpt-4o.html",
+    "error": null,
+    "notes": "4851 chars"
+  },
+  {
+    "test_name": "snake_game",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "snake_game",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "python_cli_utility",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 7757,
+    "tokens_used": 724,
+    "output_file": "outputs/dedup_gpt-4.1.py",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "python_cli_utility",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 11820,
+    "tokens_used": 695,
+    "output_file": "outputs/dedup_gpt-4.1-mini.py",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "python_cli_utility",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 3469,
+    "tokens_used": 426,
+    "output_file": "outputs/dedup_gpt-4o.py",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "python_cli_utility",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "python_cli_utility",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "react_component",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 20217,
+    "tokens_used": 1884,
+    "output_file": "outputs/kanban_gpt-4.1.tsx",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "react_component",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 18115,
+    "tokens_used": 1195,
+    "output_file": "outputs/kanban_gpt-4.1-mini.tsx",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "react_component",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 5440,
+    "tokens_used": 622,
+    "output_file": "outputs/kanban_gpt-4o.tsx",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "react_component",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "react_component",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "structured_output",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 2036,
+    "tokens_used": 260,
+    "output_file": "outputs/structured_gpt-4.1.json",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "structured_output",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 2396,
+    "tokens_used": 258,
+    "output_file": "outputs/structured_gpt-4.1-mini.json",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "structured_output",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 1747,
+    "tokens_used": 247,
+    "output_file": "outputs/structured_gpt-4o.json",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "structured_output",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "structured_output",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "streaming",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 5119,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": null,
+    "notes": "280 chunks"
+  },
+  {
+    "test_name": "streaming",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 4076,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": null,
+    "notes": "274 chunks"
+  },
+  {
+    "test_name": "streaming",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 3522,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": null,
+    "notes": "307 chunks"
+  },
+  {
+    "test_name": "streaming",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "streaming",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "multi_turn_refine",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 3978,
+    "tokens_used": 551,
+    "output_file": "outputs/multiturn_gpt-4.1.js",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "multi_turn_refine",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 5829,
+    "tokens_used": 486,
+    "output_file": "outputs/multiturn_gpt-4.1-mini.js",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "multi_turn_refine",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 5489,
+    "tokens_used": 678,
+    "output_file": "outputs/multiturn_gpt-4o.js",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "multi_turn_refine",
+    "model": "o3",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "multi_turn_refine",
+    "model": "o4-mini",
+    "passed": false,
+    "latency_ms": 0,
+    "tokens_used": 0,
+    "output_file": null,
+    "error": "Error code: 400 - {'error': {'message': \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\", 'type': 'invalid_request_error', 'param': 'max_tokens', 'code': 'unsupported_parameter'}}",
+    "notes": ""
+  },
+  {
+    "test_name": "responses_api",
+    "model": "gpt-4.1",
+    "passed": true,
+    "latency_ms": 26775,
+    "tokens_used": 0,
+    "output_file": "outputs/responses_api_gpt-4.1.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "responses_api",
+    "model": "gpt-4.1-mini",
+    "passed": true,
+    "latency_ms": 34696,
+    "tokens_used": 0,
+    "output_file": "outputs/responses_api_gpt-4.1-mini.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "responses_api",
+    "model": "gpt-4o",
+    "passed": true,
+    "latency_ms": 5733,
+    "tokens_used": 0,
+    "output_file": "outputs/responses_api_gpt-4o.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "responses_api",
+    "model": "o3",
+    "passed": true,
+    "latency_ms": 16813,
+    "tokens_used": 0,
+    "output_file": "outputs/responses_api_o3.html",
+    "error": null,
+    "notes": ""
+  },
+  {
+    "test_name": "responses_api",
+    "model": "o4-mini",
+    "passed": true,
+    "latency_ms": 22504,
+    "tokens_used": 0,
+    "output_file": "outputs/responses_api_o4-mini.html",
+    "error": null,
+    "notes": ""
+  }
+]

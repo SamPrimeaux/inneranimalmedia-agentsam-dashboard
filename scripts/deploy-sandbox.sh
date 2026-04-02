@@ -43,6 +43,8 @@ echo "=== SANDBOX DEPLOY ==="
 # ── Build ────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -eq 0 ] && [ "$WORKER_ONLY" -eq 0 ]; then
   echo "Building agent-dashboard workspace (npm ci includes devDependencies so Vite is available even if NODE_ENV=production)..."
+  NEXT_V=$(( $(cat "${VER_FILE}" 2>/dev/null || echo 0) + 1 ))
+  export VITE_SHELL_VERSION="v${NEXT_V}"
   (
     cd "${REPO_ROOT}/agent-dashboard"
     npm ci --include=dev
@@ -183,7 +185,8 @@ SANDBOX_VERSION=$("${WRANGLER[@]}" deploy ./worker.js -c "$CFG" 2>&1 | tee /tmp/
 cat /tmp/sandbox-deploy-out.txt
 
 # Record in deployments D1
-NOTES="${DEPLOYMENT_NOTES:-Sandbox deploy via deploy-sandbox.sh}"
+NEXT_V="${NEXT_V:-$(( $(cat "${VER_FILE}" 2>/dev/null || echo 0) + 1 ))}"
+NOTES="Sandbox deploy v${NEXT_V} | shell:v${NEXT_V} | $(date +%Y-%m-%d)"
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c wrangler.production.toml \
   --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at) VALUES ('${SANDBOX_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'sandbox', 'inneranimal-dashboard', 'sandbox_auto', '${NOTES}', datetime('now'))" \

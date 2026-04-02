@@ -2217,3 +2217,70 @@ Stop using git submodules; build from a **single** repository so Cloudflare Work
 ### What is live now
 Unchanged until push + deploy; CI can clone without submodule errors.
 
+## 2026-04-02 D1: document CI/CD failures (cicd_github_runs, cicd_runs, cicd_run_steps)
+
+### What was asked
+Record today’s CI/CD failures in D1 tables `cicd_github_runs`, `cicd_runs`, and `cicd_run_steps` (prod `inneranimalmedia-business`).
+
+### Files changed
+- `migrations/209_cicd_20260402_session_failures_documentation.sql`: INSERT for GitHub/Workers Builds submodule failure; parent `cicd_pipeline_runs` row (required FK for `cicd_run_steps`); aggregate `cicd_runs` row linked via `github_run_id`; three `cicd_run_steps` rows (submodules, wrangler ASSETS duplicate binding, R2 503 upload).
+
+### Files NOT changed (and why)
+- `worker.js`: not required for D1 documentation inserts.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (D1 migration only)
+
+### What is live now
+Remote D1 contains the new rows; re-apply uses unique IDs (avoid duplicate run).
+
+### Known issues / next steps
+- `cicd_run_steps.run_id` references `cicd_pipeline_runs(run_id)`, not `cicd_runs`; migration documents the parent insert in the same file.
+
+## 2026-04-02 D1: morning main churn, esbuild CI failures, user-reported regression (migration 210)
+
+### What was asked
+Document GitHub activity from the morning and CICD/incident context in `cicd_github_runs`, `cicd_runs`, `cicd_run_steps` (plus parent `cicd_pipeline_runs`).
+
+### Files changed
+- `migrations/210_cicd_20260402_morning_github_churn_and_incidents.sql`: applied to prod D1; optional one-off UPDATE corrected typo R3 to R2 in `cicd_pipeline_runs.notes` for `pipe_20260402_morning_churn_incidents`.
+
+### Deploy status
+- D1 migration applied remotely: yes
+
+### What is live now
+Rows keyed by `github_run_20260402_workers_builds_esbuild_mismatch`, `run_cicd_20260402_morning_main_churn_incident_log`, `pipe_20260402_morning_churn_incidents`; `metadata_json.commits_chronological` lists 17 commits (00:21 through 11:55 CT) with full SHAs.
+
+## 2026-04-02 D1: sandbox IAM Explorer recovery documented (migration 211)
+
+### What was asked
+Record in `cicd_*` tables that `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` is back online (partial; still buggy).
+
+### Files changed
+- `migrations/211_cicd_20260402_sandbox_agent_dashboard_recovery.sql`: applied to prod D1 — `cicd_github_runs`, `cicd_pipeline_runs`, `cicd_runs`, `cicd_run_steps` (plus parent pipeline for steps).
+
+### Deploy status
+- D1 migration applied remotely: yes
+
+## 2026-04-02 Sandbox shell version via VITE_SHELL_VERSION + deploy-sandbox NOTES
+
+### What was asked
+Apply `shellVersion.ts` (`import.meta.env.VITE_SHELL_VERSION ?? 'v6'`), inject `VITE_SHELL_VERSION` and `NEXT_V` fallback before `deployments` NOTES in `deploy-sandbox.sh`, run `./scripts/deploy-sandbox.sh` (deploy approved), then run a `cicd_runs` INSERT and show wrangler output.
+
+### Files changed
+- `agent-dashboard/agent-dashboard/src/shellVersion.ts` line 5: `SHELL_VERSION` from `VITE_SHELL_VERSION` with fallback `v6`.
+- `scripts/deploy-sandbox.sh`: before build subshell, `NEXT_V` from `VER_FILE` + `export VITE_SHELL_VERSION`; before `NOTES=`, `NEXT_V="${NEXT_V:-$(( $(cat "${VER_FILE}" 2>/dev/null || echo 0) + 1 ))}"`; `NOTES` format `Sandbox deploy v${NEXT_V} | shell:v${NEXT_V} | $(date +%Y-%m-%d)`.
+
+### Deploy status
+- Built: attempted via `deploy-sandbox.sh` — **failed** during `npm ci` (exit 254): mass `TAR_ENTRY_ERROR` / `ENXIO` / `ENOENT` under `/Volumes/Expansion/march1st-inneranimalmedia/agent-dashboard/node_modules` (external volume path; not a script bug).
+- R2 uploaded: no (build did not complete)
+- Worker deployed: no
+- Deploy approved by Sam: yes (sandbox only; promote not run)
+- `cicd_runs` manual INSERT: not run (blocked on successful deploy per user request)
+
+### Known issues / next steps
+Re-run `./scripts/deploy-sandbox.sh` from a clone whose `agent-dashboard` resolves to stable local disk (or remount Expansion), then run the `cicd_runs` INSERT (208-style columns) documented in chat.
+

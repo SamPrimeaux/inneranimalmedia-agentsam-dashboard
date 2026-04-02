@@ -44,10 +44,6 @@
       "bucket_name": "agent-sam-sandbox-cicd"
     },
     {
-      "binding": "CAD_ASSETS",
-      "bucket_name": "splineicons"
-    },
-    {
       "binding": "DASHBOARD",
       "bucket_name": "agent-sam-sandbox-cicd"
     },

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # promote-to-prod.sh — pull sandbox R2 build → push to production R2 → deploy worker
+# Sandbox bucket: agent-sam-sandbox-cicd (replaces deprecated agent-sam-sandbox-cidi).
+# Override: SANDBOX_BUCKET=my-bucket ./scripts/promote-to-prod.sh
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
 set -euo pipefail
 
@@ -16,7 +18,7 @@ echo "=== PROMOTE TO PRODUCTION ==="
 echo ""
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
-SANDBOX_BUCKET="agent-sam-sandbox-cicd"
+SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 PROD_BUCKET="agent-sam"
 PROD_CFG="wrangler.production.toml"
 

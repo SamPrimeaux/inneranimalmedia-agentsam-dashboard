@@ -38,10 +38,6 @@ binding = "ASSETS"
 bucket_name = "inneranimalmedia-assets"
 
 [[r2_buckets]]
-binding = "CAD_ASSETS"
-bucket_name = "splineicons"
-
-[[r2_buckets]]
 binding = "DASHBOARD"
 bucket_name = "agent-sam-sandbox-cicd"
 

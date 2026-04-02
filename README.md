@@ -90,7 +90,7 @@ URLs: `https://inneranimalmedia.com/dashboard/<name>` (e.g. `/dashboard/agent`, 
 | **ASSETS** | inneranimalmedia-assets | Homepage (`index-v3.html`), public pages (about, contact, pricing, process), other static marketing assets. |
 | **DASHBOARD** | agent-sam | Dashboard HTML, agent-dashboard JS/CSS, overview/time-tracking bundles, shell.css, auth-signin, worker source backup at `source/worker-source.js`. |
 | **R2** (or **IAM_PLATFORM**) | iam-platform | Memory, docs, daily logs: e.g. `memory/schema-and-records.md`, `memory/daily/YYYY-MM-DD.md`, `knowledge/`, `agent-sessions/`. Not for worker or dashboard source. |
-| **CAD_ASSETS** | splineicons | CAD/icons assets. |
+| **AUTORAG_BUCKET** | autorag | RAG source docs; Meshy GLB exports use `meshy/` prefix. |
 
 Worker never uses **iam-platform** for serving worker/dashboard code; that bucket is for memory and platform data only.
 

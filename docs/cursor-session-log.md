@@ -2056,3 +2056,78 @@ Upload remaining `/dashboard/*` pages to sandbox R2 so `/dashboard/overview` and
 ### Known issues / next steps
 - `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` still mentions legacy **`cidi`** in places; prefer **`docs/CURSOR_HANDOFF_SANDBOX.md`** for current bucket name until that file is edited.
 
+## 2026-04-02 Phase out CAD_ASSETS (splineicons); Meshy to AUTORAG_BUCKET
+
+### What was asked
+Remove useless `CAD_ASSETS` / `splineicons` binding; rely on `AUTORAG_BUCKET` → `autorag` for R2.
+
+### Files changed
+- `wrangler.jsonc`: removed `CAD_ASSETS` R2 binding; `AUTORAG_BUCKET` → `autorag` unchanged.
+- `wrangler.production.toml`: removed `CAD_ASSETS` block; `AUTORAG_BUCKET` unchanged.
+- `worker.js`: `getR2Binding` maps `autorag` to `env.AUTORAG_BUCKET`; bound-bucket lists use `autorag` instead of `splineicons`; Meshy GLB export writes to `AUTORAG_BUCKET` under `meshy/` prefix.
+- `README.md`: table row updated for AUTORAG_BUCKET.
+
+### Files NOT changed (and why)
+- `agentsam-clean/source/worker.js`: snapshot copy; not synced this pass.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until Sam deploys with approved promote/deploy.
+
+### Known issues / next steps
+- Deploy prod/sandbox worker so Cloudflare drops `CAD_ASSETS` binding; any external docs still listing splineicons should be updated over time.
+
+## 2026-04-02 Sandbox scripts: cicd default + env override + implementation plan doc
+
+### What was asked
+Align deployment scripts with `agent-sam-sandbox-cicd` and document corrected CI plan.
+
+### Files changed
+- `scripts/deploy-sandbox.sh`: `SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"`; header comments (cidi deprecated, override documented).
+- `scripts/promote-to-prod.sh`: same pattern and comments.
+- `scripts/r2-clone-agent-sam-to-sandbox.sh`: destination `agent-sam-sandbox-cicd`; `DST_BUCKET` env override; comments/rclone example updated.
+- `scripts/e2e-overnight.sh`: comment bucket name `cicd` not `cidi`.
+- `docs/IMPLEMENTATION_PLAN_SANDBOX_CI_CORRECTED.md`: new — canonical plan for Gemini/operators.
+
+### Files NOT changed (and why)
+- `scripts/upload-repo-to-r2-sandbox.sh`: already defaulted to `cicd`.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until deploy.
+
+### Known issues / next steps
+- D1/SQL seeds under `scripts/` may still mention `cidi` historically; update in a separate migration if needed.
+
+## 2026-04-02 Sandbox /dashboard/agent: CORS on shell.css + 404 on Vite chunks
+
+### What was asked
+Repair sandbox (`inneranimal-dashboard.meauxbility.workers.dev`) errors: stylesheet blocked by CORS when loading `inneranimalmedia.com/static/dashboard/shell.css` from sandbox; 404 on `/static/dashboard/agent/assets/index-*.js`.
+
+### Files changed
+- `worker.js`: (1) After `ASSETS`/`DASHBOARD` lookup by full path, retry with key `static/dashboard/agent/` stripped so Vite `dist/assets/*` matches URL layout with `base: /static/dashboard/agent/`. (2) `respondWithDashboardHtml` reads HTML and rewrites absolute `https://inneranimalmedia.com/static/dashboard/shell.css` to same-origin `/static/dashboard/shell.css` before returning (fixes CORS on sandbox).
+
+### Files NOT changed (and why)
+- `dashboard/agent.html` in repo already uses relative shell.css; broken HTML may exist only on R2 from older Meauxcad upload — worker rewrite fixes at serve time.
+
+### Deploy status
+- Built: no
+- Worker deployed: no (Sam: deploy approved for sandbox worker)
+- Deploy approved by Sam: no
+
+### What is live now
+Unchanged until worker deploy.
+
+### Known issues / next steps
+- Keep one Vite config (`vite.config.js` for IAM flat `agent-dashboard.js` vs default chunking); remove duplicate `vite.config.ts` if it causes wrong build. Run `./scripts/deploy-sandbox.sh` after `build:vite-only` alias exists in `agent-dashboard/package.json`.
+

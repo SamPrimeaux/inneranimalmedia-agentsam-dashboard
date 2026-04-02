@@ -5155,7 +5155,18 @@ const worker = {
       // Static assets: try ASSETS then DASHBOARD by path (key = path without leading slash)
       const assetKey = path.slice(1) || 'index.html';
       let obj = await env.ASSETS.get(assetKey);
+      // Vite build outputs live under agent-dashboard/dist as assets/* and *.js; URLs use base
+      // /static/dashboard/agent/ so the browser requests .../static/dashboard/agent/assets/chunk.js
+      // while bundled files are stored at keys assets/chunk.js relative to dist.
+      if (!obj && assetKey.startsWith('static/dashboard/agent/')) {
+        const relAgent = assetKey.slice('static/dashboard/agent/'.length);
+        if (relAgent) obj = await env.ASSETS.get(relAgent);
+      }
       if (!obj && env.DASHBOARD) obj = await env.DASHBOARD.get(assetKey);
+      if (!obj && env.DASHBOARD && assetKey.startsWith('static/dashboard/agent/')) {
+        const relAgent = assetKey.slice('static/dashboard/agent/'.length);
+        if (relAgent) obj = await env.DASHBOARD.get(relAgent);
+      }
       // GLB viewer: explicit R2 key for 3D model viewer page
       if (!obj && pathLower === '/static/dashboard/glb-viewer.html' && env.DASHBOARD) {
         obj = await env.DASHBOARD.get('static/dashboard/glb-viewer.html');
@@ -5285,12 +5296,20 @@ const worker = {
 
 async function respondWithDashboardHtml(obj, url, options = {}) {
     const isEmbedded = url.searchParams.get('embedded') === '1';
+    let html = await obj.text();
+    // Never load shell.css from production host when this page is on sandbox or another origin (CORS blocks stylesheet fetch).
+    html = html.replace(/https?:\/\/(?:www\.)?inneranimalmedia\.com(?=\/static\/dashboard\/shell\.css)/gi, '');
     if (!isEmbedded) {
-        return respondWithR2Object(obj, 'text/html', options);
+        const headers = new Headers();
+        headers.set('Content-Type', 'text/html; charset=utf-8');
+        if (options.noCache) {
+            headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+            headers.set('Pragma', 'no-cache');
+        }
+        return new Response(html, { status: 200, headers });
     }
     // Inject embedded class script after opening <body> tag
-    const original = await obj.text();
-    const injected = original.replace(
+    const injected = html.replace(
         /<body([^>]*)>/i,
         '<body$1><script>document.body.classList.add("embedded");<\/script>'
     );
@@ -9525,7 +9544,7 @@ async function callGatewayChat(env, systemWithBlurb, apiMessages, gatewayModel, 
 function getR2Binding(env, bucketName) {
   const map = {
     'inneranimalmedia-assets': env.ASSETS,
-    'splineicons': env.CAD_ASSETS,
+    autorag: env.AUTORAG_BUCKET,
     'agent-sam': env.DASHBOARD,
     'iam-platform': env.R2,
   };
@@ -9686,7 +9705,7 @@ FROM r2_bucket_summary`
     }
 
     if (pathLower === '/api/r2/sync' && method === 'POST') {
-      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'splineicons', 'agent-sam', 'iam-platform'];
+      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
       const nowIso = new Date().toISOString();
       const results = [];
       for (const name of BOUND_BUCKET_NAMES) {
@@ -9719,7 +9738,7 @@ FROM r2_bucket_summary`
     }
 
     if (pathLower === '/api/r2/buckets') {
-      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'splineicons', 'agent-sam', 'iam-platform'];
+      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
       try {
         const { results } = await env.DB.prepare(
           'SELECT bucket_name, creation_date FROM r2_bucket_list ORDER BY creation_date DESC'
@@ -9805,7 +9824,7 @@ FROM r2_bucket_summary`
       );
       if (!signed) {
         return jsonResponse({
-          error: 'Bucket "' + bucket + '" is not bound. List is only available for bound buckets (inneranimalmedia-assets, splineicons, agent-sam, iam-platform) or when R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set.',
+          error: 'Bucket "' + bucket + '" is not bound. List is only available for bound buckets (inneranimalmedia-assets, autorag, agent-sam, iam-platform) or when R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set.',
           code: 'BUCKET_NOT_BOUND',
         }, 400);
       }
@@ -9955,7 +9974,7 @@ FROM r2_bucket_summary`
       const name = decodeURIComponent(syncMatch[1]);
       const nowIso = new Date().toISOString();
       const binding = getR2Binding(env, name);
-      const BOUND_NAMES = ['inneranimalmedia-assets', 'splineicons', 'agent-sam', 'iam-platform'];
+      const BOUND_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
 
       if (binding && binding.list) {
         try {
@@ -19416,27 +19435,28 @@ async function runMeshyBuiltinTool(env, toolName, params) {
     const out = { status, progress, model_urls };
     const r2_key = params.r2_key != null ? String(params.r2_key).trim() : '';
     const stNorm = String(status || '').toUpperCase();
-    if (stNorm === 'SUCCEEDED' && r2_key && env.CAD_ASSETS) {
+    if (stNorm === 'SUCCEEDED' && r2_key && env.AUTORAG_BUCKET) {
       const glbUrl = model_urls && typeof model_urls === 'object' ? (model_urls.glb || model_urls.GLB) : null;
       if (glbUrl) {
         const f = await fetch(glbUrl);
         if (f.ok) {
           const buf = await f.arrayBuffer();
-          await env.CAD_ASSETS.put(r2_key, buf, { httpMetadata: { contentType: 'model/gltf-binary' } });
-          out.r2_key = r2_key;
+          const meshyKey = r2_key.startsWith('meshy/') ? r2_key : `meshy/${r2_key}`;
+          await env.AUTORAG_BUCKET.put(meshyKey, buf, { httpMetadata: { contentType: 'model/gltf-binary' } });
+          out.r2_key = meshyKey;
           await insertAiGenerationLog(env, {
             generationType: 'meshy_3d_glb_export',
             model: 'meshy_api',
-            responseText: r2_key,
+            responseText: meshyKey,
             metadataJson: {
               tool: 'meshyai_get_task',
               task_id,
-              r2_key,
+              r2_key: meshyKey,
               glb_url: glbUrl,
               byte_length: buf.byteLength,
-              bucket: 'CAD_ASSETS',
+              bucket: 'AUTORAG_BUCKET',
             },
-            relatedIdsJson: [task_id, r2_key],
+            relatedIdsJson: [task_id, meshyKey],
           });
         }
       }

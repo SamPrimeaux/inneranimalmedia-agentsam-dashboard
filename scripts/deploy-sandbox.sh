@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# deploy-sandbox.sh — build + upload to agent-sam-sandbox-cicd + deploy inneranimal-dashboard
+# deploy-sandbox.sh — build + upload to sandbox R2 + deploy inneranimal-dashboard
+# Sandbox bucket: agent-sam-sandbox-cicd (replaces deprecated agent-sam-sandbox-cidi).
+# Override: SANDBOX_BUCKET=my-bucket ./scripts/deploy-sandbox.sh
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
 set -euo pipefail
@@ -23,7 +25,7 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
 fi
 
 CFG="wrangler.jsonc"
-SANDBOX_BUCKET="agent-sam-sandbox-cicd"
+SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 
 # ── PROTECTED KEYS — DO NOT REMOVE ──────────────────────────────────────────
 # static/dashboard/agent.html and static/dashboard/agent/assets/* are owned

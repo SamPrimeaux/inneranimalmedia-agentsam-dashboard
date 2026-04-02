@@ -18,8 +18,9 @@
   "workers_dev": true,
   "preview_urls": true,
   "no_bundle": false,
+  // Vite SPA: submodule workspace outputs to agent-dashboard/agent-dashboard/dist (not agent-dashboard/dist).
   "assets": {
-    "directory": "agent-dashboard/dist",
+    "directory": "agent-dashboard/agent-dashboard/dist",
     "binding": "ASSETS"
   },
   "build": {

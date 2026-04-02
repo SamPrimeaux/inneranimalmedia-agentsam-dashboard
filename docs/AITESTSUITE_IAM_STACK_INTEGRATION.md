@@ -178,3 +178,15 @@ Rotate and scope tokens per environment (lab vs prod) where Cloudflare and provi
 ## 9. One-line summary
 
 **AITTestSuite** is the **independent Step 1 lab** on `https://aitestsuite.meauxbility.workers.dev/`, backed by **`https://github.com/SamPrimeaux/meauxcad.git`**, for optimal UI and AI integration refinements; **approved** changes are then **ported** into the **inneranimal-dashboard** sandbox, **benchmarked**, and **promoted** to **inneranimalmedia** production using the existing CIDI pipeline.
+
+---
+
+## 10. Sandbox `/dashboard/agent` vs aitestsuite (layout)
+
+**Why they looked different:** `dashboard/agent.html` wrapped the React app in the **full IAM dashboard shell** (topbar + 240px sidenav + status bar). [aitestsuite](https://aitestsuite.meauxbility.workers.dev/) is a **standalone** IDE with no that shell. Stacking a second “Explorer” chrome inside React made the sandbox worse.
+
+**Fix (HTML/CSS):** On the agent page, `body` gets class **`agent-ide-standalone`**, which **hides** `.topbar` and `.sidenav` and sizes **`.main-content.agent-page-main`** to `calc(100vh - 24px)` so the React surface fills the viewport (status bar only). See `dashboard/agent.html` inline styles.
+
+**Full parity with meauxcad** (Explorer tree + Monaco center + right agent) still requires **porting or embedding** the meauxcad `App` layout into `agent-dashboard` or a dedicated route — not only CSS.
+
+**Deploy:** `cd agent-dashboard && npm run build:vite-only && cd .. && ./scripts/deploy-sandbox.sh`; upload **`dashboard/agent.html`** to R2 whenever it changes (same as other dashboard HTML).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy-sandbox.sh — build + upload to agent-sam-sandbox-cidi + deploy inneranimal-dashboard
+# deploy-sandbox.sh — build + upload to agent-sam-sandbox-cicd + deploy inneranimal-dashboard
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
 set -euo pipefail
@@ -23,7 +23,17 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
 fi
 
 CFG="wrangler.jsonc"
-SANDBOX_BUCKET="agent-sam-sandbox-cidi"
+SANDBOX_BUCKET="agent-sam-sandbox-cicd"
+
+# ── PROTECTED KEYS — DO NOT REMOVE ──────────────────────────────────────────
+# static/dashboard/agent.html and static/dashboard/agent/assets/* are owned
+# by SamPrimeaux/meauxcad (Gemini pipeline). Never overwrite these keys.
+PROTECTED_KEYS=("static/dashboard/agent.html" "static/dashboard/agent/")
+echo "=== PROTECTED R2 KEYS (skipping) ==="
+for k in "${PROTECTED_KEYS[@]}"; do echo "  PROTECTED: $k"; done
+echo "====================================="
+# ─────────────────────────────────────────────────────────────────────────────
+
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
 
 echo "=== SANDBOX DEPLOY ==="
@@ -72,13 +82,13 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
       *)     ctype="application/octet-stream" ;;
     esac
     echo "  Uploading static/dashboard/agent/${filename}..."
-    npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/agent/${filename}" \
+    echo "  SKIP (protected): static/dashboard/agent/${filename}" # \
       --file "$filepath" \
       --content-type "$ctype" \
       --config "$CFG" --remote
   done
 
-  npx wrangler r2 object put "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+  echo "  SKIP (protected): static/dashboard/agent.html" # \
     --file "$HTML_PATH" --content-type "text/html" \
     --config "$CFG" --remote
 

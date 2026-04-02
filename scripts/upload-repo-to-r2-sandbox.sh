@@ -5,12 +5,12 @@
 # Usage:
 #   ./scripts/upload-repo-to-r2-sandbox.sh
 # Env:
-#   SANDBOX_BUCKET=agent-sam-sandbox-cidi   (default)
+#   SANDBOX_BUCKET=agent-sam-sandbox-cicd   (default)
 #
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
-BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cidi}"
+BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 CONFIG="wrangler.production.toml"
 WRAP=(./scripts/with-cloudflare-env.sh npx wrangler r2 object put)
 
@@ -47,7 +47,7 @@ echo "=== Sandbox bucket: $BUCKET (production-parity keys under static/) ==="
 # --- 0) Manifest (plain text for easy read in dashboard)
 MANIFEST="$(mktemp)"
 {
-  echo "agent-sam-sandbox-cidi — mirror of production R2 key layout (agent-sam)"
+  echo "agent-sam-sandbox-cicd — mirror of production R2 key layout (agent-sam)"
   echo "Same paths as prod: /dashboard/<page> -> static/dashboard/<page>.html"
   echo "Agent app: static/dashboard/agent.html + static/dashboard/agent/agent-dashboard.{js,css}"
   echo "Generated: $(date -u +%Y-%m-%dT%H:%MZ)"

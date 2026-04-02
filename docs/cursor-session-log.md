@@ -1905,3 +1905,154 @@ Keep settings gear; bottom status bar reflects real workspace / IDE plans.
 ### What is live now
 - Settings in **top bar** and **activity rail**; status bar shows workspace line, branch, live cursor in Code tab.
 
+## 2026-04-01 HANDOFF — Sandbox `/dashboard/agent` vs AITestSuite (shell stacking, failed UX path)
+
+### What is going on (mental model)
+
+There are **three separate Workers**, not one product skin:
+
+| Surface | Worker | URL | Source repo | What it is |
+|--------|--------|-----|-------------|------------|
+| **AITestSuite (lab)** | `aitestsuite` | `https://aitestsuite.meauxbility.workers.dev/` | `github.com/SamPrimeaux/meauxcad` | Standalone IDE: Explorer + Monaco + agent column + tabs. **No** IAM `agent.html` wrapper. |
+| **Sandbox (CIDI)** | `inneranimal-dashboard` | `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` | `march1st-inneranimalmedia` (this monorepo) + CI | Full IAM mirror. **`dashboard/agent.html` already injects IAM chrome**: global topbar, left sidenav (~240px), footer status bar. React mounts inside `.main-content`. |
+| **Production** | `inneranimalmedia` | `https://inneranimalmedia.com/dashboard/agent` | Same monorepo after promote | Same HTML shell pattern as sandbox (R2 `static/dashboard/agent.html`). |
+
+**Why AITestSuite “looks good” and sandbox “looks terrible”:** The lab is a **single** application layout. The sandbox is **IAM shell + React app**. Any attempt to paste **meauxcad-style** top bar / activity rail / “IAM Explorer” chrome **inside** React **without** removing the outer shell produces **double or triple navigation**, wrong proportions, and a cramped center. That is **not** a theme bug; it is **two apps worth of chrome**.
+
+### What went wrong (anti-patterns)
+
+1. **Shell on shell:** Adding `IamExplorerTopBar`, `IamExplorerActivityBar`, or similar inside `AgentDashboard.jsx` while `agent.html` still renders `.topbar` + `.sidenav`.
+2. **CSS-only “standalone” class on `body`:** Hiding `.topbar`/`.sidenav` via `agent-ide-standalone` in `dashboard/agent.html` is a **layout band-aid**. It does **not** recreate meauxcad’s **Explorer + editor + right agent** tree; it only frees vertical space. Sam reported this approach still **failed** expectations (still not a proper rebuild / parity).
+3. **Uncommitted / undeployed fixes:** As of this handoff, **local** `git status` still shows **modified** `dashboard/agent.html`, `agent-dashboard/dist/`, `vite.config.js`, docs, scripts — **not necessarily pushed or uploaded to sandbox R2**. Live sandbox can still be **old** broken UI even if the repo has a partial fix.
+
+### “Past 5–6 deployments” (git + intent — not all are sandbox agent UI)
+
+Recent **monorepo** commits on `main` (newest first):
+
+1. **`cc2fcf1`** — D1 migration 210 (`r2_bucket_bindings`, `r2_bucket_list` CIDI buckets). **Not** agent UI.
+2. **`0fe82b0`** — D1 migration 209 (builds + `cidi_activity_log` / meauxcad chat log wiring docs). **Not** agent UI.
+3. **`329fd84`** — Migration 208 note (`ai_api_test_runs`). **Not** agent UI.
+4. **`5178cf8`** — Docs: AITestSuite status bar / session log (meauxcad `c475045`). **Docs only** in this repo.
+5. **`75984d2`** — D1 migration 207 (CIDI audit row for AITestSuite shell **v1.2.0**). **Not** sandbox React.
+6. **`10158cc`** — Session log / overnight suite docs.
+
+The **large IAM workspace / shell push** that affects dashboard assets was earlier: **`393a9c0` (2026-03-31)** — “IAM workspace shell, sandbox shell R2, monaco+cors, migrations (v=212)”, touching `agent.html`, R2 upload scripts, `tools/code`, many migrations, `worker.js`. That commit **increased** surface area (workspace shell narrative, Monaco on TOOLS) and is the backdrop for comparing lab vs sandbox.
+
+**AITestSuite** deploys come from **meauxcad** `main` + Cloudflare Builds (e.g. shell **v1.2.0**, status bar workspace commits **`a8854e3` / `c475045`** per session log). Those **do not** auto-fix the monorepo agent page.
+
+### What actually fixes it (for the next agent — no more shell-on-shell)
+
+**Do not** add another full IDE chrome inside `AgentDashboard` until **one** of these is true:
+
+- **Option A — Single shell:** Serve `/dashboard/agent` from a **minimal HTML shell** (no IAM topbar/sidenav) **or** a **dedicated route** that only loads the Vite bundle + status bar if required by product.
+- **Option B — Real port:** **Port or embed** meauxcad’s root **`App`** (Explorer + Monaco + agent column) into `agent-dashboard` (or lazy route), sharing theme tokens — **replace** the current welcome grid for that mode, do **not** duplicate bars.
+- **Option C — Iframe/embed:** Full-screen iframe to a **sandbox-origin** meauxcad build (only if auth, cookies, and CSP are acceptable).
+
+**After any `dashboard/agent.html` change:** Upload to **sandbox** R2 (`deploy-sandbox.sh` path) before expecting `inneranimal-dashboard` to match local. **After `agent-dashboard` source change:** `npm run build:vite-only` then deploy sandbox.
+
+### Files to read first
+
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` — §10 sandbox vs lab; §2 three surfaces.
+- `dashboard/agent.html` — `.topbar`, `.sidenav`, `.main-content`, `agent-ide-standalone` (if present).
+- `agent-dashboard/src/AgentDashboard.jsx` — ensure no second IDE shell sneaks back in.
+
+### Known pain
+
+- Sam’s assessment: **last few attempts felt like “trash”** because they **patched chrome** instead of **one layout owner** (either IAM shell **or** meauxcad layout, not both).
+
+## 2026-04-01 agent-sam-sandbox-cicd R2 README
+
+### What was asked
+Document the new R2 bucket `agent-sam-sandbox-cicd` (S3 + r2.dev URLs), explain MeauxCAD v1-style `dist/` vs `source/` and related folders, and suggest layout/CI practices to reduce chaos.
+
+### Files changed
+- `docs/agent-sam-sandbox-cicd/README.md` (new): bucket note, endpoint table, vocabulary for `dist`/`source`/MANIFEST, alignment with IAM `static/dashboard/` vs `tools` MeauxCAD tree, operational checklist.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc` / bindings: not touched; README states `cicd` is parallel to canonical `agent-sam-sandbox-cidi` until explicitly wired.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+Unchanged; documentation only.
+
+### Known issues / next steps
+- Reconcile Cloudflare bucket naming (`cicd` vs `cidi`) and Worker binding when Sam promotes `cicd` to active sandbox.
+
+## 2026-04-01 Sandbox login HTML key fallback (static_auth-signin)
+
+### What was asked
+Serve the uploaded AITestSuite login HTML from `agent-sam-sandbox-cicd` at `static/static_auth-signin.html` when visiting `https://inneranimal-dashboard.meauxbility.workers.dev/` (and `/auth/signin`), matching the public r2.dev URL shape.
+
+### Files changed
+- `worker.js` (root `/` and `/auth/signin|login|signup` branches): after `static/auth-signin.html`, fall back to `static/static_auth-signin.html` so Gemini’s upload path works without renaming the object.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc`: `DASHBOARD` already binds `agent-sam-sandbox-cicd`; no binding change needed.
+- OAuth / callback handlers: not touched.
+
+### Deploy status
+- Built: n/a
+- R2 uploaded: no (object already in bucket under `static/static_auth-signin.html`)
+- Worker deployed: no — run `./scripts/deploy-sandbox.sh` (or `deploy approved` per project rules) to ship.
+- Deploy approved by Sam: no
+
+### What is live now
+Until sandbox deploy: behavior unchanged on workers.dev. After deploy: root and `/auth/*` resolve the new file when the canonical key is missing.
+
+### Known issues / next steps
+- Optional: also upload a copy as `static/auth-signin.html` for parity with production `agent-sam` naming.
+
+## 2026-04-01 agent-sam-sandbox-cicd registry README + promote bucket alignment
+
+### What was asked
+Document `agent-sam-sandbox-cicd` as the canonical sandbox CI/CD registry (structure, workflow, public URLs) for inneranimalmedia.com suite; ensure deploy/promote path is consistent so assets are actually promotable.
+
+### Files changed
+- `docs/agent-sam-sandbox-cicd/README.md`: Rewrote as registry doc (prefix table, IAM `static/dashboard/` keys, auth filenames, deploy/promote pointers, tools vs dashboard note).
+- `scripts/promote-to-prod.sh`: `SANDBOX_BUCKET` `agent-sam-sandbox-cidi` → `agent-sam-sandbox-cicd` to match `deploy-sandbox.sh` and `wrangler.jsonc`.
+- `wrangler.jsonc`: Comment typo fixed (`cidi` → `cicd` for ASSETS/DASHBOARD).
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: locked; README notes verifying prod `DASHBOARD` = `agent-sam` in Cloudflare if that is still the intent.
+
+### Deploy status
+- Built: n/a
+- R2 uploaded: n/a (documentation + script fix only)
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+Promote script previously pulled from **`cidi`** while deploy wrote to **`cicd`**; after this change, promote pulls from the same bucket deploy uses (once you run promote).
+
+### Known issues / next steps
+- Reconcile any remaining docs that still say **`agent-sam-sandbox-cidi`** for the active sandbox pipeline if those references are stale.
+
+## 2026-04-01 Sandbox dashboard R2 full upload + CURSOR_HANDOFF_SANDBOX
+
+### What was asked
+Upload remaining `/dashboard/*` pages to sandbox R2 so `/dashboard/overview` and other MPAs resolve; align with AITestSuite-to-inneranimal-dashboard plan; add sandbox handoff doc.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_SANDBOX.md` (new): bucket `agent-sam-sandbox-cicd`, URL-to-key table, `upload-repo-to-r2-sandbox.sh` + `deploy-sandbox.sh` commands, verification curls.
+- Ran `overview-dashboard` `npm run build`; ran `./scripts/upload-repo-to-r2-sandbox.sh` (uploaded `dashboard/*.html`, `static/dashboard/**`, `agent-sam/static/**`, overview dist, agent dist, `static/auth-signin.html`, `source/worker.js` snapshot) to **`agent-sam-sandbox-cicd`**.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc`: already pointed ASSETS+DASHBOARD at `cicd`; no edit this pass.
+
+### Deploy status
+- Built: yes (`overview-dashboard` Vite build)
+- R2 uploaded: yes — bucket **`agent-sam-sandbox-cicd`** (full script output; includes `static/dashboard/overview.html` + `static/dashboard/overview/*` JS)
+- Worker deployed: no (R2-only fix; existing worker serves new objects)
+- Deploy approved by Sam: n/a for this R2-only step
+
+### What is live now
+`curl -sI https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/overview` returns **200** with HTML body from R2.
+
+### Known issues / next steps
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` still mentions legacy **`cidi`** in places; prefer **`docs/CURSOR_HANDOFF_SANDBOX.md`** for current bucket name until that file is edited.
+

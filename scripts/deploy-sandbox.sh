@@ -82,15 +82,10 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
       *)     ctype="application/octet-stream" ;;
     esac
     echo "  Uploading static/dashboard/agent/${filename}..."
-    echo "  SKIP (protected): static/dashboard/agent/${filename}" # \
-      --file "$filepath" \
-      --content-type "$ctype" \
-      --config "$CFG" --remote
+    echo "  SKIP (protected): static/dashboard/agent/${filename}"
   done
 
-  echo "  SKIP (protected): static/dashboard/agent.html" # \
-    --file "$HTML_PATH" --content-type "text/html" \
-    --config "$CFG" --remote
+  echo "  SKIP (protected): static/dashboard/agent.html"
 
   # Workspace shell — same keys worker serves for /dashboard/iam-workspace-shell + /static/dashboard/shell.css
   echo "  Uploading static/dashboard/iam-workspace-shell.html..."

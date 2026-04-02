@@ -9498,7 +9498,7 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
     }
   };
   walk(j);
-  if (apiPlatform === 'gemini_api' && j.usageMetadata) {
+  if ((apiPlatform === 'gemini_api' || apiPlatform === 'vertex_ai') && j.usageMetadata) {
     const um = j.usageMetadata;
     if (typeof um.promptTokenCount === 'number') acc.in = Math.max(acc.in, um.promptTokenCount);
     if (typeof um.candidatesTokenCount === 'number') acc.out = Math.max(acc.out, um.candidatesTokenCount);
@@ -9568,7 +9568,7 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
         inputTok,
         outputTok,
         computedCostUsd,
-        apiPlatform === 'gemini_api' ? 'gemini_api' : null,
+        apiPlatform === 'gemini_api' ? 'gemini_api' : apiPlatform === 'vertex_ai' ? 'vertex_ai' : null,
         null,
         modelRow.input_rate_per_mtok ?? null,
         modelRow.output_rate_per_mtok ?? null,
@@ -9619,7 +9619,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   let modelRow;
   try {
     modelRow = await env.DB.prepare(
-      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name
+      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name
        FROM ai_models
        WHERE (id = ? OR model_key = ?) AND COALESCE(is_active, 0) = 1
        LIMIT 1`
@@ -9694,6 +9694,43 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
       ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId));
     } else {
       await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId);
+    }
+    return new Response(branch1, { headers: sseResponseHeaders() });
+  }
+
+  if (apiPlatform === 'vertex_ai') {
+    const geminiBody = {
+      contents: [{ role: 'user', parts: [{ text: message }] }],
+      systemInstruction: { parts: [{ text: AGENT_SAM_CHAT_SYSTEM }] },
+    };
+    let upstream;
+    if (modelRow.secret_key_name === 'GOOGLE_AI_API_KEY') {
+      const key = secretFn('GOOGLE_AI_API_KEY') ?? env.GOOGLE_AI_API_KEY;
+      if (!key) return jsonResponse({ error: 'GOOGLE_AI_API_KEY not configured' }, 503);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelKey)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
+      upstream = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(geminiBody),
+      });
+    } else {
+      if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+        return jsonResponse({ error: 'GOOGLE_SERVICE_ACCOUNT_JSON not configured' }, 503);
+      }
+      try {
+        upstream = await callVertexAI(env, modelKey, geminiBody, true);
+      } catch (e) {
+        console.error('[agent/chat-sse] vertex_ai', e?.message ?? e);
+        return jsonResponse({ error: 'Vertex auth failed', detail: String(e?.message || e) }, 503);
+      }
+    }
+    if (!upstream.ok) return mkUpstreamError(upstream, 'google');
+    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    const [branch1, branch2] = upstream.body.tee();
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId));
+    } else {
+      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -12693,7 +12730,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
              AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
-             AND api_platform IN ('anthropic_api', 'gemini_api', 'openai', 'workers_ai', 'cursor')
+             AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor')
            ORDER BY provider, display_name`
         ).all();
         return jsonResponse(results || []);

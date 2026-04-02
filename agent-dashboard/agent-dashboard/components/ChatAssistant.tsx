@@ -58,7 +58,7 @@ type ChatModelRow = {
 
 const LS_CONV = 'iam-agent-chat-conversation-id';
 
-const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'openai', 'workers_ai', 'cursor'] as const;
+const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor'] as const;
 const MODEL_PLATFORM_LABEL: Record<string, string> = {
   anthropic_api: 'Anthropic',
   gemini_api: 'Google',

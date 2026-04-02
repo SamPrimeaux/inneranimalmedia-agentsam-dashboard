@@ -1074,3 +1074,985 @@ Fix 404s on Vite code-split chunks under `/static/dashboard/agent/` by uploading
 - cursor_costs_daily dropped, data migrated to ai_costs_daily
 - workspace_members, workspace_settings seeded for ws_inneranimalmedia
 
+## 2026-03-31 D1 ws_agentsandbox — workspaces + workspace_settings + workspace_projects
+
+### What was asked
+Add IAM workspace shell workspace `ws_agentsandbox` into `workspace_projects` and `workspace_settings` (TOOLS origin `https://tools.inneranimalmedia.com`).
+
+### Files changed
+- `migrations/186_ws_agentsandbox_workspace.sql`: `INSERT OR IGNORE` `workspaces` (`ws_agentsandbox`, FK parent for `workspace_projects`), `INSERT OR REPLACE` `workspace_settings` (theme `theme-solarized-dark`, `settings_json` with tools URL and shell R2 key), `INSERT OR IGNORE` `workspace_projects` (`wp_agentsandbox_iam_shell`, internal project).
+
+### Deploy status
+- Applied to remote D1 `inneranimalmedia-business` via wrangler `d1 execute --file` (migration 186).
+
+### What is live now
+- `ws_agentsandbox` row in `workspaces`; matching `workspace_settings` and `workspace_projects` rows.
+
+## 2026-03-31 D1 workspace_projects — wp_inneranimalmedia
+
+### What was asked
+Add one `workspace_projects` row: `ws_inneranimalmedia` + `wp_inneranimalmedia`.
+
+### Files changed
+- `migrations/187_workspace_projects_wp_inneranimalmedia.sql`: `INSERT OR IGNORE` `wp_inneranimalmedia` for `ws_inneranimalmedia`.
+
+### Deploy status
+- Applied to remote D1 via wrangler `d1 execute --file`.
+
+### What is live now
+- Row `wp_inneranimalmedia` under workspace `ws_inneranimalmedia`.
+
+## 2026-03-31 D1 workspace_audit_log — Cursor workspace seed (186–187)
+
+### What was asked
+Add an agent audit row for the workspace seeds.
+
+### Files changed
+- `migrations/188_workspace_audit_log_cursor_workspace_seed.sql`: `INSERT OR IGNORE` `wal_cursor_wp_seed_20260331` on `ws_inneranimalmedia`, action `SEED_WORKSPACE_ROWS`, `after_json` references migrations 186–187.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One `workspace_audit_log` row documenting `ws_agentsandbox` / `wp_*` inserts.
+
+## 2026-03-31 D1 workflows — IAM autonomous pipeline (6 rows)
+
+### What was asked
+Seed `workflows` on remote D1 with artifact → Monaco → Excalidraw → Playwright → approval → promote definitions.
+
+### Files changed
+- `migrations/189_workflows_iam_autonomous_pipeline.sql`: `INSERT OR IGNORE` six rows `wf_iam_artifact_init`, `wf_iam_monaco_save`, `wf_iam_excalidraw_save`, `wf_iam_playwright_validate`, `wf_iam_approval_gate`, `wf_iam_promote_prod` with JSON `steps` and `trigger_config`.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Six pipeline definitions in `workflows`; re-run safe (IGNORE preserves existing rows and counts).
+
+## 2026-03-31 D1 workspace_notes + workspace_projects (IAM plan, start date)
+
+### What was asked
+Insert plan into `workspace_notes`; improve `workspace_projects` descriptions; record start 2026-03-31 20:00.
+
+### Files changed
+- `migrations/190_workspace_notes_and_projects_iam_plan.sql`: INSERT `workspace_notes` for `ws_inneranimalmedia`; UPDATE `wp_agentsandbox_iam_shell` and `wp_inneranimalmedia` (description, `start_date`, `metadata_json`).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One note row; both workspace projects updated with richer copy and metadata.
+
+## 2026-03-31 D1 vectorize_index_registry — MANUAL_D1_RAG row
+
+### What was asked
+Add a row to `vectorize_index_registry`.
+
+### Files changed
+- `migrations/191_vectorize_index_registry_d1_rag.sql`: `INSERT OR IGNORE` `vidx_d1_cosine_knowledge` (`MANUAL_D1_RAG`, manual source, D1 cosine RAG documentation).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Registry entry for D1 `ai_knowledge_chunks` path (not a Vectorize binding).
+
+## 2026-03-31 D1 vectorize_index_registry — TOOLS agent workspace label (192)
+
+### What was asked
+Correct registry: not AutoRAG / not D1-only label; TOOLS bucket agent workspace.
+
+### Files changed
+- `migrations/192_vectorize_registry_tools_agent_workspace_label.sql`: UPDATE row to `vidx_tools_agent_workspace`, `MANUAL_TOOLS_AGENT_WORKSPACE`, `source_r2_bucket` tools.
+- `migrations/191_vectorize_index_registry_d1_rag.sql`: header note points to 192.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- One registry row describes tools.inneranimalmedia.com workspace artifacts (Monaco, Excalidraw, shell), distinct from `vidx_autorag`.
+
+## 2026-03-31 D1 agent_workspace_state — IAM TOOLS workspace (194)
+
+### What was asked
+Add TOOLS/agent workspace into `agent_workspace_state`.
+
+### Files changed
+- `migrations/194_agent_workspace_state_iam_tools.sql`: `INSERT OR IGNORE` `agent_conversations` `conv_iam_tools_agent_workspace` + `agent_workspace_state` `state_iam_tools_agent_workspace` with `state_json` (registry id, `env.TOOLS`, URLs, prefixes).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Stable conversation + workspace state row for IAM TOOLS shell (not a chat thread).
+
+## 2026-03-31 D1 agentsam_code_index_job — IAM TOOLS workspace (195)
+
+### What was asked
+Add a row to `agentsam_code_index_job`.
+
+### Files changed
+- `migrations/195_agentsam_code_index_job_iam_tools.sql`: `INSERT OR IGNORE` `cij_iam_tools_agent_workspace` for `sam_primeaux` / `iam_tools_agent_workspace`.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Code index job slot for TOOLS bucket agent workspace (idle, d1_cosine).
+
+## 2026-03-31 D1 agentsam_project_context — IAM TOOLS workspace (196)
+
+### What was asked
+Add IAM TOOLS agent workspace into `agentsam_project_context`.
+
+### Files changed
+- `migrations/196_agentsam_project_context_iam_tools.sql`: `INSERT OR IGNORE` `ctx_iam_tools_agent_workspace` with goals, tables, routes, `started_at` 1775005200 (2026-03-31 20:00 Chicago).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Project context row linking registry, workflows, R2, and key files.
+
+## 2026-04-01 D1 agentsam_skill — IAM pipeline (6 rows, 197)
+
+### What was asked
+Add needed skills as multiple rows in `agentsam_skill`.
+
+### Files changed
+- `migrations/197_agentsam_skill_iam_pipeline.sql`: six `INSERT OR IGNORE` skills (TOOLS R2, CIDI, L1-L3 workflows, Playwright jobs, approval gate, project context) with slash_trigger iam-tools, iam-cidi, iam-workflow, iam-playwright, iam-approval, iam-context.
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Six skills for Agent Sam; wire invocations to `agentsam_skill_invocation` when used.
+
+## 2026-03-31 ai_generation_logs — extend + IAM seed documentation (198, 199)
+
+### What was asked
+Use `ai_generation_logs` to document IAM D1 seeds (or redesign); table was empty and LMS-shaped.
+
+### Files changed
+- `migrations/198_ai_generation_logs_extend.sql`: `metadata_json`, `source_kind` (CHECK), `workspace_id`, `related_ids_json`.
+- `migrations/199_ai_generation_logs_iam_seed_rows.sql`: eight `INSERT OR IGNORE` rows (`aigl_seed_*`) covering migrations 186-197 and 190, with summaries and JSON pointers.
+
+### Files NOT changed (and why)
+- `worker.js`: no INSERT path yet (optional later).
+- `docs/d1-agentic-schema.md`: canonical CREATE snippet not updated; new columns live in DB and migration files.
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a (D1 only)
+
+### What is live now
+- `ai_generation_logs` holds structured audit rows for the IAM workspace / workflows / registry / agent state / context / skills bundles; `generation_type` and `source_kind` both `migration_seed` for these rows.
+
+### Known issues / next steps
+- Optional: worker-side INSERT for future generations; keep chat metrics in `agent_telemetry` / `spend_ledger`, not duplicated here.
+
+## 2026-03-31 ai_generation_logs — docs + worker inserts
+
+### What was asked
+Sync `docs/d1-agentic-schema.md` with D1 columns for `ai_generation_logs`; add worker `INSERT` when AI creates images/files/assets (local or remote storage).
+
+### Files changed
+- `docs/d1-agentic-schema.md`: `ai_generation_logs` CREATE snippet extended with `metadata_json`, `source_kind`, `workspace_id`, `related_ids_json` and a short usage note.
+- `worker.js`: added `insertAiGenerationLog()`; wired non-fatal inserts on success for: draw tool `/api/tools/image/generate`, `/api/agent/workers-ai/image` (inline), `uploadImgxToDashboard` (OpenAI imgx paths), Workers AI imgx branch, `r2_write`, `cf_images_upload`, CloudConvert R2 export, Meshy GLB upload to `CAD_ASSETS`.
+
+### Deploy status
+- Not deployed (Sam runs CIDI / promote when ready).
+
+### What is live now
+- Schema doc matches migration 198; production worker behavior unchanged until next deploy.
+
+## 2026-03-31 ai_generation_logs — OpenAI/Google code paths + Gemini images + D1/draw
+
+### What was asked
+Extend `ai_generation_logs` for OpenAI/Google image and code-related flows, not only imgx/R2 tools.
+
+### Files changed
+- `worker.js`: `persistGeminiPartInlineImage` (Gemini/Vertex `inlineData` to DASHBOARD + log); `logAssistantCodeArtifactIfPresent` (first fenced code block, min 40 chars) after `streamDoneDbWrites` for OpenAI Chat, OpenAI Responses, `streamGoogle`, `chatWithToolsGoogle`, Workers AI, Anthropic streaming/non-stream, and agent tool-loop final text; `putAgentBrowserScreenshotToR2` logs each stored screenshot; `d1_write` success (invoke + runToolLoop); `render_to_canvas` SVG; `/api/draw/save` PNG export; `/api/r2/upload` binding upload.
+
+### Deploy status
+- Not deployed until Sam promotes worker.
+
+### What is live now
+- Repo-only; production unchanged until deploy.
+
+## 2026-03-31 D1 ai_integrations — OpenAI webhook URL (200)
+
+### What was asked
+Update `ai_integrations` with the new OpenAI API webhook endpoint `https://inneranimalmedia.com/api/webhooks/openai` (secret already rotated in worker).
+
+### Files changed
+- `migrations/200_ai_integrations_openai_webhook_url.sql`: `UPDATE ai_integrations` id `26` (`OPENAI_WEBHOOK_SECRET`): `metadata.endpoint` full URL, `path` `/api/webhooks/openai`, `legacy_path` `/api/hooks/openai`, refresh `configured_at`.
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+
+### What is live now
+- Marketplace / integrations metadata documents the public webhook URL registered with OpenAI.
+
+## 2026-03-31 Cursor Cloud Agents — agentsam_executions + ai_generation_logs
+
+### What was asked
+Log when `cursor_get_agent` reaches FINISHED with a PR URL; use `agentsam_*` tables (not deprecated `cursor_*`).
+
+### Files changed
+- `worker.js`: `insertAiGenerationLog` supports optional `explicitId` + `insertOrIgnore` for idempotent rows; `maybePersistCursorCloudAgentFinished` writes `INSERT OR IGNORE` to `agentsam_executions` (`execution_type` = `cursor_cloud_agent`, `task_id` = Cursor agent id, `output` JSON) and `ai_generation_logs` (`generation_type` = `cursor_cloud_agent_pr`) when status is `FINISHED` and `target.prUrl` is an http(s) URL; called from `cursor_get_agent` after successful API JSON parse.
+
+### Deploy status
+- Not deployed until worker promote.
+
+### What is live now
+- Repo-only.
+
+## 2026-03-31 D1 projects + ai_projects + ai_project_context_config — IAM TOOLS workspace (201)
+
+### What was asked
+Add platform project rows to `projects`, `ai_projects`, and `ai_project_context_config` for the IAM TOOLS agent workspace.
+
+### Files changed
+- `migrations/201_projects_ai_iam_tools_agent_workspace.sql`: `INSERT OR IGNORE` shared id `proj_iam_tools_agent_workspace` (tenant `tenant_sam_primeaux`, domain inneranimalmedia.com, metadata links to `ctx_iam_tools_agent_workspace` and workspace/registry ids); matching `ai_projects` row; `ai_project_context_config` id `ctx_iam_tools_dashboard_agent` for route `/dashboard/agent`. (Updated 201: `project_type`/`status` must be CHECK-valid; use `internal-tool` and `development`.)
+- `migrations/202_projects_iam_tools_fix_projects_check.sql`: same `projects` INSERT with valid CHECKs; applied after remote verification showed 201 skipped `projects`.
+
+### Deploy status
+- Applied to remote D1 (201 + 202).
+
+### What is live now
+- Three tables reference the same logical project for dashboard agent context and billing/metadata alignment.
+
+### Known issues / next steps
+- Migration 201 `projects` INSERT used `project_type='platform'` and `status='active'`, which violate `projects` CHECK constraints; the row was skipped until migration 202 (`internal-tool`, `development`).
+
+## 2026-03-31 tools/code core component READMEs
+
+### What was asked
+List core IAM components, explain how they wire to inneranimalmedia (UI redesign + backend bolt-on), and add `tools/code/` directories with short READMEs for agents.
+
+### Files changed
+- `tools/code/README.md`: index table and integration flow.
+- `tools/code/core-api-surface/README.md` through `core-realtime/README.md`: seven slices (worker API, React dashboard, static HTML, TOOLS R2, MCP, D1, realtime WS).
+
+### Deploy status
+- Docs only; no build or deploy.
+
+### What is live now
+- Repo-only documentation under `tools/code/`.
+
+## 2026-03-31 R2 upload — tools/code core READMEs
+
+### What was asked
+Store `tools/code/` READMEs on R2 (TOOLS bucket).
+
+### Files changed
+- None (upload only).
+
+### R2 uploaded
+- Bucket `tools`, keys: `code/README.md`, `code/core-api-surface/README.md`, `code/core-dashboard-react/README.md`, `code/core-dashboard-static/README.md`, `code/core-tools-r2/README.md`, `code/core-mcp/README.md`, `code/core-data-persistence/README.md`, `code/core-realtime/README.md` (`text/markdown`).
+
+### Deploy status
+- Worker not deployed.
+
+### What is live now
+- Public URLs under `https://tools.inneranimalmedia.com/code/...` (same paths as keys).
+
+## 2026-03-31 R2 upload — code/integration (providers, metrics, scripts)
+
+### What was asked
+Upload important/complex working components for multi-provider testing and batch workflows; explain and recommend in plain English.
+
+### Files changed (repo)
+- `tools/code/integration/README.md`: index for integration bundle.
+- `tools/code/integration/AI_PROVIDER_TESTING_AND_BATCH.md`: roles, order of testing, live vs batch, link to scripts/docs.
+- `tools/code/README.md`: pointer to `integration/`.
+
+### R2 uploaded (bucket `tools`)
+- `code/integration/README.md`, `AI_PROVIDER_TESTING_AND_BATCH.md`, `API_METRICS_AND_AGENT_COST_TRACKING.md`, `AGENT_MEMORY_SCHEMA_AND_RECORDS.md`
+- `code/integration/scripts/batch-api-test.sh`, `model-smoke-test.sh`, `compare-openai.sh`, `benchmark-providers.sh`, `benchmark-all-providers.sh`, `benchmark-full.sh`
+
+### Deploy status
+- R2 only; worker not deployed.
+
+### What is live now
+- https://tools.inneranimalmedia.com/code/integration/ (and paths under it).
+
+## 2026-03-31 Skills runbooks + R2 placement + Cursor skill
+
+### What was asked
+Upload components to correct buckets; add README/skill files to align humans and agents; incremental testing; advice on dedicated GitHub repo.
+
+### Files changed
+- `tools/code/skills/*.md`: WORKFLOW, R2-BUCKETS, DEPLOY-CIDI, D1-MIGRATIONS, AI-TESTING, AGENT-HUMAN-SYNC, README, SKILL.
+- `tools/code/README.md`: links to skills, autorag pointer.
+- `.cursor/skills/iam-platform-sync/SKILL.md`: Cursor-discoverable skill (same rules as repo SKILL).
+- `docs/autorag/context/iam-rag-index.md`: autorag bucket mirror source (RAG index linking to TOOLS URLs).
+
+### R2 uploaded
+- **tools:** `code/README.md`, `code/skills/*` (all skill files).
+- **autorag:** `context/iam-rag-index.md`.
+
+### Deploy status
+- R2 only; worker not deployed.
+
+### What is live now
+- TOOLS: `https://tools.inneranimalmedia.com/code/skills/README.md`
+- Autorag: `https://autorag.inneranimalmedia.com/context/iam-rag-index.md`
+
+## 2026-03-31 deploy-sandbox.sh — workspace shell R2
+
+### What was asked
+Extend `deploy-sandbox.sh` to upload `iam-workspace-shell.html` and `shell.css` to sandbox R2 on every sandbox deploy.
+
+### Files changed
+- `scripts/deploy-sandbox.sh` (after `agent.html` upload): `npx wrangler r2 object put` for `static/dashboard/iam-workspace-shell.html` from `dashboard/iam-workspace-shell.html` and `static/dashboard/shell.css` from `static/dashboard/shell.css` to `agent-sam-sandbox-cidi`.
+- `tools/code/skills/WORKFLOW.md`: note about shell uploads; re-uploaded to TOOLS R2 `code/skills/WORKFLOW.md`.
+
+### Deploy status
+- Script-only; run `./scripts/deploy-sandbox.sh` to apply uploads (not run by agent).
+
+### What is live now
+- Next sandbox deploy pushes workspace shell assets automatically.
+
+## 2026-03-31 Monaco TOOLS R2 — upload script + README
+
+### What was asked
+How to R2-install Monaco so it can integrate with TOOLS `code/` directory.
+
+### Files changed
+- `tools/code/monaco/README.md`: same-origin worker rules, `loader.config`, when TOOLS vs agent-sam vs Vite bundle.
+- `scripts/upload-monaco-to-tools-r2.sh`: uploads `agent-dashboard/node_modules/monaco-editor/min/vs` to bucket `tools` prefix `code/monaco/vs/`.
+- `tools/code/README.md`: link to monaco README.
+
+### Deploy status
+- Script not run (many R2 objects); user runs after `npm install` in agent-dashboard.
+
+### What is live now
+- Repo-only until `./scripts/upload-monaco-to-tools-r2.sh` is executed.
+
+## 2026-03-31 R2 CORS — tools bucket policy file
+
+### What was asked
+How to add CORS so Monaco / cross-origin use of TOOLS R2 works.
+
+### Files changed
+- `scripts/r2-cors-tools-bucket.json`: Wrangler `rules` for origins (prod, www, sandbox worker, localhost Vite), GET/HEAD, headers, expose ETag/length, maxAge 86400.
+- `tools/code/monaco/README.md`: apply/verify commands, dashboard path, CORS vs Web Worker limits.
+- `tools/code/skills/R2-BUCKETS.md`: pointer to CORS file.
+
+### Deploy status
+- CORS **not** applied to live bucket by agent (Sam runs `wrangler r2 bucket cors set tools --file=scripts/r2-cors-tools-bucket.json` when ready).
+
+### What is live now
+- Repo + TOOLS R2 copies of updated markdown.
+
+## 2026-03-31 R2 CORS — tools bucket applied
+
+### What was asked
+Run `wrangler r2 bucket cors set tools --file=scripts/r2-cors-tools-bucket.json`.
+
+### Files changed
+- None (command only).
+
+### Deploy status
+- CORS set on bucket `tools` (1 rule); verified with `wrangler r2 bucket cors list tools`.
+
+### What is live now
+- Cross-origin GET/HEAD from listed origins receive CORS headers for TOOLS R2 public objects.
+
+## 2026-03-31 Git — default branch main
+
+### What was asked
+Build on **main**; correct branch setup.
+
+### Files changed
+- None (git only).
+
+### What was done
+- Checked out **`main`**, ran **`git pull origin main`** (fast-forward to match `origin/main`, commit `57c6b0e`).
+- **`main`** and **`agentsam-clean`** now point at the **same** commit; **`main`** tracks **`origin/main`**.
+
+### What to do next
+- Keep committing and pushing from **`main`** (`git push origin main`). Optional: delete local **`agentsam-clean`** if you no longer need the extra name: `git branch -d agentsam-clean` (only after you are sure).
+
+## 2026-03-31 D1 — CIDI/CI log for git push 393a9c0
+
+### What was asked
+Log commit/push in `cidi_activity_log`, `cidi_pipeline_runs`, `cicd_runs`, `cidi_run_results`.
+
+### Files changed
+- `migrations/203_cidi_log_git_push_main_393a9c0.sql`: INSERT `cicd_runs` (`run_id` gh_manual_push_main_20260331_393a9c0); `cidi_activity_log` (`cidi_id` 4, workflow CIDI-IAM-AGENTSAM-20260322); `cidi_pipeline_runs` (`pip_cidi_20260331_393a9c0`, sandbox, pending); `cidi_run_results` (git pass, sandbox+benchmark skip).
+
+### Deploy status
+- Applied to remote D1 (`inneranimalmedia-business`).
+
+### What is live now
+- Push 393a9c0 recorded; pipeline row pending sandbox deploy + benchmark.
+
+## 2026-03-31 D1 — project_memory CIDI_THREE_STEP_SYSTEM + plan_steps
+
+### What was asked
+Store canonical 3-step CIDI in one queryable row; add plan_steps for completed + proposed work.
+
+### Files changed
+- `migrations/204_project_memory_cidi_three_step_and_plan_steps.sql`: `INSERT OR REPLACE` `project_memory` id `pmem_cidi_three_step_v1`, key `CIDI_THREE_STEP_SYSTEM` (JSON: steps 1-3, D1 table refs, docs); `DELETE`+`INSERT` ten `plan_steps` for `project_id` `proj_iam_tools_agent_workspace` (1-6 complete, 7-10 not_started).
+
+### Deploy status
+- Applied to remote D1.
+
+### What is live now
+- Agents: `SELECT value FROM project_memory WHERE project_id='inneranimalmedia' AND key='CIDI_THREE_STEP_SYSTEM';`
+- Plan board data: `SELECT * FROM plan_steps WHERE project_id='proj_iam_tools_agent_workspace' ORDER BY step_index;`
+
+## 2026-03-31 docs — CIDI shell master handoff README
+
+### What was asked
+Single master README for another Claude chat: full gates for React/TS shell, no stubs/routing gaps, R2/zip artifacts, 3-step CIDI alignment.
+
+### Files changed
+- `docs/CIDI_SHELL_MASTER_README.md`: new document — gates (G1–G7), canonical facts, target architecture, API pointers, CIDI steps, R2/zip commands, anti-patterns, paste-ready master prompt block.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+
+### What is live now
+- Repo-only doc; handoff to Claude via file copy or path reference.
+
+## 2026-04-01 D1 verify — TOOLS_IAM_EDITOR_ASSETS_v1 + plan_steps 11
+
+### What was asked
+Confirm Gemini D1 registration; note stable working directory and Antigravity UX reference.
+
+### Remote D1 verification (Cursor ran)
+From `/Users/samprimeaux/Downloads/march1st-inneranimalmedia`:
+`./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml`
+
+- `project_memory`: `id=pmem_tools_iam_editor_assets_v1`, `key=TOOLS_IAM_EDITOR_ASSETS_v1`, `project_id=inneranimalmedia`, `length(value)=828`.
+- `plan_steps`: `id=ps_meauxcad_tools_bundle_v1`, `step_index=11`, title MeauxCAD TOOLS bundle v1 + Monaco AMD on TOOLS, `status=complete`. Steps 7–10 still `not_started` (expected until CIDI run).
+
+### Workspace notes for future sessions
+- **Wrangler / R2 / remote D1:** repo root `march1st-inneranimalmedia` (Downloads path above); use `with-cloudflare-env.sh` + `wrangler.production.toml`.
+- **MeauxCAD bundle + Antigravity:** iterative build/upload context may live under Desktop `antigravity`; D1 execution should `cd` to IAM monorepo as above (Gemini corrected path after `../inneranimalmedia` miss).
+- **Operator UX:** plan doc + agent pane + wrangler output in one view (Antigravity/Cursor-style) worked well for Phase 7 D1 sign-off.
+
+### Files changed
+- `docs/cursor-session-log.md` (this entry only).
+
+## 2026-04-01 repo — CLAUDE.md for Claude Code CLI
+
+### What was asked
+/init-style setup: instructions for Agent Sam using GitHub, Claude Code, Cursor, gcloud, wrangler, DB; what to reply to Claude Code MCP prompt.
+
+### Files changed
+- `CLAUDE.md` (new): canonical paths, wrangler/D1 patterns, locked files, CIDI summary, TOOLS R2 prefixes, D1 keys, Monaco merge goal, session hygiene.
+
+### Deploy status
+- Not applicable (docs only).
+
+## 2026-04-01 Phase 1 Monaco connect — agent-dashboard workspace + Vite
+
+### What was asked
+Continue Phase 1: connect TOOLS R2 `code/monaco/` workspace layer into `agent-dashboard` (Claude Code had poor path/tool results; public curl 403 on several objects).
+
+### Files changed
+- `agent-dashboard/src/main.jsx`: import and call `configureMonacoLoader` before render; import `workspace/workspace.css`; keep `AgentDashboard` mount.
+- `agent-dashboard/vite.config.js`: `vite-plugin-monaco-editor` with editor/ts/json/html/css workers; CJS default interop (`monacoEditorPluginModule.default`).
+- `agent-dashboard/package.json` + `package-lock.json`: `monaco-editor@0.55.1`, `vite-plugin-monaco-editor@^1.1.0`.
+- `agent-dashboard/src/workspace/IamCodeSurface.jsx`: fix theme import `./monacoTheme.js` (was broken `../`).
+- `agent-dashboard/src/workspace/IamEditorTabBar.jsx` + `workspace.css`: language icon colors via `--iam-tab-icon-*` CSS vars (no hex in JSX).
+- `agent-dashboard/src/workspace/main.jsx`: comment that Vite entry is `src/main.jsx`, not this sample.
+- `CLAUDE.md`: bucket `tools`, wrangler `r2 object get` when public GET is 403; `NODE_ENV=production` vs devDependencies note.
+
+### Files NOT changed
+- `FloatingPreviewPanel.jsx`, `worker.js`, `agent.html`: not touched.
+- No mount of `IamEditorArea` in dashboard UI yet (optional next: feature flag / route).
+
+### Operational notes
+- Pulled blocked R2 files with: `wrangler r2 object get tools/code/monaco/<file> --remote --file=... -c wrangler.production.toml`.
+- Local `npx vite build` requires devDependencies installed; if `NODE_ENV=production`, run `npm ci` after unsetting or use `NODE_ENV=development`.
+
+### Deploy status
+- Built: yes (`npx vite build` in `agent-dashboard` after `npm ci` with dev deps).
+- R2 uploaded: no.
+- Worker deployed: no — Sam runs CIDI when ready.
+
+### What is live now
+- Changes are repo-only until sandbox build + promote.
+
+## 2026-04-01 CIDI session 1 — code workspace shell + sandbox deploy
+
+### What was asked
+Fully wire sandbox Step 1 so the new Monaco workspace shell and refined bundle are visible on the sandbox worker (3-step CIDI workflow).
+
+### Files changed
+- `agent-dashboard/src/workspace/IamWorkspaceShellHost.jsx` (new): local tab state + `IamEditorArea` + header Close.
+- `agent-dashboard/src/AgentDashboard.jsx`: import `IamWorkspaceShellHost`; `code_workspace` URL param + popstate + Escape; header button (code brackets); full-screen overlay; fixed stray `whimport` typo on `AgentBottomPanel` import.
+- `docs/CIDI_SHELL_MASTER_README.md`: Step 1 verify line documents `?code_workspace=1` and header control.
+- `dashboard/agent.html`: `v=` bumped to **213** by `deploy-sandbox.sh` (script edit).
+
+### Deploy status
+- Built: yes (`deploy-sandbox.sh` ran `npm run build:vite-only`).
+- R2 uploaded: yes — `agent-sam-sandbox-cidi` (`static/dashboard/agent/*`, `agent.html`, iam-workspace-shell, shell.css, manifest).
+- Worker deployed: yes — `inneranimal-dashboard` version `f7c250f3-f1da-4199-9ca2-704aa151a22a`.
+- D1: `dashboard_versions` + `deployments` rows updated by script (non-fatal warnings only if any).
+
+### What is live now
+- Sandbox: `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` serves **v=213**. Open **Code workspace** via the new header control (after Settings) or `?code_workspace=1`. Bundled Monaco + IAM tab chrome.
+
+### Next (CIDI)
+- Step 2: `./scripts/benchmark-full.sh sandbox`.
+- Step 3: Sam runs `./scripts/promote-to-prod.sh` after benchmark gate.
+
+## 2026-04-01 Overnight batch docs — OpenAI + Gemini E2E instructions
+
+### What was asked
+Confirm whether Cursor overnight testing properly instructs end-to-end batch testing for OpenAI and Google (not only Anthropic); ensure Claude Code can execute.
+
+### Files changed
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: new section *Provider batch APIs* with OpenAI (`/v1/batches`, Files API JSONL) and Gemini (ai.google.dev batch-mode) E2E flows, `quality_checks` categories, orchestration snippet; clarified Anthropic is only implemented script today.
+- `CLAUDE.md`: new *Overnight testing* bullets pointing to brief + `batch-api-test.sh`.
+- `scripts/overnight-api-suite.mjs`: Tier D wrangler target fixed from wrong DB name `iam-platform-db` to **`inneranimalmedia-business`**.
+
+### What is live now
+- Documentation and local script fix only; **`batch-api-openai.sh` / `batch-api-gemini.sh`** still to be implemented (brief describes exact steps).
+
+## 2026-04-01 Claude Code overnight handoff doc
+
+### What was asked
+Single paste-ready instructions for Claude Code before end of day: validated/gated test order, anti-loop rules, reconciliation with prior Claude Code worker/brief work.
+
+### Files changed
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md` (new): execution order (dry run → A+B → D → C), max retries, fail-soft provider batch, forbidden actions, success checklist, note on brief length and `inneranimalmedia-business`.
+
+## 2026-04-01 Overnight email doc + Tier C SESSION_COOKIE
+
+### What was asked
+Document morning/digest email vs overnight metrics; wire sandbox chat canary to accept `Cookie: session=...` (no secret committed).
+
+### Files changed
+- `docs/OVERNIGHT_EMAIL_AND_METRICS.md` (new): which cron email includes what; `quality_checks` only failures in digest; `reports/` local-only; Tier C cookie; optional `project_memory` for morning visibility.
+- `scripts/overnight-api-suite.mjs`: `sessionCookieHeaders()` for Tier C; warn if `SESSION_COOKIE` unset; probe error path returns `text: ''`.
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: env table note for Tier C + pointer to email doc.
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md`: Step 0 SESSION_COOKIE; source-of-truth table link.
+- `CLAUDE.md`: pointer to `OVERNIGHT_EMAIL_AND_METRICS.md`.
+
+## 2026-03-31 Morning plan: overnight metrics + prod Tier C
+
+### What was asked
+Prod session URL with `?session=` — expect full metrics in morning summary; Tier C should work against production when using prod cookie.
+
+### Files changed
+- `scripts/overnight-api-suite.mjs`: `OVERNIGHT_TIER_C_PROD=1` posts Tier C to prod; Tier B uses `sessionCookieHeaders()`; `WRITE_OVERNIGHT_TO_D1=1` upserts `project_memory` key `OVERNIGHT_API_SUITE_LAST`; env docs in header comment.
+- `worker.js` (`sendDailyPlanEmail`): `safe()` + SELECT `OVERNIGHT_API_SUITE_LAST` + same-day `agent_telemetry` rollup (UTC start-of-day, aligned with digest); prompt sections for overnight JSON, telemetry, and **OVERNIGHT METRICS** section; word limit 450.
+- `docs/OVERNIGHT_EMAIL_AND_METRICS.md`: table + Tier C prod + implemented path via `WRITE_OVERNIGHT_TO_D1`.
+
+### Deploy status
+- Worker change not deployed until Sam runs CIDI promote with `deploy approved`.
+
+### What is live now
+- Repo only; production morning email unchanged until worker deploy.
+
+## 2026-04-01 INTERNAL_API_SECRET env documentation
+
+### What was asked
+Where `INTERNAL_API_SECRET` is set (`.env`-wise) so handoff / Claude can finish Tier B.
+
+### Files changed
+- `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md` Step 0: Wrangler secret on prod worker + same value in `.env.cloudflare` for local scripts; `.env.cloudflare.example` is name-only.
+
+## 2026-04-01 Git main sync + CIDI D1 205 + documentation index
+
+### What was asked
+Push main up to date; fill `cidi_*` audit tables from agent; improve documentation discipline.
+
+### Files changed
+- `migrations/205_cidi_cursor_sync_overnight_docs_20260401.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for 2026-04-01 repo sync (overnight suite, daily-plan metrics, handoff docs).
+- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: operator index for CIDI tables and migrations 175/203/204/205.
+- `.gitignore`: `reports/` (overnight JSON may reference sessions).
+- `CLAUDE.md`: pointer to `CIDI_TABLES_AND_MIGRATIONS.md`.
+- Staged commit: workspace shell, overnight script, overnight/CIDI docs, `worker.js` morning plan, `dashboard/agent.html`, `agent-dashboard` sources, `package.json` / lockfile — not `agent-dashboard/dist/` (restore or leave unstaged).
+
+### Deploy status
+- D1 migration 205: applied to **remote** `inneranimalmedia-business` (2026-04-01).
+- Worker: not deployed until Sam promotes.
+
+### What is live now
+- **Git:** `main` at `47e9410` (pushed). **D1:** migration `205_cidi_cursor_sync_overnight_docs_20260401.sql` executed (cicd_runs + cidi_activity_log + cidi_pipeline_runs + cidi_run_results).
+
+## 2026-04-01 E2E overnight orchestrator + spec
+
+### What was asked
+Design a real end-to-end test; user pasted INTERNAL_API_SECRET in chat (must rotate).
+
+### Files changed
+- `docs/E2E_OVERNIGHT_TEST_SPEC.md`: gates G1–G6 (health, internal auth, chat, D1 tokens hard-fail, TOOLS R2 artifact URL, per-provider cap).
+- `scripts/e2e-overnight.sh`: build → `tools/code/e2e-nightly/<run_id>/agent-dashboard.js` → verify `tools.inneranimalmedia.com` → `overnight-api-suite.mjs` → D1 gate on latest haiku `agent_telemetry` row in time window (session_id column is **conversation** id, not cookie).
+
+### Deploy status
+- Docs + script only; no worker deploy.
+
+## 2026-04-01 overnight-api-suite: pass=0 fix + D1 24h metrics
+
+### What was asked
+Suite showed `pass=0 fail=0` despite green checkmarks; output felt useless.
+
+### Files changed
+- `scripts/overnight-api-suite.mjs`: result rows use **`check_status`** (not `status`) to avoid ambiguity with HTTP status; **`rowStatus()`** supports legacy `status`; **`summary`** block in JSON (`checks_pass`, `by_tier_pass`, etc.); **Tier D** adds `agent_telemetry` last-24h calls + `computed_cost_usd` sum; **`OVERNIGHT_SUMMARY_JSON=...`** one-line for piping; Tier C pass if **200 + body length** when SSE lacks `done`; warn if checks exist but no PASS/FAIL.
+
+## 2026-04-01 SESSION_COOKIE in .env.cloudflare + overnight suite green
+
+### What was asked
+Set `SESSION_COOKIE` for session `3bf853f9-...` in `.env.cloudflare` and execute the overnight workflow successfully.
+
+### Files changed
+- `.env.cloudflare` (gitignored): added `export SESSION_COOKIE='session=...'` so `overnight-api-suite.mjs` `loadEnv()` loads it.
+
+### Outcome
+- `node scripts/overnight-api-suite.mjs`: exit **0**, **8 pass / 0 fail**, Tier C sandbox canary **200** (~4–6s).
+- `WRITE_OVERNIGHT_TO_D1=1`: remote D1 **`project_memory` `OVERNIGHT_API_SUITE_LAST`** upsert succeeded.
+- Tier B skipped (no `INTERNAL_API_SECRET` in env); expected per prior docs.
+
+### Deploy status
+- No worker deploy; D1 write only for `project_memory` row.
+
+## 2026-04-01 OVERNIGHT_BATCH_API_TEST_BRIEF — E2E map + $5/provider cap
+
+### What was asked
+Document end-to-end testing scope for AI providers, MCP, workflows, Agent Sam D1; **$5 USD per provider hard stop**; fix Tier C auth row and prod-chat env clarification.
+
+### Files changed
+- `docs/OVERNIGHT_BATCH_API_TEST_BRIEF.md`: new sections **End-to-end coverage map and cost governance** (when tests run, spend buckets, hard-stop rules, layer table, gaps); env `OVERNIGHT_CAP_USD_PER_PROVIDER`; Tier C auth column; `quality_checks` wrangler example uses `inneranimalmedia-business`; orchestration + cap notes; hard limits + `OVERNIGHT_TIER_C_PROD` vs `OVERNIGHT_INCLUDE_PROD` clarification.
+
+## 2026-04-01 TOOLS live preview.html + Vite base for E2E
+
+### What was asked
+Wire the nightly TOOLS bundle into a real browser UI instead of viewing raw `agent-dashboard.js`.
+
+### Files changed
+- `agent-dashboard/vite.config.js`: `base` from **`E2E_TOOLS_VITE_BASE`** (default `/static/dashboard/agent/`) so full E2E uploads resolve chunk URLs to the TOOLS prefix.
+- `scripts/e2e-overnight.sh`: export `E2E_TOOLS_VITE_BASE` when skip-tools is off and mode is **full**; unset after build; generate **`reports/<run_id>-preview.html`** from `dashboard/agent.html` (rewrite agent CSS/JS + `shell.css` to prod); upload **`tools/.../preview.html`**; banner notes `/api/` may fail on tools origin; artifact echo for preview URL.
+- `docs/E2E_OVERNIGHT_TEST_SPEC.md`: G5 + full-mode + rebuild-without-E2E note for prod R2.
+
+### Deploy status
+- No worker deploy; TOOLS R2 only on next `./scripts/e2e-overnight.sh` run.
+
+### What is live now
+- Existing TOOLS runs still have entry + manifest only; **new** runs get `preview.html` after the script changes are used locally.
+
+## 2026-04-01 aitesting worker deploy (TOOLS R2 playground)
+
+### What was asked
+Deploy approved: ship `/Users/samprimeaux/Downloads/aitesting-worker` so `https://aitesting.meauxbility.workers.dev` serves the `tools` R2 bucket (`/`, `/docs`, `/api/ls`, `/api/file`, path by key).
+
+### Files changed
+- External project only: `aitesting-worker/wrangler.toml`, `aitesting-worker/src/worker.js` (no monorepo edits).
+
+### Deploy status
+- Worker deployed: **aitesting** version `8a764181-2f3b-4e2f-bad4-7e3de4269a6b`, URL `https://aitesting.meauxbility.workers.dev`
+- Wrangler warned remote dashboard had **D1 `DB` binding**, **observability**, different **compatibility_date**; local wrangler.toml replaced remote (R2 `TOOLS` + vars only).
+
+### What is live now
+- `GET /` returns `code/iam-workspace-shell.html`; `/api/ls?prefix=code/` returns objects + 12 subdirectory prefixes; `/api/file?key=code/README.md` returns markdown body.
+
+## 2026-04-01 D1: ws_aitestsandbox + aitesting workers / worker_registry
+
+### What was asked
+Register AITesting playground in `workers`, `worker_registry`, and `workspaces` (`ws_aitestsandbox`). User pasted an OpenAI API key in chat — **not** stored in D1 (rotate key at OpenAI).
+
+### Files changed
+- `migrations/206_ws_aitestsandbox_aitesting_worker.sql`: `workers` row `aitesting`; `worker_registry` `wr_aitesting_sandbox`; `workspaces` `ws_aitestsandbox`; `workspace_settings` + `workspace_projects` `wp_aitestsandbox_tools_playground`. Applied to prod D1 via wrangler.
+
+### Deploy status
+- D1 migration executed remotely: success (5 statements).
+
+### What is live now
+- Cloud tab `/api/workers` includes **aitesting** (active); workspace **ws_aitestsandbox** and project slug **aitesting-tools-playground** for IAM tooling.
+
+## 2026-04-01 aitesting full integration (Monaco, agent chat, Draw, Playwright list)
+
+### What was asked
+Wire `aitesting.meauxbility.workers.dev`: worker routes (ls, file, save, SSE chat), patch `iam-workspace-shell.html` in R2 (Monaco tree, agent streaming, Excalidraw iframe, Playwright jobs from D1). Set `OPENAI_API_KEY` via wrangler secret (user rotates exposed key). Do not touch main `inneranimalmedia` worker or `wrangler.production.toml`.
+
+### Files changed
+- `/Users/samprimeaux/Downloads/aitesting-worker/src/worker.js`: POST `/api/file/save`, POST `/api/agent/chat` (OpenAI SSE passthrough), GET `/api/playwright/jobs` (D1 `playwright_jobs`), `/api/ls` delimiter param, CORS for POST.
+- `/Users/samprimeaux/Downloads/aitesting-worker/wrangler.toml`: `SHELL`, `[[d1_databases]]` binding `inneranimalmedia-business`.
+- `tools` R2 `code/iam-workspace-shell.html`: Monaco AMD + R2 tree + agent panel + Browser + Draw tabs (uploaded via wrangler).
+
+### Deploy status
+- **aitesting** deployed version `e5d4755b-b057-401f-b859-7d5f4d14bb9b`; R2 shell uploaded.
+- `OPENAI_API_KEY` must be set by Sam: `cd aitesting-worker && ../march1st-inneranimalmedia/scripts/with-cloudflare-env.sh npx wrangler secret put OPENAI_API_KEY` (after rotating the leaked key).
+
+### What is live now
+- `/api/ls`, `/api/file`, `/api/playwright/jobs` return data; `/api/agent/chat` returns 500 until secret is set.
+
+## 2026-04-01 aitesting shell remaster v0.2.0 (UI/UX, Monaco theme, Excalidraw, registry, ai_api log)
+
+### What was asked
+Remaster playground shell: full tabbed UI/UX (stubs polished), Monaco theme-aware from CSS vars, Excalidraw embedded (ESM + iframe fallback), live D1 registry for `mcp_registered_tools` / `agentsam_skill` / `agentsam_project_context`, AI runs table from `ai_api_test_runs`, redeploy worker + R2 shell; summarize three-lane CIDI flow.
+
+### Files changed
+- `/Users/samprimeaux/Downloads/aitesting-worker/iam-workspace-shell.html`: `setTab` drives all centers; `applyIamMonacoTheme` + `data-theme` observer; registry + `/api/ai-runs` loaders; Excalidraw dynamic import; chat shows `X-AI-Run-Id`; shell `v0.2.0`; CSS for registry rows and excalidraw inner wrapper.
+
+### Deploy status
+- R2: `tools/code/iam-workspace-shell.html` uploaded (prod wrangler `wrangler.production.toml`).
+- Worker **aitesting** deployed (`0a243fee-63c9-4d5d-a0be-9a9cafc9775d`).
+
+### What is live now
+- `https://aitesting.meauxbility.workers.dev` serves updated shell from TOOLS R2; OpenAI chat + `ai_api_test_runs` logging unchanged in worker (prior session).
+
+## 2026-04-01 AITestSuite stack integration doc (meauxcad repo, aitestsuite worker)
+
+### What was asked
+Document how `https://aitestsuite.meauxbility.workers.dev/` integrates as Step 1 dedicated AI development zone; keep using `https://github.com/SamPrimeaux/meauxcad.git`; explain flow to sandbox then production.
+
+### Files changed
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` (new): Git vs Worker naming, three-layer ASCII + Mermaid, secrets/observability notes, D1 `aitesting` → `aitestsuite` follow-up.
+
+### Files NOT changed
+- `meauxcad` repo / `wrangler.jsonc` (separate repo; user updates Cloudflare Build settings there).
+
+### Deploy status
+- Built: N/A
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: N/A
+
+### What is live now
+- Canonical runbook for AITestSuite + IAM sandbox + prod pipeline lives in `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`.
+
+## 2026-04-01 meauxcad GitHub README + wrangler name (remote repo)
+
+### What was asked
+Rewrite/expand README and push to https://github.com/SamPrimeaux/meauxcad to confirm AITestSuite setup.
+
+### Files changed (SamPrimeaux/meauxcad on GitHub)
+- `README.md`: Expanded stack role (lab vs CIDI sandbox vs prod), live URL `aitestsuite.meauxbility.workers.dev`, features, tech table, build/deploy, layout, no emojis.
+- `wrangler.jsonc`: `"name": "meauxcad"` to `"name": "aitestsuite"` to match Cloudflare Worker.
+
+### Deploy status
+- Commits pushed: `5e86f76` (README), `9a22dcd` (wrangler).
+- IAM monorepo: not deployed.
+
+### What is live now
+- Default branch on GitHub reflects new README and Worker name; Cloudflare Builds should auto-deploy if connected.
+
+## 2026-04-01 AITestSuite terminal toolbar + IAM shell assets (meauxcad repo)
+
+### What was asked
+Top-right terminal icon next to three layout icons; bottom drawer terminal with drag resize; tie to inneranimalmedia.com assets for smooth pt2 sandbox port.
+
+### Files changed (SamPrimeaux/meauxcad, pushed `1ff1e43`)
+- `App.tsx`: Four-icon cluster (split, agent side, bottom aux strip, terminal); main column `min-h-0` flex stack; optional bottom panel strip; `XTermShell` with `iamOrigin`.
+- `components/XTermShell.tsx`: `iamOrigin` prop; xterm theme from CSS variables; flex `min-h-0` content; banner lines for shell.css + `/api/agent/terminal/ws`.
+- `index.html`: Title IAM Explorer; preconnect + `shell.css` from inneranimalmedia.com; JetBrains Mono; body uses `var(--bg-app)` / `var(--text-main)`.
+- `index.css`: body margin/overflow/font aligned with shell.
+
+### Deploy status
+- Built locally: `npx vite build` OK (after `NODE_ENV=development npm install`).
+- IAM monorepo: not deployed.
+
+### What is live now
+- Pushed to `main`; Cloudflare Workers Builds should deploy `aitestsuite` when connected.
+
+## 2026-04-01 AITestSuite shell v1.2.0 + CIDI migration 207 + cache v=
+
+### What was asked
+Every deployment bumps `v=`; document in `cidi_*` tables; status bar shows v1.2.0 (was v1.1.0).
+
+### Files changed
+**SamPrimeaux/meauxcad (pushed `a5036fc`, code v1.2.0 `a8854e3`):**
+- `src/shellVersion.ts`: `SHELL_VERSION = '1.2.0'`.
+- `package.json`: version `1.2.0`.
+- `worker.ts`, `App.tsx`, `components/StatusBar.tsx`, `components/XTermShell.tsx`: import `SHELL_VERSION`.
+- `scripts/bump-cache.js`: `?v=<semver>-<unix_ms>` from `package.json` + timestamp.
+- `README.md`: Versioning / CIDI pointer.
+- `index.html`: updated by bump-cache (committed after bump).
+
+**march1st-inneranimalmedia:**
+- `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for meauxcad `a8854e3` / shell v1.2.0.
+- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: row for migration 207.
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`: shell version + CIDI table.
+
+### Deploy status
+- D1 migration 207: **not executed** — Sam runs `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` when ready.
+
+### What is live now
+- meauxcad `main` has single-source `SHELL_VERSION` and semver+timestamp cache bust; next Cloudflare build shows status **v1.2.0** after deploy.
+
+## 2026-04-01 AITestSuite — Settings gear + status bar workspace IDE wiring
+
+### What was asked
+Keep settings gear; bottom status bar reflects real workspace / IDE plans.
+
+### Files changed (SamPrimeaux/meauxcad `c475045`)
+- `App.tsx`: Top bar **Settings** after terminal cluster; `ideWorkspace` + `formatWorkspaceStatusLine`; Welcome `onWorkspacePick`; LocalExplorer `onWorkspaceRootChange`; Monaco `onCursorPositionChange`; `StatusBar` props.
+- `src/ideWorkspace.ts`: localStorage `meauxcad_ide_workspace` + `meauxcad_git_branch`.
+- `components/StatusBar.tsx`: CSS vars (no hex); `showCursor`; `cursorText` placeholder when not in editor.
+- `components/WelcomeLauncher.tsx`, `LocalExplorer.tsx`, `MonacoEditorView.tsx`: callbacks as above.
+- `README.md`: status bar / workspace notes.
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` (march1st): status bar row.
+
+### Deploy status
+- Cloudflare: push triggers CI; D1 unchanged.
+
+### What is live now
+- Settings in **top bar** and **activity rail**; status bar shows workspace line, branch, live cursor in Code tab.
+
+## 2026-04-01 HANDOFF — Sandbox `/dashboard/agent` vs AITestSuite (shell stacking, failed UX path)
+
+### What is going on (mental model)
+
+There are **three separate Workers**, not one product skin:
+
+| Surface | Worker | URL | Source repo | What it is |
+|--------|--------|-----|-------------|------------|
+| **AITestSuite (lab)** | `aitestsuite` | `https://aitestsuite.meauxbility.workers.dev/` | `github.com/SamPrimeaux/meauxcad` | Standalone IDE: Explorer + Monaco + agent column + tabs. **No** IAM `agent.html` wrapper. |
+| **Sandbox (CIDI)** | `inneranimal-dashboard` | `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` | `march1st-inneranimalmedia` (this monorepo) + CI | Full IAM mirror. **`dashboard/agent.html` already injects IAM chrome**: global topbar, left sidenav (~240px), footer status bar. React mounts inside `.main-content`. |
+| **Production** | `inneranimalmedia` | `https://inneranimalmedia.com/dashboard/agent` | Same monorepo after promote | Same HTML shell pattern as sandbox (R2 `static/dashboard/agent.html`). |
+
+**Why AITestSuite “looks good” and sandbox “looks terrible”:** The lab is a **single** application layout. The sandbox is **IAM shell + React app**. Any attempt to paste **meauxcad-style** top bar / activity rail / “IAM Explorer” chrome **inside** React **without** removing the outer shell produces **double or triple navigation**, wrong proportions, and a cramped center. That is **not** a theme bug; it is **two apps worth of chrome**.
+
+### What went wrong (anti-patterns)
+
+1. **Shell on shell:** Adding `IamExplorerTopBar`, `IamExplorerActivityBar`, or similar inside `AgentDashboard.jsx` while `agent.html` still renders `.topbar` + `.sidenav`.
+2. **CSS-only “standalone” class on `body`:** Hiding `.topbar`/`.sidenav` via `agent-ide-standalone` in `dashboard/agent.html` is a **layout band-aid**. It does **not** recreate meauxcad’s **Explorer + editor + right agent** tree; it only frees vertical space. Sam reported this approach still **failed** expectations (still not a proper rebuild / parity).
+3. **Uncommitted / undeployed fixes:** As of this handoff, **local** `git status` still shows **modified** `dashboard/agent.html`, `agent-dashboard/dist/`, `vite.config.js`, docs, scripts — **not necessarily pushed or uploaded to sandbox R2**. Live sandbox can still be **old** broken UI even if the repo has a partial fix.
+
+### “Past 5–6 deployments” (git + intent — not all are sandbox agent UI)
+
+Recent **monorepo** commits on `main` (newest first):
+
+1. **`cc2fcf1`** — D1 migration 210 (`r2_bucket_bindings`, `r2_bucket_list` CIDI buckets). **Not** agent UI.
+2. **`0fe82b0`** — D1 migration 209 (builds + `cidi_activity_log` / meauxcad chat log wiring docs). **Not** agent UI.
+3. **`329fd84`** — Migration 208 note (`ai_api_test_runs`). **Not** agent UI.
+4. **`5178cf8`** — Docs: AITestSuite status bar / session log (meauxcad `c475045`). **Docs only** in this repo.
+5. **`75984d2`** — D1 migration 207 (CIDI audit row for AITestSuite shell **v1.2.0**). **Not** sandbox React.
+6. **`10158cc`** — Session log / overnight suite docs.
+
+The **large IAM workspace / shell push** that affects dashboard assets was earlier: **`393a9c0` (2026-03-31)** — “IAM workspace shell, sandbox shell R2, monaco+cors, migrations (v=212)”, touching `agent.html`, R2 upload scripts, `tools/code`, many migrations, `worker.js`. That commit **increased** surface area (workspace shell narrative, Monaco on TOOLS) and is the backdrop for comparing lab vs sandbox.
+
+**AITestSuite** deploys come from **meauxcad** `main` + Cloudflare Builds (e.g. shell **v1.2.0**, status bar workspace commits **`a8854e3` / `c475045`** per session log). Those **do not** auto-fix the monorepo agent page.
+
+### What actually fixes it (for the next agent — no more shell-on-shell)
+
+**Do not** add another full IDE chrome inside `AgentDashboard` until **one** of these is true:
+
+- **Option A — Single shell:** Serve `/dashboard/agent` from a **minimal HTML shell** (no IAM topbar/sidenav) **or** a **dedicated route** that only loads the Vite bundle + status bar if required by product.
+- **Option B — Real port:** **Port or embed** meauxcad’s root **`App`** (Explorer + Monaco + agent column) into `agent-dashboard` (or lazy route), sharing theme tokens — **replace** the current welcome grid for that mode, do **not** duplicate bars.
+- **Option C — Iframe/embed:** Full-screen iframe to a **sandbox-origin** meauxcad build (only if auth, cookies, and CSP are acceptable).
+
+**After any `dashboard/agent.html` change:** Upload to **sandbox** R2 (`deploy-sandbox.sh` path) before expecting `inneranimal-dashboard` to match local. **After `agent-dashboard` source change:** `npm run build:vite-only` then deploy sandbox.
+
+### Files to read first
+
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` — §10 sandbox vs lab; §2 three surfaces.
+- `dashboard/agent.html` — `.topbar`, `.sidenav`, `.main-content`, `agent-ide-standalone` (if present).
+- `agent-dashboard/src/AgentDashboard.jsx` — ensure no second IDE shell sneaks back in.
+
+### Known pain
+
+- Sam’s assessment: **last few attempts felt like “trash”** because they **patched chrome** instead of **one layout owner** (either IAM shell **or** meauxcad layout, not both).
+
+## 2026-04-01 agent-sam-sandbox-cicd R2 README
+
+### What was asked
+Document the new R2 bucket `agent-sam-sandbox-cicd` (S3 + r2.dev URLs), explain MeauxCAD v1-style `dist/` vs `source/` and related folders, and suggest layout/CI practices to reduce chaos.
+
+### Files changed
+- `docs/agent-sam-sandbox-cicd/README.md` (new): bucket note, endpoint table, vocabulary for `dist`/`source`/MANIFEST, alignment with IAM `static/dashboard/` vs `tools` MeauxCAD tree, operational checklist.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc` / bindings: not touched; README states `cicd` is parallel to canonical `agent-sam-sandbox-cidi` until explicitly wired.
+
+### Deploy status
+- Built: no
+- R2 uploaded: no
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+Unchanged; documentation only.
+
+### Known issues / next steps
+- Reconcile Cloudflare bucket naming (`cicd` vs `cidi`) and Worker binding when Sam promotes `cicd` to active sandbox.
+
+## 2026-04-01 Sandbox login HTML key fallback (static_auth-signin)
+
+### What was asked
+Serve the uploaded AITestSuite login HTML from `agent-sam-sandbox-cicd` at `static/static_auth-signin.html` when visiting `https://inneranimal-dashboard.meauxbility.workers.dev/` (and `/auth/signin`), matching the public r2.dev URL shape.
+
+### Files changed
+- `worker.js` (root `/` and `/auth/signin|login|signup` branches): after `static/auth-signin.html`, fall back to `static/static_auth-signin.html` so Gemini’s upload path works without renaming the object.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc`: `DASHBOARD` already binds `agent-sam-sandbox-cicd`; no binding change needed.
+- OAuth / callback handlers: not touched.
+
+### Deploy status
+- Built: n/a
+- R2 uploaded: no (object already in bucket under `static/static_auth-signin.html`)
+- Worker deployed: no — run `./scripts/deploy-sandbox.sh` (or `deploy approved` per project rules) to ship.
+- Deploy approved by Sam: no
+
+### What is live now
+Until sandbox deploy: behavior unchanged on workers.dev. After deploy: root and `/auth/*` resolve the new file when the canonical key is missing.
+
+### Known issues / next steps
+- Optional: also upload a copy as `static/auth-signin.html` for parity with production `agent-sam` naming.
+
+## 2026-04-01 agent-sam-sandbox-cicd registry README + promote bucket alignment
+
+### What was asked
+Document `agent-sam-sandbox-cicd` as the canonical sandbox CI/CD registry (structure, workflow, public URLs) for inneranimalmedia.com suite; ensure deploy/promote path is consistent so assets are actually promotable.
+
+### Files changed
+- `docs/agent-sam-sandbox-cicd/README.md`: Rewrote as registry doc (prefix table, IAM `static/dashboard/` keys, auth filenames, deploy/promote pointers, tools vs dashboard note).
+- `scripts/promote-to-prod.sh`: `SANDBOX_BUCKET` `agent-sam-sandbox-cidi` → `agent-sam-sandbox-cicd` to match `deploy-sandbox.sh` and `wrangler.jsonc`.
+- `wrangler.jsonc`: Comment typo fixed (`cidi` → `cicd` for ASSETS/DASHBOARD).
+
+### Files NOT changed (and why)
+- `wrangler.production.toml`: locked; README notes verifying prod `DASHBOARD` = `agent-sam` in Cloudflare if that is still the intent.
+
+### Deploy status
+- Built: n/a
+- R2 uploaded: n/a (documentation + script fix only)
+- Worker deployed: no
+- Deploy approved by Sam: n/a
+
+### What is live now
+Promote script previously pulled from **`cidi`** while deploy wrote to **`cicd`**; after this change, promote pulls from the same bucket deploy uses (once you run promote).
+
+### Known issues / next steps
+- Reconcile any remaining docs that still say **`agent-sam-sandbox-cidi`** for the active sandbox pipeline if those references are stale.
+
+## 2026-04-01 Sandbox dashboard R2 full upload + CURSOR_HANDOFF_SANDBOX
+
+### What was asked
+Upload remaining `/dashboard/*` pages to sandbox R2 so `/dashboard/overview` and other MPAs resolve; align with AITestSuite-to-inneranimal-dashboard plan; add sandbox handoff doc.
+
+### Files changed
+- `docs/CURSOR_HANDOFF_SANDBOX.md` (new): bucket `agent-sam-sandbox-cicd`, URL-to-key table, `upload-repo-to-r2-sandbox.sh` + `deploy-sandbox.sh` commands, verification curls.
+- Ran `overview-dashboard` `npm run build`; ran `./scripts/upload-repo-to-r2-sandbox.sh` (uploaded `dashboard/*.html`, `static/dashboard/**`, `agent-sam/static/**`, overview dist, agent dist, `static/auth-signin.html`, `source/worker.js` snapshot) to **`agent-sam-sandbox-cicd`**.
+
+### Files NOT changed (and why)
+- `wrangler.jsonc`: already pointed ASSETS+DASHBOARD at `cicd`; no edit this pass.
+
+### Deploy status
+- Built: yes (`overview-dashboard` Vite build)
+- R2 uploaded: yes — bucket **`agent-sam-sandbox-cicd`** (full script output; includes `static/dashboard/overview.html` + `static/dashboard/overview/*` JS)
+- Worker deployed: no (R2-only fix; existing worker serves new objects)
+- Deploy approved by Sam: n/a for this R2-only step
+
+### What is live now
+`curl -sI https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/overview` returns **200** with HTML body from R2.
+
+### Known issues / next steps
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` still mentions legacy **`cidi`** in places; prefer **`docs/CURSOR_HANDOFF_SANDBOX.md`** for current bucket name until that file is edited.
+

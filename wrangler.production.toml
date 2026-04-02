@@ -43,7 +43,7 @@ bucket_name = "splineicons"
 
 [[r2_buckets]]
 binding = "DASHBOARD"
-bucket_name = "agent-sam"
+bucket_name = "agent-sam-sandbox-cicd"
 
 [[r2_buckets]]
 binding = "AUTORAG_BUCKET"

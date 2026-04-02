@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy-sandbox.sh — build + upload to agent-sam-sandbox-cidi + deploy inneranimal-dashboard
+# deploy-sandbox.sh — build + upload to agent-sam-sandbox-cicd + deploy inneranimal-dashboard
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
 set -euo pipefail
@@ -23,7 +23,7 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
 fi
 
 CFG="wrangler.jsonc"
-SANDBOX_BUCKET="agent-sam-sandbox-cidi"
+SANDBOX_BUCKET="agent-sam-sandbox-cicd"
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
 
 echo "=== SANDBOX DEPLOY ==="

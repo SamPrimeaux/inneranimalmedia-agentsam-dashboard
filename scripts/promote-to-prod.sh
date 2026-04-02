@@ -16,7 +16,7 @@ echo "=== PROMOTE TO PRODUCTION ==="
 echo ""
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
-SANDBOX_BUCKET="agent-sam-sandbox-cidi"
+SANDBOX_BUCKET="agent-sam-sandbox-cicd"
 PROD_BUCKET="agent-sam"
 PROD_CFG="wrangler.production.toml"
 

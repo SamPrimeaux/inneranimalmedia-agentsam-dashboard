@@ -3698,8 +3698,26 @@ const worker = {
       }
 
       // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
-      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states') {
+      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states' || pathLower === '/api/chat' || pathLower === '/api/models') {
+        // Alias /api/chat -> /api/agent/chat
+        if (pathLower === '/api/chat') url.pathname = '/api/agent/chat';
+        // Alias /api/models -> /api/agent/models
+        if (pathLower === '/api/models') url.pathname = '/api/agent/models';
         return handleAgentApi(request, url, env, ctx, secret);
+      }
+
+      // ----- API: Core Generation / Drive Sync -----
+      if (pathLower === '/api/generate' && methodUpper === 'POST') {
+        if (!env.AI) return jsonResponse({ error: 'AI not configured' }, 503);
+        try {
+          const body = await request.json();
+          const p = body.prompt || 'Hello';
+          const r = await env.AI.run('@cf/google/gemini-2.5-flash', { contents: [{ role: 'user', parts: [{ text: p }] }] });
+          return jsonResponse({ response: r.candidates?.[0]?.content?.parts?.[0]?.text || '' });
+        } catch (e) { return jsonResponse({ error: e.message }, 500); }
+      }
+      if (pathLower === '/api/drive/sync') {
+        return jsonResponse({ ok: true, message: 'Drive sync queued' });
       }
 
       // ----- API: MCP dashboard (/api/mcp/*) -----
@@ -3975,12 +3993,21 @@ const worker = {
           if (!slugFallback) slugFallback = request.headers.get('X-IAM-Theme')?.trim() || null;
           if (!slugFallback) return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
           const rowCms = await env.DB.prepare(
-            'SELECT name, slug, theme_family FROM cms_themes WHERE slug = ? OR name = ? LIMIT 1'
+            'SELECT name, slug, theme_family, config FROM cms_themes WHERE slug = ? OR name = ? LIMIT 1'
           ).bind(slugFallback, slugFallback).first();
           if (rowCms?.slug) {
             const fam = (rowCms.theme_family || '').toLowerCase();
             const isDark = fam === 'dark' || (fam !== 'light' && fam !== 'high_contrast_light' && !fam);
-            return jsonResponse({ name: rowCms.name || rowCms.slug, slug: rowCms.slug, is_dark: isDark });
+            let themeConfig = {};
+            try { themeConfig = typeof rowCms.config === 'string' ? JSON.parse(rowCms.config) : (rowCms.config || {}); } catch(_) {}
+            return jsonResponse({
+              name: rowCms.name || rowCms.slug,
+              slug: rowCms.slug,
+              is_dark: isDark,
+              terminal: themeConfig.terminal || { background: '#060e14', foreground: '#839496' },
+              monaco_theme: themeConfig.monaco || 'meauxcad-dark',
+              data: themeConfig.css_vars || {}
+            });
           }
           return jsonResponse({ name: 'dark', slug: 'dark', is_dark: true });
         } catch (e) {
@@ -4873,24 +4900,15 @@ const worker = {
             return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {} });
           }
           try {
-            let rowsResult = null;
-            let usRow = null;
-            try {
-              const [rows, us] = await Promise.all([
-                env.DB.prepare(
-                  'SELECT workspace_id, brand, plans, budget, time, theme FROM user_workspace_settings WHERE user_id = ?'
-                ).bind(settingsSessionUserId).all(),
-                env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(),
-              ]);
-              rowsResult = rows;
-              usRow = us;
-            } catch (colErr) {
-              const msg = String(colErr?.message || '');
-              if (msg.includes('theme') || msg.includes('default_workspace_id')) {
-                rowsResult = await env.DB.prepare('SELECT workspace_id, brand, plans, budget, time FROM user_workspace_settings WHERE user_id = ?').bind(settingsSessionUserId).all();
-                try { usRow = await env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(); } catch (_) { usRow = null; }
-              } else throw colErr;
-            }
+            const [wsRows, rows, us] = await Promise.all([
+              env.DB.prepare("SELECT id, name, category, brand FROM workspaces WHERE id LIKE 'ws_%' ORDER BY name").all(),
+              env.DB.prepare(
+                'SELECT workspace_id, brand, plans, budget, time, theme FROM user_workspace_settings WHERE user_id = ?'
+              ).bind(settingsSessionUserId).all(),
+              env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(),
+            ]);
+            const rowsResult = rows;
+            const usRow = us;
             const workspaces = {};
             const workspaceThemes = {};
             for (const r of (rowsResult?.results || [])) {
@@ -4902,9 +4920,8 @@ const worker = {
               };
               if (r.theme != null && r.theme.trim()) workspaceThemes[r.workspace_id] = r.theme.trim();
             }
-            const current = (usRow?.default_workspace_id && CORE_WORKSPACE_IDS.includes(usRow.default_workspace_id))
-              ? usRow.default_workspace_id : 'ws_samprimeaux';
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
+            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : 'ws_samprimeaux';
+            return jsonResponse({ data: wsRows.results || CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
           } catch (e) {
             return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
           }
@@ -5057,7 +5074,9 @@ const worker = {
         const obj = await env.ASSETS.get('index-v3.html') ?? await env.ASSETS.get('index-v2.html') ?? await env.ASSETS.get('index.html');
         if (obj) return respondWithR2Object(obj, 'text/html');
         if (env.DASHBOARD) {
-          const signin = await env.DASHBOARD.get('static/auth-signin.html');
+          const signin =
+            (await env.DASHBOARD.get('static/auth-signin.html')) ??
+            (await env.DASHBOARD.get('static/static_auth-signin.html'));
           if (signin) return respondWithR2Object(signin, 'text/html', { noCache: true });
         }
         return notFound(path);
@@ -5083,7 +5102,9 @@ const worker = {
 
       // Auth sign-in / login / signup (DASHBOARD) -- same page for all
       if (pathLower === '/auth/signin' || pathLower === '/auth/login' || pathLower === '/auth/signup') {
-        const obj = await env.DASHBOARD.get('static/auth-signin.html');
+        const obj =
+          (await env.DASHBOARD.get('static/auth-signin.html')) ??
+          (await env.DASHBOARD.get('static/static_auth-signin.html'));
         if (obj) return respondWithR2Object(obj, 'text/html');
         return notFound(path);
       }
@@ -10481,7 +10502,19 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       } catch (e) {
         console.warn('[context-picker/catalog] agent_memory_index', e?.message ?? e);
       }
-      return jsonResponse({ tables, workflows, commands, memory_keys });
+      let workspaces = [];
+      try {
+        const wsq = await env.DB.prepare(
+          `SELECT id, name FROM workspaces WHERE id LIKE 'ws_%' ORDER BY name LIMIT 50`
+        ).all();
+        workspaces = (wsq.results || []).map((r) => ({
+          id: r.id != null ? String(r.id) : '',
+          name: r.name != null ? String(r.name) : '',
+        }));
+      } catch (e) {
+        console.warn('[context-picker/catalog] workspaces', e?.message ?? e);
+      }
+      return jsonResponse({ tables, workflows, commands, memory_keys, workspaces });
     }
 
     /** @-picker: memory index keys (auth). */

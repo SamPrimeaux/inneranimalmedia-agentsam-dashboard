@@ -9448,6 +9448,449 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
+/** Direct upstream SSE passthrough for /api/agent/chat with tee-based telemetry. */
+const AGENT_SAM_CHAT_SYSTEM = 'You are Agent Sam, an AI developer assistant for InnerAnimalMedia.';
+
+async function parseAgentChatRequestBody(request) {
+  const ct = (request.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('multipart/form-data')) {
+    const fd = await request.formData();
+    return {
+      message: String(fd.get('message') || '').trim(),
+      mode: String(fd.get('mode') || '').trim().toLowerCase(),
+      model: String(fd.get('model') || fd.get('model_id') || '').trim(),
+      conversationId: String(fd.get('conversationId') || fd.get('session_id') || '').trim(),
+    };
+  }
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {
+    body = {};
+  }
+  return {
+    message: String(body.message || '').trim(),
+    mode: String(body.mode || '').trim().toLowerCase(),
+    model: String(body.model || body.model_id || '').trim(),
+    conversationId: String(body.conversationId || body.session_id || '').trim(),
+  };
+}
+
+function accumulateUsageFromJson(apiPlatform, j, acc) {
+  if (!j || typeof j !== 'object') return;
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return;
+    const u = o.usage;
+    if (u && typeof u === 'object') {
+      if (typeof u.input_tokens === 'number') acc.in = Math.max(acc.in, u.input_tokens);
+      if (typeof u.output_tokens === 'number') acc.out = Math.max(acc.out, u.output_tokens);
+      if (typeof u.prompt_tokens === 'number') acc.in = Math.max(acc.in, u.prompt_tokens);
+      if (typeof u.completion_tokens === 'number') acc.out = Math.max(acc.out, u.completion_tokens);
+    }
+    const um = o.usageMetadata;
+    if (um && typeof um === 'object') {
+      if (typeof um.promptTokenCount === 'number') acc.in = Math.max(acc.in, um.promptTokenCount);
+      if (typeof um.candidatesTokenCount === 'number') acc.out = Math.max(acc.out, um.candidatesTokenCount);
+      if (typeof um.totalTokenCount === 'number') acc.total = Math.max(acc.total || 0, um.totalTokenCount);
+    }
+    for (const v of Object.values(o)) {
+      if (v && typeof v === 'object') walk(v);
+    }
+  };
+  walk(j);
+  if (apiPlatform === 'gemini_api' && j.usageMetadata) {
+    const um = j.usageMetadata;
+    if (typeof um.promptTokenCount === 'number') acc.in = Math.max(acc.in, um.promptTokenCount);
+    if (typeof um.candidatesTokenCount === 'number') acc.out = Math.max(acc.out, um.candidatesTokenCount);
+  }
+}
+
+async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId) {
+  const reader = branch2.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  const acc = { in: 0, out: 0, total: 0 };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trimEnd();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        let j;
+        try {
+          j = JSON.parse(payload);
+        } catch (_) {
+          continue;
+        }
+        accumulateUsageFromJson(apiPlatform, j, acc);
+      }
+    }
+  } catch (e) {
+    console.warn('[agent/chat-sse] telemetry branch', e?.message ?? e);
+  } finally {
+    reader.releaseLock();
+  }
+  let inputTok = acc.in;
+  let outputTok = acc.out;
+  if (apiPlatform === 'workers_ai') {
+    inputTok = 0;
+    outputTok = 0;
+  }
+  const rateIn = Number(modelRow.input_rate_per_mtok) || 0;
+  const rateOut = Number(modelRow.output_rate_per_mtok) || 0;
+  const computedCostUsd = (inputTok * rateIn) / 1_000_000 + (outputTok * rateOut) / 1_000_000;
+  if (!env.DB) return;
+  const telemetryRowId = crypto.randomUUID();
+  const modelKey = String(modelRow.model_key || '');
+  const provider = String(modelRow.provider || 'unknown');
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
+    )
+      .bind(
+        telemetryRowId,
+        'tenant_sam_primeaux',
+        conversationId || null,
+        'llm_call',
+        'chat_completion',
+        1,
+        modelKey,
+        provider,
+        inputTok,
+        0,
+        0,
+        inputTok,
+        outputTok,
+        computedCostUsd,
+        apiPlatform === 'gemini_api' ? 'gemini_api' : null,
+        null,
+        modelRow.input_rate_per_mtok ?? null,
+        modelRow.output_rate_per_mtok ?? null,
+        0,
+        0,
+        'chat',
+        null
+      )
+      .run();
+  } catch (e) {
+    console.error('[agent/chat-sse] agent_telemetry INSERT failed:', e?.message ?? e);
+  }
+}
+
+function sseResponseHeaders() {
+  return {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  };
+}
+
+async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+
+  const ingestBypass = isIngestSecretAuthorized(request, env, secretFn);
+  if (!ingestBypass) {
+    const sess = await getSession(env, request).catch(() => null);
+    if (!sess?.user_id) return jsonResponse({ error: 'Session invalid', code: 401 }, 401);
+  }
+
+  let parsed;
+  try {
+    parsed = await parseAgentChatRequestBody(request);
+  } catch (e) {
+    return jsonResponse({ error: 'Invalid request body', detail: String(e?.message || e) }, 400);
+  }
+
+  const { message, mode: modeRaw, model: modelParam, conversationId } = parsed;
+  if (!message) return jsonResponse({ error: 'message required' }, 400);
+  if (!modelParam) return jsonResponse({ error: 'model required' }, 400);
+  const mode = modeRaw || 'agent';
+  if (!['ask', 'agent', 'plan', 'debug'].includes(mode)) {
+    return jsonResponse({ error: 'Invalid mode', allowed: ['ask', 'agent', 'plan', 'debug'] }, 400);
+  }
+
+  let modelRow;
+  try {
+    modelRow = await env.DB.prepare(
+      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name
+       FROM ai_models
+       WHERE (id = ? OR model_key = ?) AND COALESCE(is_active, 0) = 1
+       LIMIT 1`
+    )
+      .bind(modelParam, modelParam)
+      .first();
+  } catch (e) {
+    console.error('[agent/chat-sse] model lookup', e?.message ?? e);
+    return jsonResponse({ error: 'Model lookup failed', detail: String(e?.message || e) }, 500);
+  }
+
+  if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
+
+  const apiPlatform = String(modelRow.api_platform || '').trim();
+  const modelKey = String(modelRow.model_key || modelParam);
+  const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
+
+  const mkUpstreamError = async (upstream, providerName) => {
+    const body_text = await upstream.text();
+    console.error('[agent/chat-sse] Provider error', providerName, upstream.status, body_text.slice(0, 4000));
+    return jsonResponse(
+      { error: 'Provider error', detail: body_text, provider: providerName, model: modelKey },
+      500
+    );
+  };
+
+  if (apiPlatform === 'anthropic_api') {
+    const key = secretFn('ANTHROPIC_API_KEY') ?? env.ANTHROPIC_API_KEY;
+    if (!key) return jsonResponse({ error: 'ANTHROPIC_API_KEY not configured' }, 503);
+    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelKey,
+        max_tokens: 8192,
+        stream: true,
+        system: AGENT_SAM_CHAT_SYSTEM,
+        messages: [{ role: 'user', content: message }],
+      }),
+    });
+    if (!upstream.ok) return mkUpstreamError(upstream, 'anthropic');
+    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    const [branch1, branch2] = upstream.body.tee();
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId));
+    } else {
+      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId);
+    }
+    return new Response(branch1, { headers: sseResponseHeaders() });
+  }
+
+  if (apiPlatform === 'gemini_api') {
+    const key = secretFn('GOOGLE_AI_API_KEY') ?? env.GOOGLE_AI_API_KEY;
+    if (!key) return jsonResponse({ error: 'GOOGLE_AI_API_KEY not configured' }, 503);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelKey)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: message }] }],
+        systemInstruction: { parts: [{ text: AGENT_SAM_CHAT_SYSTEM }] },
+      }),
+    });
+    if (!upstream.ok) return mkUpstreamError(upstream, 'google');
+    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    const [branch1, branch2] = upstream.body.tee();
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId));
+    } else {
+      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId);
+    }
+    return new Response(branch1, { headers: sseResponseHeaders() });
+  }
+
+  if (apiPlatform === 'openai') {
+    const key = secretFn('OPENAI_API_KEY') ?? env.OPENAI_API_KEY;
+    if (!key) return jsonResponse({ error: 'OPENAI_API_KEY not configured' }, 503);
+    const upstream = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelKey,
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [
+          { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+          { role: 'user', content: message },
+        ],
+      }),
+    });
+    if (!upstream.ok) return mkUpstreamError(upstream, 'openai');
+    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    const [branch1, branch2] = upstream.body.tee();
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId));
+    } else {
+      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId);
+    }
+    return new Response(branch1, { headers: sseResponseHeaders() });
+  }
+
+  if (apiPlatform === 'cursor') {
+    const ckey = secretFn('CURSOR_API_KEY') ?? env.CURSOR_API_KEY;
+    const ctoken = secretFn('CURSOR_API_TOKEN') ?? env.CURSOR_API_TOKEN;
+    if (!ckey) return jsonResponse({ error: 'CURSOR_API_KEY not configured' }, 503);
+    const upstream = await fetch('https://api2.cursor.sh/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ckey}`,
+        'Content-Type': 'application/json',
+        ...(ctoken ? { 'x-cursor-token': ctoken } : {}),
+      },
+      body: JSON.stringify({
+        model: modelKey,
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [
+          { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+          { role: 'user', content: message },
+        ],
+      }),
+    });
+    if (upstream.status === 401 || upstream.status === 404) {
+      const body_text = await upstream.text();
+      console.error('[agent/chat-sse] Cursor API endpoint mismatch', upstream.status, body_text.slice(0, 2000));
+      return jsonResponse(
+        { error: 'Cursor API endpoint mismatch', status: upstream.status, model: modelKey, detail: body_text },
+        upstream.status
+      );
+    }
+    if (!upstream.ok) return mkUpstreamError(upstream, 'cursor');
+    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    const [branch1, branch2] = upstream.body.tee();
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId));
+    } else {
+      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId);
+    }
+    return new Response(branch1, { headers: sseResponseHeaders() });
+  }
+
+  if (apiPlatform === 'workers_ai') {
+    if (!env.AI) return jsonResponse({ error: 'Workers AI binding not configured' }, 503);
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const enc = new TextEncoder();
+    const writeSse = (obj) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
+
+    const runWai = async () => {
+      try {
+        let streamOrResult;
+        try {
+          streamOrResult = await env.AI.run(modelKey, {
+            stream: true,
+            messages: [
+              { role: 'system', content: AGENT_SAM_CHAT_SYSTEM },
+              { role: 'user', content: message },
+            ],
+          });
+        } catch (e) {
+          console.error('[agent/chat-sse] Workers AI', e?.message ?? e);
+          await writeSse({ error: 'Provider error', detail: String(e?.message || e), provider: 'workers_ai', model: modelKey });
+          return;
+        }
+
+        if (streamOrResult && typeof streamOrResult.getReader === 'function') {
+          const r = streamOrResult.getReader();
+          const dec = new TextDecoder();
+          let pending = '';
+          try {
+            while (true) {
+              const { done, value } = await r.read();
+              if (done) break;
+              pending += dec.decode(value, { stream: true });
+              const parts = pending.split('\n');
+              pending = parts.pop() || '';
+              for (const line of parts) {
+                const t = line.trim();
+                if (!t) continue;
+                let j;
+                try {
+                  j = JSON.parse(t);
+                } catch (_) {
+                  continue;
+                }
+                const piece =
+                  (typeof j.response === 'string' ? j.response : null) ??
+                  (typeof j.token === 'string' ? j.token : null) ??
+                  (typeof j.text === 'string' ? j.text : null) ??
+                  '';
+                if (piece) await writeSse({ choices: [{ delta: { content: piece } }] });
+              }
+            }
+          } finally {
+            r.releaseLock();
+          }
+        } else {
+          const full =
+            (typeof streamOrResult?.response === 'string' ? streamOrResult.response : null) ??
+            (typeof streamOrResult?.text === 'string' ? streamOrResult.text : null) ??
+            '';
+          if (full) await writeSse({ choices: [{ delta: { content: full } }] });
+        }
+
+        await writeSse({ choices: [], usage: { prompt_tokens: 0, completion_tokens: 0 } });
+        await writer.write(enc.encode('data: [DONE]\n\n'));
+      } finally {
+        await writer.close().catch(() => {});
+      }
+      await insertWorkersAiChatTelemetry(env, modelRow, conversationId);
+    };
+
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(runWai());
+    } else {
+      void runWai();
+    }
+
+    return new Response(readable, { headers: sseResponseHeaders() });
+  }
+
+  return jsonResponse({ error: 'Unsupported api_platform', api_platform: apiPlatform, model: modelKey }, 400);
+}
+
+async function insertWorkersAiChatTelemetry(env, modelRow, conversationId) {
+  if (!env.DB) return;
+  const modelKey = String(modelRow.model_key || '');
+  const provider = String(modelRow.provider || 'workers_ai');
+  const inputTok = 0;
+  const outputTok = 0;
+  const computedCostUsd = 0;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
+    )
+      .bind(
+        crypto.randomUUID(),
+        'tenant_sam_primeaux',
+        conversationId || null,
+        'llm_call',
+        'chat_completion',
+        1,
+        modelKey,
+        provider,
+        inputTok,
+        0,
+        0,
+        inputTok,
+        outputTok,
+        computedCostUsd,
+        'workers_ai',
+        null,
+        modelRow.input_rate_per_mtok ?? null,
+        modelRow.output_rate_per_mtok ?? null,
+        0,
+        0,
+        'chat',
+        null
+      )
+      .run();
+  } catch (e) {
+    console.error('[agent/chat-sse] workers_ai telemetry INSERT failed:', e?.message ?? e);
+  }
+}
 /** Parse data URL to { mediaType, base64 } for vision APIs */
 function parseDataUrl(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string') return null;
@@ -12246,9 +12689,11 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       try {
         const { results } = await env.DB.prepare(
-          `SELECT id, display_name AS name, provider, supports_tools, supports_vision, size_class
+          `SELECT id, display_name AS name, provider, model_key, api_platform
            FROM ai_models
-           WHERE is_active = 1 AND show_in_picker = 1
+           WHERE COALESCE(is_active, 0) = 1
+             AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
+             AND api_platform IN ('anthropic_api', 'gemini_api', 'openai', 'workers_ai', 'cursor')
            ORDER BY provider, display_name`
         ).all();
         return jsonResponse(results || []);
@@ -12617,1445 +13062,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/chat' && method === 'POST') {
-      const chatStartTime = Date.now();
-      const routingOptsForChat = { chatStartMs: chatStartTime };
-      const contentTypeHdr = (request.headers.get('content-type') || '').toLowerCase();
-      let body = {};
-      if (contentTypeHdr.includes('multipart/form-data')) {
-        const fd = await request.formData();
-        const message = String(fd.get('message') || '').trim();
-        const modeRaw = String(fd.get('mode') || 'agent').trim().toLowerCase();
-        const convRaw = fd.get('conversationId');
-        const session_id =
-          convRaw != null && String(convRaw).trim() !== '' ? String(convRaw).trim() : undefined;
-        let msgList = [];
-        const mj = fd.get('messages_json');
-        if (mj != null && String(mj).trim() !== '') {
-          try {
-            msgList = JSON.parse(String(mj));
-          } catch (_) {
-            msgList = [];
-          }
-        }
-        if (!Array.isArray(msgList) || msgList.length === 0) {
-          if (!message) return jsonResponse({ error: 'messages_json or message required' }, 400);
-          msgList = [{ role: 'user', content: message }];
-        }
-        const model_id = String(fd.get('model_id') || 'auto');
-        const contextMode = fd.get('contextMode');
-        const contextCode = fd.get('contextCode');
-        const contextFile = fd.get('contextFile');
-        const fileEntries = fd.getAll('files');
-        const imagesArr = [];
-        const attachedFilesArr = [];
-        const metaLines = [];
-        const abToB64 = (ab) => {
-          const bytes = new Uint8Array(ab);
-          let bin = '';
-          const step = 8192;
-          for (let i = 0; i < bytes.length; i += step) {
-            bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
-          }
-          return btoa(bin);
-        };
-        for (const entry of fileEntries) {
-          if (!entry || typeof entry.arrayBuffer !== 'function') continue;
-          const name = entry.name || 'file';
-          const size = entry.size || 0;
-          const mime = entry.type || 'application/octet-stream';
-          const isImage = mime.startsWith('image/');
-          if (isImage && size > 0 && size < 5 * 1024 * 1024) {
-            const ab = await entry.arrayBuffer();
-            imagesArr.push({ dataUrl: `data:${mime};base64,${abToB64(ab)}` });
-          } else {
-            metaLines.push(`- ${name} (${size} bytes, ${mime})`);
-            attachedFilesArr.push({
-              name,
-              content: `[User attached file — metadata only, content not loaded: ${name}, ${size} bytes, ${mime}]`,
-            });
-          }
-        }
-        let _stagedAttachmentSystemText = '';
-        if (metaLines.length) {
-          _stagedAttachmentSystemText =
-            `[User staged attachments (metadata only; large or non-image files)]\n${metaLines.join('\n')}`;
-        }
-        body = {
-          model_id,
-          messages: msgList,
-          mode: modeRaw,
-          session_id,
-          images: imagesArr,
-          attached_files: attachedFilesArr,
-          _stagedAttachmentSystemText,
-        };
-        if (contextFile != null && contextCode != null) {
-          body.fileContext = { filename: String(contextFile), content: String(contextCode) };
-        }
-      } else {
-        try {
-          body = await request.json();
-        } catch (_) {
-          return jsonResponse({ error: 'Invalid JSON body' }, 400);
-        }
-      }
-      const { model_id, messages: msgList, agent_id, session_id, images: bodyImages, attached_files: bodyFiles, compiled_context: bodyCompiledContext, mode: bodyMode, fileContext: bodyFileContext, audit: bodyAudit, context_refs: bodyContextRefsRaw, context_mentions: bodyContextMentionsLegacy } = body;
-      const bodyContextRefs = Array.isArray(bodyContextRefsRaw)
-        ? bodyContextRefsRaw
-        : Array.isArray(bodyContextMentionsLegacy)
-          ? bodyContextMentionsLegacy
-          : [];
-      const chatMode = (bodyMode === 'ask' || bodyMode === 'plan' || bodyMode === 'debug' || bodyMode === 'agent') ? bodyMode : 'agent';
-      console.log('[agent/chat] model_id:', model_id);
-      const bodyCompiledContextTrim = typeof bodyCompiledContext === 'string' ? bodyCompiledContext.trim() : '';
-      if (!msgList || !Array.isArray(msgList) || msgList.length === 0) return jsonResponse({ error: 'messages required' }, 400);
-      const ingestBypass = isIngestSecretAuthorized(request, env, secretFn);
-      let chatUserId, chatWorkspaceId, chatTenantId;
-      if (ingestBypass) {
-        chatUserId = 'sam_primeaux';
-        chatWorkspaceId = 'ws_samprimeaux';
-        chatTenantId = 'tenant_sam_primeaux';
-      } else {
-        const chatSession = await getSession(env, request).catch(() => null);
-        chatUserId = chatSession?.user_id;
-        chatWorkspaceId = body?.workspace_id || 'ws_samprimeaux';
-        chatTenantId = 'tenant_sam_primeaux';
-        if (!chatUserId) return jsonResponse({ error: 'Session invalid', code: 401 }, 401);
-      }
-      await ensureWorkSessionAndSignal(env, chatUserId, chatWorkspaceId, 'ai', 'agent-chat', {
-        mode: chatMode,
-        message_count: msgList.length,
-      });
-      routingOptsForChat.workspaceId = chatWorkspaceId || 'default';
-      routingOptsForChat.tenantId = chatTenantId || 'tenant_sam_primeaux';
-
-      let _routingClassifySnapshot = null;
-      let model;
-      if (model_id === 'auto') {
-        console.log('[agent/chat] Auto mode activated - selecting optimal model');
-        const autoUserText = getLatestUserPlainText(msgList);
-        const autoResult = await selectAutoModel(env, autoUserText, true);
-        model = autoResult?.model ?? autoResult;
-        const autoIntent = autoResult?.intent ?? null;
-        if (autoIntent) _routingClassifySnapshot = { intent: autoIntent };
-        if (model && autoIntent) model = { ...model, _intent: autoIntent };
-        console.log('[agent/chat] Auto selected:', model ? `${model.provider}/${model.model_key}` : 'null', 'intent:', autoIntent);
-      } else {
-        model = await env.DB.prepare('SELECT * FROM ai_models WHERE id = ? OR model_key = ?').bind(model_id, model_id).first();
-        if (model) {
-          try {
-            const _mt = getLatestUserPlainText(msgList);
-            if (_mt) {
-              const _mc = await classifyIntent(env, _mt);
-              _routingClassifySnapshot = _mc;
-              if (_mc?.intent) model = { ...model, _intent: _mc.intent };
-            }
-          } catch (_) {}
-        }
-        if (!model) {
-          const syn = syntheticWorkersAiChatModelRow(model_id);
-          if (syn) model = syn;
-        }
-        console.log('[agent/chat] model_id:', model_id, 'resolved:', model ? `${model.provider}/${model.model_key}` : 'null');
-      }
-      if (!model) {
-        try {
-          const available = await env.DB.prepare('SELECT id, model_key, provider FROM ai_models WHERE is_active=1 AND show_in_picker=1 LIMIT 20').all();
-          console.log('[agent/chat] available models (picker):', (available?.results ?? []).map(r => `${r.provider}:${r.model_key}`).join(', '));
-        } catch (_) {}
-      }
-      // Agent-based model override
-      let agentRow = null;
-      if (agent_id) {
-        try {
-          agentRow = await env.DB.prepare(
-            'SELECT model_policy_json, system_prompt, tool_invocation_style FROM agentsam_ai WHERE id = ?'
-          ).bind(agent_id).first();
-          if (agentRow?.model_policy_json) {
-            const policy = typeof agentRow.model_policy_json === 'string'
-              ? JSON.parse(agentRow.model_policy_json)
-              : agentRow.model_policy_json;
-            const overrideKey = policy.model_name ?? policy.primary ?? null;
-            if (overrideKey) {
-              const overrideModel = await env.DB.prepare(
-                'SELECT * FROM ai_models WHERE id = ? OR model_key = ?'
-              ).bind(overrideKey, overrideKey).first();
-              if (overrideModel) model = overrideModel;
-            }
-          }
-        } catch (_) {
-          // bad JSON -- keep model from picker
-        }
-      }
-      if (!model) return jsonResponse({ error: 'Model not found' }, 404);
-
-      const agentsamRunId = crypto.randomUUID();
-      const modelIdForRun =
-        model?.id != null ? String(model.id) : model?.model_key != null ? String(model.model_key) : null;
-      if (env.DB) {
-        const insRun = env.DB
-          .prepare(
-            `INSERT INTO agentsam_agent_run (id, user_id, status, trigger, model_id, input_tokens, output_tokens, cost_usd, started_at, created_at)
-             VALUES (?, ?, 'in_progress', 'chat', ?, NULL, NULL, NULL, datetime('now'), datetime('now'))`
-          )
-          .bind(agentsamRunId, chatUserId, modelIdForRun)
-          .run()
-          .catch((e) => console.warn('[agent/chat] agentsam_agent_run', e?.message ?? e));
-        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(insRun);
-        else await insRun;
-      }
-
-      const images = Array.isArray(bodyImages) ? bodyImages : [];
-      const attachedFiles = Array.isArray(bodyFiles) ? bodyFiles : [];
-      const latestUserPlain = getLatestUserPlainText(msgList);
-      let lastUserContent = appendAttachedFilesToUserText(latestUserPlain, attachedFiles);
-      if (Array.isArray(bodyContextRefs) && bodyContextRefs.length > 0) {
-        const lines = [];
-        for (const m of bodyContextRefs) {
-          if (!m || typeof m !== 'object') continue;
-          const t = String(m.type || '').toLowerCase().trim();
-          const v = String(m.value || '').trim();
-          if (!t || !v) continue;
-          const meta = m.meta && typeof m.meta === 'object' ? m.meta : {};
-          const src = meta.source != null ? String(meta.source) : '';
-          const bits = [`- [${t}] ${v}`];
-          if (src) bits.push(`source=${src}`);
-          if (meta.bucket) bits.push(`bucket=${String(meta.bucket)}`);
-          if (meta.key) bits.push(`key=${String(meta.key)}`);
-          if (meta.repo) bits.push(`repo=${String(meta.repo)}`);
-          if (meta.path) bits.push(`path=${String(meta.path)}`);
-          if (meta.fileId) bits.push(`fileId=${String(meta.fileId)}`);
-          lines.push(bits.join(' '));
-        }
-        if (lines.length) {
-          lastUserContent += '\n\n[Structured @ context]\n' + lines.join('\n');
-        }
-      }
-
-      // Intent: auto-trigger workflow_runs (before model / RAG) — POST /api/agent/workflows/trigger parity
-      // Use only the latest user turn (not trailing assistant/tool messages or file-appendix text).
-      const workflowIntent = matchAgentChatWorkflowIntent(latestUserPlain);
-      if (workflowIntent && env.DB) {
-        let pipelineRowId = null;
-        try {
-          const prow = await env.DB.prepare(
-            `SELECT id FROM ai_workflow_pipelines WHERE id = ? LIMIT 1`
-          ).bind(workflowIntent.workflowName).first();
-          if (prow?.id) pipelineRowId = String(prow.id);
-        } catch (e) {
-          console.warn('[agent/chat] ai_workflow_pipelines lookup', e?.message ?? e);
-        }
-        const runId = 'wfr_' + [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
-        const trigBy = String(chatUserId || 'sam_primeaux').slice(0, 200);
-        try {
-          await env.DB.prepare(
-            `INSERT INTO workflow_runs (
-              id, tenant_id, workflow_id, workflow_name, trigger_source, triggered_by, status, input_data, created_at, updated_at
-            ) VALUES (?,?,?,?, 'agent', ?, 'pending', ?, datetime('now'), datetime('now'))`
-          ).bind(runId, 'tenant_sam_primeaux', pipelineRowId, workflowIntent.workflowName, trigBy, null).run();
-        } catch (e) {
-          return jsonResponse({ error: e?.message || String(e) }, 500);
-        }
-        ctx.waitUntil(executeAgentWorkflowSteps(env, ctx, runId, pipelineRowId, workflowIntent.workflowName));
-        return jsonResponse({
-          message: `Starting ${workflowIntent.displayName} workflow — running in background. Check the Output tab in the bottom panel for results.`,
-          workflow_run_id: runId,
-          workflow_name: workflowIntent.workflowName,
-          workflow_triggered: true,
-        });
-      }
-
-      const cleanMessages = msgList.filter(m =>
-        !(m.role === 'assistant' && (m.content === 'No response' || m.content === ''))
-      );
-      let apiMessages = cleanMessages.map((m, i) => {
-        const isLastUser = i === cleanMessages.length - 1 && m.role === 'user';
-        const content = isLastUser ? lastUserContent : m.content;
-        return { role: m.role === 'assistant' ? 'assistant' : 'user', content };
-      });
-
-      let conversationId = session_id || null;
-      if (!conversationId && env.DB) {
-        try {
-          conversationId = crypto.randomUUID();
-          const now = Math.floor(Date.now() / 1000);
-          await env.DB.prepare(
-            "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
-          ).bind(conversationId, env.TENANT_ID || 'system', 'chat', 'active', '{}', now, now, PROJECT_ID).run();
-          try {
-            const session = await getSession(env, request);
-            const userId = session?.user_id || 'system';
-            await env.DB.prepare(
-              "INSERT INTO agent_conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)"
-            ).bind(conversationId, userId, 'New Conversation', now, now).run();
-          } catch (e) {
-            console.error('[agent/chat] agent_conversations INSERT failed:', e?.message ?? e);
-          }
-          if (ctx && typeof ctx.waitUntil === 'function') {
-            ctx.waitUntil(generateConversationName(env, conversationId, lastUserContent || '').catch((e) => console.warn('[agent/chat] generateConversationName', e?.message)));
-          }
-        } catch (e) {
-          console.error('[agent/chat] agent_sessions INSERT failed:', e?.message ?? e);
-        }
-      }
-      conversationId = conversationId || crypto.randomUUID();
-
-      const bodySkillRaw = body.skill_ids ?? body.skill_id;
-      const skillIdsForInv = Array.isArray(bodySkillRaw)
-        ? bodySkillRaw
-        : (bodySkillRaw != null && String(bodySkillRaw).trim() !== '' ? [bodySkillRaw] : []);
-      if (skillIdsForInv.length && env.DB) {
-        const runSkillInv = () => recordAgentsamSkillInvocationsFromChat(env, {
-          skillIds: skillIdsForInv.map((x) => String(x)),
-          userId: chatUserId,
-          workspaceId: chatWorkspaceId,
-          conversationId,
-          inputSummary: latestUserPlain,
-          modelUsed: model?.model_key != null ? String(model.model_key) : null,
-          durationMs: null,
-        });
-        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(Promise.resolve().then(runSkillInv));
-        else runSkillInv();
-      }
-
-      let ragContext = '';
-      const RAG_MIN_QUERY_WORDS = 4;
-      const RAG_MIN_CONTEXT_CHARS = 100;
-      let doRagChunksInjected = 0;
-      let doTopRagScore = 0;
-      let doTopChunkIds = [];
-      let doQueryHash = '';
-      // AutoRAG: skip for shell/question (pgvector handles those), skip if token missing
-      // If AI Search returns 7001, fail silently — pgvector provides fallback context
-      const _intentForRag = model?._intent ?? null;
-      const runRag = (chatMode === 'agent') &&
-        (_intentForRag !== 'shell') &&
-        (_intentForRag !== 'question') &&
-        env.AI &&
-        env.VECTORIZE_INDEX &&
-        lastUserContent &&
-        lastUserContent.split(' ').length >= RAG_MIN_QUERY_WORDS;
-
-      let ragSkippedFromDoCache = false;
-      if (runRag && lastUserContent && env.AGENT_SESSION && conversationId) {
-        try {
-          const _qhBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lastUserContent));
-          doQueryHash = Array.from(new Uint8Array(_qhBuf)).map((x) => x.toString(16).padStart(2, '0')).join('');
-          const _doId = env.AGENT_SESSION.idFromName(String(conversationId));
-          const _doSess = env.AGENT_SESSION.get(_doId);
-          const _ragCacheResp = await _doSess.fetch(new Request(`https://do/rag-cache?hash=${encodeURIComponent(doQueryHash)}`));
-          const _ragCache = await _ragCacheResp.json().catch(() => ({}));
-          if (_ragCache.hit === true && _ragCache.context != null && String(_ragCache.context).length >= RAG_MIN_CONTEXT_CHARS) {
-            ragContext = capWithMarker(String(_ragCache.context), PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
-            ragSkippedFromDoCache = true;
-            doTopRagScore = Number(_ragCache.top_score) || 0;
-            try {
-              const _cid = _ragCache.chunk_ids;
-              doTopChunkIds = typeof _cid === 'string' && _cid.trim() ? JSON.parse(_cid) : [];
-            } catch {
-              doTopChunkIds = [];
-            }
-            doRagChunksInjected = Array.isArray(doTopChunkIds) ? doTopChunkIds.length : 0;
-          }
-        } catch (e) {
-          console.warn('[agent/chat] DO RAG cache read', e?.message ?? e);
-        }
-      }
-
-      if (runRag && !ragSkippedFromDoCache) {
-        try {
-          const _t0Rag = Date.now();
-          const _EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
-          const _CPT = 4;
-          if (!doQueryHash && lastUserContent) {
-            const _qhBuf2 = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(lastUserContent));
-            doQueryHash = Array.from(new Uint8Array(_qhBuf2)).map((x) => x.toString(16).padStart(2, '0')).join('');
-          }
-          const _embedRes = await env.AI.run(_EMBED_MODEL, { text: lastUserContent });
-          const _queryVec = _embedRes?.data?.[0] ?? _embedRes?.result?.data?.[0];
-          if (_queryVec) {
-            const _chunkRows = await env.DB.prepare(
-              `SELECT id, content, token_count, embedding_vector, metadata_json
-               FROM ai_knowledge_chunks
-               WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
-            ).all();
-            const _chunks = _chunkRows.results ?? [];
-            const _cos = (a, b) => {
-              let dot = 0, na = 0, nb = 0;
-              for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-              return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
-            };
-            const _scored = _chunks
-              .map((c) => { try { return { ...c, score: _cos(_queryVec, JSON.parse(c.embedding_vector)) }; } catch { return null; } })
-              .filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 3);
-            const _topRag = _scored[0]?.score ?? 0;
-            if (_topRag < 0.6 && env.DB) {
-              const _slug = String(_intentForRag ?? 'mixed');
-              const _rule = await env.DB.prepare(
-                `SELECT fallback_model_key FROM ai_routing_rules WHERE COALESCE(is_active,1)=1 AND match_type='intent' AND match_value=? ORDER BY priority DESC LIMIT 1`
-              ).bind(_slug).first();
-              if (_rule?.fallback_model_key) {
-                const _fb = await env.DB.prepare('SELECT * FROM ai_models WHERE model_key = ? AND COALESCE(is_active,1)=1').bind(_rule.fallback_model_key).first();
-                if (_fb) model = { ..._fb, _intent: model._intent };
-              }
-            }
-            const _ragChunksForXml = _scored.map((c) => {
-              let object_key = '';
-              try {
-                if (c.metadata_json != null) {
-                  const m = typeof c.metadata_json === 'string' ? JSON.parse(c.metadata_json) : c.metadata_json;
-                  object_key = m.object_key || m.source || m.path || '';
-                }
-              } catch (_) {}
-              return { content: c.content, score: c.score, object_key };
-            });
-            const _xmlEscAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const ragBlock = _ragChunksForXml.length
-              ? `<retrieved_context>\n${_ragChunksForXml.map((c, i) =>
-                `  <chunk index="${i + 1}" score="${typeof c.score === 'number' ? c.score.toFixed(3) : '?'}" source="${_xmlEscAttr(c.object_key || '')}">\n<![CDATA[\n${c.content}\n]]>\n  </chunk>`,
-              ).join('\n')}\n</retrieved_context>`
-              : '';
-            const _injectTokens = _scored.reduce((s, c) => s + (c.token_count || 0), 0);
-            const _wasCapped = ragBlock.length > PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS;
-            if (ragBlock.length >= RAG_MIN_CONTEXT_CHARS) {
-              ragContext = capWithMarker(ragBlock, PROMPT_CAPS.RAG_CONTEXT_MAX_CHARS);
-            }
-            const _ragDur = Date.now() - _t0Rag;
-            const _ragHistId = crypto.randomUUID();
-            const _ragChunkIds = _scored.map((c) => c.id);
-            const _ragScoreMap = {};
-            for (const c of _scored) _ragScoreMap[c.id] = c.score;
-            ctx.waitUntil(env.DB.prepare(`
-              INSERT INTO rag_query_log
-                (conversation_id,query_text,query_tokens,results_count,top_score,
-                 chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            `).bind(conversationId, lastUserContent.slice(0, 500),
-              Math.ceil(lastUserContent.length / _CPT), _chunks.length, _topRag,
-              _scored.length, _injectTokens, ragBlock.length, _EMBED_MODEL, chatMode, _intentForRag,
-              'd1_cosine', _ragDur, _wasCapped ? 1 : 0, 0, 0
-            ).run().catch(() => {}));
-            ctx.waitUntil(env.DB.prepare(
-              `INSERT INTO ai_rag_search_history (id, tenant_id, query_text, retrieved_chunk_ids_json, retrieval_score_json, context_used, created_at)
-               VALUES (?,?,?,?,?,?,unixepoch())`
-            ).bind(_ragHistId, 'tenant_sam_primeaux', lastUserContent.slice(0, 2000), JSON.stringify(_ragChunkIds), JSON.stringify(_ragScoreMap), ragContext || ragBlock).run().catch(() => {}));
-            ctx.waitUntil(insertQualityCheckRagQuery(env, _topRag));
-            doRagChunksInjected = _scored.length;
-            doTopRagScore = _topRag;
-            doTopChunkIds = _ragChunkIds;
-          }
-        } catch (e) { console.error('[agent/chat] RAG failed:', e?.message ?? e); }
-      }
-
-      let pgMatchRows = [];
-      const _skipPgVector = (model?._intent === 'shell' || model?._intent === 'question' || model?._intent === 'sql');
-      if (!_skipPgVector && env.HYPERDRIVE?.connectionString && lastUserContent && String(lastUserContent).trim()) {
-        try {
-          const pgProj = typeof body.pg_project_id === 'string' ? body.pg_project_id : undefined;
-          const pgRes = await pgMatchDocuments(env, lastUserContent, {
-            project_id: pgProj,
-            match_threshold: typeof body.pg_match_threshold === 'number' ? body.pg_match_threshold : undefined,
-            match_count: typeof body.pg_match_count === 'number' ? body.pg_match_count : 8,
-          });
-          if (pgRes.rows?.length && !pgRes.error) {
-            pgMatchRows = pgRes.rows;
-          } else if (pgRes.error) {
-            console.warn('[agent/chat] pgvector match_documents:', pgRes.error);
-          }
-        } catch (e) {
-          console.warn('[agent/chat] pgvector failed:', e?.message ?? e);
-        }
-      }
-
-      let contextIndexBlurb = '';
-      const contextIndexScope =
-        body.tenant_id && body.tenant_id !== 'system' ? body.tenant_id : 'tenant_sam_primeaux';
-      const contextSearchTerm = getContextIndexSearchTerm(lastUserContent);
-      let contextIndexIdsForLog = [];
-      if (contextSearchTerm && env.DB) {
-        try {
-          const idxRows = await fetchContextIndex(env.DB, lastUserContent, contextIndexScope);
-          const built = await buildContextIndexPromptBlock(env, idxRows, lastUserContent);
-          contextIndexBlurb = built.text;
-          contextIndexIdsForLog = built.ids;
-        } catch (e) {
-          console.warn('[context_index] assemble', e?.message ?? e);
-        }
-      }
-      await logContextSearch(env.DB, {
-        queryText: lastUserContent,
-        scope: contextIndexScope,
-        searchTerm: contextSearchTerm || '',
-        contextIds: contextIndexIdsForLog,
-      });
-
-      let compiledContext = null;
-      let builtSections = null;
-      let agentSamSystemCore = null;
-      if (bodyCompiledContextTrim) {
-        compiledContext = bodyCompiledContextTrim;
-      } else {
-      // STEP 1 -- build a hash key (include date so daily memory is fresh per day)
-      const tenantId = body.tenant_id || 'system';
-      const today = new Date().toISOString().slice(0, 10);
-      const contextHash = `${tenantId}:agent_sam:v1:${today}`;
-      // Invalidation: when adding writes to agent_memory_index or ai_knowledge_base (here or any endpoint), call invalidateCompiledContextCache(env) after the write.
-
-      // STEP 2 -- check cache before doing any memory/kb queries
-      try {
-        const cached = await env.DB.prepare(
-          `SELECT compiled_context FROM ai_compiled_context_cache
-           WHERE context_hash = ?
-           AND (expires_at IS NULL OR expires_at > unixepoch())`
-        ).bind(contextHash).first();
-
-        if (cached?.compiled_context) {
-          compiledContext = cached.compiled_context;
-          // update hit count, non-blocking
-          env.DB.prepare(
-            `UPDATE ai_compiled_context_cache
-             SET access_count = access_count + 1,
-                 cache_hit_count = cache_hit_count + 1,
-                 last_accessed_at = unixepoch()
-             WHERE context_hash = ?`
-          ).bind(contextHash).run().catch(() => {});
-        }
-      } catch (_) {}
-
-      // STEP 3 -- cache miss: build normally
-      if (!compiledContext) {
-      let schemaMemory = '';
-      if (env.R2) {
-        try {
-          const o = await env.R2.get('memory/schema-and-records.md');
-          if (o) schemaMemory = await o.text();
-        } catch (_) {}
-      }
-
-      let dailyLog = '';
-      let yesterdayLog = '';
-      if (env.R2) {
-        try {
-          const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-          const o1 = await env.R2.get('memory/daily/' + today + '.md');
-          if (o1) dailyLog = await o1.text();
-          const o2 = await env.R2.get('memory/daily/' + yesterday + '.md');
-          if (o2) yesterdayLog = await o2.text();
-        } catch (_) {}
-      }
-      const dailyMemoryRaw = (dailyLog || yesterdayLog)
-        ? '\n\n[Daily memory - authoritative for "what did we do today" and "what are next priorities"; prefer this over generic roadmap or old D1 counts]:\n' + (dailyLog || '(none for today)') + (yesterdayLog ? '\n\n[Yesterday]:\n' + yesterdayLog : '')
-        : '';
-      const dailyMemoryBlurb = capForProvider(dailyMemoryRaw, model?.provider, 'DAILY_MEMORY_MAX_CHARS');
-
-      const memoryIndexBlurb = '';
-
-      let knowledgeBlurb = '';
-      try {
-        const { results: kbRows } = await env.DB.prepare(
-          'SELECT title, content, category FROM ai_knowledge_base WHERE tenant_id = ? OR tenant_id = ? ORDER BY id DESC LIMIT 15'
-        ).bind(tenantId, 'system').all();
-        if (kbRows?.length) {
-          const parts = kbRows.map((r) => `[${r.title || r.category || 'Doc'}]: ${(r.content || '').slice(0, 1500)}`).filter((s) => s.length > 10);
-          const raw = parts.length ? `\n\n[Domain knowledge base]:\n${parts.join('\n\n')}` : '';
-          knowledgeBlurb = capForProvider(raw, model?.provider, 'KNOWLEDGE_BLURB_MAX_CHARS');
-        }
-      } catch (_) {}
-
-      let mcpBlurb = '';
-      try {
-        const { results: mcpRows } = await env.DB.prepare(
-          "SELECT id, service_name, endpoint_url, authentication_type, token_secret_name FROM mcp_services WHERE is_active=1 ORDER BY service_name"
-        ).all();
-        if (mcpRows?.length) {
-          const raw = `\n\n[Active MCP services (tools available)]:\n${mcpRows.map((r) => `- ${r.service_name} (${r.endpoint_url})`).join('\n')}`;
-          mcpBlurb = capForProvider(raw, model?.provider, 'MCP_BLURB_MAX_CHARS');
-        }
-      } catch (_) {}
-
-      agentSamSystemCore = `You are Agent Sam, the AI assistant for Inner Animal Media. You run inside the IAM dashboard; the backend is already connected to D1, R2, Vectorize, and APIs.
-
-- Identify only as Agent Sam. Do not say you are Cursor, Claude, GPT, or any other product.
-- LIVE DATA RULE: Never answer questions about current database state, record counts, table lists, active sessions, live metrics, or any real-time system state from compiled context alone. Always use d1_query, r2_list, r2_read, or appropriate tools for live data questions. Compiled context is baseline identity knowledge only — not a source of truth for current system state.
-- Overload / 529: If the user sees "Overload" or 529 errors, that is the Worker (server) being temporarily busy--not low API balance. The user has sufficient Anthropic, OpenAI, and AI Gateway credits. Say so briefly and suggest retrying in a moment; the dashboard will auto-retry once.
-- Opening URLs for the user: When the user needs to complete a step in a browser (e.g. wrangler login, OAuth, Cloudflare dashboard, admin login), output exactly one line on its own: OPEN_IN_PREVIEW: <full URL>. The dashboard will open that URL in the preview panel so the user can log in or complete the step there. Then say in normal text that you opened the link in the preview panel and they can complete the step there; after that you can continue. Example: "OPEN_IN_PREVIEW: https://dash.cloudflare.com/profile/authentication\nI've opened the Cloudflare dashboard in the preview panel--complete login there, then we can continue."
-- You are functional: when users ask to run an API call, seed RAG, or perform a platform action, either (1) the backend may have already performed it (you will be told in [System: ...])--confirm it to the user, or (2) give one concrete step or use OPEN_IN_PREVIEW if they need to complete something in a browser.
-- Never refuse with "I cannot execute code" or "I don't have access to databases" for actions that are possible via this dashboard or its APIs. The platform has access; guide the user or confirm what was done.
-- Be concise and actionable. For RAG, bootstrap, D1, deployments: explain what exists and what the user can do next.
-- D1 / schema workflow: Suggest the exact SQL or change first; wait for explicit user approval ("accept", "yes", "go ahead", etc.) before executing or giving runnable migration commands. Prefer consolidating into canonical tables (agent_telemetry, spend_ledger, project_time_entries, agent_sessions, agent_messages) instead of creating new overlapping tables.
-- Shell commands (wrangler, git, npm, bun, cloudflared): When the user is building or deploying and you suggest a command they should run, output it in a single markdown code block so the dashboard can offer "Run in terminal". Use \`\`\`bash or \`\`\`sh and put exactly the command(s) to run inside. Example: "To deploy, run:\n\n\`\`\`bash\nwrangler deploy\n\`\`\`\n\nClick **Run in terminal** in the dashboard to run this after you approve." Suggest one command (or a short, safe sequence) at a time for destructive or multi-step actions; wait for the user to approve or run before suggesting the next. Only suggest commands appropriate for the IAM platform: wrangler (auth, dev, deploy, D1, KV, R2, queues, secrets, tail, pages, etc.), git (status, commit, push, etc.), npm/bun (install, run dev/build), cloudflared (tunnel). Do not suggest arbitrary system commands unless the user explicitly asks. The user approves in the UI; then the command runs in their connected terminal. Be strategic and concise so the agent can do the heavy work while the user accepts or stops.
-- Treat anything touching --remote, --env production, delete, rollback, reset --hard, or secret as risky regardless of context; suggest one step at a time and wait for explicit approval before suggesting the next.
-- Playwright / browser (UI validation, screenshots): The platform can run browser tools via MCP: playwright_screenshot (params: url), browser_screenshot (params: url, optional fullPage), browser_navigate (params: url), browser_content (params: url). For page checks or screenshots, suggest the side panel Browser tab (paste URL, Go for live view, Screenshot for image) or that these tools are available when invoked.
-- Runnable wrangler/bash (for Run in terminal): Suggest commands in \`\`\`bash blocks. Examples the user can run from chat: wrangler whoami; wrangler d1 list -c wrangler.production.toml; wrangler r2 bucket list; wrangler r2 object list BUCKET --remote -c wrangler.production.toml; wrangler kv namespace list; wrangler secret list; wrangler tail -c wrangler.production.toml; wrangler deploy -c wrangler.production.toml; npm run build; git status. User can also type /run <command> to run immediately. Use -c wrangler.production.toml and --remote for production.
-- Code generation: Output code in markdown fenced blocks (\`\`\`language filename). Do NOT use r2_write tool for code - users will save via the Monaco editor. Only use r2_write for non-code files or when explicitly asked to write directly to R2.`;
-      const schemaBlurbRaw = schemaMemory ? `\n\n[Schema and records memory - use for backfill, cost tracking, and table consolidation; suggest then wait for user approval before executing D1/SQL]:\n${schemaMemory}` : '';
-      const schemaBlurb = capForProvider(schemaBlurbRaw, model?.provider, 'SCHEMA_BLURB_MAX_CHARS');
-      const fullBlob = agentSamSystemCore + memoryIndexBlurb + knowledgeBlurb + mcpBlurb + schemaBlurb + dailyMemoryBlurb;
-      compiledContext = fullBlob;
-      builtSections = { core: agentSamSystemCore, memory: memoryIndexBlurb, kb: knowledgeBlurb, mcp: mcpBlurb, schema: schemaBlurb, daily: dailyMemoryBlurb, full: fullBlob };
-
-        // STEP 4 -- store in cache as JSON of sections (expires 30 minutes)
-        try {
-          await env.DB.prepare(
-            `INSERT INTO ai_compiled_context_cache
-             (id, context_hash, context_type, compiled_context,
-              source_context_ids_json, token_count, tenant_id,
-              created_at, last_accessed_at, expires_at)
-             VALUES (?, ?, 'agent_sam_system', ?, '[]', ?, ?, unixepoch(), unixepoch(), unixepoch()+1800)
-             ON CONFLICT(context_hash) DO UPDATE SET
-               compiled_context = excluded.compiled_context,
-               access_count = access_count + 1,
-               last_accessed_at = unixepoch(),
-               expires_at = unixepoch()+1800`
-          ).bind(
-            `cache_${crypto.randomUUID()}`,
-            contextHash,
-            JSON.stringify(builtSections),
-            Math.ceil(fullBlob.length / 4),
-            tenantId
-          ).run();
-        } catch (_) {}
-      }
-      }
-
-      let resolvedSections = builtSections;
-      if (!resolvedSections && compiledContext) {
-        try { resolvedSections = JSON.parse(compiledContext); } catch (_) { resolvedSections = null; }
-      }
-      if (resolvedSections === null && compiledContext) {
-        resolvedSections = { full: compiledContext };
-      }
-
-      const coreSystemPrefix = `<role>You are Agent Sam, an AI devops and business assistant for Inner Animals Media. Resolved model: ${model.model_key} provider: ${model.provider}. Always report this exact model_key when asked what model you are running on.</role>
-<rules>
-- Never hallucinate deploys or database writes. Always verify with a query after any write.
-- Never rotate tokens mid-session without local verification first.
-- Report exact model_key and provider when asked.
-- Deploy rule: sandbox first, then promote. Never npm run deploy alone.
-</rules>
-<parallel_tools>
-If calling multiple independent tools, call them all in parallel simultaneously. Never sequential when parallel is possible. Maximize parallel tool calls for speed.
-</parallel_tools>
-<context_management>
-Your context window will be automatically compacted as it approaches its limit. Do not stop tasks early due to token budget concerns. Save progress state to memory before compaction. Be persistent and complete tasks fully.
-</context_management>
-
-CRITICAL: Never simulate, roleplay, or fabricate tool calls or their results. If you cannot call a real tool, say so plainly. Never invent data or pretend to execute queries.
-
-Do not use emoji in any response unless the user explicitly requests them.
-
-`;
-      let fileBlock = '';
-      if (bodyFileContext?.filename && bodyFileContext?.content != null) {
-        let content = String(bodyFileContext.content);
-        const startLine = bodyFileContext.startLine;
-        const endLine = bodyFileContext.endLine;
-        if (typeof startLine === 'number' && typeof endLine === 'number' && endLine >= startLine) {
-          const lines = content.split('\n');
-          const start = Math.max(0, startLine - 1);
-          const end = Math.min(lines.length, endLine);
-          content = lines.slice(start, end).join('\n');
-        }
-        const maxChars = PROMPT_CAPS.FILE_CONTEXT_MAX_CHARS;
-        const truncated = content.length > maxChars;
-        const slice = content.slice(0, maxChars);
-        fileBlock = `\n\nCURRENT FILE OPEN IN MONACO:
-Filename: ${bodyFileContext.filename}
-Bucket: ${bodyFileContext.bucket || 'not specified'}
-Content (first ${maxChars} chars${truncated ? ', truncated' : ''}${startLine != null && endLine != null ? `, lines ${startLine}-${endLine}` : ''}):
-\`\`\`
-${slice}${truncated ? PROMPT_CAPS.TRUNCATION_MARKER : ''}
-\`\`\`
-`;
-      }
-      if (body._stagedAttachmentSystemText) {
-        fileBlock += `\n\n${String(body._stagedAttachmentSystemText)}`;
-      }
-      let unifiedAgentContextBlock = '';
-      try {
-        const { results: d1UnifiedRows } = await env.DB.prepare(
-          'SELECT key, value, memory_type, importance_score FROM agent_memory_index WHERE importance_score >= 0.9 AND tenant_id = \'tenant_sam_primeaux\' ORDER BY importance_score DESC LIMIT 50'
-        ).all();
-        unifiedAgentContextBlock = buildUnifiedAgentContextBlock(d1UnifiedRows || [], pgMatchRows || []);
-        if (d1UnifiedRows?.length && ctx && typeof ctx.waitUntil === 'function') {
-          ctx.waitUntil(
-            env.DB.prepare(
-              `UPDATE agent_memory_index SET access_count = access_count + 1, last_accessed_at = unixepoch()
-               WHERE tenant_id = 'tenant_sam_primeaux' AND importance_score >= 0.9`
-            ).run().catch((e) => console.warn('[agent_memory_index] access_count update', e?.message ?? e))
-          );
-        }
-      } catch (e) {
-        console.warn('[agent/chat] unified agent context', e?.message ?? e);
-      }
-      // DB-driven system prompt — overrides hardcoded core if set
-      const dbSystemPrompt = agentRow?.system_prompt
-        ? String(agentRow.system_prompt).trim()
-        : null;
-      const toolStyle = agentRow?.tool_invocation_style || 'balanced';
-      const toolStylePrefix = toolStyle === 'aggressive'
-        ? 'TOOL USE: Invoke tools immediately when asked. Do not explain before acting. Execute first.\n\n'
-        : toolStyle === 'conservative'
-          ? 'TOOL USE: Confirm with the user before invoking any tool.\n\n'
-          : '';
-      const coreBase = agentSamSystemCore ?? (resolvedSections && resolvedSections.core) ?? '';
-      const effectiveSystemCore = dbSystemPrompt
-        ? (toolStylePrefix + dbSystemPrompt)
-        : (toolStylePrefix + coreBase);
-      let modeSections = resolvedSections;
-      if (agent_id) {
-        const mem = resolvedSections?.memory ?? '';
-        const kb = resolvedSections?.kb ?? '';
-        const mcp = resolvedSections?.mcp ?? '';
-        const schema = resolvedSections?.schema ?? '';
-        const daily = resolvedSections?.daily ?? '';
-        const newFull = effectiveSystemCore + mem + kb + mcp + schema + daily;
-        modeSections = resolvedSections
-          ? { ...resolvedSections, core: effectiveSystemCore, full: newFull }
-          : { core: effectiveSystemCore, full: newFull, memory: mem, kb, mcp, schema, daily };
-      }
-      const _agentIntent = model?._intent ?? null;
-      if (!_agentIntent && lastUserContent) {
-        try {
-          const _mc = await classifyIntent(env, lastUserContent);
-          _routingClassifySnapshot = _mc;
-          if (_mc?.intent) model = { ...model, _intent: _mc.intent };
-        } catch (_) {}
-      }
-      const _agentIntentFinal = model?._intent ?? 'mixed';
-      const systemWithBlurb = coreSystemPrefix + buildModeContext(chatMode, modeSections, compiledContext, ragContext, fileBlock, model, contextIndexBlurb, _agentIntentFinal);
-      let finalSystem = (unifiedAgentContextBlock ? unifiedAgentContextBlock + '\n\n' : '') + systemWithBlurb;
-
-      if (session_id && apiMessages.length > PROMPT_CAPS.LAST_N_VERBATIM_TURNS) {
-        try {
-          const sumObj = await env.R2.get('knowledge/conversations/' + session_id + '-summary.md');
-          if (sumObj) {
-            const summaryText = await sumObj.text();
-            const summaryBlock = capWithMarker(summaryText, PROMPT_CAPS.SESSION_SUMMARY_MAX_CHARS);
-            finalSystem += '\n\n[Previous session summary]:\n' + summaryBlock;
-            apiMessages = apiMessages.slice(-PROMPT_CAPS.LAST_N_VERBATIM_TURNS);
-          }
-        } catch (_) {}
-      }
-
-      finalSystem +=
-        '\n\nCODE DELIVERY RULES (non-negotiable):\n' +
-        '- When writing code >15 lines that the user will deploy: use tool_r2_write ' +
-        'to save it to agent-sam/drafts/{filename} BEFORE mentioning it in chat.\n' +
-        '- Never say \'I\'ve written the file\' or \'here is the updated worker.js\' without ' +
-        'having actually called tool_r2_write or d1_write.\n' +
-        '- Never fabricate tool call results. If a tool fails, report the error.\n' +
-        '- For worker.js edits: read the current file first via tool_r2_read from ' +
-        'agent-sam/source/worker.js, make surgical changes, write back.\n' +
-        '- For D1 operations: use d1_query for reads, d1_write for mutations. ' +
-        'Never invent query results.\n' +
-        '- The Monaco editor is available in the code panel. Populate it via ' +
-        'data.type=\'code\' SSE events with fields: code, filename, language.\n' +
-        '- Terminal commands must use terminal_execute tool. Never tell the user to ' +
-        'run commands manually when terminal_execute is available.';
-
-      try {
-        const libRes = await env.DB.prepare(
-          `SELECT slug, name, agent_tags FROM draw_libraries WHERE is_active = 1 ORDER BY sort_order ASC, name ASC LIMIT 80`
-        ).all();
-        const libRows = libRes?.results || [];
-        if (libRows.length) {
-          const lines = libRows.map((r) => {
-            let tags = r.agent_tags;
-            try {
-              const parsed = typeof tags === 'string' ? JSON.parse(tags) : tags;
-              tags = Array.isArray(parsed) ? parsed.join(', ') : String(tags || '');
-            } catch (_) {
-              tags = String(tags || '');
-            }
-            return `- ${r.slug}: ${r.name} (agent_tags: ${tags})`;
-          });
-          finalSystem +=
-            '\n\nEXCALIDRAW SHAPE LIBRARIES (call excalidraw_load_library with { slug } to merge a library before drawing when it matches the task):\n' +
-            lines.join('\n');
-        }
-      } catch (e) {
-        console.warn('[agent/chat] draw_libraries system prompt', e?.message ?? e);
-      }
-
-      let projectContextBlurb = '';
-      try {
-        const wsId = chatWorkspaceId || 'ws_samprimeaux';
-        const wsToProjectKey = {
-          'ws_samprimeaux': 'iam-dashboard-sprint',
-          'ws_inneranimal': 'iam-dashboard-sprint',
-        };
-        const projectKey = wsToProjectKey[wsId];
-        if (projectKey) {
-          const ctx = await env.DB.prepare(
-            `SELECT description, goals, constraints, current_blockers, primary_tables,
-                    workers_involved, r2_buckets_involved, domains_involved, key_files, related_routes
-             FROM agentsam_project_context
-             WHERE project_key = ? AND status = 'active'
-             LIMIT 1`
-          ).bind(projectKey).first();
-          if (ctx) {
-            projectContextBlurb = [
-              '## Active Project Context',
-              ctx.description,
-              ctx.goals ? `Goals: ${ctx.goals}` : '',
-              ctx.constraints ? `Constraints: ${ctx.constraints}` : '',
-              ctx.current_blockers ? `Current blockers: ${ctx.current_blockers}` : '',
-              ctx.primary_tables ? `Primary tables: ${ctx.primary_tables}` : '',
-              ctx.workers_involved ? `Workers: ${ctx.workers_involved}` : '',
-              ctx.r2_buckets_involved ? `R2 buckets: ${ctx.r2_buckets_involved}` : '',
-              ctx.domains_involved ? `Domains: ${ctx.domains_involved}` : '',
-              ctx.key_files ? `Key files: ${ctx.key_files}` : '',
-              ctx.related_routes ? `Related routes: ${ctx.related_routes}` : '',
-            ].filter(Boolean).join('\n');
-          }
-        }
-      } catch (e) {
-        console.warn('[project-ctx] non-fatal:', e?.message);
-        projectContextBlurb = '';
-      }
-      if (projectContextBlurb) {
-        finalSystem = finalSystem + '\n\n' + projectContextBlurb;
-      }
-
-      try {
-        const fragment = await env.DB.prepare(
-          'SELECT fragment_text FROM provider_prompt_fragments WHERE provider=? AND is_active=1'
-        ).bind(model.provider).first();
-        if (fragment?.fragment_text) finalSystem = finalSystem + '\n\n' + fragment.fragment_text;
-      } catch (e) {
-        console.warn('[agent/chat] provider_prompt_fragments', e?.message ?? e);
-      }
-
-      const canStreamAnthropic = model.provider === 'anthropic'
-        && !!env.ANTHROPIC_API_KEY;
-      const canStreamOpenAI = model.provider === 'openai'
-        && !!env.OPENAI_API_KEY;
-      const canStreamGoogle = model.provider === 'google' && (!!env.GOOGLE_AI_API_KEY || shouldUseVertexForGoogleModel(env, model.model_key || ''));
-      const canStreamWorkersAI = (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && !!env.AI;
-      const wantStream = body.stream === true && (canStreamAnthropic || canStreamOpenAI || canStreamGoogle || canStreamWorkersAI);
-
-      const supportsTools = ['anthropic', 'openai', 'google'].includes(model.provider);
-      const useTools = supportsTools;
-      let toolDefinitions = [];
-      if (supportsTools) {
-        try {
-          const toolRows = await env.DB.prepare(
-            `SELECT tool_name, description, input_schema, tool_category FROM mcp_registered_tools WHERE enabled = 1
-             AND (modes_json LIKE '%"' || ? || '"%')
-             AND is_degraded = 0`
-          ).bind(chatMode).all();
-          const filteredToolRows = filterToolRowsByPanel(agent_id, toolRows.results ?? []);
-          toolDefinitions = filteredToolRows.map(t => {
-            let rawSchema = {};
-            try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
-
-            let input_schema;
-            if (rawSchema.type === 'object' && rawSchema.properties) {
-              input_schema = rawSchema;
-            } else {
-              const properties = {};
-              const required = [];
-              for (const [key, val] of Object.entries(rawSchema)) {
-                properties[key] = {
-                  type: val.type ?? 'string',
-                  ...(val.items && { items: val.items }),
-                  ...(val.description && { description: val.description }),
-                  ...(val.enum && { enum: val.enum })
-                };
-                if (val.required) required.push(key);
-              }
-              input_schema = { type: 'object', properties, required };
-            }
-
-            return { name: t.tool_name, description: t.description || t.tool_name, input_schema };
-          });
-        } catch (_) {}
-      }
-      // Intent-aware tool selection — keyword-boosted, hard cap 15
-      const _intentForFilter = _agentIntentFinal || (chatMode !== 'agent' ? chatMode : 'mixed');
-      const _msgForFilter = getLatestUserPlainText(msgList) || '';
-      if (chatMode === 'agent' || chatMode === 'ask') {
-        toolDefinitions = filterToolsByIntent(_intentForFilter, _msgForFilter, toolDefinitions);
-      } else {
-        toolDefinitions = filterToolsByMode(chatMode, toolDefinitions); // plan/debug keep existing
-      }
-      const binaryAttachments = (attachedFiles || []).filter((f) => f.encoding === 'base64');
-      if (binaryAttachments.length > 0) {
-        toolDefinitions = [...toolDefinitions, {
-          name: 'attached_file_content',
-          description: 'Get the base64 content and size of a binary file the user attached to this message. Call with filename matching one of the attached binary files.',
-          input_schema: { type: 'object', properties: { filename: { type: 'string', description: 'Exact filename of the attached binary file' } }, required: ['filename'] },
-        }];
-      }
-
-      const _routingRawIntent = _routingClassifySnapshot
-        ? JSON.stringify({
-          intent: _routingClassifySnapshot.intent,
-          tasks: _routingClassifySnapshot.tasks || [],
-        }).slice(0, 4000)
-        : String(_agentIntentFinal);
-      const _routingTaskType = (_routingClassifySnapshot?.tasks?.[0]?.type) || intentToModelRoutingTaskType(_agentIntentFinal);
-      routingOptsForChat.taskType = _routingTaskType;
-      if (conversationId && env.DB) {
-        try {
-          await env.DB.prepare(
-            `INSERT INTO routing_decisions (id, session_id, mode, raw_intent, task_type, model_selected, provider_selected, rule_source, tool_count_sent, created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,unixepoch())`
-          ).bind(
-            crypto.randomUUID(),
-            conversationId,
-            chatMode,
-            _routingRawIntent,
-            _routingTaskType,
-            model.model_key,
-            model.provider,
-            'model_routing_rules',
-            toolDefinitions.length
-          ).run();
-        } catch (e) {
-          console.warn('[agent/chat] routing_decisions INSERT', e?.message ?? e);
-        }
-      }
-
-      const messageContentChars = (m) => {
-        const c = m.content;
-        if (typeof c === 'string') return c.length;
-        if (Array.isArray(c)) return c.reduce((s, p) => s + (typeof p === 'string' ? p.length : JSON.stringify(p).length), 0);
-        return JSON.stringify(c != null ? c : '').length;
-      };
-      const historyChars = apiMessages.reduce((s, m) => s + messageContentChars(m), 0);
-      const fileContextChars = (bodyFileContext?.content != null) ? Math.min(String(bodyFileContext.content).length, PROMPT_CAPS.FILE_CONTEXT_MAX_CHARS) : 0;
-      const toolDefChars = toolDefinitions.reduce((s, t) => s + JSON.stringify(t).length, 0);
-      const telemetryPayload = {
-        mode: chatMode,
-        provider: model.provider,
-        stream: wantStream,
-        toolCount: toolDefinitions?.length ?? 0,
-        messageCount: apiMessages.length,
-        coreSystemChars: coreSystemPrefix.length,
-        compiledContextChars: systemWithBlurb.length - coreSystemPrefix.length,
-        ragContextChars: ragContext.length,
-        pgvectorContextChars: unifiedAgentContextBlock.length,
-        fileContextChars,
-        historyChars,
-        toolDefChars,
-        totalAssembledChars: finalSystem.length + historyChars,
-      };
-      logPromptTelemetry(env, telemetryPayload);
-      let auditReport = null;
-      if (bodyAudit) {
-        auditReport = {
-          section_tokens: {
-            core_system: charsToTokens(telemetryPayload.coreSystemChars),
-            compiled_context: charsToTokens(telemetryPayload.compiledContextChars),
-            rag_context: charsToTokens(telemetryPayload.ragContextChars),
-            file_context: charsToTokens(telemetryPayload.fileContextChars),
-            conversation_history: charsToTokens(telemetryPayload.historyChars),
-            tool_definitions: charsToTokens(telemetryPayload.toolDefChars),
-          },
-          total_input_tokens: charsToTokens(telemetryPayload.totalAssembledChars),
-          mode: chatMode,
-          tools_included: (toolDefinitions?.length ?? 0) > 0,
-          message_count: apiMessages.length,
-          output_tokens: null,
-          latency_ms: null,
-        };
-      }
-
-      if (wantStream) {
-        try {
-          const userContent = lastUserContent || msgList[msgList.length - 1]?.content || '';
-          await env.DB.prepare(
-            "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-          ).bind(crypto.randomUUID(), conversationId, 'user', userContent.slice(0, 50000), null).run();
-        } catch (e) {
-          console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
-        }
-        if (ctx && typeof ctx.waitUntil === 'function' && env.DB) {
-          env.DB.prepare('SELECT COUNT(*) as c FROM agent_messages WHERE conversation_id = ?').bind(conversationId).first()
-            .then((row) => {
-              if (row && row.c > 50) {
-                ctx.waitUntil(compactConversationToKnowledge(env, conversationId));
-              }
-            })
-            .catch(() => {});
-        }
-        await upsertMcpAgentSession(env, conversationId, agent_id);
-
-        if (canStreamOpenAI) {
-          // GPT-5.x requires Responses API (Chat Completions rejects these models)
-        const _needsResponsesAPI = model.model_key && (
-          model.model_key.startsWith('gpt-5.') ||
-          model.model_key === 'gpt-5' ||
-          model.model_key === 'gpt-5-mini' ||
-          model.model_key === 'gpt-5-nano' ||
-          model.model_key === 'o4-mini' ||
-          model.model_key === 'o3' ||
-          model.model_key === 'o1'
-        );
-        if (_needsResponsesAPI) {
-          return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId, routingOptsForChat);
-        }
-        return streamOpenAIResponses(env, finalSystem, apiMessages, model, images, conversationId, agent_id, ctx, toolDefinitions, _agentIntentFinal, agentsamRunId, routingOptsForChat);
-        }
-        console.log('[routing] wantStream:', wantStream, 'canStreamGoogle:', canStreamGoogle, 'canStreamAnthropic:', canStreamAnthropic, 'provider:', model.provider);
-        if (canStreamGoogle) {
-          return chatWithToolsGoogle(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { mode: chatMode, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat });
-        }
-        if (canStreamWorkersAI) {
-          return streamWorkersAI(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, agentsamRunId, routingOptsForChat);
-        }
-        if (toolDefinitions.length > 0) {
-          if (canStreamAnthropic) {
-            let oauthUserIdForTools;
-            try {
-              const au = await getAuthUser(request, env);
-              oauthUserIdForTools = au ? (au.email || au.id) : undefined;
-            } catch (_) { oauthUserIdForTools = undefined; }
-            const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agent_id, ctx, { stream: true, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat }, toolDefinitions);
-            if (toolsResp) return toolsResp;
-            return jsonResponse({ error: 'Tool loop returned no response' }, 500);
-          }
-          if (canStreamOpenAI || canStreamGoogle) {
-            const toolLoopResult = await runToolLoop(env, request, model.provider, model.model_key, finalSystem, apiMessages, toolDefinitions, model, agent_id, conversationId, attachedFiles, ctx, images);
-            return jsonResponse(toolLoopResult);
-          }
-        }
-        if (canStreamAnthropic) {
-        const anthropicMessagesStream = apiMessages.map((m, i) => {
-          const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
-          return { role: m.role, content: isLastUser ? buildAnthropicContent(m.content, images) : m.content };
-        });
-        const modelKeyStream = resolveAnthropicModelKey(model.model_key);
-        const streamResp = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
-            'x-api-key': env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: modelKeyStream,
-            max_tokens: 8192,
-            system: finalSystem,
-            messages: anthropicMessagesStream,
-            stream: true,
-          }),
-        });
-        if (!streamResp.ok) {
-          const errData = await streamResp.json().catch(() => ({}));
-          return jsonResponse(errData, streamResp.status);
-        }
-
-        const reader = streamResp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let inputTokens = 0;
-        let outputTokens = 0;
-        let cacheCreateTokens = 0;
-        let cacheReadTokens = 0;
-        let fullText = '';
-        const envRef = env;
-        const modelRef = model;
-        const conversationIdRef = conversationId;
-
-        const readable = new ReadableStream({
-          async pull(controller) {
-            let sentThinking = false;
-            try {
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!sentThinking) {
-                  sentThinking = true;
-                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'state', state: 'THINKING' })}\n\n`));
-                }
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-                for (const line of lines) {
-                  if (!line.startsWith('data: ')) continue;
-                  const raw = line.slice(6).trim();
-                  if (raw === '[DONE]') continue;
-                  try {
-                    const data = JSON.parse(raw);
-                    if (data.type === 'content_block_delta' && data.delta?.type === 'text_delta' && data.delta?.text) {
-                      fullText += data.delta.text;
-                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'text', text: data.delta.text })}\n\n`));
-                    } else if (data.type === 'message_start' && data.message?.usage) {
-                      inputTokens = data.message.usage.input_tokens ?? 0;
-                      cacheCreateTokens = data.message.usage.cache_creation_input_tokens ?? 0;
-                      cacheReadTokens = data.message.usage.cache_read_input_tokens ?? 0;
-                    } else if (data.type === 'message_delta' && data.usage) {
-                      if (data.usage.output_tokens != null) outputTokens = data.usage.output_tokens;
-                      if (data.usage.input_tokens != null) inputTokens = data.usage.input_tokens;
-                    } else if (data.type === 'message_stop') {
-                      const costUsd = calculateCost(modelRef, inputTokens, outputTokens);
-                      const { rateIn, rateOut } = getSpendRates(modelRef.provider, modelRef.model_key);
-                      const amountUsd = Math.round((inputTokens * rateIn + outputTokens * rateOut) * 1e8) / 1e8;
-                      try {
-                        await envRef.DB.prepare(
-                          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-                        ).bind(crypto.randomUUID(), conversationIdRef, 'assistant', fullText.slice(0, 50000), modelRef.provider).run();
-                      } catch (e) {
-                        console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
-                      }
-                      let telemetryInlineId = null;
-                      try {
-                        telemetryInlineId = crypto.randomUUID();
-                        await envRef.DB.prepare(
-                          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,unixepoch())`
-                        ).bind(telemetryInlineId, envRef.TENANT_ID || 'system', conversationIdRef, 'llm_call', 'chat_completion', 1, modelRef.model_key, modelRef.provider, inputTokens, cacheCreateTokens, cacheReadTokens, inputTokens + cacheCreateTokens + cacheReadTokens, outputTokens, amountUsd).run();
-                      } catch (e) {
-                        console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
-                      }
-                      if (telemetryInlineId) {
-                        await completeRoutingDecisionTelemetry(envRef, conversationIdRef, telemetryInlineId, inputTokens, outputTokens, amountUsd, routingOptsForChat);
-                      }
-                      if (ctx && typeof ctx.waitUntil === 'function') {
-                        const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
-                        const now = Math.floor(Date.now() / 1000);
-                        ctx.waitUntil(envRef.DB.prepare(
-                          `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-                        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(modelRef.provider), 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
-                      } else {
-                        try {
-                          const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
-                          const now = Math.floor(Date.now() / 1000);
-                          await envRef.DB.prepare(
-                            `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-                          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(modelRef.provider), 'api_direct', now, amountUsd, modelRef.model_key, inputTokens, outputTokens, conversationIdRef || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
-                        } catch (e) {
-                          console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
-                        }
-                      }
-                      if (agentsamRunId) {
-                        try {
-                          await completeAgentsamAgentRun(envRef, agentsamRunId, conversationIdRef, inputTokens, outputTokens, amountUsd);
-                        } catch (e) {
-                          console.warn('[agent/chat] agentsam_agent_run completion', e?.message ?? e);
-                        }
-                      }
-                      if (agent_id) {
-                        try {
-                          await envRef.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
-                        } catch (_) {}
-                      }
-                      if (ctx && typeof ctx.waitUntil === 'function') {
-                        ctx.waitUntil(persistAgentMemoryHyperdrive(envRef, {
-                          sessionId: conversationIdRef,
-                          userText: lastUserContent || '',
-                          assistantText: fullText,
-                          modelKey: modelRef.model_key,
-                          provider: modelRef.provider,
-                        }).catch((e) => console.warn('[agent_memory]', e?.message ?? e)));
-                      }
-                      emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
-                      const donePayload = { type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: amountUsd, conversation_id: conversationIdRef, model_used: modelRef.model_key, model_display_name: modelRef.display_name };
-                      if (bodyAudit) donePayload.audit = { input_tokens: inputTokens, output_tokens: outputTokens, latency_ms: Date.now() - chatStartTime, mode: chatMode, tools_included: false };
-                      controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(donePayload) + '\n\n'));
-                    } else if (data.type === 'error') {
-                      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'error', error: data.error })}\n\n`));
-                    }
-                  } catch (_) { /* ignore parse errors */ }
-                }
-              }
-            } finally {
-              reader.releaseLock();
-              try {
-                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'state', state: 'IDLE' })}\n\n`));
-              } catch (_) {}
-            }
-            controller.close();
-          },
-        });
-
-        return new Response(readable, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
-        });
-        }
-      }
-
-      console.log('[agent/chat] wantStream:', wantStream, 'useTools:', useTools, 'toolDefs:', toolDefinitions?.length, 'body.stream:', body.stream);
-      if (useTools && toolDefinitions.length > 0) {
-        try {
-          const userContent = lastUserContent || msgList[msgList.length - 1]?.content || '';
-          await env.DB.prepare(
-            "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-          ).bind(crypto.randomUUID(), conversationId, 'user', userContent.slice(0, 50000), null).run();
-        } catch (e) {
-          console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
-        }
-        conversationId = conversationId ?? crypto.randomUUID();
-        await upsertMcpAgentSession(env, conversationId, agent_id);
-        const agentIdForTools = agent_id ?? 'agent_sam_v1';
-        const modelKeyForTools = model.provider === 'anthropic' ? resolveAnthropicModelKey(model.model_key) : (model.model_key || 'gpt-4o');
-        if (model.provider === 'anthropic' && env.ANTHROPIC_API_KEY) {
-          let oauthUserIdForTools;
-          try {
-            const au = await getAuthUser(request, env);
-            oauthUserIdForTools = au ? (au.email || au.id) : undefined;
-          } catch (_) { oauthUserIdForTools = undefined; }
-          console.log(`[TOKEN_AUDIT] intent=${_agentIntentFinal} toolCount=${toolDefinitions.length} systemChars=${finalSystem.length} historyChars=${historyChars} toolDefChars=${toolDefChars}`);
-          const toolsResp = await chatWithToolsAnthropic(env, finalSystem, apiMessages, model, conversationId, agentIdForTools, ctx, { stream: false, mode: chatMode, oauthUserId: oauthUserIdForTools, _intent: _agentIntentFinal, agentsamAgentRunId: agentsamRunId, routingOpts: routingOptsForChat }, toolDefinitions);
-          if (toolsResp) return toolsResp;
-        }
-        const toolLoopResult = await runToolLoop(env, request, model.provider, modelKeyForTools, finalSystem, apiMessages, toolDefinitions, model, agentIdForTools, conversationId, attachedFiles, ctx, images);
-        const finalText = typeof toolLoopResult === 'string' ? toolLoopResult : (toolLoopResult?.content?.[0]?.text ?? '');
-        const loopInTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.input_tokens != null ? Number(toolLoopResult.input_tokens) || 0 : 0;
-        const loopOutTok = typeof toolLoopResult === 'object' && toolLoopResult != null && toolLoopResult.output_tokens != null ? Number(toolLoopResult.output_tokens) || 0 : 0;
-        const loopCacheCreate = typeof toolLoopResult === 'object' && toolLoopResult != null ? Number(toolLoopResult.cache_creation_input_tokens) || 0 : 0;
-        const loopCacheRead = typeof toolLoopResult === 'object' && toolLoopResult != null ? Number(toolLoopResult.cache_read_input_tokens) || 0 : 0;
-        const resolvedModelForTools = model.provider === 'google' ? await resolveGoogleModelRowForVertexAi(env, model) : model;
-        const toolLoopCostUsd = calculateCost(resolvedModelForTools, loopInTok, loopOutTok);
-        try {
-          await streamDoneDbWrites(env, conversationId, resolvedModelForTools, finalText, loopInTok, loopOutTok, toolLoopCostUsd, agentIdForTools, ctx, lastUserContent || '', agentsamRunId, routingOptsForChat, loopCacheCreate, loopCacheRead);
-          await logAssistantCodeArtifactIfPresent(env, {
-            fullText: finalText,
-            modelKey: resolvedModelForTools.model_key,
-            conversationId,
-            provider: String(resolvedModelForTools.provider || 'unknown'),
-          });
-        } catch (e) {
-          console.error('[agent/chat] streamDoneDbWrites (tool loop) failed:', e?.message ?? e);
-        }
-        const content = typeof toolLoopResult === 'object' && toolLoopResult?.content ? toolLoopResult.content : [{ type: 'text', text: finalText || '' }];
-        const toolLoopRes = { content, role: 'assistant', conversation_id: conversationId };
-        if (auditReport) {
-          const outText = (content && content[0] && content[0].text) ? content[0].text : (typeof finalText === 'string' ? finalText : '');
-          auditReport.output_tokens = charsToTokens(outText.length);
-          auditReport.latency_ms = Date.now() - chatStartTime;
-          toolLoopRes.audit = auditReport;
-        }
-        // Stream the response as SSE so the frontend parser receives type:text events
-        const sseText = finalText || '';
-        const enc = new TextEncoder();
-        const sseBody = new ReadableStream({
-          start(controller) {
-            if (sseText) {
-              controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: sseText })}
-
-`));
-            }
-            controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', conversation_id: conversationId, input_tokens: loopInTok, output_tokens: loopOutTok, cost_usd: toolLoopCostUsd })}
-
-`));
-            controller.close();
-          }
-        });
-        return new Response(sseBody, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
-      }
-
-      let result;
-      if (result === undefined && model.provider === 'anthropic' && env.ANTHROPIC_API_KEY) {
-        const anthropicMessages = apiMessages.map((m, i) => {
-          const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
-          return { role: m.role, content: isLastUser ? buildAnthropicContent(m.content, images) : m.content };
-        });
-        const modelKey = resolveAnthropicModelKey(model.model_key);
-        const resp = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
-            'x-api-key': env.ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({ model: modelKey, max_tokens: 8192, system: finalSystem, messages: anthropicMessages }),
-        });
-        result = await resp.json();
-        if (!resp.ok) return jsonResponse(result, resp.status);
-      }
-      if (result === undefined && model.provider === 'openai' && env.OPENAI_API_KEY) {
-        const modelKey = model.model_key || 'gpt-4o';
-        try {
-          const openAiMessages = apiMessages.map((m, i) => {
-            const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
-            const content = isLastUser ? buildOpenAIContent(m.content, images) : m.content;
-            return { role: m.role, content };
-          });
-          const withSystem = [{ role: 'system', content: finalSystem }, ...openAiMessages];
-          const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
-            body: JSON.stringify({ model: modelKey, messages: withSystem }),
-          });
-          result = await resp.json();
-          if (!resp.ok) return jsonResponse(result, resp.status);
-        } catch (err) {
-          console.log('[gateway] OpenAI call failed:', err?.message ?? err, 'model:', modelKey);
-          return jsonResponse({ error: 'OpenAI request failed', detail: err?.message ?? String(err) }, 502);
-        }
-      }
-      if (result === undefined && model.provider === 'google' && (env.GOOGLE_AI_API_KEY || shouldUseVertexForGoogleModel(env, model.model_key || 'gemini-2.5-flash'))) {
-        const googleContents = apiMessages.map((m, i) => {
-          const isLastUser = i === apiMessages.length - 1 && m.role === 'user' && images.length > 0;
-          const parts = isLastUser ? buildGoogleParts(m.content, images) : [{ text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }];
-          return { role: m.role === 'assistant' ? 'model' : 'user', parts };
-        });
-        const mk = model.model_key || 'gemini-2.5-flash';
-        const genBody = {
-          systemInstruction: { parts: [{ text: finalSystem }] },
-          contents: googleContents,
-        };
-        let resp;
-        if (shouldUseVertexForGoogleModel(env, mk)) {
-          resp = await callVertexAI(env, mk, genBody, false);
-        } else {
-          resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${mk}:generateContent`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-goog-api-key': env.GOOGLE_AI_API_KEY,
-              },
-              body: JSON.stringify(genBody),
-            }
-          );
-        }
-        result = await resp.json();
-        if (!resp.ok) return jsonResponse(result, resp.status);
-      }
-      if (result === undefined && (model.provider === 'cloudflare_workers_ai' || model.provider === 'workers_ai') && env.AI) {
-        const mk = (model.model_key || '').trim() || '@cf/meta/llama-3.1-8b-instruct';
-        result = await env.AI.run(mk, { messages: [{ role: 'system', content: finalSystem }, ...apiMessages] });
-      }
-      if (result === undefined) {
-        return jsonResponse({ error: 'Provider not configured or unsupported' }, 503);
-      }
-
-      const inputTok = result?.usage?.input_tokens ?? result?.usage?.prompt_tokens ?? result?.usageMetadata?.promptTokenCount ?? 0;
-      const outputTok = result?.usage?.output_tokens ?? result?.usage?.completion_tokens ?? result?.usageMetadata?.candidatesTokenCount ?? 0;
-      const cacheCreateTok = result?.usage?.cache_creation_input_tokens ?? 0;
-      const cacheReadTok = result?.usage?.cache_read_input_tokens ?? 0;
-      const { rateIn, rateOut } = getSpendRates(model.provider, model.model_key);
-      const amountUsd = Math.round((inputTok * rateIn + outputTok * rateOut) * 1e8) / 1e8;
-      const computedCostUsd = amountUsd;
-      const assistantContent =
-        result?.content?.[0]?.text
-        ?? result?.choices?.[0]?.message?.content
-        ?? result?.candidates?.[0]?.content?.parts?.[0]?.text
-        ?? (typeof result?.message === 'string' ? result.message : undefined)
-        ?? (typeof result?.response === 'string' ? result.response : undefined)
-        ?? (typeof result?.result?.response === 'string' ? result.result.response : undefined)
-        ?? '';
-      conversationId = conversationId || crypto.randomUUID();
-      await upsertMcpAgentSession(env, conversationId, agent_id);
-      try {
-        const convId = conversationId;
-        if (convId) {
-          const userContent = lastUserContent || msgList[msgList.length - 1]?.content || '';
-          await env.DB.prepare(
-            "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-          ).bind(crypto.randomUUID(), convId, 'user', userContent.slice(0, 50000), null).run();
-          await env.DB.prepare(
-            "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-          ).bind(crypto.randomUUID(), convId, 'assistant', (assistantContent || '').slice(0, 50000), model.provider).run();
-        }
-      } catch (e) {
-        console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
-      }
-      let nsGoogleServiceName = null;
-      let nsGooglePricingSource = null;
-      if (model.provider === 'google') {
-        const v = shouldUseVertexForGoogleModel(env, model.model_key || '');
-        nsGoogleServiceName = v ? 'vertex_ai' : 'gemini_api';
-        nsGooglePricingSource = v ? 'vertex_official' : 'gemini_api_official';
-      }
-      try {
-        await env.DB.prepare(
-          `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
-        ).bind(crypto.randomUUID(), env.TENANT_ID || 'system', conversationId || null, 'llm_call', 'chat_completion', 1, model.model_key, model.provider, inputTok, cacheCreateTok, cacheReadTok, inputTok + cacheCreateTok + cacheReadTok, outputTok, computedCostUsd, nsGoogleServiceName, nsGooglePricingSource).run();
-      } catch (e) {
-        console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
-      }
-      if (ctx && typeof ctx.waitUntil === 'function') {
-        const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
-        const now = Math.floor(Date.now() / 1000);
-        ctx.waitUntil(env.DB.prepare(
-          `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(model.provider), 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run().catch((e) => console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e)));
-      } else {
-        try {
-          const slId = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
-          const now = Math.floor(Date.now() / 1000);
-          await env.DB.prepare(
-            `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-          ).bind(slId, 'tenant_sam_primeaux', 'ws_samprimeaux', 'inneranimalmedia', spendLedgerProvider(model.provider), 'api_direct', now, amountUsd, model.model_key, inputTok, outputTok, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
-        } catch (e) {
-          console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
-        }
-      }
-      if (agent_id) {
-        try {
-          await env.DB.prepare("UPDATE agentsam_ai SET total_runs=total_runs+1, last_run_at=unixepoch(), updated_at=unixepoch() WHERE id=?").bind(agent_id).run();
-        } catch (_) {}
-      }
-      if (agentsamRunId) {
-        try {
-          await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
-        } catch (e) {
-          console.warn('[agent/chat] agentsam_agent_run completion', e?.message ?? e);
-        }
-      }
-      if (ctx && typeof ctx.waitUntil === 'function') {
-        ctx.waitUntil(persistAgentMemoryHyperdrive(env, {
-          sessionId: conversationId,
-          userText: lastUserContent || '',
-          assistantText: assistantContent || '',
-          modelKey: model.model_key,
-          provider: model.provider,
-        }).catch((e) => console.warn('[agent_memory]', e?.message ?? e)));
-      }
-      if (ctx && typeof ctx.waitUntil === 'function' && env.AGENT_SESSION && conversationId) {
-        const _doPersistId = env.AGENT_SESSION.idFromName(String(conversationId));
-        const _doPersist = env.AGENT_SESSION.get(_doPersistId);
-        const _modelKeyPersist = model.model_key || (model.id != null ? String(model.id) : '');
-        ctx.waitUntil(
-          _doPersist.fetch(new Request('https://do/message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              role: 'assistant',
-              content: assistantContent || '',
-              model_used: _modelKeyPersist,
-              input_tokens: inputTok,
-              output_tokens: outputTok,
-              rag_chunks_injected: doRagChunksInjected || 0,
-              top_rag_score: doTopRagScore || 0,
-            }),
-          })).catch((e) => console.warn('[agent/chat] DO message persist', e?.message ?? e)),
-        );
-        if (doRagChunksInjected > 0 && ragContext && doQueryHash) {
-          ctx.waitUntil(
-            _doPersist.fetch(new Request('https://do/rag-cache', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                query_hash: doQueryHash,
-                chunk_ids: JSON.stringify(doTopChunkIds || []),
-                context: ragContext,
-                top_score: doTopRagScore || 0,
-              }),
-            })).catch((e) => console.warn('[agent/chat] DO rag cache write', e?.message ?? e)),
-          );
-        }
-      }
-      return jsonResponse({
-        ok: true,
-        content: [{ type: 'text', text: assistantContent || '' }],
-        text: assistantContent || '',
-        conversation_id: conversationId,
-        usage: { input_tokens: inputTok, output_tokens: outputTok, prompt_tokens: inputTok, completion_tokens: outputTok }
-      });
+      return agentChatDirectSseHandler(env, request, ctx, secretFn);
     }
 
     if (pathLower === '/api/agent/do-history' && method === 'GET') {

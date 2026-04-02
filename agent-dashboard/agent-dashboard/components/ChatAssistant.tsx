@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Send,
@@ -48,7 +48,24 @@ type StagedAttachment = {
 type PickerItem = { id: string; label: string; kind: string };
 type SlashCmd = { slug: string; description: string | null };
 
+type ChatModelRow = {
+  id: string;
+  name: string;
+  provider: string;
+  model_key: string;
+  api_platform: string;
+};
+
 const LS_CONV = 'iam-agent-chat-conversation-id';
+
+const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'openai', 'workers_ai', 'cursor'] as const;
+const MODEL_PLATFORM_LABEL: Record<string, string> = {
+  anthropic_api: 'Anthropic',
+  gemini_api: 'Google',
+  openai: 'OpenAI',
+  workers_ai: 'Workers AI',
+  cursor: 'Cursor',
+};
 
 function formatFileSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -56,7 +73,11 @@ function formatFileSize(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function measureAboveAnchor(el: HTMLElement | null, minW: number): React.CSSProperties | null {
+function measureAboveAnchor(
+  el: HTMLElement | null,
+  minW: number,
+  maxHeightCap = 280
+): React.CSSProperties | null {
   if (!el) return null;
   const r = el.getBoundingClientRect();
   const gap = 8;
@@ -65,9 +86,52 @@ function measureAboveAnchor(el: HTMLElement | null, minW: number): React.CSSProp
     left: r.left,
     bottom: window.innerHeight - r.top + gap,
     zIndex: 9999,
-    maxHeight: Math.min(280, Math.max(100, r.top - gap - 8)),
+    maxHeight: Math.min(maxHeightCap, Math.max(100, r.top - gap - 8)),
     minWidth: minW,
   };
+}
+
+function extractSseAssistantDelta(parsed: unknown): string {
+  if (!parsed || typeof parsed !== 'object') return '';
+  const o = parsed as Record<string, unknown>;
+  if (typeof o.text === 'string') return o.text;
+  const choices = o.choices as Array<{ delta?: { content?: string } }> | undefined;
+  if (Array.isArray(choices) && choices[0]?.delta?.content != null) {
+    return String(choices[0].delta.content);
+  }
+  if (o.type === 'content_block_delta') {
+    const delta = o.delta as Record<string, unknown> | undefined;
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') return delta.text;
+  }
+  const candidates = o.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
+  if (Array.isArray(candidates) && candidates[0]?.content?.parts) {
+    return candidates[0].content.parts.map((p) => (p.text != null ? String(p.text) : '')).join('');
+  }
+  return '';
+}
+
+function isStreamErrorPayload(
+  parsed: unknown
+): parsed is { error: string; detail?: string; provider?: string; model?: string } {
+  return !!(
+    parsed &&
+    typeof parsed === 'object' &&
+    'error' in parsed &&
+    typeof (parsed as { error: unknown }).error === 'string'
+  );
+}
+
+function formatHttpErrorMessage(status: number, bodyText: string): string {
+  try {
+    const j = JSON.parse(bodyText) as { error?: string; detail?: string; status?: number; model?: string };
+    const parts = [j.error, j.detail, j.model ? `model: ${j.model}` : '', status ? `HTTP ${status}` : ''].filter(
+      Boolean
+    );
+    if (parts.length) return parts.join(' — ');
+  } catch {
+    /* use body */
+  }
+  return bodyText.trim() || `HTTP ${status}`;
 }
 
 const getLangMeta = (lang: string) => {
@@ -116,6 +180,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
   );
 
+  const [chatModels, setChatModels] = useState<ChatModelRow[]>([]);
+  const [selectedModelKey, setSelectedModelKey] = useState<string>('');
+
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionItems, setMentionItems] = useState<PickerItem[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -132,7 +199,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const commandsCacheRef = useRef<{ at: number; items: SlashCmd[] } | null>(null);
 
   const measureAttachMenu = useCallback(() => {
-    setAttachMenuStyle(measureAboveAnchor(attachButtonRef.current, 200));
+    setAttachMenuStyle(measureAboveAnchor(attachButtonRef.current, 240, 420));
   }, []);
 
   const measureModeMenu = useCallback(() => {
@@ -200,7 +267,28 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    fetch('/api/agent/models')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!Array.isArray(data)) return;
+        const rows = data as ChatModelRow[];
+        setChatModels(rows);
+        setSelectedModelKey((prev) => {
+          if (prev && rows.some((m) => m.model_key === prev)) return prev;
+          return rows[0]?.model_key || '';
+        });
+      })
+      .catch(() => {});
+  }, []);
+
   const modeLabel = modes.find((m) => m.slug === mode)?.label ?? mode;
+
+  const selectedModelDisplayName = useMemo(() => {
+    const row = chatModels.find((m) => m.model_key === selectedModelKey);
+    return row?.name || selectedModelKey || 'No model';
+  }, [chatModels, selectedModelKey]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('iam-chat-mode', { detail: { label: modeLabel, slug: mode } }));
@@ -375,9 +463,16 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     insertAtCursor(next, pos, pos);
   };
 
+  const stripEmptyAssistantTail = useCallback((prev: Message[]) => {
+    const next = [...prev];
+    const last = next[next.length - 1];
+    if (last?.role === 'assistant' && last.content === '') next.pop();
+    return next;
+  }, []);
+
   const handleSend = async () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || isLoading) return;
+    if ((!text && attachments.length === 0) || isLoading || !selectedModelKey) return;
 
     const userMessage = text || '(attachment)';
     setInput('');
@@ -391,26 +486,34 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     const form = new FormData();
     form.append('message', userMessage);
     form.append('mode', mode);
+    form.append('model', selectedModelKey);
     form.append('conversationId', conversationId || '');
-    form.append('model_id', 'auto');
-    form.append(
-      'messages_json',
-      JSON.stringify(newMessages.map((m) => ({ role: m.role, content: m.content })))
-    );
     form.append('contextMode', String(activeProject));
     if (activeFileContent != null) form.append('contextCode', activeFileContent);
     if (activeFileName) form.append('contextFile', activeFileName);
     attachments.forEach((a) => form.append('files', a.file));
 
+    const applyAssistantError = (msg: string) => {
+      setMessages((prev) => [...stripEmptyAssistantTail(prev), { role: 'assistant', content: msg }]);
+    };
+
     try {
       const response = await fetch('/api/agent/chat', { method: 'POST', body: form });
 
-      if (!response.ok) throw new Error('Network response was not ok');
-      if (!response.body) throw new Error('No body in response');
+      if (!response.ok) {
+        const errText = await response.text();
+        applyAssistantError(formatHttpErrorMessage(response.status, errText));
+        return;
+      }
+      if (!response.body) {
+        applyAssistantError('Empty response body from chat endpoint');
+        return;
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let assistantContent = '';
+      let sseCarry = '';
 
       setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
@@ -418,33 +521,52 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+        sseCarry += decoder.decode(value, { stream: true });
+        const parts = sseCarry.split('\n\n');
+        sseCarry = parts.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.replace('data: ', '').trim();
+        for (const block of parts) {
+          for (const rawLine of block.split('\n')) {
+            const line = rawLine.trim();
+            if (!line.startsWith('data:')) continue;
+            const dataStr = line.slice(5).trim();
             if (dataStr === '[DONE]') continue;
+            let data: unknown;
             try {
-              const data = JSON.parse(dataStr);
-              const cid =
-                data.conversation_id != null && typeof data.conversation_id === 'string'
-                  ? data.conversation_id
-                  : null;
-              if (cid) {
+              data = JSON.parse(dataStr);
+            } catch {
+              continue;
+            }
+            if (isStreamErrorPayload(data)) {
+              const partsErr = [data.error, data.detail, data.provider, data.model].filter(Boolean);
+              throw new Error(partsErr.join(' — '));
+            }
+            if (data && typeof data === 'object' && 'conversation_id' in data) {
+              const cid = (data as { conversation_id?: string }).conversation_id;
+              if (typeof cid === 'string' && cid) {
                 setConversationId(cid);
                 localStorage.setItem(LS_CONV, cid);
               }
-              if (data.text) {
-                assistantContent += data.text;
+            }
+            const delta = extractSseAssistantDelta(data);
+            if (delta) {
+              assistantContent += delta;
+              setMessages((prev) => {
+                const last = [...prev];
+                last[last.length - 1] = { role: 'assistant', content: assistantContent };
+                return last;
+              });
+            }
+            if (data && typeof data === 'object' && typeof (data as { text?: string }).text === 'string') {
+              const legacy = (data as { text: string }).text;
+              if (legacy && !delta) {
+                assistantContent += legacy;
                 setMessages((prev) => {
                   const last = [...prev];
-                  last[last.length - 1].content = assistantContent;
+                  last[last.length - 1] = { role: 'assistant', content: assistantContent };
                   return last;
                 });
               }
-            } catch {
-              /* ignore */
             }
           }
         }
@@ -462,11 +584,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         }
       }
     } catch (error) {
-      console.error('Chat proxy failed:', error);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Connection error to Studio Proxy. Please try again.' },
-      ]);
+      console.error('Chat request failed:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      setMessages((prev) => [...stripEmptyAssistantTail(prev), { role: 'assistant', content: msg }]);
     } finally {
       setIsLoading(false);
       clearAttachments();
@@ -579,7 +699,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     return parts.length > 0 ? <>{parts}</> : <span className="whitespace-pre-wrap">{content}</span>;
   };
 
-  const canSend = (input.trim().length > 0 || attachments.length > 0) && !isLoading;
+  const canSend =
+    !!selectedModelKey && (input.trim().length > 0 || attachments.length > 0) && !isLoading;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen && mentionItems.length) {
@@ -765,7 +886,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 type="button"
                 ref={attachButtonRef}
                 className="flex-shrink-0 p-2 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5 rounded-lg transition-all"
-                title="Attach"
+                title={`Attach — model: ${selectedModelDisplayName}`}
                 onClick={() => {
                   setAttachMenuOpen((o) => !o);
                   setIsModeOpen(false);
@@ -886,6 +1007,38 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               <Slash size={14} className="text-[var(--text-muted)] shrink-0" />
               <span>Command</span>
             </button>
+            <div className="border-t border-[#1e3e4a] my-1 mx-2" role="separator" />
+            <div className="px-3 py-1 text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
+              Models
+            </div>
+            {MODEL_PLATFORM_ORDER.map((plat) => {
+              const list = chatModels.filter((m) => m.api_platform === plat);
+              if (!list.length) return null;
+              return (
+                <div key={plat} className="pb-1">
+                  <div className="px-3 py-0.5 text-[10px] text-[var(--text-muted)] opacity-90">
+                    {MODEL_PLATFORM_LABEL[plat] || plat}
+                  </div>
+                  {list.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[#0a2d38] rounded-lg mx-1 ${
+                        selectedModelKey === m.model_key
+                          ? 'text-[var(--solar-cyan)] bg-[#0a2d38]/80'
+                          : 'text-[var(--text-main)]'
+                      }`}
+                      onClick={() => {
+                        setSelectedModelKey(m.model_key);
+                        setAttachMenuOpen(false);
+                      }}
+                    >
+                      <span className="truncate text-[11px]">{m.name}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
           </div>,
           document.body
         )}

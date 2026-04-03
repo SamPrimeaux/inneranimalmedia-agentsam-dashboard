@@ -7242,73 +7242,187 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && planToolNames.has(t.name));
   }
   if (mode === 'debug') {
-    const debugToolNames = new Set(['terminal_execute', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search']);
+    const debugToolNames = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search']);
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
   }
   if (mode === 'ask') {
-    const askToolNames = new Set(['d1_query', 'r2_read', 'r2_list', 'knowledge_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
+    const askToolNames = new Set(['d1_query', 'r2_read', 'r2_list', 'knowledge_search', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
     return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
   }
   if (mode === 'agent') {
-    const agentToolNames = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
+    const agentToolNames = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
     return toolDefinitions.filter((t) => t && agentToolNames.has(t.name));
   }
   return toolDefinitions.slice(0, 20);
 }
 
-/** Intent-aware + keyword-boosted tool filter — replaces static mode sets */
-function filterToolsByIntent(intent, message, toolDefinitions) {
-  const msg = (message || '').toLowerCase();
-  const INTENT_MAP = {
-    shell:    ['terminal_execute'],
-    sql:      ['d1_query', 'd1_write', 'platform_info'],
-    question: ['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list'],
-    plan:     ['generate_execution_plan', 'context_search', 'knowledge_search', 'd1_query', 'platform_info'],
-  };
-  const KEYWORD_GROUPS = [
-    { keys: ['screenshot','browser','navigate','click','fill','devtools','a11y','accessibility','audit','performance','trace'],
-      tools: ['cdt_take_screenshot','cdt_navigate_page','cdt_click','cdt_fill','cdt_fill_form','cdt_list_console_messages','cdt_list_network_requests','cdt_list_pages','cdt_wait_for','cdt_evaluate_script','cdt_take_snapshot','browser_screenshot','playwright_screenshot','a11y_audit_webpage','a11y_get_summary','cdt_performance_start_trace','cdt_performance_stop_trace','cdt_performance_analyze_insight'] },
-    { keys: ['deploy','worker','wrangler','production','sandbox','promote','rollback'],
-      tools: ['worker_deploy','list_workers','terminal_execute','d1_query','get_deploy_command','get_worker_services'] },
-    { keys: ['github','repo','branch','commit','pull request','git'],
-      tools: ['github_repos','github_file','terminal_execute'] },
-    { keys: ['email','send','resend','broadcast'],
-      tools: ['resend_send_email','resend_send_broadcast','resend_list_domains','resend_create_api_key','generate_daily_summary_email','human_context_list'] },
-    { keys: ['r2','bucket','file','upload','download','storage'],
-      tools: ['r2_read','r2_write','r2_list','r2_search','r2_bucket_summary'] },
-    { keys: ['preview', 'browser', 'open url', 'show me', 'live preview'],
-      tools: ['preview_in_browser', 'r2_write', 'get_r2_url'] },
-    { keys: ['image','generate image','edit image','cf images','cloudflare images'],
-      tools: ['imgx_generate_image','imgx_edit_image','imgx_list_providers','r2_write','cf_images_upload','cf_images_list','cf_images_delete'] },
-    { keys: ['3d','model','glb','meshy'],
-      tools: ['meshyai_text_to_3d','meshyai_image_to_3d','meshyai_get_task','r2_write'] },
-    { keys: ['excalidraw','diagram','canvas','whiteboard'],
-      tools: ['excalidraw_open','excalidraw_add_elements','excalidraw_clear','excalidraw_export','excalidraw_load_library'] },
-    { keys: ['convert','pdf','docx','cloudconvert'],
-      tools: ['cloudconvert_create_job','cloudconvert_get_job'] },
-    { keys: ['cursor','coding task','cursor agent'],
-      tools: ['cursor_run_agent','cursor_get_agent','cursor_list_agents'] },
-    { keys: ['google drive','gdrive','drive doc'],
-      tools: ['gdrive_list','gdrive_fetch'] },
-    { keys: ['context','optimize','chunk','summarize'],
-      tools: ['context_search','context_chunk','context_optimize','context_extract_structure','context_summarize_code'] },
-    { keys: ['telemetry','event','analytics'],
-      tools: ['telemetry_log','telemetry_query','telemetry_stats'] },
-    { keys: ['client','pelican','shinshu','pawlove','anything floors','new iberia'],
-      tools: ['list_clients','d1_query','human_context_list'] },
-    { keys: ['memory','remember','store fact','save fact'],
-      tools: ['human_context_add','human_context_list','d1_write'] },
-  ];
-  let allowed = new Set(INTENT_MAP[intent] || []);
-  for (const group of KEYWORD_GROUPS) {
-    if (group.keys.some(k => msg.includes(k))) {
-      group.tools.forEach(t => allowed.add(t));
+/**
+ * Normalize mixed allow-list storage: JSON array or comma-separated string (e.g. terminal_execute,r2_*).
+ */
+function parseMixedToolAllowList(raw) {
+  if (raw == null) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+  if (s.startsWith('[')) {
+    try {
+      const j = JSON.parse(s);
+      if (Array.isArray(j)) return j.map((x) => String(x).trim()).filter(Boolean);
+    } catch (_) {
+      /* fall through to CSV */
     }
   }
-  if (allowed.size === 0) {
-    allowed = new Set(['d1_query', 'context_search', 'knowledge_search', 'platform_info', 'human_context_list']);
+  return s.split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+/** Strip D1 id prefix so tool_d1_query matches worker tool d1_query. */
+function stripToolPrefixForMatch(s) {
+  const t = String(s || '').trim();
+  if (t.startsWith('tool_')) return t.slice(5);
+  return t;
+}
+
+/**
+ * Small glob: * matches any substring; patterns like cdt_*, imgx_*, r2_*.
+ * Applies stripToolPrefixForMatch to the pattern only (worker tool names never use tool_).
+ */
+function smallGlobMatch(patternRaw, toolName) {
+  const pattern = stripToolPrefixForMatch(String(patternRaw || '').trim());
+  const candidate = String(toolName || '').trim();
+  if (!pattern || !candidate) return false;
+  if (pattern === '*') return true;
+  if (!pattern.includes('*')) return pattern === candidate;
+  const parts = pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&'));
+  try {
+    return new RegExp(`^${parts.join('.*')}$`).test(candidate);
+  } catch (_) {
+    return false;
   }
-  const result = toolDefinitions.filter(t => t && allowed.has(t.name));
+}
+
+/**
+ * Intersect MCP tool rows/defs with agentsam_subagent_profile.allowed_tool_globs (mixed JSON/CSV, tool_ prefix, globs).
+ * Empty / null allow list = no extra restriction (pass-through).
+ */
+function filterToolsByAllowPatterns(toolDefinitions, allowedRaw) {
+  if (!Array.isArray(toolDefinitions) || !toolDefinitions.length) return toolDefinitions || [];
+  const patterns = parseMixedToolAllowList(allowedRaw);
+  if (!patterns.length) return toolDefinitions;
+  return toolDefinitions.filter((t) => {
+    const name = t && (t.name != null ? t.name : t.tool_name);
+    if (name == null || String(name).trim() === '') return false;
+    return patterns.some((p) => smallGlobMatch(p, String(name)));
+  });
+}
+
+/** Fallback keyword groups when D1 intent patterns are unavailable (deploy parity: remove after D1 path verified). */
+const INTENT_KEYWORD_GROUPS_FALLBACK = [
+  { keys: ['screenshot', 'browser', 'navigate', 'click', 'fill', 'devtools', 'a11y', 'accessibility', 'audit', 'performance', 'trace'],
+    tools: ['cdt_take_screenshot', 'cdt_navigate_page', 'cdt_click', 'cdt_fill', 'cdt_fill_form', 'cdt_list_console_messages', 'cdt_list_network_requests', 'cdt_list_pages', 'cdt_wait_for', 'cdt_evaluate_script', 'cdt_take_snapshot', 'browser_screenshot', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'cdt_performance_start_trace', 'cdt_performance_stop_trace', 'cdt_performance_analyze_insight'] },
+  { keys: ['deploy', 'worker', 'wrangler', 'production', 'sandbox', 'promote', 'rollback'],
+    tools: ['worker_deploy', 'list_workers', 'terminal_execute', 'd1_query', 'get_deploy_command', 'get_worker_services'] },
+  { keys: ['github', 'repo', 'branch', 'commit', 'pull request', 'git'],
+    tools: ['github_repos', 'github_file', 'terminal_execute'] },
+  { keys: ['email', 'send', 'resend', 'broadcast'],
+    tools: ['resend_send_email', 'resend_send_broadcast', 'resend_list_domains', 'resend_create_api_key', 'generate_daily_summary_email', 'human_context_list'] },
+  { keys: ['r2', 'bucket', 'file', 'upload', 'download', 'storage'],
+    tools: ['r2_read', 'r2_write', 'r2_list', 'r2_search', 'r2_bucket_summary'] },
+  { keys: ['preview', 'browser', 'open url', 'show me', 'live preview'],
+    tools: ['preview_in_browser', 'r2_write', 'get_r2_url'] },
+  { keys: ['image', 'generate image', 'edit image', 'cf images', 'cloudflare images'],
+    tools: ['imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'r2_write', 'cf_images_upload', 'cf_images_list', 'cf_images_delete'] },
+  { keys: ['3d', 'model', 'glb', 'meshy'],
+    tools: ['meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task', 'r2_write'] },
+  { keys: ['excalidraw', 'diagram', 'canvas', 'whiteboard'],
+    tools: ['excalidraw_open', 'excalidraw_add_elements', 'excalidraw_clear', 'excalidraw_export', 'excalidraw_load_library'] },
+  { keys: ['convert', 'pdf', 'docx', 'cloudconvert'],
+    tools: ['cloudconvert_create_job', 'cloudconvert_get_job'] },
+  { keys: ['cursor', 'coding task', 'cursor agent'],
+    tools: ['cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents'] },
+  { keys: ['workspace', 'codebase', 'grep', 'find file', 'repo file', 'local file'],
+    tools: ['workspace_read_file', 'workspace_list_files', 'workspace_search', 'terminal_execute'] },
+  { keys: ['google drive', 'gdrive', 'drive doc'],
+    tools: ['gdrive_list', 'gdrive_fetch'] },
+  { keys: ['context', 'optimize', 'chunk', 'summarize'],
+    tools: ['context_search', 'context_chunk', 'context_optimize', 'context_extract_structure', 'context_summarize_code'] },
+  { keys: ['telemetry', 'event', 'analytics'],
+    tools: ['telemetry_log', 'telemetry_query', 'telemetry_stats'] },
+  { keys: ['client', 'pelican', 'shinshu', 'pawlove', 'anything floors', 'new iberia'],
+    tools: ['list_clients', 'd1_query', 'human_context_list'] },
+  { keys: ['memory', 'remember', 'store fact', 'save fact'],
+    tools: ['human_context_add', 'human_context_list', 'd1_write'] },
+];
+
+const TOOLCTX_INTENTS_KV_PREFIX = 'toolctx:intents:';
+const TOOLCTX_INTENTS_KV_TTL_SEC = 300;
+
+/**
+ * Load keyword tool groups from agent_intent_patterns (D1), KV-cached per tenant.
+ * @returns {Promise<Array<{ keys: string[], tools: string[] }>|null>} null on D1 error (caller uses fallback)
+ */
+async function loadIntentKeywordGroupsFromD1(env, tenantId) {
+  const tid = String(tenantId || 'tenant_sam_primeaux').trim() || 'tenant_sam_primeaux';
+  const cacheKey = `${TOOLCTX_INTENTS_KV_PREFIX}${tid}`;
+  if (env.SESSION_CACHE) {
+    try {
+      const raw = await env.SESSION_CACHE.get(cacheKey);
+      if (raw) {
+        const j = JSON.parse(raw);
+        if (j && Array.isArray(j.groups)) return j.groups;
+      }
+    } catch (_) {}
+  }
+  if (!env.DB) return null;
+  try {
+    const r = await env.DB.prepare(
+      `SELECT triggers_json, tools_json FROM agent_intent_patterns
+       WHERE is_active = 1
+         AND tools_json IS NOT NULL
+         AND TRIM(tools_json) != ''`
+    ).all();
+    const groups = [];
+    for (const row of r.results || []) {
+      const keys = parseMixedToolAllowList(row.triggers_json).map((x) => String(x).toLowerCase()).filter(Boolean);
+      const tools = parseMixedToolAllowList(row.tools_json);
+      if (keys.length === 0 || tools.length === 0) continue;
+      groups.push({ keys, tools });
+    }
+    if (env.SESSION_CACHE) {
+      env.SESSION_CACHE.put(cacheKey, JSON.stringify({ groups, v: 1 }), { expirationTtl: TOOLCTX_INTENTS_KV_TTL_SEC }).catch(() => {});
+    }
+    return groups;
+  } catch (e) {
+    console.warn('[loadIntentKeywordGroupsFromD1]', e?.message ?? e);
+    return null;
+  }
+}
+
+/** Intent-aware + keyword-boosted tool filter — D1 triggers_json/tools_json with KV cache; fallback to INTENT_KEYWORD_GROUPS_FALLBACK on D1 failure. */
+async function filterToolsByIntent(env, tenantId, intent, message, toolDefinitions) {
+  const msg = (message || '').toLowerCase();
+  const INTENT_MAP = {
+    shell: ['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search'],
+    sql: ['d1_query', 'd1_write', 'platform_info'],
+    question: ['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list'],
+    plan: ['generate_execution_plan', 'context_search', 'knowledge_search', 'd1_query', 'platform_info'],
+  };
+  let keywordGroups = await loadIntentKeywordGroupsFromD1(env, tenantId);
+  if (keywordGroups == null) {
+    keywordGroups = INTENT_KEYWORD_GROUPS_FALLBACK;
+  }
+  const intentPatterns = INTENT_MAP[intent] ? INTENT_MAP[intent].slice() : [];
+  const keywordPatterns = [];
+  for (const group of keywordGroups) {
+    if (group.keys.some((k) => msg.includes(k))) {
+      for (const p of group.tools) keywordPatterns.push(p);
+    }
+  }
+  let allPatterns = intentPatterns.concat(keywordPatterns);
+  if (allPatterns.length === 0) {
+    allPatterns = ['d1_query', 'context_search', 'knowledge_search', 'platform_info', 'human_context_list'];
+  }
+  const result = toolDefinitions.filter(
+    (t) => t && t.name && allPatterns.some((p) => smallGlobMatch(p, t.name))
+  );
   return result.slice(0, 15); // hard cap
 }
 
@@ -8815,6 +8929,12 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
+      } else if (toolName === 'workspace_read_file' || toolName === 'workspace_list_files' || toolName === 'workspace_search') {
+        try {
+          resultText = await runWorkspaceDiskTool(env, request, toolName, params, conversationId, executionCtx);
+        } catch (e) {
+          resultText = JSON.stringify({ error: e?.message ?? String(e) });
+        }
       } else if (toolName.startsWith('cdt_')) {
         try {
           const out = await runCdpBuiltinTool(env, toolName, params || {});
@@ -8824,7 +8944,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
       if (env.DB) {
         try {
           let category = 'builtin';
@@ -9129,6 +9249,176 @@ async function runTerminalCommand(env, request, command, sessionId = null, execu
     }
   }
   return out;
+}
+
+/** Canonical Agent Sam repo root on the PTY host (iam-pty). */
+const IAM_WORKSPACE_ROOT = '/Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard';
+
+function normalizeWorkspaceAbsolutePath(raw) {
+  const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+  let s = String(raw ?? '').trim();
+  if (!s) return { ok: true, path: root };
+  if (!s.startsWith('/')) {
+    s = `${root}/${s.replace(/^\/+/, '')}`;
+  }
+  const parts = s.split('/').filter(Boolean);
+  const stack = [];
+  for (const part of parts) {
+    if (part === '..') {
+      if (stack.length) stack.pop();
+    } else if (part !== '.') {
+      stack.push(part);
+    }
+  }
+  const abs = `/${stack.join('/')}`;
+  if (!abs.startsWith(root)) {
+    return { ok: false, error: `Path must be under ${root}` };
+  }
+  return { ok: true, path: abs };
+}
+
+function workspaceSafeGlobPattern(raw) {
+  const t = String(raw ?? '').trim();
+  if (!t) return '*';
+  if (t.length > 120) return null;
+  if (/[;&|`$(){}<>!#\\\n\r]/.test(t)) return null;
+  return t;
+}
+
+function workspaceSafeGrepQuery(raw) {
+  const t = String(raw ?? '').trim();
+  if (!t) return null;
+  if (t.length > 500) return null;
+  if (/[\n\r\0]/.test(t)) return null;
+  return t;
+}
+
+/**
+ * Read / list / grep the PTY host workspace via runTerminalCommand (same backend as terminal_execute).
+ * Returns a JSON string for the model.
+ */
+async function runWorkspaceDiskTool(env, request, toolName, params, conversationId, executionCtx) {
+  if (!env.TERMINAL_WS_URL) {
+    return JSON.stringify({ error: 'terminal_not_configured', message: 'TERMINAL_WS_URL not set' });
+  }
+  const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+  const p = params || {};
+
+  if (toolName === 'workspace_read_file') {
+    const pathRaw = p.path ?? p.file ?? '';
+    const norm = normalizeWorkspaceAbsolutePath(pathRaw);
+    if (!norm.ok) return JSON.stringify({ error: 'invalid_path', message: norm.error });
+    const fp = norm.path;
+    const q = JSON.stringify(fp);
+
+    const checkCmd = `sh -c 'if [ ! -e ${q} ]; then echo WSPACE_E_NOT_FOUND; exit 2; fi; if [ ! -f ${q} ]; then echo WSPACE_E_NOT_FILE; exit 3; fi; if [ ! -r ${q} ]; then echo WSPACE_E_PERM; exit 4; fi; echo OK'`;
+    const r0 = await runTerminalCommand(env, request, checkCmd, conversationId, executionCtx);
+    const o0 = (r0.output || '').trim();
+    if (o0.includes('WSPACE_E_NOT_FOUND')) {
+      return JSON.stringify({ error: 'not_found', message: `No file at ${fp}` });
+    }
+    if (o0.includes('WSPACE_E_NOT_FILE')) {
+      return JSON.stringify({ error: 'not_a_file', message: 'Path is not a regular file' });
+    }
+    if (o0.includes('WSPACE_E_PERM')) {
+      return JSON.stringify({ error: 'permission_denied', message: 'Permission denied' });
+    }
+
+    const metaCmd = `sh -c 'wc -c < ${q} | tr -d " "; echo; stat -f %m ${q} 2>/dev/null || stat -c %Y ${q}'`;
+    const r1 = await runTerminalCommand(env, request, metaCmd, conversationId, executionCtx);
+    const metaLines = (r1.output || '').trim().split(/\r?\n/).filter(Boolean);
+    const bytes = parseInt(metaLines[0], 10) || 0;
+    const mtime = parseInt(metaLines[1], 10) || 0;
+
+    const catCmd = `sh -c 'cat ${q}'`;
+    const r2 = await runTerminalCommand(env, request, catCmd, conversationId, executionCtx);
+    let content = r2.output ?? '';
+    const MAX = 1500000;
+    let truncated = false;
+    if (content.length > MAX) {
+      content = content.slice(0, MAX);
+      truncated = true;
+    }
+    return JSON.stringify({
+      path: fp,
+      bytes,
+      mtime_unix: mtime,
+      content,
+      ...(truncated ? { truncated: true, note: `Content truncated to ${MAX} characters` } : {}),
+    });
+  }
+
+  if (toolName === 'workspace_list_files') {
+    const dirNorm = normalizeWorkspaceAbsolutePath(p.dir ?? '');
+    if (!dirNorm.ok) return JSON.stringify({ error: 'invalid_path', message: dirNorm.error });
+    const dirPath = dirNorm.path;
+    const pat = workspaceSafeGlobPattern(p.pattern);
+    if (pat === null) {
+      return JSON.stringify({ error: 'invalid_pattern', message: 'Pattern contains disallowed characters or is too long' });
+    }
+    const qPat = JSON.stringify(pat);
+    let relFromRoot = '.';
+    if (dirPath !== root) {
+      if (!dirPath.startsWith(`${root}/`)) {
+        return JSON.stringify({ error: 'invalid_path', message: 'Directory not under workspace root' });
+      }
+      relFromRoot = dirPath.slice(root.length + 1);
+      if (!relFromRoot) relFromRoot = '.';
+    }
+    const qRel = JSON.stringify(relFromRoot);
+    const qRoot = JSON.stringify(root);
+    const listCmd = `sh -c 'cd ${qRoot} && find ${qRel} -name ${qPat} -not -path "*/node_modules/*" -not -name "._*" 2>/dev/null | head -n 2000'`;
+    const r = await runTerminalCommand(env, request, listCmd, conversationId, executionCtx);
+    const raw = (r.output || '').trim();
+    const paths = raw
+      ? raw.split(/\r?\n/).map((l) => l.replace(/^\.\//, '')).filter(Boolean)
+      : [];
+    return JSON.stringify({ dir: dirPath, pattern: pat, paths });
+  }
+
+  if (toolName === 'workspace_search') {
+    const query = workspaceSafeGrepQuery(p.query);
+    if (!query) {
+      return JSON.stringify({ error: 'invalid_query', message: 'query required (non-empty, no newlines)' });
+    }
+    const dirNorm = normalizeWorkspaceAbsolutePath(p.dir ?? '');
+    if (!dirNorm.ok) return JSON.stringify({ error: 'invalid_path', message: dirNorm.error });
+    const dirPath = dirNorm.path;
+    const fpat = workspaceSafeGlobPattern(p.file_pattern ?? '*');
+    if (fpat === null) {
+      return JSON.stringify({ error: 'invalid_file_pattern', message: 'file_pattern contains disallowed characters or is too long' });
+    }
+    let relFromRoot = '.';
+    if (dirPath !== root) {
+      if (!dirPath.startsWith(`${root}/`)) {
+        return JSON.stringify({ error: 'invalid_path', message: 'Directory not under workspace root' });
+      }
+      relFromRoot = dirPath.slice(root.length + 1);
+      if (!relFromRoot) relFromRoot = '.';
+    }
+    const qRoot = JSON.stringify(root);
+    const qRel = JSON.stringify(relFromRoot);
+    const qInc = JSON.stringify(fpat);
+    const qQuery = JSON.stringify(query);
+    const grepCmd = `sh -c 'cd ${qRoot} && grep -rHn --include=${qInc} --exclude-dir=node_modules --exclude-dir=.git -F ${qQuery} ${qRel} 2>/dev/null | head -n 120'`;
+    const r = await runTerminalCommand(env, request, grepCmd, conversationId, executionCtx);
+    const raw = (r.output || '').trim();
+    const lines = raw ? raw.split(/\r?\n/).filter(Boolean) : [];
+    const matches = [];
+    for (const line of lines) {
+      const idx = line.indexOf(':');
+      if (idx < 0) continue;
+      const idx2 = line.indexOf(':', idx + 1);
+      if (idx2 < 0) continue;
+      const file = line.slice(0, idx);
+      const lineNo = parseInt(line.slice(idx + 1, idx2), 10) || 0;
+      const preview = line.slice(idx2 + 1);
+      matches.push({ file, line: lineNo, preview });
+    }
+    return JSON.stringify({ query, dir: dirPath, file_pattern: fpat, matches });
+  }
+
+  return JSON.stringify({ error: 'unknown_workspace_tool', toolName });
 }
 
 /**
@@ -9522,7 +9812,19 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
     ).bind(mode).all();
     const filtered = filterToolRowsByPanel(agent_id, r.results || []);
     const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
-    const modeNames = new Set(modeFiltered.map(t => t.tool_name || t.name));
+    const tenantForIntent =
+      (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
+      (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+      'tenant_sam_primeaux';
+    const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
+    const intentForFilter = opts._intent || 'mixed';
+    let intentFiltered = modeFiltered;
+    try {
+      intentFiltered = await filterToolsByIntent(env, tenantForIntent, intentForFilter, lastUserForIntent, modeFiltered);
+    } catch (e) {
+      console.warn('[chatWithToolsGoogle] filterToolsByIntent', e?.message ?? e);
+    }
+    const modeNames = new Set(intentFiltered.map((t) => t.tool_name || t.name));
     toolDeclarations = filtered.filter(t => modeNames.has(t.tool_name)).map(t => {
       let schema = {};
       try { schema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
@@ -9542,6 +9844,9 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       })()
       };
     });
+    if (opts.allowed_tool_globs != null && parseMixedToolAllowList(opts.allowed_tool_globs).length > 0) {
+      toolDeclarations = filterToolsByAllowPatterns(toolDeclarations, opts.allowed_tool_globs);
+    }
   } catch (e) {
     console.error('[chatWithToolsGoogle] tool load failed:', e?.message);
   }
@@ -10245,6 +10550,7 @@ ${commandsBlock || '(none)'}
 
 ## IDE State
 - Monaco / open file: user can type @file or @monaco in the message to attach editor content, cursor snapshot, and an **Agent tool targets** block with exact bucket/key/repo for that turn. Use those ids with r2_read / r2_write / github_file / terminal_execute when the user wants real persistence — not chat-only code.
+- Workspace (PTY host): use workspace_read_file to read any file by path when the user references a file not already in context. Use workspace_list_files to explore the repo. Use workspace_search to find symbol definitions, usages, or patterns across the codebase.
 - Excalidraw: use excalidraw_open → excalidraw_load_library → excalidraw_add_elements
 - Terminal: use terminal_execute for shell commands
 - Browser: use cdt_navigate_page → cdt_take_screenshot for browser control. No Playwright needed — cdt_* tools are your browser.
@@ -16236,7 +16542,7 @@ async function handleMcpApi(req, u, e, ctx) {
                   }
 
                   // Terminal — split output into lines
-                  if (tool_name === 'terminal_execute' || tool_name.startsWith('local_file_')) {
+                  if (tool_name === 'terminal_execute' || tool_name.startsWith('local_file_') || tool_name.startsWith('workspace_')) {
                     const output = typeof result === 'string' ? result : result?.output || result?.result || JSON.stringify(result);
                     const lines = String(output).split('\n');
                     for (const line of lines) {
@@ -17445,6 +17751,36 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         output: null,
         errorMessage: errMsg.slice(0, 200),
         requestId: null,
+      });
+      return { error: errMsg };
+    }
+  }
+  if (tool_name === 'workspace_read_file' || tool_name === 'workspace_list_files' || tool_name === 'workspace_search') {
+    const wsT0 = Date.now();
+    try {
+      const jsonText = await runWorkspaceDiskTool(env, null, tool_name, params, conversationId, opts.executionCtx ?? null);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'terminal',
+        toolInput: params,
+        result: jsonText,
+        error: null,
+        serviceName: 'builtin',
+        durationMs: Date.now() - wsT0,
+      });
+      return { result: jsonText };
+    } catch (err) {
+      const errMsg = String(err?.message || err);
+      await rec({
+        conversationId,
+        toolName: tool_name,
+        toolCategory: 'terminal',
+        toolInput: params,
+        result: null,
+        error: errMsg,
+        serviceName: 'builtin',
+        durationMs: Date.now() - wsT0,
       });
       return { error: errMsg };
     }
@@ -20311,6 +20647,7 @@ const ACTION_TOOLS = [
 ];
 const READ_ONLY_TOOLS = [
   'knowledge_search', 'd1_query', 'r2_read', 'r2_list', 'web_search', 'telemetry_query',
+  'workspace_read_file', 'workspace_list_files', 'workspace_search',
 ];
 function isActionTool(toolName) {
   return typeof toolName === 'string' && ACTION_TOOLS.includes(toolName);
@@ -20419,11 +20756,31 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         }
       }
     }
+    if (tools.length > 0) {
+      try {
+        const tenantForIntent =
+          (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
+          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+          'tenant_sam_primeaux';
+        const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
+        const intentForFilter = opts._intent || 'mixed';
+        tools = await filterToolsByIntent(env, tenantForIntent, intentForFilter, lastUserForIntent, tools);
+      } catch (e) {
+        console.warn('[chatWithToolsAnthropic] filterToolsByIntent', e?.message ?? e);
+      }
+      if (opts.allowed_tool_globs != null && parseMixedToolAllowList(opts.allowed_tool_globs).length > 0) {
+        tools = filterToolsByAllowPatterns(tools, opts.allowed_tool_globs);
+      }
+    }
   } catch (e) {
     console.error('[chatWithToolsAnthropic] tool load failed:', e?.message ?? e);
   }
   if (tools.length === 0 && !preFilteredTools) return null;
   console.log('[chatWithToolsAnthropic] Loaded tools:', tools.length);
+  const hasWorkspaceTools = tools.some((t) => t && /^workspace_/.test(t.name));
+  const systemWithWorkspaceHint = hasWorkspaceTools
+    ? `${systemWithBlurb}\n\n## Workspace (PTY host repo)\nUse workspace_read_file to read any file by path when the user references a file not already in context. Use workspace_list_files to explore the repo. Use workspace_search to find symbol definitions, usages, or patterns across the codebase.`
+    : systemWithBlurb;
   const modelKey = resolveAnthropicModelKey(model.model_key);
   const allToolCalls = [];
   let messages = apiMessages.map((m) => ({ role: m.role, content: m.content }));
@@ -20438,6 +20795,9 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
 
   const TOOL_DISPLAY = {
     terminal_execute: 'terminal',
+    workspace_read_file: 'filesystem',
+    workspace_list_files: 'filesystem',
+    workspace_search: 'filesystem',
     d1_query: 'D1 database',
     d1_write: 'D1 database',
     r2_read: 'file',
@@ -20493,7 +20853,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     const body = {
       model: modelKey,
       max_tokens: _isAdaptive ? 16000 : 8192,
-      system: systemWithBlurb,
+      system: systemWithWorkspaceHint,
       messages,
       tools,
       ..._thinkingConfig,
@@ -20708,7 +21068,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   }
 
   if (iter >= MCP_CHAT_TOOL_LOOP_MAX && (!lastContent || lastContent.trim().length < 10)) {
-    const finalSystem = systemWithBlurb + '\n\nYou must reply with a single concise final answer based on the conversation and tool results above. Do not use any tools.';
+    const finalSystem = systemWithWorkspaceHint + '\n\nYou must reply with a single concise final answer based on the conversation and tool results above. Do not use any tools.';
     const finalRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {

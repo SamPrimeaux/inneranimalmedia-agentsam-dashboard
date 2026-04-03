@@ -105,6 +105,8 @@ export type ActiveFile = {
   name: string;
   content: string;
   originalContent?: string;
+  /** Relative path within the connected native folder (for lightweight chat context). */
+  workspacePath?: string;
   handle?: FileSystemFileHandle;
   r2Key?: string;
   r2Bucket?: string;

@@ -193,6 +193,16 @@ function messageRequestsEditorContext(userMessage: string, activeFileName?: stri
   );
 }
 
+/** Path-like id for lightweight injection (no buffer), similar to Cursor open-file metadata. */
+function getEditorLightweightPath(af: ActiveFile | null | undefined): string | null {
+  if (!af) return null;
+  if (af.workspacePath?.trim()) return af.workspacePath.trim();
+  if (af.r2Key?.trim()) return `r2:${af.r2Bucket || 'DASHBOARD'}/${af.r2Key}`;
+  if (af.githubRepo && af.githubPath) return `${af.githubRepo}/${af.githubPath}`;
+  if (af.driveFileId?.trim()) return `drive:${af.driveFileId}`;
+  return null;
+}
+
 /** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
 async function buildMentionContext(
   userMessage: string,
@@ -277,6 +287,19 @@ async function buildMentionContext(
         '(No stored D1 result in this session. SQL explorer can set sessionStorage key iam_d1_last_result.)'
       }`
     );
+  }
+
+  const noFileMonacoFilenameMention =
+    !hasWordMention(userMessage, 'file') &&
+    !hasWordMention(userMessage, 'monaco') &&
+    !fileNameMentionedInMessage(userMessage, activeFileName);
+  if (noFileMonacoFilenameMention) {
+    const p = getEditorLightweightPath(activeFile);
+    if (p) {
+      const n =
+        activeFileContent != null && activeFileContent !== '' ? activeFileContent.split('\n').length : 0;
+      parts.push(`### Editor context\nCurrently open: ${p} (${n} lines)`);
+    }
   }
 
   if (parts.length === 0) return userMessage;

@@ -21,7 +21,7 @@ interface FileNode {
 }
 
 export const LocalExplorer: React.FC<{
-    onFileSelect: (fileData: { name: string; content: string; handle: any }) => void;
+    onFileSelect: (fileData: { name: string; content: string; handle: any; workspacePath?: string }) => void;
     /** Fires when user connects a native folder — drives status bar + persisted workspace. */
     onWorkspaceRootChange?: (info: { folderName: string }) => void;
     /** Open R2 object in Monaco (same as R2 panel). */
@@ -142,11 +142,12 @@ export const LocalExplorer: React.FC<{
         void handleOpenFolder();
     }, [nativeFolderOpenSignal, handleOpenFolder]);
 
-    const toggleDir = async (node: FileNode, pathKey: string) => {
+    const toggleDir = async (node: FileNode, pathPrefix: string) => {
         if (node.kind === 'file') {
             const file = await node.handle.getFile();
             const content = await file.text();
-            onFileSelect({ name: node.name, content, handle: node.handle });
+            const workspacePath = pathPrefix ? `${pathPrefix}/${node.name}` : node.name;
+            onFileSelect({ name: node.name, content, handle: node.handle, workspacePath });
             return;
         }
 
@@ -173,11 +174,12 @@ export const LocalExplorer: React.FC<{
         return null;
     };
 
-    const renderTree = (node: FileNode, depth: number = 0) => {
+    const renderTree = (node: FileNode, depth: number = 0, pathPrefix: string = '') => {
+        const nodePath = pathPrefix ? `${pathPrefix}/${node.name}` : node.name;
         return (
-            <div key={node.name} className="flex flex-col">
+            <div key={nodePath} className="flex flex-col">
                 <div 
-                    onClick={() => toggleDir(node, String(depth))}
+                    onClick={() => toggleDir(node, pathPrefix)}
                     style={{ paddingLeft: `${depth * 10}px` }}
                     className="flex items-center gap-1.5 px-2 py-1 hover:bg-[var(--bg-hover)] cursor-pointer text-[13px] text-[var(--text-main)] group whitespace-nowrap overflow-hidden text-ellipsis"
                 >
@@ -196,7 +198,7 @@ export const LocalExplorer: React.FC<{
                 </div>
                 {node.isOpen && node.children && (
                     <div className="flex flex-col border-l border-[var(--border-subtle)] ml-3">
-                        {node.children.map(child => renderTree(child, depth + 1))}
+                        {node.children.map(child => renderTree(child, depth + 1, nodePath))}
                     </div>
                 )}
             </div>

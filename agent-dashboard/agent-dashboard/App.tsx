@@ -89,8 +89,7 @@ const App: React.FC = () => {
       // IAM Status Stubs
       ['/api/tunnel/status', '/api/agent/terminal/config-status'].forEach(url => console.log('TODO: wire', url));
       
-      // Telemetry Stub
-      fetch('/api/agent/telemetry', { method: 'POST', body: JSON.stringify({ event: 'status_poll' }) }).catch(() => {});
+      fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
     } catch (err) {
       console.error("Status polling failed:", err);
     }
@@ -451,8 +450,8 @@ const App: React.FC = () => {
       });
       const data = await response.json();
 
-      if (data.text && engineRef.current) {
-        const entities: any[] = JSON.parse(data.text);
+      if (data.response && engineRef.current) {
+        const entities: any[] = JSON.parse(data.response);
         entities.forEach(ent => {
             const formattedVoxels = ent.voxels.map((v: any) => ({
                 ...v,

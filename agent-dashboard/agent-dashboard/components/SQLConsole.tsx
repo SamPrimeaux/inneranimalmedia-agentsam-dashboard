@@ -1,17 +1,33 @@
-import React, { useState } from 'react';
-import { Play, RotateCcw, Save, Trash2, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Play, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { DataGrid } from './DataGrid';
+
+export type SqlDialect = 'd1' | 'postgres';
 
 interface SQLConsoleProps {
   onExecute: (sql: string) => Promise<{ success: boolean; results?: any[]; error?: string }>;
   history: string[];
+  dialect?: SqlDialect;
 }
 
-export const SQLConsole: React.FC<SQLConsoleProps> = ({ onExecute, history }) => {
-  const [sql, setSql] = useState('-- Write your SQL query here\nSELECT * FROM sqlite_master WHERE type=\'table\';');
+const DEFAULT_SQL: Record<SqlDialect, string> = {
+  d1: `-- SQLite / D1
+SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;`,
+  postgres: `-- PostgreSQL (Supabase via Hyperdrive)
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type IN ('BASE TABLE','VIEW')
+ORDER BY table_name;`,
+};
+
+export const SQLConsole: React.FC<SQLConsoleProps> = ({ onExecute, history, dialect = 'd1' }) => {
+  const [sql, setSql] = useState(DEFAULT_SQL[dialect]);
   const [results, setResults] = useState<any[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+
+  useEffect(() => {
+    setSql(DEFAULT_SQL[dialect]);
+  }, [dialect]);
 
   const handleRun = async () => {
     setIsExecuting(true);
@@ -62,7 +78,7 @@ export const SQLConsole: React.FC<SQLConsoleProps> = ({ onExecute, history }) =>
           value={sql}
           onChange={(e) => setSql(e.target.value)}
           spellCheck={false}
-          className="flex-1 w-full p-4 bg-[#030a0d] text-[13px] font-mono text-[var(--solar-cyan)] focus:outline-none resize-none"
+          className="flex-1 w-full p-4 bg-[var(--bg-app)] text-[13px] font-mono text-[var(--solar-cyan)] focus:outline-none resize-none"
         />
       </div>
 

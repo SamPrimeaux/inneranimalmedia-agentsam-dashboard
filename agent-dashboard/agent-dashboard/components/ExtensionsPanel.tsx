@@ -22,10 +22,21 @@ export const ExtensionsPanel: React.FC<Props> = ({ onToolSelect }) => {
 
     const fetchTools = () => {
         setLoading(true);
-        fetch('/api/mcps')
+        fetch('/api/mcp/tools', { credentials: 'same-origin' })
             .then(res => res.json())
-            .then(data => {
-                if (Array.isArray(data)) setTools(data);
+            .then((data: { tools?: Array<{ tool_name: string; description?: string; category?: string }> }) => {
+                const rows = Array.isArray(data.tools) ? data.tools : [];
+                setTools(
+                    rows.map(t => ({
+                        id: t.tool_name,
+                        mcp_name: t.tool_name,
+                        feature_name: t.tool_name,
+                        description: t.description || '',
+                        version: '1',
+                        status: 'active',
+                        schema: '{}',
+                    }))
+                );
                 setLoading(false);
             })
             .catch(err => {

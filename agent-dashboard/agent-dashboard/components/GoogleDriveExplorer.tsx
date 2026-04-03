@@ -14,13 +14,26 @@ export const GoogleDriveExplorer: React.FC = () => {
     const fetchFiles = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/integrations/google-drive/list');
-        if (!res.ok) throw new Error('Unauthenticated');
+        const st = await fetch('/api/integrations/status', { credentials: 'same-origin' });
+        const status = st.ok ? await st.json().catch(() => ({})) : {};
+        if (st.ok && status && status.google === false) {
+          setIsAuthenticated(false);
+          setFiles([]);
+          return;
+        }
+        const res = await fetch('/api/integrations/gdrive/files?folderId=root', { credentials: 'same-origin' });
+        if (res.status === 401 || res.status === 400) {
+          setIsAuthenticated(false);
+          setFiles([]);
+          return;
+        }
+        if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
-        setFiles(data.files || []);
+        setFiles(Array.isArray(data.files) ? data.files : []);
         setIsAuthenticated(true);
       } catch (err) {
         setIsAuthenticated(false);
+        setFiles([]);
       } finally {
         setIsLoading(false);
       }
@@ -28,14 +41,6 @@ export const GoogleDriveExplorer: React.FC = () => {
 
     useEffect(() => {
       fetchFiles();
-      
-      // IAM Google Drive Stubs
-      const stubs = [
-        '/api/integrations/google-drive/files',
-        '/api/integrations/google-drive/file',
-        '/api/oauth/google/callback'
-      ];
-      stubs.forEach(url => console.log('TODO: wire', url));
     }, []);
 
 

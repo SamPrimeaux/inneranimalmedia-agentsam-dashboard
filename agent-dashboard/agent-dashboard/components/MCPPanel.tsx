@@ -17,10 +17,20 @@ export const MCPPanel: React.FC = () => {
   const [results, setResults] = useState<Record<string, any>>({});
 
   useEffect(() => {
-    fetch('/api/mcps')
+    fetch('/api/mcp/tools', { credentials: 'same-origin' })
       .then(res => res.json())
-      .then(data => {
-        setTools(data);
+      .then((data: { tools?: Array<{ tool_name: string; description?: string; category?: string }> }) => {
+        const rows = Array.isArray(data.tools) ? data.tools : [];
+        setTools(
+          rows.map(t => ({
+            id: t.tool_name,
+            tool_name: t.tool_name,
+            tool_category: t.category || 'general',
+            description: t.description || '',
+            enabled: 1,
+            input_schema: '{}',
+          }))
+        );
         setLoading(false);
       })
       .catch(err => {
@@ -35,10 +45,11 @@ export const MCPPanel: React.FC = () => {
       const resp = await fetch('/api/mcp/invoke', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({
-          tool: tool.tool_name,
-          arguments: {} // Simplified for now, real UI would have a form
-        })
+          tool_name: tool.tool_name,
+          params: {},
+        }),
       });
       const data = await resp.json();
       setResults(prev => ({ ...prev, [tool.id]: data }));

@@ -67,46 +67,75 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
 
-  // Fetch real data from DB-backed API routes
+  // Worker routes: /api/mcp/tools, /api/ai/models, /api/integrations/github/repos
   useEffect(() => {
-    fetch('/api/settings/mcps').then(r => r.json()).then((d: MCP[]) => {
-      if (Array.isArray(d)) {
-        setMcps(d);
-        const t: Record<string, boolean> = {};
-        d.forEach(m => { t[m.id] = !!m.enabled; });
-        setMcpToggles(t);
-      }
-    }).catch(() => setMcps([]));
+    const opt = { credentials: 'same-origin' as const };
 
-    fetch('/api/settings/models').then(r => r.json()).then((d: AIModel[]) => {
-      if (Array.isArray(d)) setModels(d);
-    }).catch(() => setModels([]));
+    fetch('/api/mcp/tools', opt)
+      .then(r => r.json())
+      .then((d: { tools?: Array<{ tool_name: string; description?: string; category?: string }> }) => {
+        const rows = Array.isArray(d.tools) ? d.tools : [];
+        const mapped: MCP[] = rows.map(t => ({
+          id: t.tool_name,
+          tool_name: t.tool_name,
+          tool_category: t.category || 'general',
+          description: t.description || '',
+          enabled: 1,
+          requires_approval: 0,
+          mcp_service_url: 'https://mcp.inneranimalmedia.com/mcp',
+          input_schema: '{}',
+        }));
+        setMcps(mapped);
+        const toggles: Record<string, boolean> = {};
+        mapped.forEach(m => { toggles[m.id] = !!m.enabled; });
+        setMcpToggles(toggles);
+      })
+      .catch(() => setMcps([]));
 
-    fetch('/api/settings/repos').then(r => r.json()).then((d: GitRepo[]) => {
-      if (Array.isArray(d)) setRepos(d);
-    }).catch(() => setRepos([]));
+    fetch('/api/ai/models', opt)
+      .then(r => r.json())
+      .then((d: { models?: AIModel[] }) => {
+        const rows = Array.isArray(d.models) ? d.models : [];
+        setModels(
+          rows.map(m => ({
+            provider: String((m as AIModel).provider || ''),
+            model_key: String((m as AIModel).model_key || ''),
+            display_name: String((m as AIModel).display_name || (m as AIModel).model_key || ''),
+            is_active: Number((m as AIModel).is_active) ? 1 : 0,
+            supports_tools: Number((m as AIModel).supports_tools) ? 1 : 0,
+            supports_vision: Number((m as AIModel).supports_vision) ? 1 : 0,
+            size_class: String((m as AIModel).size_class || ''),
+          }))
+        );
+      })
+      .catch(() => setModels([]));
 
-    // IAM Settings & Policy Stubs
-    const stubs = [
-      '/api/settings', '/api/settings/preferences', '/api/settings/appearance',
-      '/api/settings/agent-config', '/api/settings/workspaces', 
-      '/api/settings/workspace/default', '/api/settings/emails', '/api/settings/sessions',
-      '/api/agentsam/feature-flags', '/api/agentsam/rules', '/api/agentsam/user-policy',
-      '/api/agentsam/cmd-allowlist', '/api/agentsam/fetch-allowlist',
-      '/api/agentsam/trusted-origins', '/api/agentsam/ignore-patterns'
-    ];
-    stubs.forEach(url => console.log('TODO: wire', url));
+    fetch('/api/integrations/github/repos', opt)
+      .then(r => r.json())
+      .then((d: unknown) => {
+        if (!Array.isArray(d)) {
+          setRepos([]);
+          return;
+        }
+        setRepos(
+          d.map((r: Record<string, unknown>, i: number) => ({
+            id: typeof r.id === 'number' ? r.id : i,
+            repo_full_name: String(r.full_name || r.name || `repo_${i}`),
+            repo_url: String(r.html_url || ''),
+            default_branch: String(r.default_branch || 'main'),
+            cloudflare_worker_name: '',
+            is_active: 1,
+          }))
+        );
+      })
+      .catch(() => setRepos([]));
   }, []);
 
 
   const toggleMcp = async (id: string, val: boolean) => {
     setMcpToggles(p => ({ ...p, [id]: val }));
     setLoading(p => ({ ...p, [id]: true }));
-    await fetch('/api/settings/mcps/toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, enabled: val ? 1 : 0 })
-    }).catch(console.error);
+    // No public PATCH for mcp_registered_tools yet; local UI state only.
     setLoading(p => ({ ...p, [id]: false }));
   };
 

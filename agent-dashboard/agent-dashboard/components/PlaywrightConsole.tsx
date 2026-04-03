@@ -24,13 +24,40 @@ export const PlaywrightConsole: React.FC = () => {
     const fetchJobs = async () => {
         setIsLoading(true);
         try {
-            const res = await fetch('/api/playwright/jobs');
+            const res = await fetch('/api/d1/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    sql: `SELECT id, job_type, url, status, result_url, error, created_at, completed_at
+                          FROM playwright_jobs ORDER BY rowid DESC LIMIT 50`,
+                }),
+            });
             const data = await res.json();
-            if (data.success) {
-                setJobs(data.jobs);
+            if (!data.success || !Array.isArray(data.results)) {
+                setJobs([]);
+                return;
             }
+            const mapped: PlaywrightJob[] = data.results.map((r: Record<string, unknown>) => {
+                const st = String(r.status || 'pending');
+                const normalized =
+                    st === 'error' ? 'failed' : st === 'completed' || st === 'pending' || st === 'running' ? st : 'pending';
+                return {
+                    id: String(r.id || ''),
+                    job_type: String(r.job_type || 'screenshot'),
+                    target_url: String(r.url || ''),
+                    status: normalized as PlaywrightJob['status'],
+                    result_url: r.result_url != null ? String(r.result_url) : undefined,
+                    error: r.error != null ? String(r.error) : undefined,
+                    created_at: String(r.created_at || new Date().toISOString()),
+                    completed_at: r.completed_at != null ? String(r.completed_at) : undefined,
+                    metadata: r.metadata != null ? String(r.metadata) : undefined,
+                };
+            });
+            setJobs(mapped);
         } catch (err) {
             console.error('Failed to fetch jobs:', err);
+            setJobs([]);
         } finally {
             setIsLoading(false);
         }
@@ -48,17 +75,18 @@ export const PlaywrightConsole: React.FC = () => {
 
         setIsLaunching(true);
         try {
-            const res = await fetch('/api/playwright/jobs/launch', {
+            const res = await fetch('/api/playwright/screenshot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify({
+                    url: targetUrl,
                     job_type: 'screenshot',
-                    target_url: targetUrl,
-                    metadata: { triggered_by: 'meauxcad_ui' }
-                })
+                    triggered_by: 'meauxcad_ui',
+                }),
             });
             const data = await res.json();
-            if (data.success) {
+            if (res.ok && (data.id || data.status)) {
                 setTargetUrl('');
                 fetchJobs();
             }

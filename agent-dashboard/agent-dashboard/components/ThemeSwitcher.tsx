@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 
 interface Theme {
-  id: string;
+  id: string | number;
   name: string;
   slug: string;
-  config: string;
-  preview_color: string;
+  config: string | Record<string, string>;
+  preview_color?: string;
 }
 
 export const ThemeSwitcher: React.FC = () => {
@@ -16,17 +16,13 @@ export const ThemeSwitcher: React.FC = () => {
     fetch('/api/themes')
       .then(res => res.json())
       .then(data => {
-        if (data.success) {
-          setThemes(data.data);
+        if (Array.isArray(data.themes)) {
+          setThemes(data.themes as Theme[]);
         }
       })
       .catch(console.error);
 
-    // IAM Theme & Color Stubs
-    const stubs = [
-      '/api/colors/all',
-      '/api/themes/apply'
-    ];
+    const stubs = ['/api/colors/all'];
     stubs.forEach(url => console.log('TODO: wire', url));
 
     // Initial active theme from localStorage or default
@@ -35,7 +31,15 @@ export const ThemeSwitcher: React.FC = () => {
   }, []);
 
   const applyTheme = (theme: Theme) => {
-    const config = JSON.parse(theme.config);
+    let config: Record<string, string> = {};
+    try {
+      config =
+        typeof theme.config === 'string'
+          ? (JSON.parse(theme.config) as Record<string, string>)
+          : (theme.config as unknown as Record<string, string>) || {};
+    } catch {
+      config = {};
+    }
     
     // Apply CSS variables instantly
     Object.entries(config).forEach(([k, v]) => {
@@ -46,14 +50,11 @@ export const ThemeSwitcher: React.FC = () => {
     fetch('/api/themes/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({
-        slug: theme.slug,
-        theme_id: theme.id,
-        workspace_id: 'meauxcad'
-      })
-    }).catch(() => {
-      console.log('TODO: wire PATCH /api/settings/preferences {theme_preset}');
-    });
+        theme_id: String(theme.id),
+      }),
+    }).catch(() => {});
 
 
     // Update state and local storage
@@ -78,7 +79,7 @@ export const ThemeSwitcher: React.FC = () => {
           >
             <div 
               className="w-6 h-6 rounded-full border border-[var(--border-subtle)]"
-              style={{ backgroundColor: theme.preview_color }}
+              style={{ backgroundColor: theme.preview_color || 'var(--border-subtle)' }}
             />
             <span className="text-xs font-medium text-[var(--text-main)]">
               {theme.name}

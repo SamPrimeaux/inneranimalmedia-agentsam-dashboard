@@ -4038,6 +4038,34 @@ const worker = {
         }
       }
 
+      if (pathLower === '/api/themes/apply' && request.method === 'POST') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        let body = {};
+        try {
+          body = await request.json();
+        } catch (_) {}
+        const theme_id = body.theme_id != null ? String(body.theme_id).trim() : '';
+        if (!theme_id) return jsonResponse({ error: 'theme_id required' }, 400);
+        const row = await env.DB.prepare('SELECT slug FROM cms_themes WHERE id = ? LIMIT 1').bind(theme_id).first();
+        if (!row?.slug) return jsonResponse({ error: 'theme not found' }, 404);
+        const themeSlug = String(row.slug);
+        const tenantId = 'tenant_sam_primeaux';
+        const ex = await env.DB.prepare(
+          `SELECT id FROM settings WHERE tenant_id = ? AND setting_key = 'appearance.theme' LIMIT 1`
+        ).bind(tenantId).first();
+        if (ex?.id) {
+          await env.DB.prepare(`UPDATE settings SET setting_value = ?, updated_at = datetime('now') WHERE id = ?`).bind(themeSlug, ex.id).run();
+        } else {
+          await env.DB.prepare(
+            `INSERT INTO settings (tenant_id, setting_key, setting_value, category, value_type)
+             VALUES (?, 'appearance.theme', ?, 'appearance', 'string')`
+          ).bind(tenantId, themeSlug).run();
+        }
+        return jsonResponse({ ok: true });
+      }
+
       {
         const phase1Res = await handlePhase1PlatformD1Routes(request, url, env, pathLower);
         if (phase1Res) return phase1Res;
@@ -4254,7 +4282,7 @@ const worker = {
     }
     // ── END /api/env/* ──────────────────────────────────────────
 
-    // /api/d1/query — D1 SQL runner (auth required)
+    // /api/d1/query — D1 SQL runner (auth required). Dashboard CRUD: allow DML/DDL; block only cluster-level DROP DATABASE patterns.
     if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
@@ -4262,14 +4290,97 @@ const worker = {
       try {
         const { sql } = await request.json();
         if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
-        // Safety: block destructive ops without explicit confirmation
-        const upperSql = sql.trim().toUpperCase();
-        const dangerous = ['DROP TABLE', 'DROP DATABASE', 'TRUNCATE', 'DELETE FROM'];
-        if (dangerous.some(d => upperSql.startsWith(d))) {
-          return jsonResponse({ error: 'Destructive query blocked. Use wrangler d1 execute directly for this.' }, 403);
+        if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
+          return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
         }
-        const { results, success, meta } = await env.DB.prepare(sql).all();
-        return jsonResponse({ results: results || [], success, meta });
+        const trimmed = sql.trim();
+        const upper = trimmed.toUpperCase();
+        const isRead =
+          upper.startsWith('SELECT') ||
+          upper.startsWith('PRAGMA') ||
+          upper.startsWith('WITH') ||
+          upper.startsWith('EXPLAIN');
+        if (isRead) {
+          const { results, success, meta } = await env.DB.prepare(sql).all();
+          return jsonResponse({ results: results || [], success, meta });
+        }
+        const run = await env.DB.prepare(sql).run();
+        return jsonResponse({ results: [], success: true, meta: run.meta });
+      } catch (e) {
+        return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
+      }
+    }
+
+    // /api/hyperdrive/status — Hyperdrive binding + Postgres connectivity (no auth; same-origin only useful with session)
+    if (pathLower === '/api/hyperdrive/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+      if (!env.HYPERDRIVE?.connectionString) {
+        return jsonResponse({ ok: false, error: 'hyperdrive not configured' }, 503);
+      }
+      try {
+        const { Client } = await import('pg');
+        const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+        await client.connect();
+        try {
+          await client.query('SELECT 1 AS ok');
+        } finally {
+          await client.end().catch(() => {});
+        }
+        return jsonResponse({ ok: true });
+      } catch (e) {
+        return jsonResponse({ ok: false, error: e?.message || String(e) }, 503);
+      }
+    }
+
+    // GET /api/hyperdrive/tables — public schema table names (same shape as GET /api/agent/db/tables)
+    if (pathLower === '/api/hyperdrive/tables' && (request.method || 'GET').toUpperCase() === 'GET') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ tables: [], error: 'hyperdrive not configured' }, 503);
+      try {
+        const { Client } = await import('pg');
+        const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+        await client.connect();
+        try {
+          const res = await client.query(
+            `SELECT table_name AS tablename FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_type IN ('BASE TABLE', 'VIEW')
+             ORDER BY table_name`
+          );
+          const tables = (res.rows || []).map((r) => String(r.tablename || '').trim()).filter(Boolean);
+          return jsonResponse({ tables });
+        } finally {
+          await client.end().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[api/hyperdrive/tables]', e?.message ?? e);
+        return jsonResponse({ tables: [], error: e?.message || String(e) }, 500);
+      }
+    }
+
+    // POST /api/hyperdrive/query — Postgres via Hyperdrive (same response shape as POST /api/d1/query)
+    if (pathLower === '/api/hyperdrive/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+      if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ error: 'hyperdrive not configured' }, 503);
+      try {
+        const { sql } = await request.json();
+        if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
+        if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
+          return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
+        }
+        const { Client } = await import('pg');
+        const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+        await client.connect();
+        try {
+          const res = await client.query(sql);
+          return jsonResponse({
+            results: res.rows || [],
+            success: true,
+            meta: { rows_read: res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
+          });
+        } finally {
+          await client.end().catch(() => {});
+        }
       } catch (e) {
         return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
       }
@@ -10195,8 +10306,104 @@ function getR2Binding(env, bucketName) {
     'agent-sam': env.DASHBOARD,
     'agent-sam-sandbox-cicd': env.ASSETS,
     'iam-platform': env.R2,
+    'iam-docs': env.DOCS_BUCKET,
+    tools: env.TOOLS,
   };
   return map[bucketName] || null;
+}
+
+/** Logical R2 bucket names that have a non-null binding on this worker (wrangler / env). */
+function listBoundR2BucketNames(env) {
+  const names = [];
+  if (env.ASSETS) names.push('inneranimalmedia-assets');
+  if (env.AUTORAG_BUCKET) names.push('autorag');
+  if (env.DASHBOARD) names.push('agent-sam');
+  if (env.R2) names.push('iam-platform');
+  if (env.DOCS_BUCKET) names.push('iam-docs');
+  if (env.TOOLS) names.push('tools');
+  return names;
+}
+
+/** Live object count and total bytes for one bucket (binding or S3 API with R2 keys). */
+async function r2LiveBucketStats(env, bucketName) {
+  const binding = getR2Binding(env, bucketName);
+  if (binding && binding.list) {
+    let cursor;
+    let count = 0;
+    let bytes = 0;
+    do {
+      const list = await binding.list({ limit: 1000, cursor });
+      for (const o of list.objects || []) {
+        if (o.key.endsWith('/')) continue;
+        count++;
+        bytes += o.size || 0;
+      }
+      cursor = list.truncated ? list.cursor : undefined;
+    } while (cursor);
+    return { ok: true, count, bytes };
+  }
+  if (!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+    return { ok: false, error: 'Bucket not bound and R2 S3 credentials not configured', status: 400 };
+  }
+  let count = 0;
+  let bytes = 0;
+  let nextToken = null;
+  do {
+    const query = nextToken
+      ? buildR2Query({ 'list-type': '2', 'max-keys': '1000', 'continuation-token': nextToken })
+      : buildR2Query({ 'list-type': '2', 'max-keys': '1000' });
+    const s = await signR2Request('GET', bucketName, '', query, env);
+    if (!s) return { ok: false, error: 'R2 S3 sign failed', status: 503 };
+    const listResp = await fetch(s.endpoint, { method: 'GET', headers: s.headers });
+    if (!listResp.ok) {
+      return { ok: false, error: 'R2 list failed', status: listResp.status >= 500 ? 502 : 400 };
+    }
+    const parsed = parseListObjectsV2Xml(await listResp.text());
+    for (const o of parsed.objects) {
+      count++;
+      bytes += o.size || 0;
+    }
+    nextToken = parsed.isTruncated ? parsed.nextToken : null;
+  } while (nextToken);
+  return { ok: true, count, bytes };
+}
+
+/** S3-compatible presigned GET URL (R2) when R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are set. */
+async function presignR2GetObjectUrl(env, bucket, key, expiresSeconds = 3600) {
+  const accessKey = env.R2_ACCESS_KEY_ID;
+  const secretKey = env.R2_SECRET_ACCESS_KEY;
+  if (!accessKey || !secretKey) return null;
+  const region = 'auto';
+  const service = 's3';
+  const host = R2_S3_HOST;
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '').slice(0, 15) + 'Z';
+  const dateStamp = amzDate.slice(0, 8);
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const credential = `${accessKey}/${credentialScope}`;
+  const encodedKey = String(key)
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  const canonicalUri = `/${bucket}/${encodedKey}`;
+  const algorithm = 'AWS4-HMAC-SHA256';
+  const signedHeaders = 'host';
+  const exp = Math.min(604800, Math.max(60, expiresSeconds));
+  const params = new URLSearchParams({
+    'X-Amz-Algorithm': algorithm,
+    'X-Amz-Credential': credential,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(exp),
+    'X-Amz-SignedHeaders': signedHeaders,
+  });
+  const sortedParams = [...params.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const canonicalQueryString = sortedParams.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  const canonicalHeaders = `host:${host}\n`;
+  const canonicalRequest = ['GET', canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, 'UNSIGNED-PAYLOAD'].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, await sha256hex(canonicalRequest)].join('\n');
+  const signingKey = await getSigningKey(secretKey, dateStamp, region, service);
+  const signature = await hmacHex(signingKey, stringToSign);
+  return `https://${host}/${bucket}/${encodedKey}?${canonicalQueryString}&X-Amz-Signature=${encodeURIComponent(signature)}`;
 }
 
 function getContentTypeFromKey(key) {
@@ -10851,10 +11058,71 @@ async function handleR2Api(request, url, env) {
   const pathLower = path.toLowerCase();
   const method = (request.method || 'GET').toUpperCase();
 
+  if (pathLower === '/api/r2/buckets' && method === 'GET') {
+    return jsonResponse({ buckets: listBoundR2BucketNames(env) });
+  }
+
+  if (pathLower === '/api/r2/stats' && method === 'GET' && url.searchParams.get('bucket')) {
+    const b = url.searchParams.get('bucket').trim();
+    const stats = await r2LiveBucketStats(env, b);
+    if (!stats.ok) {
+      return jsonResponse({ error: stats.error || 'stats_failed', bucket: b }, stats.status || 400);
+    }
+    return jsonResponse({ bucket: b, object_count: stats.count, total_bytes: stats.bytes });
+  }
+
+  if (pathLower === '/api/r2/sync' && method === 'POST') {
+    let syncBody = {};
+    try {
+      syncBody = await request.clone().json();
+    } catch (_) {
+      syncBody = {};
+    }
+    const source_bucket = syncBody.source_bucket != null ? String(syncBody.source_bucket).trim() : '';
+    const dest_bucket = syncBody.dest_bucket != null ? String(syncBody.dest_bucket).trim() : '';
+    const syncPrefix = syncBody.prefix != null ? String(syncBody.prefix) : '';
+    if (source_bucket && dest_bucket) {
+      const srcBind = getR2Binding(env, source_bucket);
+      const dstBind = getR2Binding(env, dest_bucket);
+      if (!srcBind || !srcBind.list || !srcBind.get || !dstBind || !dstBind.put) {
+        return jsonResponse(
+          { error: 'source and dest must be worker-bound buckets with list/get and put', source_bucket, dest_bucket },
+          400,
+        );
+      }
+      let copied = 0;
+      let bytes = 0;
+      const errors = [];
+      let cursor;
+      do {
+        const list = await srcBind.list({ prefix: syncPrefix, limit: 1000, cursor });
+        for (const o of list.objects || []) {
+          if (o.key.endsWith('/')) continue;
+          try {
+            const obj = await srcBind.get(o.key);
+            if (!obj) continue;
+            const buf =
+              typeof obj.arrayBuffer === 'function'
+                ? await obj.arrayBuffer()
+                : await new Response(obj.body).arrayBuffer();
+            const ct = obj.httpMetadata?.contentType || getContentTypeFromKey(o.key) || 'application/octet-stream';
+            await dstBind.put(o.key, buf, { httpMetadata: { contentType: ct } });
+            copied++;
+            bytes += buf.byteLength;
+          } catch (e) {
+            errors.push({ key: o.key, error: String(e?.message || e) });
+          }
+        }
+        cursor = list.truncated ? list.cursor : undefined;
+      } while (cursor);
+      return jsonResponse({ ok: true, copied, bytes, errors: errors.length ? errors : undefined });
+    }
+  }
+
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
   try {
-    if (pathLower === '/api/r2/stats') {
+    if (pathLower === '/api/r2/stats' && !url.searchParams.get('bucket')) {
       const row = await env.DB.prepare(
         `SELECT
   COUNT(*) as total_buckets,
@@ -10878,10 +11146,9 @@ FROM r2_bucket_summary`
     }
 
     if (pathLower === '/api/r2/sync' && method === 'POST') {
-      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
       const nowIso = new Date().toISOString();
       const results = [];
-      for (const name of BOUND_BUCKET_NAMES) {
+      for (const name of listBoundR2BucketNames(env)) {
         const binding = getR2Binding(env, name);
         if (!binding || !binding.list) continue;
         let cursor;
@@ -10908,43 +11175,6 @@ FROM r2_bucket_summary`
         results.push({ bucket: name, objects: count, total_bytes: totalBytes });
       }
       return jsonResponse({ success: true, refreshed: results, inventoried_at: nowIso });
-    }
-
-    if (pathLower === '/api/r2/buckets') {
-      const BOUND_BUCKET_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
-      try {
-        const { results } = await env.DB.prepare(
-          'SELECT bucket_name, creation_date FROM r2_bucket_list ORDER BY creation_date DESC'
-        ).all();
-        const summaries = await env.DB.prepare(
-          'SELECT bucket_name, object_count, total_bytes FROM r2_bucket_summary'
-        ).all().then(({ results: rows }) => (rows || []).reduce((acc, row) => { acc[row.bucket_name] = row; return acc; }, {}));
-        return jsonResponse({
-          buckets: (results || []).map((r) => {
-            const s = summaries[r.bucket_name];
-            return {
-              bucket_name: r.bucket_name,
-              creation_date: r.creation_date,
-              object_count: s?.object_count ?? 0,
-              size_bytes: s?.total_bytes ?? 0,
-            };
-          }),
-          bound_bucket_names: BOUND_BUCKET_NAMES,
-        });
-      } catch (_) {
-        const { results } = await env.DB.prepare(
-          'SELECT bucket_name, last_inventoried_at AS creation_date, object_count, total_bytes FROM r2_bucket_summary ORDER BY total_bytes DESC'
-        ).all();
-        return jsonResponse({
-          buckets: (results || []).map((r) => ({
-            bucket_name: r.bucket_name,
-            creation_date: r.creation_date,
-            object_count: r.object_count ?? 0,
-            size_bytes: r.total_bytes ?? 0,
-          })),
-          bound_bucket_names: BOUND_BUCKET_NAMES,
-        });
-      }
     }
 
     if (pathLower === '/api/r2/list' && method === 'GET') {
@@ -11002,7 +11232,10 @@ FROM r2_bucket_summary`
       );
       if (!signed) {
         return jsonResponse({
-          error: 'Bucket "' + bucket + '" is not bound. List is only available for bound buckets (inneranimalmedia-assets, autorag, agent-sam, iam-platform) or when R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set.',
+          error:
+            'Bucket "' +
+            bucket +
+            '" is not bound. List is only available for worker-bound buckets (see GET /api/r2/buckets) or when R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set.',
           code: 'BUCKET_NOT_BOUND',
         }, 400);
       }
@@ -11025,33 +11258,34 @@ FROM r2_bucket_summary`
     if (pathLower === '/api/r2/search' && method === 'GET') {
       const bucket = url.searchParams.get('bucket');
       const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      const keyPrefix = (url.searchParams.get('prefix') || '').trim();
       if (!bucket) return jsonResponse({ error: 'bucket required' }, 400);
-      if (!q || q.length < 2) return jsonResponse([]);
+      if (q.length > 0 && q.length < 2) return jsonResponse({ objects: [] });
+      if (q.length === 0 && keyPrefix.length === 0) return jsonResponse({ objects: [] });
       const binding = getR2Binding(env, bucket);
-      if (!binding || !binding.list) return jsonResponse([]);
+      if (!binding || !binding.list) return jsonResponse({ objects: [] });
       const allObjects = [];
       let cursor;
-      const maxScan = 500;
       do {
-        const list = await binding.list({ prefix: '', limit: 500, cursor });
+        const list = await binding.list({ prefix: keyPrefix, limit: 500, cursor });
         const rawObjects = list.objects || [];
         for (const o of rawObjects) {
           if (o.key.endsWith('/')) continue;
-          if (o.key.toLowerCase().includes(q)) {
-            allObjects.push({
-              key: o.key,
-              path: o.key,
-              name: o.key.split('/').pop() || o.key,
-              size: o.size ?? 0,
-              last_modified: o.uploaded ? new Date(o.uploaded).toISOString() : null,
-            });
-            if (allObjects.length >= 100) break;
-          }
+          const bySub = q.length >= 2 ? o.key.toLowerCase().includes(q) : true;
+          if (!bySub) continue;
+          allObjects.push({
+            key: o.key,
+            path: o.key,
+            name: o.key.split('/').pop() || o.key,
+            size: o.size ?? 0,
+            last_modified: o.uploaded ? new Date(o.uploaded).toISOString() : null,
+          });
+          if (allObjects.length >= 100) break;
         }
         if (allObjects.length >= 100) break;
         cursor = list.truncated ? list.cursor : undefined;
       } while (cursor && allObjects.length < 100);
-      return jsonResponse(allObjects);
+      return jsonResponse({ objects: allObjects });
     }
 
     if (pathLower === '/api/r2/upload' && method === 'POST') {
@@ -11068,13 +11302,23 @@ FROM r2_bucket_summary`
     }
 
     if (pathLower === '/api/r2/delete' && method === 'DELETE') {
-      const bucket = url.searchParams.get('bucket');
-      const key = url.searchParams.get('key');
-      if (!bucket || !key) return jsonResponse({ error: 'bucket and key required' }, 400);
+      let bucket = url.searchParams.get('bucket');
+      let key = url.searchParams.get('key');
+      if (!bucket || !key) {
+        let delBody = {};
+        try {
+          delBody = await request.json();
+        } catch (_) {
+          delBody = {};
+        }
+        if (delBody.bucket != null) bucket = String(delBody.bucket);
+        if (delBody.key != null) key = String(delBody.key);
+      }
+      if (!bucket || !key) return jsonResponse({ error: 'bucket and key required (query or JSON body)' }, 400);
       const binding = getR2Binding(env, bucket);
       if (!binding) return jsonResponse({ error: 'Bucket not bound' }, 400);
       await binding.delete(key);
-      return jsonResponse({ deleted: true });
+      return jsonResponse({ deleted: true, bucket, key });
     }
 
     if (pathLower === '/api/r2/file' && method === 'DELETE') {
@@ -11093,8 +11337,15 @@ FROM r2_bucket_summary`
       const bucket = url.searchParams.get('bucket');
       const key = url.searchParams.get('key');
       if (!bucket || !key) return jsonResponse({ error: 'bucket and key required' }, 400);
-      const presignedUrl = `${url.origin}/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`;
-      return jsonResponse({ url: presignedUrl });
+      const workerUrl = `${url.origin}/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`;
+      const expRaw = url.searchParams.get('expires');
+      const expiresSec = expRaw != null ? parseInt(expRaw, 10) : 3600;
+      const presigned_s3_url = await presignR2GetObjectUrl(env, bucket, key, Number.isFinite(expiresSec) ? expiresSec : 3600);
+      return jsonResponse({
+        url: workerUrl,
+        public_url: workerUrl,
+        presigned_s3_url,
+      });
     }
 
     if (pathLower === '/api/r2/buckets/bulk-action' && method === 'POST') {
@@ -11152,7 +11403,7 @@ FROM r2_bucket_summary`
       const name = decodeURIComponent(syncMatch[1]);
       const nowIso = new Date().toISOString();
       const binding = getR2Binding(env, name);
-      const BOUND_NAMES = ['inneranimalmedia-assets', 'autorag', 'agent-sam', 'iam-platform'];
+      const BOUND_NAMES = listBoundR2BucketNames(env);
 
       if (binding && binding.list) {
         try {

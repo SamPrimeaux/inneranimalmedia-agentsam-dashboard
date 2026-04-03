@@ -32,6 +32,9 @@ Main worker deploys:
 - Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml`
 - Never use plain `npx wrangler deploy` at this repo root (wrong worker / config)
 
+## Wrangler CLI (repo root devDependency)
+- Keep `wrangler` current before deploy-heavy work: `npm install wrangler@latest --save-dev` and commit `package.json` + `package-lock.json` when the version changes.
+
 ## Deploy queue and post-deploy verification
 - **Maximum 2 queue items per deploy** — do not batch more than two deploy-related tasks into a single approval/deploy cycle; split work across sessions or explicit approvals if needed.
 - **After every deploy:** verify the current project’s primary surface loads in the browser (e.g. `/dashboard/agent` on production, or whatever URL matches this repo/build) **before** approving or starting the next item in the deploy queue. No chained deploys without a successful load check on the relevant page.

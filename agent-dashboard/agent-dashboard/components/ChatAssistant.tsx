@@ -22,6 +22,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { ProjectType } from '../types';
+import type { ActiveFile } from '../types';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -33,9 +34,13 @@ interface ChatAssistantProps {
   activeFileContent?: string;
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
-  onFileSelect?: (file: { name: string; content: string }) => void;
+  onFileSelect?: (file: Pick<ActiveFile, 'name' | 'content'> & Partial<ActiveFile>) => void;
   onRunInTerminal?: (cmd: string) => void;
   activeFileName?: string;
+  /** SSE: agent tool `r2_write` emits `r2_file_updated` for Monaco sync */
+  onR2FileUpdated?: (event: { type: 'r2_file_updated'; bucket: string; key: string }) => void;
+  /** SSE: `browser_navigate` opens the Browser tab (e.g. after HTML write or preview_in_browser) */
+  onBrowserNavigate?: (event: { type: 'browser_navigate'; url: string }) => void;
 }
 
 type StagedAttachment = {
@@ -157,6 +162,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   setMessages,
   onFileSelect,
   onRunInTerminal,
+  onR2FileUpdated,
+  onBrowserNavigate,
 }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -541,6 +548,31 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               const partsErr = [data.error, data.detail, data.provider, data.model].filter(Boolean);
               throw new Error(partsErr.join(' — '));
             }
+            if (
+              data &&
+              typeof data === 'object' &&
+              (data as { type?: string }).type === 'r2_file_updated' &&
+              typeof (data as { bucket?: string }).bucket === 'string' &&
+              typeof (data as { key?: string }).key === 'string'
+            ) {
+              const r2evt = data as { type: 'r2_file_updated'; bucket: string; key: string };
+              onR2FileUpdated?.(r2evt);
+              assistantContent += `\n[FILE_CREATED:${r2evt.key}]\n`;
+              setMessages((prev) => {
+                const last = [...prev];
+                last[last.length - 1] = { role: 'assistant', content: assistantContent };
+                return last;
+              });
+              continue;
+            }
+            if (
+              data &&
+              typeof data === 'object' &&
+              (data as { type?: string }).type === 'browser_navigate' &&
+              typeof (data as { url?: string }).url === 'string'
+            ) {
+              onBrowserNavigate?.(data as { type: 'browser_navigate'; url: string });
+            }
             if (data && typeof data === 'object' && 'conversation_id' in data) {
               const cid = (data as { conversation_id?: string }).conversation_id;
               if (typeof cid === 'string' && cid) {
@@ -594,15 +626,25 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   };
 
   const renderMessageContent = (content: string, msgIndex: number) => {
+    let display = content
+      .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, '')
+      .replace(/<invoke[\s\S]*?<\/antml:invoke>/gi, '')
+      .replace(/<antml:invoke[\s\S]*?<\/antml:invoke>/gi, '')
+      .trim();
+    display = display.replace(
+      /\[FILE_CREATED:(.+?)\]/g,
+      (_, key: string) => `Created ${key} — opened in editor`
+    );
+
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)\n```/g;
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match;
     let codeCount = 0;
 
-    while ((match = codeBlockRegex.exec(content)) !== null) {
+    while ((match = codeBlockRegex.exec(display)) !== null) {
       if (match.index > lastIndex) {
-        const text = content.substring(lastIndex, match.index);
+        const text = display.substring(lastIndex, match.index);
         parts.push(<span key={`text-${lastIndex}`} className="whitespace-pre-wrap">{text}</span>);
       }
 
@@ -692,11 +734,11 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       lastIndex = codeBlockRegex.lastIndex;
     }
 
-    if (lastIndex < content.length) {
-      parts.push(<span key="text-end" className="whitespace-pre-wrap">{content.substring(lastIndex)}</span>);
+    if (lastIndex < display.length) {
+      parts.push(<span key="text-end" className="whitespace-pre-wrap">{display.substring(lastIndex)}</span>);
     }
 
-    return parts.length > 0 ? <>{parts}</> : <span className="whitespace-pre-wrap">{content}</span>;
+    return parts.length > 0 ? <>{parts}</> : <span className="whitespace-pre-wrap">{display}</span>;
   };
 
   const canSend =

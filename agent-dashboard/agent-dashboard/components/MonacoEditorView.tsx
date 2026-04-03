@@ -1,15 +1,18 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import Editor, { DiffEditor, useMonaco } from '@monaco-editor/react';
-import { 
-  Save, GitCompare, Copy, Check, FileCode2, RotateCcw, ChevronDown
+import {
+  Save,
+  GitCompare,
+  Copy,
+  Check,
+  FileCode2,
+  RotateCcw,
+  GitBranch,
 } from 'lucide-react';
 
-interface FileData {
-  name: string;
-  content: string;
-  handle?: any;
-  originalContent?: string; // snapshot at open time — enables diff
-}
+import type { ActiveFile } from '../types';
+
+type FileData = ActiveFile;
 
 interface MonacoEditorViewProps {
   fileData: FileData | null;
@@ -110,6 +113,7 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   const isThemeReady = useRef(false);
   const [showDiff, setShowDiff] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [gitActionHint, setGitActionHint] = useState<string | null>(null);
 
   // Define custom theme once Monaco loads
   useEffect(() => {
@@ -137,17 +141,58 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   // When file switches, reset diff view
   useEffect(() => {
     setShowDiff(false);
-    
-    // IAM Monaco & File Stubs
-    const stubs = [
-      '/api/monaco/complete',
-      '/api/r2/file',
-      '/api/r2/upload',
-      '/api/agent/git/status',
-      '/api/agent/git/sync'
-    ];
-    stubs.forEach(url => console.log('TODO: wire', url));
   }, [fileData?.name]);
+
+  // Monaco: AI inline completion via worker /api/monaco/complete
+  useEffect(() => {
+    if (!monaco || !fileData) return;
+    const ext = fileData.name.split('.').pop()?.toLowerCase() || 'txt';
+    const lang = LANG_MAP[ext] || 'plaintext';
+    const disposable = monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: ['.', '(', '[', '{', ' ', ':', '='],
+      provideCompletionItems: async (model, position) => {
+        const rangeBefore = {
+          startLineNumber: Math.max(1, position.lineNumber - 120),
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        };
+        const context = model.getValueInRange(rangeBefore).slice(-4000);
+        try {
+          const res = await fetch('/api/monaco/complete', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context, language: lang, mode: 'explain' }),
+          });
+          if (!res.ok) return { suggestions: [] };
+          const j = (await res.json()) as { text?: string; error?: string };
+          if (j.error || !j.text?.trim()) return { suggestions: [] };
+          const line = j.text.trim().split('\n')[0] ?? '';
+          if (!line) return { suggestions: [] };
+          const insertRange = {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          };
+          return {
+            suggestions: [
+              {
+                label: line.length > 72 ? `${line.slice(0, 69)}…` : line,
+                kind: monaco.languages.CompletionItemKind.Text,
+                insertText: line,
+                range: insertRange,
+              },
+            ],
+          };
+        } catch {
+          return { suggestions: [] };
+        }
+      },
+    });
+    return () => disposable.dispose();
+  }, [monaco, fileData?.name]);
 
 
   const handleCopy = useCallback(() => {
@@ -157,6 +202,52 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
       setTimeout(() => setCopied(false), 1500);
     }
   }, [fileData]);
+
+  const requestGitSyncProposal = useCallback(async () => {
+    setGitActionHint(null);
+    try {
+      const res = await fetch('/api/agent/git/sync', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        proposal_id?: string;
+        error?: string;
+      };
+      if (res.ok && j.proposal_id) {
+        setGitActionHint(`Sync proposal queued: ${j.proposal_id}`);
+      } else {
+        setGitActionHint(j.error || `Git sync failed (${res.status})`);
+      }
+    } catch (e) {
+      setGitActionHint(e instanceof Error ? e.message : 'Git sync request failed');
+    }
+    window.setTimeout(() => setGitActionHint(null), 12000);
+  }, []);
+
+  const refreshGitStatus = useCallback(async () => {
+    setGitActionHint(null);
+    try {
+      const res = await fetch('/api/agent/git/status', { credentials: 'same-origin' });
+      const j = (await res.json().catch(() => ({}))) as {
+        branch?: string;
+        git_hash?: string | null;
+        error?: string;
+      };
+      if (res.ok && j.branch) {
+        const short = j.git_hash ? String(j.git_hash).slice(0, 7) : 'unknown';
+        setGitActionHint(`Deploy ref: ${j.branch} @ ${short}`);
+      } else {
+        setGitActionHint(j.error || `Git status failed (${res.status})`);
+      }
+    } catch (e) {
+      setGitActionHint(e instanceof Error ? e.message : 'Git status request failed');
+    }
+    window.setTimeout(() => setGitActionHint(null), 10000);
+  }, []);
 
   const hasDiffData = fileData?.originalContent !== undefined && fileData.originalContent !== fileData.content;
 
@@ -193,6 +284,28 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
 
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
+          {gitActionHint && (
+            <span className="text-[10px] text-[var(--text-muted)] max-w-[14rem] truncate mr-1" title={gitActionHint}>
+              {gitActionHint}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void refreshGitStatus()}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/50 transition-all"
+            title="Refresh deploy / git status (D1)"
+          >
+            <GitBranch size={12} />
+            Status
+          </button>
+          <button
+            type="button"
+            onClick={() => void requestGitSyncProposal()}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all"
+            title="Create GitHub sync approval proposal"
+          >
+            Sync
+          </button>
           {hasDiffData && (
             <button
               onClick={() => setShowDiff(!showDiff)}

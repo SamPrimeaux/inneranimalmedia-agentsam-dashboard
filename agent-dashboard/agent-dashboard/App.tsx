@@ -27,7 +27,7 @@ import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
 import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { MCPPanel } from './components/MCPPanel';
-import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane } from './types';
+import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
 import {
   loadWorkspace,
@@ -108,8 +108,15 @@ const App: React.FC = () => {
   // Tabs: only 'welcome' is open by default. Others open on demand and can be closed.
   const [openTabs, setOpenTabs] = useState<TabId[]>(['welcome']);
   const [activeTab, setActiveTab] = useState<TabId>('welcome');
-  const [activeFile, setActiveFile] = useState<{name: string, content: string, handle?: any, originalContent?: string} | null>(null);
-  const [browserUrl, setBrowserUrl] = useState<string | undefined>(undefined);
+  const [activeFile, setActiveFile] = useState<ActiveFile | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');
+
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = window.setTimeout(() => setToastMsg(null), 4500);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
 
   const openTab = (tab: TabId) => {
     setOpenTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
@@ -162,22 +169,117 @@ const App: React.FC = () => {
   // ── File save (File System Access API write-back) ────────────────────────
   const isDirty = !!activeFile && activeFile.originalContent !== undefined && activeFile.content !== activeFile.originalContent;
 
+  const handleR2FileUpdatedFromAgent = useCallback(
+    async (event: { type: 'r2_file_updated'; bucket: string; key: string }) => {
+      if (event.type !== 'r2_file_updated' || !event.bucket || !event.key) return;
+      try {
+        const res = await fetch(
+          `/api/r2/file?bucket=${encodeURIComponent(event.bucket)}&key=${encodeURIComponent(event.key)}`,
+          { credentials: 'same-origin' },
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const content = typeof data.content === 'string' ? data.content : '';
+        const baseName = event.key.split('/').pop() || event.key;
+        setActiveFile({
+          name: baseName,
+          content,
+          originalContent: content,
+          r2Key: event.key,
+          r2Bucket: event.bucket,
+        });
+        setOpenTabs((prev) => (prev.includes('code') ? prev : [...prev, 'code']));
+        setActiveTab('code');
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [],
+  );
+
+  const handleBrowserNavigateFromAgent = useCallback(
+    (event: { type: 'browser_navigate'; url: string }) => {
+      if (event.type !== 'browser_navigate' || !event.url?.trim()) return;
+      setBrowserUrl(event.url.trim());
+      setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
+      setActiveTab('browser');
+    },
+    [],
+  );
+
   const handleSaveFile = useCallback(async (content: string) => {
     if (!activeFile) return;
+    if (activeFile.driveFileId) {
+      setToastMsg('Drive files are read-only from Monaco — download to edit.');
+      return;
+    }
     if (activeFile.handle) {
       try {
         const writable = await activeFile.handle.createWritable();
         await writable.write(content);
         await writable.close();
-        // Commit — new baseline
-        setActiveFile(prev => prev ? { ...prev, content, originalContent: content } : null);
+        setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
       } catch (err) {
         console.error('Save failed:', err);
       }
-    } else {
-      // No handle (agent-generated file) — just update originalContent to remove dirty indicator
-      setActiveFile(prev => prev ? { ...prev, content, originalContent: content } : null);
+      return;
     }
+    if (activeFile.r2Key) {
+      try {
+        const res = await fetch('/api/r2/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            bucket: activeFile.r2Bucket ?? 'DASHBOARD',
+            key: activeFile.r2Key,
+            content,
+          }),
+        });
+        if (!res.ok) {
+          console.error('R2 save failed', await res.text());
+          return;
+        }
+        setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
+      } catch (e) {
+        console.error(e);
+      }
+      return;
+    }
+    if (activeFile.githubPath && activeFile.githubRepo) {
+      const parts = activeFile.githubRepo.split('/');
+      const owner = parts[0];
+      const repo = parts[1];
+      if (!owner || !repo) return;
+      const base64 = btoa(unescape(encodeURIComponent(content)));
+      try {
+        const res = await fetch(
+          `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              path: activeFile.githubPath,
+              message: 'Update via Agent Sam',
+              content: base64,
+              sha: activeFile.githubSha,
+            }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        const newSha = data.content?.sha || data.sha;
+        setActiveFile((prev) =>
+          prev
+            ? { ...prev, content, originalContent: content, githubSha: newSha || prev.githubSha }
+            : null,
+        );
+      } catch (e) {
+        console.error(e);
+      }
+      return;
+    }
+    setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
   }, [activeFile]);
 
   // ── Terminal bridge ──────────────────────────────────────────────────────
@@ -229,29 +331,6 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
-
-  // Native Cmd+S FileSystem Save Interceptor
-  useEffect(() => {
-      const handleSave = async (e: KeyboardEvent) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-              e.preventDefault();
-              if (activeTab === 'code' && activeFile?.handle) {
-                  try {
-                      const writable = await activeFile.handle.createWritable();
-                      await writable.write(activeFile.content);
-                      await writable.close();
-                      alert(`Saved ${activeFile.name} locally!`);
-                  } catch (err) {
-                      console.error("Save failed:", err);
-                      // In case they didn't grant permission or it's read-only
-                  }
-              }
-          }
-      };
-      
-      window.addEventListener('keydown', handleSave);
-      return () => window.removeEventListener('keydown', handleSave);
-  }, [activeTab, activeFile]);
 
   const [genConfig, setGenConfig] = useState<GenerationConfig>({
     style: ArtStyle.CYBERPUNK,
@@ -578,6 +657,8 @@ const App: React.FC = () => {
                             openTab('code');
                         }}
                         onRunInTerminal={runInTerminal}
+                        onR2FileUpdated={handleR2FileUpdatedFromAgent}
+                        onBrowserNavigate={handleBrowserNavigateFromAgent}
                     />
                 </div>
                 {/* Grab Bar */}
@@ -618,6 +699,10 @@ const App: React.FC = () => {
                           setActiveFile({ ...file, originalContent: file.content });
                           openTab('code');
                       }}
+                          onOpenInEditor={(file) => {
+                              setActiveFile(file);
+                              openTab('code');
+                          }}
                       />
                   ) : activeActivity === 'mcps' ? (
                       <MCPPanel />
@@ -632,11 +717,26 @@ const App: React.FC = () => {
                   ) : activeActivity === 'sql' ? (
                       <DatabaseBrowser onClose={() => setActiveActivity(null)} />
                   ) : activeActivity === 'actions' ? (
-                      <GitHubExplorer />
+                      <GitHubExplorer
+                          onOpenInEditor={(file) => {
+                              setActiveFile(file);
+                              openTab('code');
+                          }}
+                      />
                   ) : activeActivity === 'drive' ? (
-                      <GoogleDriveExplorer />
+                      <GoogleDriveExplorer
+                          onOpenInEditor={(file) => {
+                              setActiveFile(file);
+                              openTab('code');
+                          }}
+                      />
                   ) : activeActivity === 'remote' ? (
-                      <R2Explorer />
+                      <R2Explorer
+                          onOpenInEditor={(file) => {
+                              setActiveFile(file);
+                              openTab('code');
+                          }}
+                      />
                   ) : activeActivity === 'playwright' ? (
                       <PlaywrightConsole />
                   ) : (
@@ -780,7 +880,7 @@ const App: React.FC = () => {
                   )}
                   {activeTab === 'browser' && (
                       <div className="absolute inset-0 z-10 overflow-hidden">
-                          <BrowserView initialUrl={browserUrl} />
+                          <BrowserView url={browserUrl} />
                       </div>
                   )}
 
@@ -836,6 +936,8 @@ const App: React.FC = () => {
                                 openTab('code');
                             }}
                             onRunInTerminal={runInTerminal}
+                            onR2FileUpdated={handleR2FileUpdatedFromAgent}
+                            onBrowserNavigate={handleBrowserNavigateFromAgent}
                          />
                     </div>
                 </div>
@@ -844,6 +946,15 @@ const App: React.FC = () => {
       </div>
       
       {/* 8. STATUS BAR (FOOTER) */}
+      {toastMsg && (
+        <div
+          className="fixed bottom-16 left-1/2 z-[200] -translate-x-1/2 px-4 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[11px] text-[var(--text-main)] shadow-lg max-w-md text-center"
+          role="status"
+        >
+          {toastMsg}
+        </div>
+      )}
+
       <StatusBar 
         branch={gitBranch}
         workspace={ideWorkspace.workspace_id || 'No Workspace'}

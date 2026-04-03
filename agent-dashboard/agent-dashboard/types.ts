@@ -99,3 +99,17 @@ export interface ProjectConfig {
   type: ProjectType;
   lastModified: number;
 }
+
+/** Open file in Monaco — local handle, R2, GitHub, or Drive metadata */
+export type ActiveFile = {
+  name: string;
+  content: string;
+  originalContent?: string;
+  handle?: FileSystemFileHandle;
+  r2Key?: string;
+  r2Bucket?: string;
+  githubPath?: string;
+  githubRepo?: string;
+  githubSha?: string;
+  driveFileId?: string;
+};

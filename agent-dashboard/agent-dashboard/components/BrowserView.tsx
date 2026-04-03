@@ -1,43 +1,67 @@
-import React, { useState } from 'react';
-import { RotateCcw, ArrowLeft, ArrowRight, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
 
-export const BrowserView: React.FC<{ initialUrl?: string }> = ({ initialUrl = 'https://inneranimalmedia.com' }) => {
-    const [url, setUrl] = useState(initialUrl);
-    const [inputUrl, setInputUrl] = useState(initialUrl);
+const DEFAULT_URL = 'https://inneranimalmedia.com';
 
-    const handleNavigate = (e: React.KeyboardEvent) => {
+function normalizeNavigate(raw: string): string {
+    let next = raw.trim();
+    if (!next) return DEFAULT_URL;
+    if (!/^https?:\/\//i.test(next)) next = `https://${next}`;
+    return next;
+}
+
+/** Embedded browser: URL bar + iframe (minimal chrome). */
+export const BrowserView: React.FC<{ url?: string }> = ({ url: urlFromParent }) => {
+    const [iframeUrl, setIframeUrl] = useState(() => normalizeNavigate(urlFromParent || DEFAULT_URL));
+    const [inputUrl, setInputUrl] = useState(() => normalizeNavigate(urlFromParent || DEFAULT_URL));
+
+    useEffect(() => {
+        if (urlFromParent && urlFromParent.trim()) {
+            const n = normalizeNavigate(urlFromParent);
+            setIframeUrl(n);
+            setInputUrl(n);
+        }
+    }, [urlFromParent]);
+
+    const go = useCallback(() => {
+        const n = normalizeNavigate(inputUrl);
+        setIframeUrl(n);
+        setInputUrl(n);
+    }, [inputUrl]);
+
+    const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') {
-            let next = inputUrl.trim();
-            if (!next.startsWith('http')) next = 'https://' + next;
-            setUrl(next);
+            e.preventDefault();
+            go();
         }
     };
 
     return (
-        <div className="flex flex-col w-full h-full bg-[#0a0a0f] text-[var(--text-main)] overflow-hidden">
-            <div className="flex items-center gap-2 p-2 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] shrink-0 shadow-lg z-20">
-                <button className="p-1.5 hover:bg-[var(--bg-hover)] rounded text-[var(--text-muted)] hover:text-white transition-all" title="Back"><ArrowLeft size={16} /></button>
-                <button className="p-1.5 hover:bg-[var(--bg-hover)] rounded text-[var(--text-muted)] hover:text-white transition-all" title="Forward"><ArrowRight size={16} /></button>
-                <button className="p-1.5 hover:bg-[var(--bg-hover)] rounded text-[var(--text-muted)] hover:text-white transition-all" title="Reload" onClick={() => setUrl(url)}><RotateCcw size={16} /></button>
-                
-                <div className="flex-1 relative flex items-center">
-                    <input 
-                        type="text"
-                        value={inputUrl}
-                        onChange={(e) => setInputUrl(e.target.value)}
-                        onKeyDown={handleNavigate}
-                        className="w-full h-8 px-4 bg-[#0B2129] text-[13px] rounded-lg border border-[#163742] focus:outline-none focus:border-[var(--solar-cyan)] transition-all font-mono text-[var(--text-main)] shadow-inner"
-                    />
-                </div>
-                
-                <a href={url} target="_blank" rel="noreferrer" className="p-1.5 hover:bg-[var(--bg-hover)] rounded text-[var(--solar-cyan)] transition-all cursor-pointer opacity-80 hover:opacity-100" title="Popout"><ExternalLink size={16} /></a>
+        <div className="flex flex-col w-full h-full bg-[var(--bg-app)] text-[var(--text-main)] overflow-hidden">
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] shrink-0 z-20">
+                <input
+                    type="text"
+                    value={inputUrl}
+                    onChange={(e) => setInputUrl(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    placeholder="https://"
+                    className="flex-1 min-w-0 h-8 px-3 text-[13px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] focus:outline-none focus:border-[var(--solar-cyan)] font-mono text-[var(--text-main)]"
+                    aria-label="URL"
+                />
+                <button
+                    type="button"
+                    onClick={go}
+                    className="shrink-0 h-8 px-3 text-[12px] font-medium rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)]"
+                >
+                    Go
+                </button>
             </div>
-            <div className="flex-1 w-full relative bg-white">
-                <iframe 
-                    src={url} 
-                    className="w-full h-full border-0 absolute inset-0" 
-                    title="Live Web Preview" 
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms" 
+            <div className="flex-1 w-full relative bg-[var(--bg-app)] min-h-0">
+                <iframe
+                    key={iframeUrl}
+                    src={iframeUrl}
+                    className="w-full h-full border-0 absolute inset-0 bg-white"
+                    title="Embedded browser"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
                 />
             </div>
         </div>

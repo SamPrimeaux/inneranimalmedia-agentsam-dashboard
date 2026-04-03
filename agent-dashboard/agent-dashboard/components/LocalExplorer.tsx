@@ -1,5 +1,16 @@
-import React, { useState } from 'react';
-import { FolderOpen, File as FileIcon, ChevronRight, ChevronDown, Folder, HardDrive, Cloud, Github, Box } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { FolderOpen, File as FileIcon, ChevronRight, ChevronDown, Folder, HardDrive, Cloud, Github, Box, FileCode2, Loader2 } from 'lucide-react';
+import type { ActiveFile } from '../types';
+
+function bucketLabelToBinding(label: string): string {
+    const b = label.trim().toLowerCase();
+    if (b === 'agent-sam' || b === 'tools') return 'DASHBOARD';
+    if (b === 'agent-sam-sandbox-cicd' || b === 'inneranimalmedia-assets') return 'ASSETS';
+    if (b === 'iam-platform') return 'R2';
+    if (b === 'iam-docs') return 'DOCS_BUCKET';
+    if (b === 'autorag') return 'AUTORAG_BUCKET';
+    return 'DASHBOARD';
+}
 
 interface FileNode {
     name: string;
@@ -13,7 +24,9 @@ export const LocalExplorer: React.FC<{
     onFileSelect: (fileData: { name: string; content: string; handle: any }) => void;
     /** Fires when user connects a native folder — drives status bar + persisted workspace. */
     onWorkspaceRootChange?: (info: { folderName: string }) => void;
-}> = ({ onFileSelect, onWorkspaceRootChange }) => {
+    /** Open R2 object in Monaco (same as R2 panel). */
+    onOpenInEditor?: (file: ActiveFile) => void;
+}> = ({ onFileSelect, onWorkspaceRootChange, onOpenInEditor }) => {
     const [rootDir, setRootDir] = useState<FileNode | null>(null);
     const [expandedSections, setExpandedSections] = useState({
         local: true,
@@ -21,6 +34,64 @@ export const LocalExplorer: React.FC<{
         github: false,
         drive: false
     });
+
+    const [r2Buckets, setR2Buckets] = useState<string[]>([]);
+    const [r2ExpandedBucket, setR2ExpandedBucket] = useState<string | null>(null);
+    const [r2ObjectsByBucket, setR2ObjectsByBucket] = useState<Record<string, { key: string; size?: number }[]>>({});
+    const [r2Loading, setR2Loading] = useState(false);
+
+    const loadR2Buckets = useCallback(async () => {
+        try {
+            const res = await fetch('/api/r2/buckets', { credentials: 'same-origin' });
+            const data = await res.json();
+            setR2Buckets(Array.isArray(data.buckets) ? data.buckets : []);
+        } catch {
+            setR2Buckets([]);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadR2Buckets();
+    }, [loadR2Buckets]);
+
+    const loadR2List = async (bucket: string) => {
+        setR2Loading(true);
+        try {
+            const qs = new URLSearchParams({ bucket, prefix: '' });
+            const res = await fetch(`/api/r2/list?${qs}`, { credentials: 'same-origin' });
+            const data = await res.json();
+            const rows = Array.isArray(data.objects) ? data.objects : [];
+            setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: rows }));
+        } catch {
+            setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: [] }));
+        } finally {
+            setR2Loading(false);
+        }
+    };
+
+    const openR2Key = async (bucket: string, key: string) => {
+        if (!onOpenInEditor) return;
+        const binding = bucketLabelToBinding(bucket);
+        setR2Loading(true);
+        try {
+            const qs = new URLSearchParams({ bucket: binding, key });
+            const res = await fetch(`/api/r2/file?${qs}`, { credentials: 'same-origin' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || typeof data.content !== 'string') return;
+            const base = key.split('/').pop() || key;
+            onOpenInEditor({
+                name: base,
+                content: data.content,
+                originalContent: data.content,
+                r2Key: key,
+                r2Bucket: binding,
+            });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setR2Loading(false);
+        }
+    };
 
     const toggleSection = (section: keyof typeof expandedSections) => {
         setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -165,10 +236,62 @@ export const LocalExplorer: React.FC<{
                     <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Cloudflare R2</span>
                 </div>
                 {expandedSections.r2 && (
-                    <div className="px-10 py-3 text-[11px] text-[var(--text-muted)] flex flex-col gap-2 font-mono">
-                        <div className="flex items-center gap-2 hover:text-white cursor-pointer"><Box size={13} className="text-[var(--solar-blue)]"/> cad_storage</div>
-                        <div className="flex items-center gap-2 hover:text-white cursor-pointer"><Box size={13} className="text-[var(--solar-blue)]"/> platform_assets</div>
-                        <div className="flex items-center gap-2 hover:text-white cursor-pointer"><ChevronRight size={13} className="opacity-50"/> splineicons</div>
+                    <div className="px-4 py-2 text-[11px] text-[var(--text-muted)] flex flex-col gap-1 font-mono">
+                        {r2Buckets.length === 0 && !r2Loading && (
+                            <span className="text-[10px] italic">No buckets listed.</span>
+                        )}
+                        {r2Buckets.map((b) => {
+                            const open = r2ExpandedBucket === b;
+                            const objs = r2ObjectsByBucket[b] || [];
+                            return (
+                                <div key={b} className="border border-[var(--border-subtle)]/40 rounded overflow-hidden">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (open) {
+                                                setR2ExpandedBucket(null);
+                                            } else {
+                                                setR2ExpandedBucket(b);
+                                                void loadR2List(b);
+                                            }
+                                        }}
+                                        className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] text-left text-[12px]"
+                                    >
+                                        {open ? <ChevronDown size={14} className="shrink-0 opacity-60" /> : <ChevronRight size={14} className="shrink-0 opacity-60" />}
+                                        <Box size={13} className="text-[var(--solar-blue)] shrink-0" />
+                                        <span className="truncate">{b}</span>
+                                    </button>
+                                    {open && (
+                                        <div className="px-2 pb-2">
+                                            {r2Loading && r2ExpandedBucket === b && (
+                                                <div className="flex items-center gap-1 py-1 text-[10px]">
+                                                    <Loader2 size={10} className="animate-spin" /> Loading…
+                                                </div>
+                                            )}
+                                            {objs.map((o) => (
+                                                <div
+                                                    key={o.key}
+                                                    className="flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group"
+                                                >
+                                                    <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
+                                                    <span className="truncate flex-1 text-[10px]">{o.key}</span>
+                                                    {onOpenInEditor && (
+                                                        <button
+                                                            type="button"
+                                                            title="Open"
+                                                            className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)]"
+                                                            onClick={() => openR2Key(b, o.key)}
+                                                        >
+                                                            <FileCode2 size={11} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>

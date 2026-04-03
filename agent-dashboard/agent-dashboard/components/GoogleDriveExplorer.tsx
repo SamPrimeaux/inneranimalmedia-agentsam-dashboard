@@ -4,8 +4,11 @@ import {
   Plus, Upload, RefreshCw, MoreVertical, HardDrive, 
   Github, User, Settings, Lock, Loader2, ExternalLink
 } from 'lucide-react';
+import type { ActiveFile } from '../types';
 
-export const GoogleDriveExplorer: React.FC = () => {
+export const GoogleDriveExplorer: React.FC<{
+  onOpenInEditor?: (file: ActiveFile) => void;
+}> = ({ onOpenInEditor }) => {
     const [isAuthenticated, setIsAuthenticated] = useState(true); // Default to true since we have real endpoints to check
     const [isExpanded, setIsExpanded] = useState(true);
     const [files, setFiles] = useState<any[]>([]);
@@ -89,7 +92,7 @@ export const GoogleDriveExplorer: React.FC = () => {
                     <span className="text-[11px] font-bold tracking-widest uppercase">Google Drive</span>
                 </div>
                 <div className="flex gap-1">
-                    <button className="p-1 hover:bg-[var(--bg-hover)] rounded" title="Refresh"><RefreshCw size={12} /></button>
+                    <button type="button" onClick={() => fetchFiles()} className="p-1 hover:bg-[var(--bg-hover)] rounded" title="Refresh"><RefreshCw size={12} /></button>
                     <button className="p-1 hover:bg-[var(--bg-hover)] rounded" title="Upload"><Upload size={12} /></button>
                     <button className="p-1 hover:bg-[var(--bg-hover)] rounded" title="New Folder"><Plus size={12} /></button>
                 </div>
@@ -109,8 +112,34 @@ export const GoogleDriveExplorer: React.FC = () => {
               {isExpanded && (
                 <div className="ml-6 mt-1 flex flex-col gap-0.5 border-l border-[var(--border-subtle)] pl-1">
                   {files.length === 0 && !isLoading && <div className="p-2 text-[10px] text-[var(--text-muted)] italic font-mono space-y-1">No files found.</div>}
-                  {files.map(f => (
-                    <FileItem key={f.id} name={f.name} type={f.mimeType?.includes('folder') ? 'folder' : 'file'} />
+                  {files.map((f) => (
+                    <FileItem
+                      key={f.id}
+                      name={f.name}
+                      type={f.mimeType?.includes('folder') ? 'folder' : 'file'}
+                      onOpen={
+                        !f.mimeType?.includes('folder') && onOpenInEditor
+                          ? async () => {
+                              try {
+                                const res = await fetch(
+                                  `/api/integrations/gdrive/file?fileId=${encodeURIComponent(f.id)}`,
+                                  { credentials: 'same-origin' },
+                                );
+                                const data = await res.json();
+                                if (!res.ok || typeof data.content !== 'string') return;
+                                onOpenInEditor({
+                                  name: f.name,
+                                  content: data.content,
+                                  originalContent: data.content,
+                                  driveFileId: f.id,
+                                });
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }
+                          : undefined
+                      }
+                    />
                   ))}
                 </div>
               )}
@@ -144,8 +173,31 @@ export const GoogleDriveExplorer: React.FC = () => {
     );
 };
 
-const FileItem = ({ name, type }: { name: string, type: 'file' | 'folder' }) => (
-  <div className="flex items-center gap-2 px-2 py-1 hover:bg-[var(--bg-hover)] cursor-pointer rounded text-[11px] transition-all group">
+const FileItem = ({
+  name,
+  type,
+  onOpen,
+}: {
+  name: string;
+  type: 'file' | 'folder';
+  onOpen?: () => void | Promise<void>;
+}) => (
+  <div
+    role={onOpen ? 'button' : undefined}
+    tabIndex={onOpen ? 0 : undefined}
+    onClick={() => {
+      if (onOpen) void onOpen();
+    }}
+    onKeyDown={(e) => {
+      if (onOpen && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        void onOpen();
+      }
+    }}
+    className={`flex items-center gap-2 px-2 py-1 rounded text-[11px] transition-all group ${
+      onOpen ? 'hover:bg-[var(--bg-hover)] cursor-pointer' : ''
+    }`}
+  >
     {type === 'folder' ? <Folder size={12} className="text-[var(--solar-blue)]" /> : <File size={12} className="text-[var(--text-muted)]" />}
     <span className="truncate">{name}</span>
     <MoreVertical size={10} className="ml-auto opacity-0 group-hover:opacity-40" />

@@ -1,5 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, File, Loader2, RefreshCw, ChevronRight, HardDrive, Trash2, Link2, Upload, ArrowRightLeft } from 'lucide-react';
+import { Database, File, Loader2, RefreshCw, ChevronRight, HardDrive, Trash2, Link2, Upload, ArrowRightLeft, FileCode2 } from 'lucide-react';
+import type { ActiveFile } from '../types';
+
+/** Map bucket list label (from /api/r2/buckets) to /api/r2/file binding allowlist name */
+function bucketLabelToBinding(label: string): string {
+    const b = label.trim().toLowerCase();
+    if (b === 'agent-sam' || b === 'tools') return 'DASHBOARD';
+    if (b === 'agent-sam-sandbox-cicd' || b === 'inneranimalmedia-assets') return 'ASSETS';
+    if (b === 'iam-platform') return 'R2';
+    if (b === 'iam-docs') return 'DOCS_BUCKET';
+    if (b === 'autorag') return 'AUTORAG_BUCKET';
+    return 'DASHBOARD';
+}
 
 type R2ObjectRow = {
     key: string;
@@ -8,7 +20,9 @@ type R2ObjectRow = {
     lastModified?: string | null;
 };
 
-export const R2Explorer: React.FC = () => {
+export const R2Explorer: React.FC<{
+    onOpenInEditor?: (file: ActiveFile) => void;
+}> = ({ onOpenInEditor }) => {
     const [buckets, setBuckets] = useState<string[]>([]);
     const [bucket, setBucket] = useState<string>('');
     const [prefix, setPrefix] = useState('');
@@ -212,6 +226,30 @@ export const R2Explorer: React.FC = () => {
 
     const displayRows = searchActive ? searchObjects : objects;
 
+    const openInEditor = async (key: string) => {
+        if (!onOpenInEditor || !bucket) return;
+        const binding = bucketLabelToBinding(bucket);
+        setIsLoading(true);
+        try {
+            const qs = new URLSearchParams({ bucket: binding, key });
+            const res = await fetch(`/api/r2/file?${qs}`, { credentials: 'same-origin' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || typeof data.content !== 'string') return;
+            const base = key.split('/').pop() || key;
+            onOpenInEditor({
+                name: base,
+                content: data.content,
+                originalContent: data.content,
+                r2Key: key,
+                r2Bucket: binding,
+            });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     return (
         <div className="w-full h-full bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden">
             <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex flex-col gap-2 shrink-0">
@@ -326,6 +364,16 @@ export const R2Explorer: React.FC = () => {
                                 >
                                     <Link2 size={12} />
                                 </button>
+                                {onOpenInEditor && (
+                                    <button
+                                        type="button"
+                                        title="Open in editor"
+                                        className="p-1 opacity-70 hover:opacity-100 text-[var(--solar-cyan)]"
+                                        onClick={() => openInEditor(obj.key)}
+                                    >
+                                        <FileCode2 size={12} />
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     title="Delete"

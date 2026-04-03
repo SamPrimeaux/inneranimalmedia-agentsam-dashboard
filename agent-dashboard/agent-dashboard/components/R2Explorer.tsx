@@ -347,7 +347,21 @@ export const R2Explorer: React.FC<{
                         displayRows.map((obj) => (
                             <div
                                 key={obj.key}
-                                className="flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] rounded transition-all group"
+                                role={onOpenInEditor ? 'button' : undefined}
+                                tabIndex={onOpenInEditor ? 0 : undefined}
+                                onClick={() => {
+                                    if (onOpenInEditor) void openInEditor(obj.key);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (!onOpenInEditor) return;
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        void openInEditor(obj.key);
+                                    }
+                                }}
+                                className={`flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] rounded transition-all group ${
+                                    onOpenInEditor ? 'cursor-pointer' : ''
+                                }`}
                             >
                                 <File size={13} className="text-[var(--text-muted)] group-hover:text-[var(--solar-orange)] shrink-0" />
                                 <div className="flex flex-col min-w-0 flex-1">
@@ -360,7 +374,10 @@ export const R2Explorer: React.FC<{
                                     type="button"
                                     title="Copy URL"
                                     className="p-1 opacity-60 hover:opacity-100"
-                                    onClick={() => copyObjectUrl(obj.key)}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        copyObjectUrl(obj.key);
+                                    }}
                                 >
                                     <Link2 size={12} />
                                 </button>
@@ -369,7 +386,10 @@ export const R2Explorer: React.FC<{
                                         type="button"
                                         title="Open in editor"
                                         className="p-1 opacity-70 hover:opacity-100 text-[var(--solar-cyan)]"
-                                        onClick={() => openInEditor(obj.key)}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            void openInEditor(obj.key);
+                                        }}
                                     >
                                         <FileCode2 size={12} />
                                     </button>
@@ -378,7 +398,10 @@ export const R2Explorer: React.FC<{
                                     type="button"
                                     title="Delete"
                                     className="p-1 opacity-60 hover:opacity-100 text-[var(--text-muted)]"
-                                    onClick={() => deleteObject(obj.key)}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteObject(obj.key);
+                                    }}
                                 >
                                     <Trash2 size={12} />
                                 </button>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { FolderOpen, File as FileIcon, ChevronRight, ChevronDown, Folder, HardDrive, Cloud, Github, Box, FileCode2, Loader2 } from 'lucide-react';
 import type { ActiveFile } from '../types';
 
@@ -26,7 +26,9 @@ export const LocalExplorer: React.FC<{
     onWorkspaceRootChange?: (info: { folderName: string }) => void;
     /** Open R2 object in Monaco (same as R2 panel). */
     onOpenInEditor?: (file: ActiveFile) => void;
-}> = ({ onFileSelect, onWorkspaceRootChange, onOpenInEditor }) => {
+    /** Bumps when Welcome (or parent) should open the native folder picker (showDirectoryPicker). */
+    nativeFolderOpenSignal?: number;
+}> = ({ onFileSelect, onWorkspaceRootChange, onOpenInEditor, nativeFolderOpenSignal = 0 }) => {
     const [rootDir, setRootDir] = useState<FileNode | null>(null);
     const [expandedSections, setExpandedSections] = useState({
         local: true,
@@ -39,6 +41,7 @@ export const LocalExplorer: React.FC<{
     const [r2ExpandedBucket, setR2ExpandedBucket] = useState<string | null>(null);
     const [r2ObjectsByBucket, setR2ObjectsByBucket] = useState<Record<string, { key: string; size?: number }[]>>({});
     const [r2Loading, setR2Loading] = useState(false);
+    const lastNativeFolderSignal = useRef(0);
 
     const loadR2Buckets = useCallback(async () => {
         try {
@@ -97,43 +100,47 @@ export const LocalExplorer: React.FC<{
         setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
     };
 
-    const handleOpenFolder = async () => {
-        try {
-            // @ts-ignore - TS doesn't fully document the newer FileSystem Access API
-            const dirHandle = await window.showDirectoryPicker();
-            
-            // Build root node
-            const root: FileNode = {
-                name: dirHandle.name,
-                kind: 'directory',
-                handle: dirHandle,
-                isOpen: true,
-                children: await getEntries(dirHandle)
-            };
-            setRootDir(root);
-            onWorkspaceRootChange?.({ folderName: root.name });
-        } catch (err) {
-            console.error('Failed to open directory:', err);
-        }
-    };
-
-    const getEntries = async (dirHandle: any): Promise<FileNode[]> => {
+    const getEntries = useCallback(async (dirHandle: any): Promise<FileNode[]> => {
         const entries: FileNode[] = [];
         for await (const entry of dirHandle.values()) {
-            // Skip massive node_modules to avoid freezing
             if (entry.name === 'node_modules' || entry.name === '.git') continue;
             entries.push({
                 name: entry.name,
                 kind: entry.kind,
                 handle: entry,
-                isOpen: false
+                isOpen: false,
             });
         }
         return entries.sort((a, b) => {
             if (a.kind === b.kind) return a.name.localeCompare(b.name);
             return a.kind === 'directory' ? -1 : 1;
         });
-    };
+    }, []);
+
+    const handleOpenFolder = useCallback(async () => {
+        try {
+            // File System Access API (Chromium); not in all TS DOM libs
+            const dirHandle = await (window as unknown as { showDirectoryPicker: () => Promise<any> }).showDirectoryPicker();
+
+            const root: FileNode = {
+                name: dirHandle.name,
+                kind: 'directory',
+                handle: dirHandle,
+                isOpen: true,
+                children: await getEntries(dirHandle),
+            };
+            setRootDir(root);
+            onWorkspaceRootChange?.({ folderName: root.name });
+        } catch (err) {
+            console.error('Failed to open directory:', err);
+        }
+    }, [getEntries, onWorkspaceRootChange]);
+
+    useEffect(() => {
+        if (nativeFolderOpenSignal === 0 || nativeFolderOpenSignal === lastNativeFolderSignal.current) return;
+        lastNativeFolderSignal.current = nativeFolderOpenSignal;
+        void handleOpenFolder();
+    }, [nativeFolderOpenSignal, handleOpenFolder]);
 
     const toggleDir = async (node: FileNode, pathKey: string) => {
         if (node.kind === 'file') {
@@ -271,7 +278,21 @@ export const LocalExplorer: React.FC<{
                                             {objs.map((o) => (
                                                 <div
                                                     key={o.key}
-                                                    className="flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group"
+                                                    role={onOpenInEditor ? 'button' : undefined}
+                                                    tabIndex={onOpenInEditor ? 0 : undefined}
+                                                    onClick={() => {
+                                                        if (onOpenInEditor) void openR2Key(b, o.key);
+                                                    }}
+                                                    onKeyDown={(e) => {
+                                                        if (!onOpenInEditor) return;
+                                                        if (e.key === 'Enter' || e.key === ' ') {
+                                                            e.preventDefault();
+                                                            void openR2Key(b, o.key);
+                                                        }
+                                                    }}
+                                                    className={`flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group ${
+                                                        onOpenInEditor ? 'cursor-pointer' : ''
+                                                    }`}
                                                 >
                                                     <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
                                                     <span className="truncate flex-1 text-[10px]">{o.key}</span>
@@ -280,7 +301,10 @@ export const LocalExplorer: React.FC<{
                                                             type="button"
                                                             title="Open"
                                                             className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)]"
-                                                            onClick={() => openR2Key(b, o.key)}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                void openR2Key(b, o.key);
+                                                            }}
                                                         >
                                                             <FileCode2 size={11} />
                                                         </button>

@@ -126,6 +126,21 @@ function isStreamErrorPayload(
   );
 }
 
+/** True when streamed text has clearly entered raw HTML/CSS/SVG body (before r2_file_updated). */
+function looksLikeEmbeddedFileDumpStart(full: string): boolean {
+  const tail = full.slice(-14000);
+  if (/<!DOCTYPE\s+html/i.test(tail)) return true;
+  if (/<\s*html[\s>]/i.test(tail)) return true;
+  if (/<\s*head[\s>]/i.test(tail) && /<\s*body[\s>]/i.test(tail)) return true;
+  if (/<\s*meta\s+[^>]*charset/i.test(tail)) return true;
+  if (/<\s*style[\s>]/i.test(tail) && tail.includes('{') && tail.includes('}')) return true;
+  if (/<svg[\s>]/i.test(tail) && tail.length > 400) return true;
+  if (/^\s*@(?:charset|import|layer)\s+/im.test(tail.slice(-2500))) return true;
+  const m = tail.match(/\{[^{}]*\}/g);
+  if (m && m.length >= 18 && /[#.][a-zA-Z0-9_-]+\s*\{/.test(tail)) return true;
+  return false;
+}
+
 function formatHttpErrorMessage(status: number, bodyText: string): string {
   try {
     const j = JSON.parse(bodyText) as { error?: string; detail?: string; status?: number; model?: string };
@@ -521,6 +536,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       const decoder = new TextDecoder();
       let assistantContent = '';
       let sseCarry = '';
+      let fileEchoSuppress = false;
 
       setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
@@ -557,6 +573,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             ) {
               const r2evt = data as { type: 'r2_file_updated'; bucket: string; key: string };
               onR2FileUpdated?.(r2evt);
+              fileEchoSuppress = false;
               assistantContent += `\n[FILE_CREATED:${r2evt.key}]\n`;
               setMessages((prev) => {
                 const last = [...prev];
@@ -582,22 +599,34 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             }
             const delta = extractSseAssistantDelta(data);
             if (delta) {
-              assistantContent += delta;
-              setMessages((prev) => {
-                const last = [...prev];
-                last[last.length - 1] = { role: 'assistant', content: assistantContent };
-                return last;
-              });
-            }
-            if (data && typeof data === 'object' && typeof (data as { text?: string }).text === 'string') {
-              const legacy = (data as { text: string }).text;
-              if (legacy && !delta) {
-                assistantContent += legacy;
+              const combined = assistantContent + delta;
+              if (!fileEchoSuppress && looksLikeEmbeddedFileDumpStart(combined)) {
+                fileEchoSuppress = true;
+              }
+              if (!fileEchoSuppress) {
+                assistantContent += delta;
                 setMessages((prev) => {
                   const last = [...prev];
                   last[last.length - 1] = { role: 'assistant', content: assistantContent };
                   return last;
                 });
+              }
+            }
+            if (data && typeof data === 'object' && typeof (data as { text?: string }).text === 'string') {
+              const legacy = (data as { text: string }).text;
+              if (legacy && !delta) {
+                const combined = assistantContent + legacy;
+                if (!fileEchoSuppress && looksLikeEmbeddedFileDumpStart(combined)) {
+                  fileEchoSuppress = true;
+                }
+                if (!fileEchoSuppress) {
+                  assistantContent += legacy;
+                  setMessages((prev) => {
+                    const last = [...prev];
+                    last[last.length - 1] = { role: 'assistant', content: assistantContent };
+                    return last;
+                  });
+                }
               }
             }
           }

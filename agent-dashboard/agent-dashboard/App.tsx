@@ -68,6 +68,8 @@ const App: React.FC = () => {
   const [errorCount, setErrorCount] = useState(0);
   const [spendCount, setSpendCount] = useState('$0.00');
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
+  /** Increment to trigger File System Access picker from Welcome "Open Folder" after files panel mounts. */
+  const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
 
   const fetchLiveStatus = useCallback(async () => {
     try {
@@ -692,6 +694,7 @@ const App: React.FC = () => {
                       />
                   ) : activeActivity === 'files' ? (
                       <LocalExplorer
+                          nativeFolderOpenSignal={nativeFolderOpenSignal}
                           onWorkspaceRootChange={({ folderName }) => {
                               setIdeWorkspace({ source: 'local', folderName });
                           }}
@@ -842,7 +845,10 @@ const App: React.FC = () => {
                   {activeTab === 'welcome' && (
                       <div className="absolute inset-0 z-10">
                           <WelcomeLauncher
-                              onOpenFolder={() => setActiveActivity('files')}
+                              onOpenFolder={() => {
+                                setActiveActivity('files');
+                                setNativeFolderOpenSignal((n) => n + 1);
+                              }}
                               onWorkspacePick={({ name, path }) => {
                                   setIdeWorkspace({ source: 'pinned', name, pathHint: path });
                               }}
@@ -902,6 +908,7 @@ const App: React.FC = () => {
                           ref={terminalRef}
                           onClose={() => setIsTerminalOpen(false)}
                           iamOrigin="https://inneranimalmedia.com"
+                          workspaceCdCommand="cd ~/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard"
                           outputLines={shellOutputLines}
                           onOutputLine={(line) =>
                             setShellOutputLines((prev) => [...prev.slice(-250), line])

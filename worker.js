@@ -18413,9 +18413,14 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     return { result: resultText };
   }
   if (tool_name === 'context_extract_structure') {
-    const text = String(params.text ?? '');
+    const raw = String(params.text ?? '');
+    const maxChars = 50 * 1024;
+    const truncated = raw.length > maxChars;
+    const text = truncated ? raw.slice(0, maxChars) : raw;
     const functions = (text.match(/(?:async\s+)?function\s+\w+|const\s+\w+\s*=\s*(?:async\s+)?\(/g) || []).slice(0, 30);
-    const resultText = JSON.stringify({ functions });
+    const resultText = JSON.stringify(
+      truncated ? { functions, truncated: true, original_length: raw.length, analyzed_chars: text.length } : { functions }
+    );
     await rec({ conversationId, toolName: tool_name, toolCategory: 'context', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
     return { result: resultText };
   }

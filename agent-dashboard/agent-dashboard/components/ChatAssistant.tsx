@@ -153,37 +153,61 @@ function parseMonacoInvokeParameterBlock(inner: string): Record<string, string> 
 }
 
 /**
- * Remove complete `<invoke name="monaco">...</invoke>` blocks, parse filename/content, return files to open in the editor.
+ * Remove complete `<invoke name="...">...</invoke>` blocks (any tool name) from streamed assistant text.
+ * For `name="monaco"`, parse filename/content and return files to open in the editor.
  * Handles both `<invoke>` / `<antml:invoke>` and matching closing tags (streamed model output varies).
  */
 function extractMonacoInvokesFromBuffer(text: string): { text: string; files: Array<{ name: string; content: string }> } {
   const files: Array<{ name: string; content: string }> = [];
   let out = text;
-  const blockRe = /<(?:antml:)?invoke\b[^>]*\bname\s*=\s*["']monaco["'][^>]*>([\s\S]*?)<\/(?:antml:)?invoke>/i;
+  const blockRe = /<(?:antml:)?invoke\b([^>]*)>([\s\S]*?)<\/(?:antml:)?invoke>/i;
   for (let guard = 0; guard < 64; guard++) {
     const m = out.match(blockRe);
     if (!m || m.index === undefined) break;
-    const inner = m[1] || '';
-    const params = parseMonacoInvokeParameterBlock(inner);
-    const nameRaw = params.filename || params.file || params.path || '';
-    const filename = (nameRaw || 'snippet.txt').trim() || 'snippet.txt';
-    const content = params.content ?? '';
-    if (content.length > 0) {
-      files.push({ name: filename, content });
-    } else {
-      console.warn('[ChatAssistant] monaco invoke skipped: missing or empty content parameter', {
-        filename,
-        paramKeys: Object.keys(params),
-      });
+    const attrs = m[1] || '';
+    const inner = m[2] || '';
+    const nameMatch = attrs.match(/\bname\s*=\s*["']([^"']+)["']/i);
+    const toolName = (nameMatch?.[1] || '').trim().toLowerCase();
+    if (toolName === 'monaco') {
+      const params = parseMonacoInvokeParameterBlock(inner);
+      const nameRaw = params.filename || params.file || params.path || '';
+      const filename = (nameRaw || 'snippet.txt').trim() || 'snippet.txt';
+      const content = params.content ?? '';
+      if (content.length > 0) {
+        files.push({ name: filename, content });
+      } else {
+        console.warn('[ChatAssistant] monaco invoke skipped: missing or empty content parameter', {
+          filename,
+          paramKeys: Object.keys(params),
+        });
+      }
     }
+    out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
+  }
+  const fcRe = /<function_calls\b[^>]*>[\s\S]*?<\/function_calls>/i;
+  for (let guard = 0; guard < 64; guard++) {
+    const m = out.match(fcRe);
+    if (!m || m.index === undefined) break;
     out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
   }
   return { text: out, files };
 }
 
-/** While the model is still streaming a monaco XML block, hide the partial tag from the bubble. */
+/** While the model is still streaming tool XML, hide partial `<function_calls>` / `<invoke>` tails from the bubble. */
 function hideIncompleteMonacoInvokeTail(text: string): string {
-  const openRe = /<(?:antml:)?invoke\b[^>]*\bname\s*=\s*["']monaco["'][^>]*>/gi;
+  let lastFc = -1;
+  const fcOpenRe = /<function_calls\b/gi;
+  let fm: RegExpExecArray | null;
+  while ((fm = fcOpenRe.exec(text)) !== null) {
+    lastFc = fm.index;
+  }
+  if (lastFc >= 0) {
+    const tailFc = text.slice(lastFc);
+    if (!/<\/function_calls>/i.test(tailFc)) {
+      return text.slice(0, lastFc);
+    }
+  }
+  const openRe = /<(?:antml:)?invoke\b[^>]*>/gi;
   let lastOpen = -1;
   let m: RegExpExecArray | null;
   while ((m = openRe.exec(text)) !== null) {

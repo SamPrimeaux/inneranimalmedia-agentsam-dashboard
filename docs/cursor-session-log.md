@@ -2339,3 +2339,19 @@ Sandbox R2 object updated on remote bucket; `worker.js` fix is committed on `mai
 ### Known issues / next steps
 - Re-upload uses `--remote` for sandbox R2. Git reported `non-monotonic index` on `._pack-*.idx` (macOS resource fork noise); consider cleaning `._*` files under `.git/objects/pack` if git acts up.
 
+## 2026-04-03 Workspaces GET column fallbacks + benchmark session cookie
+
+### What was asked
+Fix sandbox `GET /api/settings/workspaces` returning 500 (breaking workspace-aware theme fetch in `App.tsx`); confirm chat works when authenticated. Root cause: benchmark `curl` had no session cookie, not worker chat auth. Add `IAM_SESSION_COOKIE` / `~/.iam-session-cookie` support to `benchmark-full.sh`; commit worker resilience + benchmark changes; update session log.
+
+### Files changed
+- `worker.js` (`GET /api/settings/workspaces`): `Promise.all` workspace queries each retry without optional columns when D1 reports `no such column` — `workspaces.brand`, `user_workspace_settings.theme`, `user_settings.default_workspace_id` (sandbox D1 can lag migration 148).
+- `scripts/benchmark-full.sh`: load `IAM_SESSION_COOKIE` or trim contents of `~/.iam-session-cookie`; pass `-H "Cookie: iam_session=..."` on `POST .../api/agent/chat`; header line shows auth present vs warning.
+
+### Deploy status
+- Built: no — R2 uploaded: no — Worker deployed: no — deploy approved: no
+- Git: commit `2c96101` on `main` — `worker.js` + `scripts/benchmark-full.sh` — push: yes
+
+### Notes
+Chat endpoint accepts `Cookie: iam_session=<uuid>`; full benchmark requires a valid session. Optional: apply `migrations/148_workspace_default_and_theme.sql` to sandbox D1 so `theme` / `default_workspace_id` exist without relying on fallbacks.
+

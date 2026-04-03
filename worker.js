@@ -5206,6 +5206,12 @@ const worker = {
         return respondWithR2Object(obj, contentType(assetKey), noCache ? { noCache: true } : {});
       }
 
+      // With assets.run_worker_first, non-API paths that miss R2 still fall through to the Vite dist bundle (wrangler STATIC_ASSETS).
+      if (env.STATIC_ASSETS && !pathLower.startsWith('/api/')) {
+        try {
+          return await env.STATIC_ASSETS.fetch(request);
+        } catch (_) {}
+      }
       return notFound(path);
     } catch (err) {
       let errPath = '/';

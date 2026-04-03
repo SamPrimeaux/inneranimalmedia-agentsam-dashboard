@@ -6280,6 +6280,28 @@ async function loadSubagentPersonaBlock(env, oauthUserId) {
   }
 }
 
+/**
+ * Load agentsam_subagent_profile.allowed_tool_globs for the signed-in user (id or slug match).
+ * Returns undefined if no row, DB error, or column null — caller passes nothing on opts (no extra filtering).
+ */
+async function loadSubagentAllowedToolGlobs(env, oauthUserId, subagentKey) {
+  if (!env?.DB || !oauthUserId) return undefined;
+  const k = subagentKey != null ? String(subagentKey).trim() : '';
+  if (!k) return undefined;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT allowed_tool_globs FROM agentsam_subagent_profile
+       WHERE user_id = ? AND is_active = 1 AND (id = ? OR slug = ?) LIMIT 1`
+    ).bind(String(oauthUserId), k, k).first();
+    if (!row || row.allowed_tool_globs == null) return undefined;
+    const raw = row.allowed_tool_globs;
+    const s = typeof raw === 'string' ? raw.trim() : String(raw).trim();
+    return s.length ? s : undefined;
+  } catch (_) {
+    return undefined;
+  }
+}
+
 /** Start a per-request chat SSE row (linked to conversation for rollup queries). */
 async function insertChatSseAgentRun(env, id, conversationId, modelId, sessionLike, agentAiId = null) {
   if (!id || !env?.DB) return;
@@ -9802,6 +9824,23 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
   const modelKey = modelRow.model_key || 'gemini-2.5-flash';
   const enc = new TextEncoder();
 
+  let resolvedAllowedToolGlobs = opts.allowed_tool_globs;
+  if (
+    (resolvedAllowedToolGlobs == null || String(resolvedAllowedToolGlobs).trim() === '') &&
+    opts.oauthUserId
+  ) {
+    const sk =
+      opts.subagent_id != null && String(opts.subagent_id).trim() !== ''
+        ? String(opts.subagent_id).trim()
+        : opts.agent_id != null && String(opts.agent_id).trim() !== ''
+          ? String(opts.agent_id).trim()
+          : '';
+    if (sk) {
+      const loaded = await loadSubagentAllowedToolGlobs(env, opts.oauthUserId, sk);
+      if (loaded != null) resolvedAllowedToolGlobs = loaded;
+    }
+  }
+
   // Load tools in Google format
   let toolDeclarations = [];
   try {
@@ -9844,8 +9883,8 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       })()
       };
     });
-    if (opts.allowed_tool_globs != null && parseMixedToolAllowList(opts.allowed_tool_globs).length > 0) {
-      toolDeclarations = filterToolsByAllowPatterns(toolDeclarations, opts.allowed_tool_globs);
+    if (resolvedAllowedToolGlobs != null && parseMixedToolAllowList(resolvedAllowedToolGlobs).length > 0) {
+      toolDeclarations = filterToolsByAllowPatterns(toolDeclarations, resolvedAllowedToolGlobs);
     }
   } catch (e) {
     console.error('[chatWithToolsGoogle] tool load failed:', e?.message);
@@ -10251,12 +10290,15 @@ async function parseAgentChatRequestBody(request) {
   const ct = (request.headers.get('content-type') || '').toLowerCase();
   if (ct.includes('multipart/form-data')) {
     const fd = await request.formData();
+    const sid = String(fd.get('subagent_id') || '').trim();
+    const aid = String(fd.get('agent_id') || '').trim();
     return {
       message: String(fd.get('message') || '').trim(),
       mode: String(fd.get('mode') || '').trim().toLowerCase(),
       model: String(fd.get('model') || fd.get('model_id') || '').trim(),
       conversationId: String(fd.get('conversationId') || fd.get('session_id') || '').trim(),
       agent: String(fd.get('agent') || '').trim(),
+      subagentProfileKey: sid || aid,
     };
   }
   let body = {};
@@ -10265,12 +10307,15 @@ async function parseAgentChatRequestBody(request) {
   } catch (_) {
     body = {};
   }
+  const sidJson = body.subagent_id != null ? String(body.subagent_id).trim() : '';
+  const aidJson = body.agent_id != null ? String(body.agent_id).trim() : '';
   return {
     message: String(body.message || '').trim(),
     mode: String(body.mode || '').trim().toLowerCase(),
     model: String(body.model || body.model_id || '').trim(),
     conversationId: String(body.conversationId || body.session_id || '').trim(),
     agent: body.agent != null ? String(body.agent).trim() : '',
+    subagentProfileKey: sidJson || aidJson,
   };
 }
 
@@ -20666,6 +20711,24 @@ function toolApprovalPreview(toolName, params) {
 async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, conversationId, agent_id, ctx, opts = {}, preFilteredTools = null) {
   const wantStream = opts.stream === true;
   const mode = opts.mode || 'agent';
+
+  let resolvedAllowedToolGlobs = opts.allowed_tool_globs;
+  if (
+    (resolvedAllowedToolGlobs == null || String(resolvedAllowedToolGlobs).trim() === '') &&
+    opts.oauthUserId
+  ) {
+    const sk =
+      opts.subagent_id != null && String(opts.subagent_id).trim() !== ''
+        ? String(opts.subagent_id).trim()
+        : opts.agent_id != null && String(opts.agent_id).trim() !== ''
+          ? String(opts.agent_id).trim()
+          : '';
+    if (sk) {
+      const loaded = await loadSubagentAllowedToolGlobs(env, opts.oauthUserId, sk);
+      if (loaded != null) resolvedAllowedToolGlobs = loaded;
+    }
+  }
+
   let tools = [];
   try {
     // Use pre-filtered tools from router if provided — avoids reloading all 36 tools
@@ -20768,8 +20831,8 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       } catch (e) {
         console.warn('[chatWithToolsAnthropic] filterToolsByIntent', e?.message ?? e);
       }
-      if (opts.allowed_tool_globs != null && parseMixedToolAllowList(opts.allowed_tool_globs).length > 0) {
-        tools = filterToolsByAllowPatterns(tools, opts.allowed_tool_globs);
+      if (resolvedAllowedToolGlobs != null && parseMixedToolAllowList(resolvedAllowedToolGlobs).length > 0) {
+        tools = filterToolsByAllowPatterns(tools, resolvedAllowedToolGlobs);
       }
     }
   } catch (e) {

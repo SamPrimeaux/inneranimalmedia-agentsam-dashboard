@@ -46,6 +46,8 @@ interface ChatAssistantProps {
   onR2FileUpdated?: (event: { type: 'r2_file_updated'; bucket: string; key: string }) => void;
   /** SSE: `browser_navigate` opens the Browser tab (e.g. after HTML write or preview_in_browser) */
   onBrowserNavigate?: (event: { type: 'browser_navigate'; url: string }) => void;
+  /** Dropped or attached .glb opens the GLB tab with a blob URL (parent owns viewer state). */
+  onGlbFileSelect?: (file: File) => void;
 }
 
 type StagedAttachment = {
@@ -57,6 +59,13 @@ type StagedAttachment = {
 
 type PickerItem = { id: string; label: string; kind: string };
 type SlashCmd = { slug: string; description: string | null };
+
+type ToolApprovalPayload = {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  preview?: string;
+};
 
 type ChatModelRow = {
   id: string;
@@ -334,6 +343,23 @@ function languageFromFileName(fileName: string): string {
   return map[ext] || (ext || 'text');
 }
 
+const CHAT_TEXT_CODE_EXT = new Set(['js', 'ts', 'tsx', 'jsx', 'css', 'html', 'htm', 'sql', 'md', 'json', 'py', 'sh']);
+
+function isChatTextCodeFile(file: File): boolean {
+  if (file.type.startsWith('text/')) return true;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  return CHAT_TEXT_CODE_EXT.has(ext);
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(typeof fr.result === 'string' ? fr.result : '');
+    fr.onerror = () => reject(fr.error);
+    fr.readAsText(file);
+  });
+}
+
 /** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
 async function buildMentionContext(
   userMessage: string,
@@ -343,9 +369,12 @@ async function buildMentionContext(
     activeFile?: ActiveFile | null;
     editorCursorLine?: number;
     editorCursorColumn?: number;
+    /** Text/code attachments: same injection shape as @file for the active buffer. */
+    attachContextFiles?: Array<{ name: string; content: string }>;
   }
 ): Promise<string> {
-  const { activeFileName, activeFileContent, activeFile, editorCursorLine, editorCursorColumn } = opts;
+  const { activeFileName, activeFileContent, activeFile, editorCursorLine, editorCursorColumn, attachContextFiles } =
+    opts;
   const parts: string[] = [];
   const wantsEditorCtx = messageRequestsEditorContext(userMessage, activeFileName);
   const injectFileSnippet =
@@ -357,6 +386,12 @@ async function buildMentionContext(
     parts.push(
       `### @file\n${activeFileName || 'untitled'}\n\n${activeFileContent.slice(0, MENTION_FILE_MAX_CHARS)}`
     );
+  }
+
+  if (attachContextFiles?.length) {
+    for (const f of attachContextFiles) {
+      parts.push(`### @${f.name}\n\n${f.content.slice(0, MENTION_FILE_MAX_CHARS)}`);
+    }
   }
 
   if (hasWordMention(userMessage, 'monaco')) {
@@ -501,6 +536,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onRunInTerminal,
   onR2FileUpdated,
   onBrowserNavigate,
+  onGlbFileSelect,
 }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -520,9 +556,16 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [isModeOpen, setIsModeOpen] = useState(false);
 
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
+  const [composerDragging, setComposerDragging] = useState(false);
+  const composerDragDepthRef = useRef(0);
   const [conversationId, setConversationId] = useState<string>(() =>
     typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
   );
+
+  const [pendingToolApproval, setPendingToolApproval] = useState<{
+    tool: ToolApprovalPayload;
+  } | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
 
   const [chatModels, setChatModels] = useState<ChatModelRow[]>([]);
   const [selectedModelKey, setSelectedModelKey] = useState<string>('');
@@ -814,11 +857,70 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     return next;
   }, []);
 
+  const handleApprovePendingTool = useCallback(async () => {
+    if (!pendingToolApproval) return;
+    const { tool } = pendingToolApproval;
+    setApprovalBusy(true);
+    try {
+      const res = await fetch('/api/agent/chat/execute-approved-tool', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool_name: tool.name,
+          tool_input: tool.parameters ?? {},
+          conversation_id: conversationId || undefined,
+        }),
+      });
+      const j = (await res.json()) as { success?: boolean; error?: string; result?: unknown };
+      setPendingToolApproval(null);
+      const resultStr =
+        typeof j.result === 'string' ? j.result : JSON.stringify(j.result ?? null, null, 2);
+      const suffix = j.success
+        ? `\n\n---\nTool **${tool.name}** completed.\n\`\`\`\n${resultStr.slice(0, 12000)}\n\`\`\``
+        : `\n\n---\nTool **${tool.name}** failed: ${j.error ?? 'unknown error'}`;
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === 'assistant') {
+          next[next.length - 1] = { ...last, content: last.content + suffix };
+        }
+        return next;
+      });
+    } catch (e) {
+      console.error('[ChatAssistant] execute-approved-tool', e);
+      setPendingToolApproval(null);
+      const msg = e instanceof Error ? e.message : String(e);
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === 'assistant') {
+          next[next.length - 1] = { ...last, content: `${last.content}\n\n[Approve request failed: ${msg}]` };
+        }
+        return next;
+      });
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, [pendingToolApproval, conversationId, setMessages]);
+
+  const handleDenyPendingTool = useCallback(() => {
+    setPendingToolApproval(null);
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last?.role === 'assistant') {
+        next[next.length - 1] = { ...last, content: `${last.content}\n\n[Tool execution cancelled.]` };
+      }
+      return next;
+    });
+  }, [setMessages]);
+
   const handleSend = async () => {
     const text = input.trim();
     if ((!text && attachments.length === 0) || isLoading || !selectedModelKey) return;
 
     const userMessage = text || '(attachment)';
+    setPendingToolApproval(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
@@ -827,12 +929,32 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     setMentionOpen(false);
     setSlashOpen(false);
 
+    const attachContextFiles: Array<{ name: string; content: string }> = [];
+    for (const a of attachments) {
+      if (a.type !== 'file') continue;
+      const lower = a.file.name.toLowerCase();
+      if (lower.endsWith('.glb')) {
+        onGlbFileSelect?.(a.file);
+        continue;
+      }
+      if (isChatTextCodeFile(a.file)) {
+        try {
+          const text = await readFileAsText(a.file);
+          onFileSelect?.({ name: a.file.name, content: text, originalContent: text });
+          attachContextFiles.push({ name: a.file.name, content: text });
+        } catch {
+          /* skip unreadable */
+        }
+      }
+    }
+
     const messageForApi = await buildMentionContext(userMessage, {
       activeFileName,
       activeFileContent: activeFileContent ?? null,
       activeFile: activeFile ?? null,
       editorCursorLine,
       editorCursorColumn,
+      attachContextFiles: attachContextFiles.length ? attachContextFiles : undefined,
     });
 
     const form = new FormData();
@@ -892,6 +1014,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             if (isStreamErrorPayload(data)) {
               const partsErr = [data.error, data.detail, data.provider, data.model].filter(Boolean);
               throw new Error(partsErr.join(' — '));
+            }
+            if (
+              data &&
+              typeof data === 'object' &&
+              (data as { type?: string }).type === 'tool_approval_request'
+            ) {
+              const t = data as { type: string; tool?: ToolApprovalPayload };
+              if (t.tool && typeof t.tool.name === 'string') {
+                setPendingToolApproval({ tool: t.tool });
+                setIsLoading(false);
+              }
+              continue;
             }
             if (
               data &&
@@ -1239,6 +1373,39 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         </div>
 
         <div className="shrink-0 w-full p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2">
+          {pendingToolApproval && (
+            <div
+              role="region"
+              aria-label="Tool approval"
+              className="rounded-lg border border-[var(--solar-cyan)]/35 bg-[#060e14] p-3 space-y-2"
+            >
+              <div className="text-[11px] font-semibold text-[var(--text-heading)]">Tool approval required</div>
+              <div className="text-[11px] font-mono text-[var(--solar-cyan)]">{pendingToolApproval.tool.name}</div>
+              {pendingToolApproval.tool.preview ? (
+                <div className="text-[11px] text-[var(--text-main)] whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                  {pendingToolApproval.tool.preview}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={approvalBusy}
+                  onClick={() => void handleApprovePendingTool()}
+                  className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-[var(--solar-green)]/20 border border-[var(--solar-green)]/40 text-[var(--solar-green)] hover:bg-[var(--solar-green)]/30 disabled:opacity-50"
+                >
+                  {approvalBusy ? 'Running…' : 'Confirm'}
+                </button>
+                <button
+                  type="button"
+                  disabled={approvalBusy}
+                  onClick={handleDenyPendingTool}
+                  className="px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--solar-red)]/50 hover:text-[var(--solar-red)] disabled:opacity-50"
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="flex gap-2 overflow-x-auto pb-1 chat-hide-scroll">
               {attachments.map((a) => (
@@ -1302,7 +1469,37 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             }}
           />
 
-          <div className="flex flex-col bg-[#060e14] border border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60 rounded-xl transition-all shadow-inner overflow-visible">
+          <div
+            className={`flex flex-col bg-[#060e14] border rounded-xl transition-all shadow-inner overflow-visible ${
+              composerDragging
+                ? 'border-[var(--solar-cyan)]/70 ring-1 ring-[var(--solar-cyan)]/35'
+                : 'border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60'
+            }`}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              composerDragDepthRef.current += 1;
+              setComposerDragging(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              composerDragDepthRef.current = Math.max(0, composerDragDepthRef.current - 1);
+              if (composerDragDepthRef.current === 0) setComposerDragging(false);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'copy';
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              composerDragDepthRef.current = 0;
+              setComposerDragging(false);
+              addFilesFromList(e.dataTransfer.files, false);
+            }}
+          >
             <div className="flex items-end gap-1.5 px-2 pt-2 pb-2">
               <button
                 type="button"

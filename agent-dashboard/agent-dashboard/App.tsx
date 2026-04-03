@@ -92,6 +92,17 @@ const App: React.FC = () => {
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
   /** Increment to trigger File System Access picker from Welcome "Open Folder" after files panel mounts. */
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
+  /** From GET /api/settings/workspaces (`current` = default_workspace_id); drives theme ?workspace= */
+  const [authWorkspaceId, setAuthWorkspaceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/settings/workspaces', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { current?: string } | null) => {
+        if (d?.current && typeof d.current === 'string') setAuthWorkspaceId(d.current);
+      })
+      .catch(() => {});
+  }, []);
 
   const fetchLiveStatus = useCallback(async () => {
     try {
@@ -135,6 +146,16 @@ const App: React.FC = () => {
   const [activeFile, setActiveFile] = useState<ActiveFile | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');
+  const [glbViewerUrl, setGlbViewerUrl] = useState<string>(
+    'https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/6454d6fa-d4f1-43ec-33fd-628d0e7cdb00/public'
+  );
+  const [glbViewerFilename, setGlbViewerFilename] = useState('Meshy_AI_Jet.glb');
+
+  useEffect(() => {
+    return () => {
+      if (glbViewerUrl.startsWith('blob:')) URL.revokeObjectURL(glbViewerUrl);
+    };
+  }, [glbViewerUrl]);
 
   useEffect(() => {
     if (!toastMsg) return;
@@ -371,7 +392,7 @@ const App: React.FC = () => {
     setTimeout(() => terminalRef.current?.writeToTerminal(text), 100);
   }, [isTerminalOpen]);
 
-  // Dynamic CMS Theme Fetcher
+  // Dynamic CMS Theme Fetcher (tenant from session + env; workspace_id matches cms_themes.workspace_id)
   useEffect(() => {
     const cached = localStorage.getItem('mcad_theme_css');
     if (cached) {
@@ -383,11 +404,15 @@ const App: React.FC = () => {
       } catch(e) {}
     }
 
-    fetch('/api/themes/active?workspace=meauxcad')
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && data.data) {
-          const vars = data.data;
+    const ws = authWorkspaceId?.trim() || '';
+    const themeUrl = ws
+      ? `/api/themes/active?workspace_id=${encodeURIComponent(ws)}`
+      : '/api/themes/active';
+    fetch(themeUrl, { credentials: 'same-origin' })
+      .then((res) => res.json())
+      .then((data: { data?: Record<string, string> }) => {
+        const vars = data?.data;
+        if (vars && typeof vars === 'object' && Object.keys(vars).length > 0) {
           Object.entries(vars).forEach(([k, v]) => {
             document.documentElement.style.setProperty(k, String(v));
           });
@@ -395,7 +420,7 @@ const App: React.FC = () => {
         }
       })
       .catch(console.error);
-  }, []);
+  }, [authWorkspaceId]);
 
   // Cmd+J Listener
   useEffect(() => {
@@ -736,6 +761,15 @@ const App: React.FC = () => {
                             setActiveFile({ ...file, originalContent: '' });
                             openTab('code');
                         }}
+                        onGlbFileSelect={(file) => {
+                          const url = URL.createObjectURL(file);
+                          setGlbViewerUrl((prev) => {
+                            if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                            return url;
+                          });
+                          setGlbViewerFilename(file.name);
+                          openTab('glb');
+                        }}
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
                         onBrowserNavigate={handleBrowserNavigateFromAgent}
@@ -986,7 +1020,7 @@ const App: React.FC = () => {
 
                   {activeTab === 'glb' && (
                       <div className="absolute inset-0 z-10 overflow-hidden">
-                          <GLBViewer url="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/6454d6fa-d4f1-43ec-33fd-628d0e7cdb00/public" filename="Meshy_AI_Jet.glb" />
+                          <GLBViewer url={glbViewerUrl} filename={glbViewerFilename} />
                       </div>
                   )}
 
@@ -1039,6 +1073,15 @@ const App: React.FC = () => {
                                 setActiveFile({ ...file, originalContent: file.content });
                                 openTab('code');
                             }}
+                            onGlbFileSelect={(file) => {
+                              const url = URL.createObjectURL(file);
+                              setGlbViewerUrl((prev) => {
+                                if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                                return url;
+                              });
+                              setGlbViewerFilename(file.name);
+                              openTab('glb');
+                            }}
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}
                             onBrowserNavigate={handleBrowserNavigateFromAgent}
@@ -1061,7 +1104,7 @@ const App: React.FC = () => {
 
       <StatusBar 
         branch={gitBranch}
-        workspace={ideWorkspace.workspace_id || 'No Workspace'}
+        workspace={authWorkspaceId || formatWorkspaceStatusLine(ideWorkspace)}
         errorCount={errorCount}
         showCursor={activeTab === 'code'}
         line={cursorPos.line}

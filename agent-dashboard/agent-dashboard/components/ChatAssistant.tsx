@@ -24,9 +24,17 @@ import {
 import { ProjectType } from '../types';
 import type { ActiveFile } from '../types';
 
+type MessageAttachmentPreview = {
+  previewUrl: string | null;
+  type: 'image' | 'file';
+  name: string;
+};
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  /** Blob URLs kept after send so image previews stay visible in history (not revoked with composer clear). */
+  attachmentPreviews?: MessageAttachmentPreview[];
 }
 
 interface ChatAssistantProps {
@@ -259,6 +267,9 @@ function formatHttpErrorMessage(status: number, bodyText: string): string {
 const MENTION_CONTEXT_HEADER = '\n\n--- On-demand context (this message only) ---\n';
 const MENTION_FILE_MAX_CHARS = 8000;
 const MENTION_R2_LIST_MAX_ROWS = 250;
+/** Worker request body cap (inform UI); combined files rejected above CHAT_ATTACH_MAX_TOTAL_BYTES in worker.js */
+const CHAT_REQUEST_MAX_BYTES = 100 * 1024 * 1024;
+const CHAT_ATTACH_MAX_TOTAL_BYTES = 90 * 1024 * 1024;
 
 function hasWordMention(text: string, tag: string): boolean {
   return new RegExp(`@${tag}\\b`).test(text);
@@ -280,14 +291,6 @@ function fileNameMentionedInMessage(userMessage: string, activeFileName?: string
     if (re.test(userMessage)) return true;
   }
   return false;
-}
-
-function messageRequestsEditorContext(userMessage: string, activeFileName?: string): boolean {
-  return (
-    hasWordMention(userMessage, 'file') ||
-    hasWordMention(userMessage, 'monaco') ||
-    fileNameMentionedInMessage(userMessage, activeFileName)
-  );
 }
 
 /** Path-like id for lightweight injection (no buffer), similar to Cursor open-file metadata. */
@@ -360,7 +363,10 @@ function readFileAsText(file: File): Promise<string> {
   });
 }
 
-/** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
+/**
+ * Append @-mention snippets, always-on open-file buffer + tool routing when a file is open,
+ * and optional R2/D1 context. @ tokens still gate @monaco list and @r2 bucket lists.
+ */
 async function buildMentionContext(
   userMessage: string,
   opts: {
@@ -376,7 +382,6 @@ async function buildMentionContext(
   const { activeFileName, activeFileContent, activeFile, editorCursorLine, editorCursorColumn, attachContextFiles } =
     opts;
   const parts: string[] = [];
-  const wantsEditorCtx = messageRequestsEditorContext(userMessage, activeFileName);
   const injectFileSnippet =
     (hasWordMention(userMessage, 'file') || fileNameMentionedInMessage(userMessage, activeFileName)) &&
     activeFileContent != null &&
@@ -404,7 +409,7 @@ async function buildMentionContext(
     );
   }
 
-  if (wantsEditorCtx) {
+  if (activeFile) {
     parts.push(formatAgentToolRouting(activeFile));
   }
 
@@ -455,7 +460,11 @@ async function buildMentionContext(
     );
   }
 
-  if (activeFile) {
+  if (activeFile && activeFileContent != null && activeFileContent !== '' && !injectFileSnippet) {
+    parts.push(
+      `### Open file (editor)\n${activeFileName || activeFile.name || 'untitled'}\n\n${activeFileContent.slice(0, MENTION_FILE_MAX_CHARS)}`
+    );
+  } else if (activeFile && !injectFileSnippet) {
     const path = getEditorDisplayPath(activeFile, activeFileName);
     const n =
       activeFileContent != null && activeFileContent !== '' ? activeFileContent.split('\n').length : 0;
@@ -482,7 +491,7 @@ function formatAgentToolRouting(activeFile: ActiveFile | null | undefined): stri
   if (activeFile.r2Key) {
     const b = activeFile.r2Bucket || 'DASHBOARD';
     lines.push(
-      `- R2: r2_read({ bucket: "${b}", key: "${activeFile.r2Key}" }) before large edits; r2_write({ bucket: "${b}", key: "${activeFile.r2Key}", body: <full file text>, content_type: as appropriate e.g. application/javascript, text/html }). Bucket may be DASHBOARD (agent-sam) or logical names like agent-sam — both resolve. After r2_write the dashboard reloads this key.`
+      `- R2: r2_read({ bucket: "${b}", key: "${activeFile.r2Key}" }) before large edits; r2_write({ bucket: "${b}", key: "${activeFile.r2Key}", body: <full file text>, content_type: as appropriate e.g. application/javascript, text/html }). To delete this object: r2_delete({ bucket: "${b}", key: "${activeFile.r2Key}" }) — destructive; ask mode may require user approval before execution. Bucket may be DASHBOARD (agent-sam) or logical names like agent-sam — both resolve. After r2_write the dashboard reloads this key.`
     );
   }
   if (activeFile.githubRepo && activeFile.githubPath) {
@@ -556,6 +565,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [isModeOpen, setIsModeOpen] = useState(false);
 
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
+  const totalStagedBytes = useMemo(
+    () => attachments.reduce((sum, a) => sum + (a.file.size || 0), 0),
+    [attachments]
+  );
   const [composerDragging, setComposerDragging] = useState(false);
   const composerDragDepthRef = useRef(0);
   const [conversationId, setConversationId] = useState<string>(() =>
@@ -802,10 +815,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     });
   };
 
+  /** Clears the composer only. Do not revoke blob URLs here — after send they are kept on the user message (`attachmentPreviews`) for history thumbnails. */
   const clearAttachments = () => {
-    attachments.forEach((a) => {
-      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-    });
     setAttachments([]);
   };
 
@@ -919,11 +930,25 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     const text = input.trim();
     if ((!text && attachments.length === 0) || isLoading || !selectedModelKey) return;
 
+    if (totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES) return;
+
     const userMessage = text || '(attachment)';
     setPendingToolApproval(null);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
+    const attachmentPreviews: MessageAttachmentPreview[] = attachments.map((a) => ({
+      previewUrl: a.previewUrl,
+      type: a.type,
+      name: a.file.name,
+    }));
+    const newMessages: Message[] = [
+      ...messages,
+      {
+        role: 'user',
+        content: userMessage,
+        ...(attachmentPreviews.length ? { attachmentPreviews } : {}),
+      },
+    ];
     setMessages(newMessages);
     setIsLoading(true);
     setMentionOpen(false);
@@ -1256,7 +1281,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   };
 
   const canSend =
-    !!selectedModelKey && (input.trim().length > 0 || attachments.length > 0) && !isLoading;
+    !!selectedModelKey &&
+    (input.trim().length > 0 || attachments.length > 0) &&
+    !isLoading &&
+    totalStagedBytes <= CHAT_ATTACH_MAX_TOTAL_BYTES;
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen && mentionItems.length) {
@@ -1348,6 +1376,27 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                       : 'text-[var(--text-main)] w-full'
                   }`}
                 >
+                  {msg.role === 'user' && msg.attachmentPreviews && msg.attachmentPreviews.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {msg.attachmentPreviews.map((ap, j) =>
+                        ap.type === 'image' && ap.previewUrl ? (
+                          <img
+                            key={j}
+                            src={ap.previewUrl}
+                            alt=""
+                            className="max-h-40 max-w-full rounded-lg border border-[#1e3e4a] object-contain"
+                          />
+                        ) : (
+                          <span
+                            key={j}
+                            className="text-[11px] text-[var(--text-muted)] px-2 py-1 rounded border border-[#1e3e4a]/60"
+                          >
+                            {ap.name}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  ) : null}
                   {renderMessageContent(msg.content, i)}
                 </div>
               </div>
@@ -1407,43 +1456,59 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </div>
           )}
           {attachments.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto pb-1 chat-hide-scroll">
-              {attachments.map((a) => (
-                <div
-                  key={a.id}
-                  className="relative flex-shrink-0 flex items-center gap-2 bg-[#060e14] border border-[#1e3e4a] rounded-lg pl-1 pr-7 py-1"
-                >
-                  {a.type === 'image' && a.previewUrl ? (
-                    <img
-                      src={a.previewUrl}
-                      alt=""
-                      className="w-12 h-12 rounded-md object-cover"
-                      style={{ width: 48, height: 48, borderRadius: 6 }}
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-md bg-[#0a2d38] flex items-center justify-center border border-[#1e3e4a]">
-                      <FileText size={18} className="text-[var(--text-muted)]" />
-                    </div>
-                  )}
-                  {a.type === 'file' && (
-                    <div className="min-w-0 max-w-[140px]">
-                      <div className="text-[10px] font-mono text-[var(--text-main)] truncate">
-                        {a.file.name.length > 24 ? `${a.file.name.slice(0, 21)}...` : a.file.name}
-                      </div>
-                      <div className="text-[9px] text-[var(--text-muted)]">{formatFileSize(a.file.size)}</div>
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    aria-label="Remove attachment"
-                    className="absolute top-0.5 right-0.5 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] hover:bg-white/5"
-                    onClick={() => removeAttachment(a.id)}
+            <>
+              <div className="flex gap-2 overflow-x-auto pb-1 chat-hide-scroll">
+                {attachments.map((a) => (
+                  <div
+                    key={a.id}
+                    className="relative flex-shrink-0 flex items-center gap-2 bg-[#060e14] border border-[#1e3e4a] rounded-lg pl-1 pr-7 py-1"
                   >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
+                    {a.type === 'image' && a.previewUrl ? (
+                      <img
+                        src={a.previewUrl}
+                        alt=""
+                        className="w-12 h-12 rounded-md object-cover"
+                        style={{ width: 48, height: 48, borderRadius: 6 }}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-[#0a2d38] flex items-center justify-center border border-[#1e3e4a]">
+                        <FileText size={18} className="text-[var(--text-muted)]" />
+                      </div>
+                    )}
+                    {a.type === 'file' && (
+                      <div className="min-w-0 max-w-[140px]">
+                        <div className="text-[10px] font-mono text-[var(--text-main)] truncate">
+                          {a.file.name.length > 24 ? `${a.file.name.slice(0, 21)}...` : a.file.name}
+                        </div>
+                        <div className="text-[9px] text-[var(--text-muted)]">{formatFileSize(a.file.size)}</div>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Remove attachment"
+                      className="absolute top-0.5 right-0.5 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] hover:bg-white/5"
+                      onClick={() => removeAttachment(a.id)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-mono px-0.5 -mt-0.5 pb-0.5">
+                <span
+                  className={
+                    totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES ? 'text-[var(--solar-red)]' : 'text-[var(--text-muted)]'
+                  }
+                >
+                  Total: {(totalStagedBytes / (1024 * 1024)).toFixed(2)} MB / {(CHAT_REQUEST_MAX_BYTES / (1024 * 1024)).toFixed(0)} MB
+                </span>
+                {totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES ? (
+                  <span className="text-[var(--solar-red)]">
+                    Over {(CHAT_ATTACH_MAX_TOTAL_BYTES / (1024 * 1024)).toFixed(0)} MB combined — remove files before send
+                  </span>
+                ) : null}
+              </div>
+            </>
           )}
 
           <input

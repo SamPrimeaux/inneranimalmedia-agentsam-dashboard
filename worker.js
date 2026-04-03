@@ -6356,6 +6356,40 @@ async function failAgentsamAgentRun(env, runId, conversationId, errorMessage) {
   }
 }
 
+/** After agentsam_get_agent: complete or fail agentsam_agent_run row linked by idempotency_key = Cursor agent id. */
+async function maybeSyncAgentsamAgentRunFromCursorGet(env, apiBody, cursorAgentId) {
+  if (!env?.DB || !cursorAgentId) return;
+  const root = apiBody.result && typeof apiBody.result === 'object' ? apiBody.result : apiBody;
+  const st = String(root.status ?? '').trim().toUpperCase();
+  if (st !== 'FINISHED' && st !== 'FAILED') return;
+  let row;
+  try {
+    row = await env.DB.prepare(
+      `SELECT id FROM agentsam_agent_run WHERE idempotency_key = ? AND trigger = 'cursor_agent' ORDER BY created_at DESC LIMIT 1`
+    )
+      .bind(String(cursorAgentId))
+      .first();
+  } catch (e) {
+    console.warn('[agentsam_agent_run] cursor_get lookup', e?.message ?? e);
+    return;
+  }
+  if (!row?.id) return;
+  const u = root.usage && typeof root.usage === 'object' ? root.usage : {};
+  const inTok = Math.floor(
+    Number(root.inputTokens ?? root.input_tokens ?? u.input_tokens ?? u.prompt_tokens ?? 0) || 0,
+  );
+  const outTok = Math.floor(
+    Number(root.outputTokens ?? root.output_tokens ?? u.output_tokens ?? u.completion_tokens ?? 0) || 0,
+  );
+  const costUsd = Number(root.costUsd ?? root.cost_usd ?? root.estimatedCostUsd ?? root.estimated_cost_usd ?? 0) || 0;
+  if (st === 'FINISHED') {
+    await completeAgentsamAgentRun(env, row.id, null, inTok, outTok, costUsd);
+  } else {
+    const errMsg = String(root.error?.message ?? root.error ?? root.message ?? 'FAILED').slice(0, 8000);
+    await failAgentsamAgentRun(env, row.id, null, errMsg);
+  }
+}
+
 async function resolveAgentAiIdForChat(env, agentParam) {
   if (!env?.DB) return null;
   try {
@@ -6691,6 +6725,13 @@ async function insertAiGenerationLog(env, opts) {
     quizId = null,
     explicitId = null,
     insertOrIgnore = false,
+    inputTokens = null,
+    outputTokens = null,
+    computedCostUsd = null,
+    llmProvider = null,
+    logConversationId = null,
+    codeLanguage = null,
+    codeCharCount = null,
   } = opts;
   const tenantId =
     (rawTenantId != null && String(rawTenantId).trim()) ||
@@ -6726,17 +6767,27 @@ async function insertAiGenerationLog(env, opts) {
               return null;
             }
           })();
+  const inTok = inputTokens != null ? Math.floor(Number(inputTokens) || 0) : null;
+  const outTok = outputTokens != null ? Math.floor(Number(outputTokens) || 0) : null;
+  const costUsdCol = computedCostUsd != null ? Number(computedCostUsd) : null;
+  const provCol = llmProvider != null && String(llmProvider).trim() ? String(llmProvider).trim() : null;
+  const convCol = logConversationId != null && String(logConversationId).trim() ? String(logConversationId).trim() : null;
+  const langCol = codeLanguage != null && String(codeLanguage).trim() ? String(codeLanguage).trim().slice(0, 64) : null;
+  const codeChars = codeCharCount != null ? Math.floor(Number(codeCharCount) || 0) : null;
+
   const insertSql = insertOrIgnore
     ? `INSERT OR IGNORE INTO ai_generation_logs (
         id, course_id, lesson_id, quiz_id, generation_type, prompt, model, response_text,
         tokens_used, cost_cents, quality_score, status, created_by, created_at, completed_at, tenant_id,
-        metadata_json, source_kind, workspace_id, related_ids_json
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        metadata_json, source_kind, workspace_id, related_ids_json,
+        input_tokens, output_tokens, computed_cost_usd, provider, conversation_id, code_language, code_char_count
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     : `INSERT INTO ai_generation_logs (
         id, course_id, lesson_id, quiz_id, generation_type, prompt, model, response_text,
         tokens_used, cost_cents, quality_score, status, created_by, created_at, completed_at, tenant_id,
-        metadata_json, source_kind, workspace_id, related_ids_json
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+        metadata_json, source_kind, workspace_id, related_ids_json,
+        input_tokens, output_tokens, computed_cost_usd, provider, conversation_id, code_language, code_char_count
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
   try {
     await env.DB.prepare(insertSql)
       .bind(
@@ -6759,7 +6810,14 @@ async function insertAiGenerationLog(env, opts) {
         meta,
         sourceKind,
         workspaceId,
-        rel
+        rel,
+        inTok,
+        outTok,
+        costUsdCol,
+        provCol,
+        convCol,
+        langCol,
+        codeChars
       )
       .run();
   } catch (e) {
@@ -6802,7 +6860,7 @@ async function maybePersistCursorCloudAgentFinished(env, apiBody, agentId) {
       `INSERT OR IGNORE INTO agentsam_executions (id, task_id, subagent_id, execution_type, command, output, created_at)
        VALUES (?,?,?,?,?,?,unixepoch())`
     )
-      .bind(execId, agentId, null, 'cursor_cloud_agent', 'cursor_get_agent', out)
+      .bind(execId, agentId, null, 'cursor_cloud_agent', 'agentsam_get_agent', out)
       .run();
   } catch (e) {
     console.warn('[maybePersistCursorCloudAgentFinished] agentsam_executions', e?.message ?? e);
@@ -6862,27 +6920,50 @@ async function persistGeminiPartInlineImage(env, part, modelKey, conversationId)
 }
 
 /** First fenced code block in assistant text (OpenAI / Google / Anthropic / Workers AI chat). */
-async function logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider }) {
+async function logAssistantCodeArtifactIfPresent(env, {
+  fullText,
+  modelKey,
+  conversationId,
+  provider,
+  inputTokens = 0,
+  outputTokens = 0,
+  computedCostUsd = 0,
+}) {
   if (!env?.DB || typeof fullText !== 'string') return;
-  const re = /```(\w*)\s*([^\n]*)\n([\s\S]*?)```/;
+  const re = /```([^\n`]*?)\s*\n([\s\S]*?)```/;
   const m = fullText.match(re);
   if (!m) return;
-  const code = (m[3] || '').trim();
+  const fenceFirst = (m[1] || '').trim();
+  let codeLanguage = 'text';
+  if (fenceFirst) {
+    const langPart = fenceFirst.split(/\s+/)[0] || '';
+    codeLanguage = (langPart.replace(/[^a-zA-Z0-9.#+\-_]/g, '') || 'text').slice(0, 64) || 'text';
+  }
+  const code = (m[2] || '').trim();
   if (code.length < 40) return;
-  const language = (m[1] || '').trim() || 'text';
-  const rawFilename = (m[2] || '').trim().replace(/^(\/\/|#|\/\*)\s*/, '');
+  const codeCharCount = code.length;
+  const rawFilename = fenceFirst.includes(' ')
+    ? fenceFirst.slice(fenceFirst.indexOf(' ') + 1).trim().replace(/^(\/\/|#|\/\*)\s*/, '')
+    : '';
   await insertAiGenerationLog(env, {
     generationType: 'assistant_code_block',
     model: modelKey,
-    responseText: `code:${language}:${code.length}c`,
+    responseText: `code:${codeLanguage}:${codeCharCount}c`,
     metadataJson: {
       provider: provider || 'unknown',
-      language,
+      language: codeLanguage,
       filename_hint: rawFilename.slice(0, 120),
-      code_length: code.length,
+      code_length: codeCharCount,
       conversation_id: conversationId || null,
     },
     relatedIdsJson: conversationId ? [conversationId] : null,
+    inputTokens: Math.floor(Number(inputTokens) || 0),
+    outputTokens: Math.floor(Number(outputTokens) || 0),
+    computedCostUsd: Number(computedCostUsd) || 0,
+    llmProvider: provider || null,
+    logConversationId: conversationId || null,
+    codeLanguage,
+    codeCharCount,
   });
 }
 
@@ -7403,7 +7484,7 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
   }
   if (mode === 'agent') {
-    const agentToolNames = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
+    const agentToolNames = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'agentsam_run_agent', 'agentsam_get_agent', 'agentsam_list_agents', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
     return toolDefinitions.filter((t) => t && agentToolNames.has(t.name));
   }
   return toolDefinitions.slice(0, 20);
@@ -7489,8 +7570,8 @@ const INTENT_KEYWORD_GROUPS_FALLBACK = [
     tools: ['excalidraw_open', 'excalidraw_add_elements', 'excalidraw_clear', 'excalidraw_export', 'excalidraw_load_library'] },
   { keys: ['convert', 'pdf', 'docx', 'cloudconvert'],
     tools: ['cloudconvert_create_job', 'cloudconvert_get_job'] },
-  { keys: ['cursor', 'coding task', 'cursor agent'],
-    tools: ['cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents'] },
+  { keys: ['autonomous coding', 'spawn agent', 'run agent', 'agentsam agent', 'coding task', 'background task'],
+    tools: ['agentsam_run_agent', 'agentsam_get_agent', 'agentsam_list_agents'] },
   { keys: ['workspace', 'codebase', 'grep', 'find file', 'repo file', 'local file'],
     tools: ['workspace_read_file', 'workspace_list_files', 'workspace_search', 'terminal_execute'] },
   { keys: ['google drive', 'gdrive', 'drive doc'],
@@ -8943,13 +9024,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             });
           }
         }
-      } else if (toolName === 'cursor_run_agent') {
+      } else if (toolName === 'agentsam_run_agent') {
         resultText = JSON.stringify({
           error: 'Tool requires approval. Approve in the UI or call /api/agent/chat/execute-approved-tool with the same tool_name and params.',
         });
-      } else if (toolName === 'cursor_get_agent' || toolName === 'cursor_list_agents') {
+      } else if (toolName === 'agentsam_get_agent' || toolName === 'agentsam_list_agents') {
         try {
-          const out = await runCursorCloudAgentBuiltinTool(env, toolName, params || {});
+          const out = await runCursorCloudAgentBuiltinTool(env, toolName, params || {}, {
+            oauthUserId: null,
+            conversationId: params?.conversation_id ?? null,
+          });
           resultText = JSON.stringify(out);
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
@@ -8969,22 +9053,24 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
       } else if (toolName === 'r2_write') {
-        const key = params.key || params.path;
+        let key = params.key || params.path;
         if (!key) { resultText = 'r2_write: key required'; }
         else {
           const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
           if (!bucket) { resultText = `r2_write: bucket ${params.bucket} not available`; }
           else {
+            key = normalizeSandboxWriteKeyForAssets(bucketName, key);
             const ct = params.content_type || params.contentType || 'text/plain';
             await bucket.put(key, params.body ?? '', { httpMetadata: { contentType: ct } });
-            const publicUrl =
-              bucketName === 'DOCS_BUCKET' ? `https://docs.inneranimalmedia.com/${key}` :
-                bucketName === 'AUTORAG_BUCKET' ? `https://autorag.inneranimalmedia.com/${key}` : null;
+            const publicUrl = await buildR2PublicHttpsUrl(env, bucketName, key);
             const kl = String(key).toLowerCase();
             const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
+            let browserNavUrl = null;
+            if (bucketName === 'ASSETS' && publicUrl) browserNavUrl = publicUrl;
+            else if (isHtml) browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
             const uiEvents = [
               { type: 'r2_file_updated', bucket: bucketName, key },
-              ...(isHtml ? [{ type: 'browser_navigate', url: `https://tools.inneranimalmedia.com/${key}` }] : []),
+              ...(browserNavUrl ? [{ type: 'browser_navigate', url: browserNavUrl }] : []),
             ];
             resultText = JSON.stringify({
               ok: true,
@@ -8993,7 +9079,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
               public_url: publicUrl,
               broadcast: true,
               ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
-              ...(isHtml ? { ui_events: uiEvents } : {}),
+              ...(browserNavUrl ? { ui_events: uiEvents } : {}),
             });
           }
         }
@@ -9823,7 +9909,15 @@ async function streamOpenAIResponses(env, systemWithBlurb, apiMessages, modelRow
       }
       const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
-      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider: 'openai' });
+      await logAssistantCodeArtifactIfPresent(env, {
+        fullText,
+        modelKey,
+        conversationId,
+        provider: 'openai',
+        inputTokens,
+        outputTokens,
+        computedCostUsd: costUsd,
+      });
       controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelKey })}\n\n`));
       controller.close();
     },
@@ -9910,7 +10004,15 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
         }
         const costUsd = calculateCost(modelRow, inputTokens, outputTokens);
         await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
-        await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey, conversationId, provider: 'openai' });
+        await logAssistantCodeArtifactIfPresent(env, {
+          fullText,
+          modelKey,
+          conversationId,
+          provider: 'openai',
+          inputTokens,
+          outputTokens,
+          computedCostUsd: costUsd,
+        });
         emitCodeBlocksFromText(fullText, (obj) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(obj) + '\n\n')));
         controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: modelRow.model_key, model_display_name: modelRow.display_name })}\n\n`));
       } catch (e) {
@@ -9924,19 +10026,20 @@ async function streamOpenAI(env, systemWithBlurb, apiMessages, modelRow, images,
   return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
-/** Default GitHub repo for Cursor Cloud Agents when `repo` / `repository` is omitted (tool cursor_run_agent). */
+/** Default GitHub repo for Cursor Cloud Agents when `repo` / `repository` is omitted (tool name: agentsam_run_agent; display: agentsam_run_agent). */
 const CURSOR_CLOUD_AGENTS_DEFAULT_REPO = 'https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard';
 
 /**
  * Builtin MCP: Cursor Cloud Agents API (async coding agents).
  * https://cursor.com/docs/cloud-agent/api/endpoints — Basic auth: btoa(CURSOR_API_KEY + ':').
+ * opts.oauthUserId / opts.conversationId: persist agentsam_agent_run (queued → running → completed via agentsam_get_agent).
  */
-async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
+async function runCursorCloudAgentBuiltinTool(env, toolName, params, opts = {}) {
   const key = env.CURSOR_API_KEY;
   if (!key) return { error: 'CURSOR_API_KEY not configured' };
   const auth = `Basic ${btoa(`${key}:`)}`;
 
-  if (toolName === 'cursor_list_agents') {
+  if (toolName === 'agentsam_list_agents') {
     const limit = Math.min(Math.max(1, Number(params?.limit) || 10), 100);
     const res = await fetch(`https://api.cursor.com/v0/agents?limit=${limit}`, {
       method: 'GET',
@@ -9951,7 +10054,7 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
     return data;
   }
 
-  if (toolName === 'cursor_get_agent') {
+  if (toolName === 'agentsam_get_agent') {
     const agentId = String(params?.agent_id ?? params?.id ?? '').trim();
     if (!agentId) return { error: 'agent_id required' };
     const res = await fetch(`https://api.cursor.com/v0/agents/${encodeURIComponent(agentId)}`, {
@@ -9965,15 +10068,35 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
       return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
     }
     await maybePersistCursorCloudAgentFinished(env, data, agentId);
+    await maybeSyncAgentsamAgentRunFromCursorGet(env, data, agentId);
     return data;
   }
 
-  if (toolName === 'cursor_run_agent') {
+  if (toolName === 'agentsam_run_agent') {
     const prompt = String(params?.prompt ?? '').trim();
     if (!prompt) return { error: 'prompt required' };
     const model = String(params?.model ?? 'claude-4.6-opus-high-thinking').trim();
     const repository = String(params?.repo ?? params?.repository ?? CURSOR_CLOUD_AGENTS_DEFAULT_REPO).trim();
     const ref = String(params?.ref ?? 'main').trim();
+    const oauthUserId = String(opts.oauthUserId || params?.user_id || '').trim() || null;
+    const conversationId = opts.conversationId != null && String(opts.conversationId).trim() !== '' ? String(opts.conversationId).trim() : null;
+    let agentAiId = null;
+    try {
+      agentAiId = await resolveAgentAiIdForChat(env, params?.agent_id || params?.agent_ai_id || null);
+    } catch (_) {}
+    const runId = crypto.randomUUID();
+    if (env.DB && oauthUserId) {
+      try {
+        await env.DB.prepare(
+          `INSERT INTO agentsam_agent_run (id, user_id, workspace_id, conversation_id, status, trigger, model_id, started_at, created_at, agent_ai_id)
+           VALUES (?, ?, ?, ?, 'queued', 'cursor_agent', ?, datetime('now'), datetime('now'), ?)`
+        )
+          .bind(runId, oauthUserId, tenantIdFromEnv(env) || null, conversationId, model, agentAiId)
+          .run();
+      } catch (e) {
+        console.warn('[agentsam_agent_run] cursor spawn insert', e?.message ?? e);
+      }
+    }
     const body = {
       model,
       prompt: { text: prompt.slice(0, 100000) },
@@ -9991,9 +10114,26 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const msg = data?.error?.message || data?.message || data?.error || `Cursor API ${res.status}`;
-      return { error: typeof msg === 'string' ? msg : JSON.stringify(msg), detail: data };
+      const errStr = typeof msg === 'string' ? msg : JSON.stringify(msg);
+      if (env.DB && oauthUserId) {
+        await failAgentsamAgentRun(env, runId, conversationId, errStr);
+      }
+      return { error: errStr, detail: data };
+    }
+    const cursorAgentId = data.id != null ? String(data.id) : '';
+    if (cursorAgentId && env.DB && oauthUserId) {
+      try {
+        await env.DB.prepare(
+          `UPDATE agentsam_agent_run SET idempotency_key = ?, status = 'running' WHERE id = ?`
+        )
+          .bind(cursorAgentId, runId)
+          .run();
+      } catch (e) {
+        console.warn('[agentsam_agent_run] cursor spawn link', e?.message ?? e);
+      }
     }
     return {
+      agentsam_run_id: runId,
       agent_id: data.id,
       status: data.status,
       branch: data.target?.branchName,
@@ -10002,7 +10142,7 @@ async function runCursorCloudAgentBuiltinTool(env, toolName, params) {
       target: data.target,
       source: data.source,
       name: data.name,
-      poll_hint: 'Poll cursor_get_agent with agent_id until status is FINISHED or FAILED; check target.prUrl for PR.',
+      poll_hint: 'Poll agentsam_get_agent with agent_id until status is FINISHED or FAILED; check target.prUrl for PR.',
     };
   }
 
@@ -10107,22 +10247,23 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       {
         name: 'preview_in_browser',
         description:
-          'Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show the user a live preview.',
+          'Open a URL in the dashboard browser tab. Pass url directly, or r2Key with optional bucket (default ASSETS for sandbox preview). Public ASSETS URLs use agent_configs slug r2_public_urls.',
         parameters: {
           type: 'object',
           properties: {
             url: { type: 'string', description: 'Full https URL to open in the embedded browser' },
-            r2Key: { type: 'string', description: 'R2 object key; builds https://tools.inneranimalmedia.com/{r2Key}' },
+            r2Key: { type: 'string', description: 'R2 object key; combined with bucket to build public URL' },
+            bucket: { type: 'string', description: 'Binding or logical name: ASSETS (default), DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd' },
           },
         },
       },
       {
         name: 'get_r2_url',
-        description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key).',
+        description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key). ASSETS uses agent_configs slug r2_public_urls.',
         parameters: {
           type: 'object',
           properties: {
-            bucket: { type: 'string', description: 'Binding: DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET' },
+            bucket: { type: 'string', description: 'Binding: ASSETS, DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd (default DASHBOARD)' },
             key: { type: 'string', description: 'Object key path' },
           },
           required: ['key'],
@@ -10185,6 +10326,9 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
     r2_write: 'file',
     preview_in_browser: 'browser',
     get_r2_url: 'file',
+    agentsam_run_agent: 'agentsam_run_agent',
+    agentsam_get_agent: 'agentsam_get_agent',
+    agentsam_list_agents: 'agentsam_list_agents',
     github_fetch: 'GitHub',
     web_search: 'web',
     deploy_worker: 'deploy',
@@ -10454,7 +10598,15 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
         agentId: agent_id,
         agentRunId: agentsamAgentRunId,
       });
-      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: effectiveModelRow.model_key || modelKey, conversationId, provider: 'google' });
+      await logAssistantCodeArtifactIfPresent(env, {
+        fullText,
+        modelKey: effectiveModelRow.model_key || modelKey,
+        conversationId,
+        provider: 'google',
+        inputTokens,
+        outputTokens,
+        computedCostUsd: costUsd,
+      });
       await writer.write(enc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name })}
 
 `));
@@ -10596,7 +10748,15 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
       }
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
       await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
-      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: effectiveModelRow.model_key, conversationId, provider: 'google' });
+      await logAssistantCodeArtifactIfPresent(env, {
+        fullText,
+        modelKey: effectiveModelRow.model_key,
+        conversationId,
+        provider: 'google',
+        inputTokens,
+        outputTokens,
+        computedCostUsd: costUsd,
+      });
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: effectiveModelRow.model_key, model_display_name: effectiveModelRow.display_name }) + '\n\n'));
     } catch (e) {
       await writer.write(enc.encode('data: ' + JSON.stringify({ type: 'error', error: e?.message ?? String(e) }) + '\n\n'));
@@ -10660,7 +10820,15 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       const safeRow   = { ...(modelRow || {}), model_key: safeModel, provider: (modelRow && modelRow.provider != null) ? modelRow.provider : 'workers_ai' };
 
       await streamDoneDbWrites(env, conversationId, safeRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts);
-      await logAssistantCodeArtifactIfPresent(env, { fullText, modelKey: safeRow.model_key, conversationId, provider: 'cloudflare_workers_ai' });
+      await logAssistantCodeArtifactIfPresent(env, {
+        fullText,
+        modelKey: safeRow.model_key,
+        conversationId,
+        provider: 'cloudflare_workers_ai',
+        inputTokens,
+        outputTokens,
+        computedCostUsd: costUsd,
+      });
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
@@ -10675,7 +10843,8 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
 
 /** Direct upstream SSE passthrough for /api/agent/chat with tee-based telemetry. */
 
-const CHAT_ATTACH_MAX_FILES = 5;
+/** Combined multipart file parts; stay under 100MB Worker request body cap. */
+const CHAT_ATTACH_MAX_TOTAL_BYTES = 90 * 1024 * 1024;
 const CHAT_ATTACH_MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const CHAT_ATTACH_MAX_TEXT_CHARS = 100 * 1024;
 const CHAT_TEXT_CODE_EXT = new Set(['js', 'ts', 'tsx', 'jsx', 'css', 'html', 'htm', 'sql', 'md', 'json', 'py', 'sh']);
@@ -10723,8 +10892,16 @@ async function parseMultipartChatFiles(fd) {
   const out = { vision: [], textFiles: [], binaryNotes: [] };
   const raw = fd.getAll('files');
   const files = raw.filter((v) => v && typeof v === 'object' && typeof v.arrayBuffer === 'function');
-  const take = files.slice(0, CHAT_ATTACH_MAX_FILES);
-  for (const file of take) {
+  let totalBytes = 0;
+  for (const f of files) {
+    if (typeof f.size === 'number' && f.size >= 0) totalBytes += f.size;
+  }
+  if (totalBytes > CHAT_ATTACH_MAX_TOTAL_BYTES) {
+    throw new Error(
+      `Combined attachments (${(totalBytes / (1024 * 1024)).toFixed(2)} MB) exceed the ${CHAT_ATTACH_MAX_TOTAL_BYTES / (1024 * 1024)} MB limit. Stay under 90 MB to fit within the 100 MB request body cap.`
+    );
+  }
+  for (const file of files) {
     const name = (file.name || 'file').trim() || 'file';
     const mime = (file.type || '').toLowerCase();
     let buf;
@@ -11120,9 +11297,9 @@ ${commandsBlock || '(none)'}
 - Excalidraw: use excalidraw_open → excalidraw_load_library → excalidraw_add_elements
 - Terminal: use terminal_execute for shell commands
 - Browser: use cdt_navigate_page → cdt_take_screenshot for browser control. No Playwright needed — cdt_* tools are your browser.
-- Cursor Cloud Agents: use cursor_run_agent to spawn async coding agents on a branch
-- **preview_in_browser**: Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show the user a live preview.
-- **get_r2_url**: Return the public HTTPS URL for an R2 key (params bucket + key).`;
+- Cursor Cloud Agents: use agentsam_run_agent (UI label: agentsam_run_agent) to spawn async coding agents on a branch; runs are logged to agentsam_agent_run
+- **preview_in_browser**: Open a URL in the dashboard browser tab. Pass url directly, or pass r2Key plus optional bucket (default ASSETS). Public ASSETS URLs come from agent_configs slug r2_public_urls (not hardcoded).
+- **get_r2_url**: Return the public HTTPS URL for an R2 key (bucket + key). ASSETS / agent-sam-sandbox-cicd use the same public base from agent_configs slug r2_public_urls.`;
 
     const partsSys = [];
     if (personaPrefixSse && String(personaPrefixSse).trim()) partsSys.push(String(personaPrefixSse).trim());
@@ -11736,11 +11913,11 @@ function canonicalNameForAgentR2Binding(env, binding) {
   return 'R2';
 }
 
-/** Default read = iam-platform (R2); default write = DASHBOARD (agent-sam). Accepts logical names e.g. agent-sam. */
+/** Default read = iam-platform (R2); default write = ASSETS (sandbox preview) when bound, else agent-sam. Accepts logical names e.g. agent-sam. */
 function resolveAgentR2BucketBinding(env, bucketRaw, defaultKind) {
   const empty = () =>
     defaultKind === 'write'
-      ? { binding: env.DASHBOARD, name: 'DASHBOARD' }
+      ? (env.ASSETS ? { binding: env.ASSETS, name: 'ASSETS' } : { binding: env.DASHBOARD, name: 'DASHBOARD' })
       : { binding: env.R2, name: 'R2' };
   if (bucketRaw == null || String(bucketRaw).trim() === '') return empty();
   const lower = String(bucketRaw).trim().toLowerCase().replace(/_/g, '-');
@@ -11755,6 +11932,74 @@ function resolveAgentR2BucketBinding(env, bucketRaw, defaultKind) {
   if (bn === 'AUTORAG_BUCKET' && env.AUTORAG_BUCKET) return { binding: env.AUTORAG_BUCKET, name: 'AUTORAG_BUCKET' };
   if (bn === 'R2' && env.R2) return { binding: env.R2, name: 'R2' };
   return { binding: null, name: bn };
+}
+
+/** config_json from agent_configs WHERE slug = r2_public_urls (see pickAssetsPublicBaseFromConfig). */
+let r2PublicUrlsCache = { at: 0, ttlMs: 120000, map: null };
+
+async function loadR2PublicUrlsFromDb(env) {
+  const now = Date.now();
+  if (r2PublicUrlsCache.map != null && now - r2PublicUrlsCache.at < r2PublicUrlsCache.ttlMs) {
+    return r2PublicUrlsCache.map;
+  }
+  let map = null;
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare('SELECT config_json FROM agent_configs WHERE slug = ? LIMIT 1').bind('r2_public_urls').first();
+      if (row?.config_json != null) {
+        const raw = row.config_json;
+        map = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      }
+    } catch (e) {
+      console.warn('[r2_public_urls] load failed', e?.message ?? e);
+    }
+  }
+  r2PublicUrlsCache = { at: now, ttlMs: 120000, map };
+  return map;
+}
+
+function pickAssetsPublicBaseFromConfig(cfg) {
+  if (!cfg || typeof cfg !== 'object') return null;
+  const keys = ['ASSETS', 'inneranimalmedia-assets', 'agent-sam-sandbox-cicd', 'assets_public_base', 'public_base'];
+  for (const k of keys) {
+    const v = cfg[k];
+    if (typeof v === 'string' && v.trim()) return v.replace(/\/$/, '');
+  }
+  if (cfg.bases && typeof cfg.bases === 'object') {
+    for (const k of ['ASSETS', 'inneranimalmedia-assets', 'agent-sam-sandbox-cicd']) {
+      const v = cfg.bases[k];
+      if (typeof v === 'string' && v.trim()) return v.replace(/\/$/, '');
+    }
+  }
+  return null;
+}
+
+function joinPublicObjectUrl(base, key) {
+  const b = String(base).replace(/\/$/, '');
+  const k = String(key || '').replace(/^\//, '');
+  return `${b}/${k.split('/').map((seg) => encodeURIComponent(seg)).join('/')}`;
+}
+
+/** Single filename -> agent-sandbox/<name> when writing to ASSETS (inneranimalmedia-assets). */
+function normalizeSandboxWriteKeyForAssets(bucketName, key) {
+  const k = String(key || '').trim();
+  if (!k || bucketName !== 'ASSETS') return k;
+  if (k.includes('/') || k.startsWith('agent-sandbox/')) return k;
+  return `agent-sandbox/${k}`;
+}
+
+/** HTTPS URL for public preview / linking; ASSETS uses D1 agent_configs slug r2_public_urls. */
+async function buildR2PublicHttpsUrl(env, bucketName, key) {
+  if (!key) return null;
+  if (bucketName === 'DOCS_BUCKET') return `https://docs.inneranimalmedia.com/${key}`;
+  if (bucketName === 'AUTORAG_BUCKET') return `https://autorag.inneranimalmedia.com/${key}`;
+  if (bucketName === 'DASHBOARD' || bucketName === 'TOOLS') return `https://tools.inneranimalmedia.com/${key}`;
+  if (bucketName === 'ASSETS') {
+    const cfg = await loadR2PublicUrlsFromDb(env);
+    const base = pickAssetsPublicBaseFromConfig(cfg);
+    return base ? joinPublicObjectUrl(base, key) : null;
+  }
+  return null;
 }
 
 /** IAM Explorer /api/r2/file: allowlisted binding names only (no env.TOOLS). */
@@ -18833,7 +19078,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
 
   // r2_write + r2_search + r2_bucket_summary
   if (tool_name === 'r2_write') {
-    const key = params.key ?? params.path ?? '';
+    let key = params.key ?? params.path ?? '';
     const body = params.body;
     if (!key) {
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'r2_write: key required', serviceName: 'builtin' });
@@ -18842,16 +19087,18 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     try {
       const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
       if (!bucket) return { error: `r2_write: bucket ${params.bucket} not available` };
+      key = normalizeSandboxWriteKeyForAssets(bucketName, key);
       const ct = params.content_type || params.contentType || 'text/plain; charset=utf-8';
       await bucket.put(key, body ?? '', { httpMetadata: { contentType: ct } });
-      const publicUrl =
-        bucketName === 'DOCS_BUCKET' ? `https://docs.inneranimalmedia.com/${key}` :
-          bucketName === 'AUTORAG_BUCKET' ? `https://autorag.inneranimalmedia.com/${key}` : null;
+      const publicUrl = await buildR2PublicHttpsUrl(env, bucketName, key);
       const kl = String(key).toLowerCase();
       const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
+      let browserNavUrl = null;
+      if (bucketName === 'ASSETS' && publicUrl) browserNavUrl = publicUrl;
+      else if (isHtml) browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
       const ui_events = [
         { type: 'r2_file_updated', bucket: bucketName, key },
-        ...(isHtml ? [{ type: 'browser_navigate', url: `https://tools.inneranimalmedia.com/${key}` }] : []),
+        ...(browserNavUrl ? [{ type: 'browser_navigate', url: browserNavUrl }] : []),
       ];
       const payload = {
         ok: true,
@@ -18860,7 +19107,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         public_url: publicUrl,
         broadcast: true,
         ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
-        ...(isHtml ? { ui_events } : {}),
+        ...(browserNavUrl ? { ui_events } : {}),
       };
       const resultText = JSON.stringify(payload);
       let byteLen = 0;
@@ -19295,9 +19542,9 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     }
   }
 
-  const INTERNAL_CURSOR_CLOUD_TOOLS_INVOKE = ['cursor_run_agent', 'cursor_get_agent', 'cursor_list_agents'];
-  if (INTERNAL_CURSOR_CLOUD_TOOLS_INVOKE.includes(tool_name)) {
-    if (tool_name === 'cursor_run_agent' && !opts.skipApprovalCheck) {
+  const INTERNAL_AGENTSAM_CURSOR_CLOUD_TOOLS = ['agentsam_run_agent', 'agentsam_get_agent', 'agentsam_list_agents'];
+  if (INTERNAL_AGENTSAM_CURSOR_CLOUD_TOOLS.includes(tool_name)) {
+    if (tool_name === 'agentsam_run_agent' && !opts.skipApprovalCheck) {
       await rec({
         conversationId,
         toolName: tool_name,
@@ -19310,7 +19557,10 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       return { error: 'Tool requires approval' };
     }
     try {
-      const out = await runCursorCloudAgentBuiltinTool(env, tool_name, params || {});
+      const out = await runCursorCloudAgentBuiltinTool(env, tool_name, params || {}, {
+        oauthUserId: opts.oauthUserId,
+        conversationId,
+      });
       if (out && out.error) {
         await rec({
           conversationId,
@@ -19349,7 +19599,16 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
   }
 
   if (tool_name === 'preview_in_browser') {
-    const url = params.url || (params.r2Key ? `https://tools.inneranimalmedia.com/${params.r2Key}` : null);
+    let url = params.url || null;
+    if (!url && params.r2Key) {
+      const { name: bn } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
+      url = await buildR2PublicHttpsUrl(env, bn, params.r2Key);
+      if (!url) {
+        const err = `preview_in_browser: could not resolve public URL (bucket=${bn}; configure agent_configs slug r2_public_urls for ASSETS)`;
+        await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: null, error: err, serviceName: 'builtin' });
+        return { error: err };
+      }
+    }
     if (!url) {
       await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: null, error: 'url or r2Key required', serviceName: 'builtin' });
       return { error: 'url or r2Key required' };
@@ -19360,18 +19619,16 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
   }
   if (tool_name === 'get_r2_url') {
     const key = params.key ?? params.path ?? '';
-    const bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
+    const bucketInput = params.bucket != null && String(params.bucket).trim() !== '' ? params.bucket : 'DASHBOARD';
+    const { name: bucketName } = resolveAgentR2BucketBinding(env, bucketInput, 'read');
     if (!key) {
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'key required', serviceName: 'builtin' });
       return { error: 'key required' };
     }
-    let url = null;
-    if (bucketName === 'DASHBOARD' || bucketName === 'TOOLS') url = `https://tools.inneranimalmedia.com/${key}`;
-    else if (bucketName === 'DOCS_BUCKET') url = `https://docs.inneranimalmedia.com/${key}`;
-    else if (bucketName === 'AUTORAG_BUCKET') url = `https://autorag.inneranimalmedia.com/${key}`;
-    else {
-      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: `bucket ${bucketName} not supported`, serviceName: 'builtin' });
-      return { error: `get_r2_url: bucket ${bucketName} not supported` };
+    const url = await buildR2PublicHttpsUrl(env, bucketName, key);
+    if (!url) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: `get_r2_url: bucket ${bucketName} not supported or public base missing`, serviceName: 'builtin' });
+      return { error: `get_r2_url: bucket ${bucketName} not supported or public base missing`, serviceName: 'builtin' };
     }
     const payload = { ok: true, url, bucket: bucketName, key };
     await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: JSON.stringify(payload), error: null, serviceName: 'builtin' });
@@ -21624,22 +21881,23 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
         {
           name: 'preview_in_browser',
           description:
-            'Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show the user a live preview.',
+            'Open a URL in the dashboard browser tab. Pass url directly, or r2Key with optional bucket (default ASSETS for sandbox preview). Public ASSETS URLs use agent_configs slug r2_public_urls.',
           input_schema: {
             type: 'object',
             properties: {
               url: { type: 'string', description: 'Full https URL to open in the embedded browser' },
-              r2Key: { type: 'string', description: 'R2 object key; builds https://tools.inneranimalmedia.com/{r2Key}' },
+              r2Key: { type: 'string', description: 'R2 object key; combined with bucket to build public URL' },
+              bucket: { type: 'string', description: 'Binding: ASSETS (default), DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd' },
             },
           },
         },
         {
           name: 'get_r2_url',
-          description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key).',
+          description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key). ASSETS uses agent_configs slug r2_public_urls.',
           input_schema: {
             type: 'object',
             properties: {
-              bucket: { type: 'string', description: 'Binding: DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET' },
+              bucket: { type: 'string', description: 'Binding: ASSETS, DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd (default DASHBOARD)' },
               key: { type: 'string', description: 'Object key path' },
             },
             required: ['key'],
@@ -21718,6 +21976,9 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
     r2_write: 'file',
     preview_in_browser: 'browser',
     get_r2_url: 'file',
+    agentsam_run_agent: 'agentsam_run_agent',
+    agentsam_get_agent: 'agentsam_get_agent',
+    agentsam_list_agents: 'agentsam_list_agents',
     github_fetch: 'GitHub',
     web_search: 'web',
     deploy_worker: 'deploy',
@@ -21907,7 +22168,15 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
           lastUsage.cache_read_input_tokens,
           true,
         );
-        await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'openai' });
+        await logAssistantCodeArtifactIfPresent(env, {
+          fullText: lastContent,
+          modelKey: model.model_key,
+          conversationId,
+          provider: 'openai',
+          inputTokens,
+          outputTokens,
+          computedCostUsd: costUsd,
+        });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
         await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,
@@ -22095,7 +22364,15 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
           lastUsage.cache_read_input_tokens,
           true,
         );
-        await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'openai' });
+        await logAssistantCodeArtifactIfPresent(env, {
+          fullText: lastContent,
+          modelKey: model.model_key,
+          conversationId,
+          provider: 'openai',
+          inputTokens: finalInputTokens,
+          outputTokens: finalOutputTokens,
+          computedCostUsd: finalCost,
+        });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,
@@ -22248,22 +22525,23 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       const SYNTHETIC_DASHBOARD_TOOLS = [
         {
           name: 'preview_in_browser',
-          description: 'Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show a live preview.',
+          description: 'Open a URL in the dashboard browser tab. Pass url directly, or r2Key with optional bucket (default ASSETS for sandbox preview). Public ASSETS URLs use agent_configs slug r2_public_urls.',
           input_schema: {
             type: 'object',
             properties: {
               url: { type: 'string', description: 'Full https URL to open in the embedded browser' },
-              r2Key: { type: 'string', description: 'R2 object key; builds https://tools.inneranimalmedia.com/{r2Key}' },
+              r2Key: { type: 'string', description: 'R2 object key; combined with bucket to build public URL' },
+              bucket: { type: 'string', description: 'Binding: ASSETS (default), DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd' },
             },
           },
         },
         {
           name: 'get_r2_url',
-          description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key).',
+          description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key). ASSETS uses agent_configs slug r2_public_urls.',
           input_schema: {
             type: 'object',
             properties: {
-              bucket: { type: 'string', description: 'Binding: DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET' },
+              bucket: { type: 'string', description: 'Binding: ASSETS, DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET, agent-sam-sandbox-cicd (default DASHBOARD)' },
               key: { type: 'string', description: 'Object key path' },
             },
             required: ['key'],
@@ -22341,6 +22619,9 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     r2_write: 'file',
     preview_in_browser: 'browser',
     get_r2_url: 'file',
+    agentsam_run_agent: 'agentsam_run_agent',
+    agentsam_get_agent: 'agentsam_get_agent',
+    agentsam_list_agents: 'agentsam_list_agents',
     github_fetch: 'GitHub',
     web_search: 'web',
     deploy_worker: 'deploy',
@@ -22531,7 +22812,15 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         return;
       }
         await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
-      await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
+      await logAssistantCodeArtifactIfPresent(env, {
+        fullText: lastContent,
+        modelKey: model.model_key,
+        conversationId,
+        provider: 'anthropic',
+        inputTokens,
+        outputTokens,
+        computedCostUsd: costUsd,
+      });
       enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
       await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
         conversationId,
@@ -22687,7 +22976,15 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
         await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
-        await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
+        await logAssistantCodeArtifactIfPresent(env, {
+          fullText: lastContent,
+          modelKey: model.model_key,
+          conversationId,
+          provider: 'anthropic',
+          inputTokens: finalInputTokens,
+          outputTokens: finalOutputTokens,
+          computedCostUsd: finalCost,
+        });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
         await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,

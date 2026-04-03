@@ -198,7 +198,7 @@ function getSamContext(email) {
     name: 'Sam Primeaux',
     role: 'superadmin',
     permissions: ['*'],
-    tenant_id: 'system',
+    tenant_id: null,
     workspace_id: 'ws_samprimeaux',
     is_active: 1,
   };
@@ -2753,11 +2753,11 @@ const worker = {
       prevIAmResponseLog = __iamResponseLog;
       __iamResponseLog = { env, ctx, request, path, method: methodUpper };
 
-      // /api/tools-proxy/* — proxy TOOLS R2 through authenticated domain (avoids CF Access on tools subdomain)
-      if (pathLower.startsWith('/api/tools-proxy/') && env.TOOLS) {
+      // /api/tools-proxy/* — proxy tools keys through DASHBOARD R2 (sandbox has no TOOLS binding)
+      if (pathLower.startsWith('/api/tools-proxy/') && env.DASHBOARD) {
         const proxyKey = path.slice('/api/tools-proxy/'.length);
         if (proxyKey) {
-          const obj = await env.TOOLS.get(proxyKey);
+          const obj = await env.DASHBOARD.get(proxyKey);
           if (obj) {
             const ct = obj.httpMetadata?.contentType || 'application/octet-stream';
             return new Response(obj.body, { headers: {
@@ -2770,14 +2770,14 @@ const worker = {
         return new Response('Not found', { status: 404 });
       }
 
-      // tools.inneranimalmedia.com — serve TOOLS R2 bucket publicly
-      if (url.hostname === 'tools.inneranimalmedia.com' && env.TOOLS) {
+      // tools.inneranimalmedia.com — serve tools keys from DASHBOARD when TOOLS binding absent
+      if (url.hostname === 'tools.inneranimalmedia.com' && env.DASHBOARD) {
         if (methodUpper === 'OPTIONS') {
           return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, HEAD', 'Access-Control-Allow-Headers': '*' } });
         }
         const key = path.slice(1);
         if (key) {
-          const obj = await env.TOOLS.get(key);
+          const obj = await env.DASHBOARD.get(key);
           if (obj) {
             const ct = obj.httpMetadata?.contentType || 'application/octet-stream';
             return new Response(obj.body, { headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=300' } });
@@ -3717,7 +3717,7 @@ const worker = {
       }
 
       // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
-      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states' || pathLower === '/api/chat' || pathLower === '/api/models') {
+      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states' || pathLower === '/api/chat' || pathLower === '/api/models' || pathLower.startsWith('/api/telemetry')) {
         // Alias /api/chat -> /api/agent/chat
         if (pathLower === '/api/chat') url.pathname = '/api/agent/chat';
         // Alias /api/models -> /api/agent/models
@@ -6030,6 +6030,192 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
   }
 }
 
+/** Load active model pricing for telemetry cost math (keyed by model_key). */
+async function loadAiModelRatesMap(env) {
+  if (!env?.DB) return {};
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT model_key, input_rate_per_mtok, output_rate_per_mtok,
+              cache_read_rate_per_mtok, cache_write_rate_per_mtok
+       FROM ai_models WHERE COALESCE(is_active, 0) = 1`
+    ).all();
+    const map = {};
+    for (const r of results || []) {
+      const k = r.model_key != null ? String(r.model_key) : '';
+      if (k) map[k] = r;
+    }
+    return map;
+  } catch (e) {
+    console.warn('[loadAiModelRatesMap]', e?.message ?? e);
+    return {};
+  }
+}
+
+/**
+ * Unified telemetry + spend write. Maps cache read/write to cache_read_input_tokens / cache_creation_input_tokens.
+ * Stores routing_decision_id, agent_run_id, previews, etc. in metadata_json (no migration required).
+ * Never throws.
+ */
+async function writeTelemetry(env, data, modelRates) {
+  const {
+    sessionId, tenantId, provider, model,
+    inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+    latencyMs, toolCallCount, toolNamesUsed,
+    promptPreview, responsePreview,
+    finishReason, success, errorMessage,
+    routingDecisionId, agentRunId,
+    computedCostUsdOverride,
+  } = data;
+
+  const modelKey = model != null ? String(model) : '';
+  const rates = modelKey && modelRates ? modelRates[modelKey] : null;
+  let estimatedCost = null;
+  if (computedCostUsdOverride != null && Number.isFinite(Number(computedCostUsdOverride))) {
+    estimatedCost = Number(computedCostUsdOverride);
+  } else if (rates) {
+    const inR = Number(rates.input_rate_per_mtok) || 0;
+    const outR = Number(rates.output_rate_per_mtok) || 0;
+    const cr = Number(rates.cache_read_rate_per_mtok) || 0;
+    const cw = Number(rates.cache_write_rate_per_mtok) || 0;
+    estimatedCost = (
+      (Number(inputTokens) || 0) * inR +
+      (Number(outputTokens) || 0) * outR +
+      (Number(cacheReadTokens) || 0) * cr +
+      (Number(cacheWriteTokens) || 0) * cw
+    ) / 1_000_000;
+  }
+
+  const telemetryId = `tel_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const metaObj = {
+    routing_decision_id: routingDecisionId || null,
+    agent_run_id: agentRunId || null,
+    tool_call_count: toolCallCount || 0,
+    tool_names_used: toolNamesUsed || [],
+    prompt_preview: (promptPreview || '').slice(0, 500),
+    response_preview: (responsePreview || '').slice(0, 500),
+    finish_reason: finishReason || null,
+    success: !!success,
+    error_message: errorMessage || null,
+    request_latency_ms: latencyMs ?? null,
+  };
+  const metaJson = JSON.stringify(metaObj);
+  const tin = Math.floor(Number(inputTokens) || 0);
+  const tout = Math.floor(Number(outputTokens) || 0);
+  const crd = Math.floor(Number(cacheReadTokens) || 0);
+  const cwd = Math.floor(Number(cacheWriteTokens) || 0);
+  const totIn = tin + crd + cwd;
+  let tid =
+    tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
+  if (!tid && env?.TENANT_ID) tid = String(env.TENANT_ID).trim();
+  if (!tid) {
+    console.warn('[writeTelemetry] missing tenant_id; skipping agent_telemetry / spend_ledger');
+    return null;
+  }
+  const sid = sessionId != null ? String(sessionId) : null;
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agent_telemetry (
+        id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
+        model_used, provider, input_tokens, output_tokens,
+        cache_read_input_tokens, cache_creation_input_tokens,
+        computed_cost_usd, total_input_tokens,
+        event_type, severity, created_at, updated_at
+      ) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
+    ).bind(
+      telemetryId, tid, sid,
+      'agent_chat', 'llm_turn', 1, metaJson,
+      modelKey, String(provider || 'unknown'),
+      tin, tout, crd, cwd,
+      estimatedCost != null ? estimatedCost : 0,
+      totIn,
+      'chat', success ? 'info' : 'warning'
+    ).run();
+  } catch (e) {
+    console.error('telemetry agent_telemetry:', e);
+  }
+
+  if (estimatedCost !== null && Number(estimatedCost) > 0) {
+    try {
+      const sp = spendLedgerProvider(String(provider || 'unknown'));
+      const spFixed = sp === 'workers_ai' ? 'cloudflare_workers_ai' : sp;
+      const lid = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
+      await env.DB.prepare(
+        `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id, ref_table, ref_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        lid, tid, 'default', 'inneranimalmedia', spFixed, 'api_direct',
+        Math.floor(Date.now() / 1000), estimatedCost, modelKey, tin, tout,
+        sid || 'unknown', 'proj_inneranimalmedia_main_prod_013',
+        'agent_telemetry', telemetryId
+      ).run();
+    } catch (e) {
+      console.error('telemetry spend_ledger:', e);
+    }
+  }
+
+  return telemetryId;
+}
+
+/** Parse Workers AI stream JSON line or result object for { prompt_tokens, completion_tokens }. */
+function extractWorkersAiUsageFromJson(j) {
+  if (!j || typeof j !== 'object') return null;
+  const u = j.usage && typeof j.usage === 'object' ? j.usage : j;
+  const pt = u.prompt_tokens ?? u.input_tokens;
+  const ct = u.completion_tokens ?? u.output_tokens;
+  if (pt == null && ct == null) return null;
+  return { prompt_tokens: Math.floor(Number(pt) || 0), completion_tokens: Math.floor(Number(ct) || 0) };
+}
+
+function computeUsdFromModelRatesRow(modelKey, ratesRow, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens) {
+  if (!ratesRow) return 0;
+  const inR = Number(ratesRow.input_rate_per_mtok) || 0;
+  const outR = Number(ratesRow.output_rate_per_mtok) || 0;
+  const cr = Number(ratesRow.cache_read_rate_per_mtok) || 0;
+  const cw = Number(ratesRow.cache_write_rate_per_mtok) || 0;
+  return (
+    (Number(inputTokens) || 0) * inR +
+    (Number(outputTokens) || 0) * outR +
+    (Number(cacheReadTokens) || 0) * cr +
+    (Number(cacheWriteTokens) || 0) * cw
+  ) / 1_000_000;
+}
+
+/** If tool name matches a skill row, log invocation (PRAGMA-aligned columns). */
+async function maybeInsertSkillInvocationForTool(env, { toolName, tenantId, sessionId, inputTokens, outputTokens, latencyMs, success }) {
+  if (!env?.DB || !toolName) return;
+  const tn = String(toolName).trim();
+  if (!tn) return;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id FROM agentsam_skill WHERE is_active = 1 AND (
+        LOWER(name) = LOWER(?) OR LOWER(COALESCE(slash_trigger,'')) = LOWER(?) OR LOWER(COALESCE(slash_trigger,'')) = LOWER(?)
+      ) LIMIT 1`
+    ).bind(tn, tn, '/' + tn.replace(/^\//, '')).first();
+    if (!row?.id) return;
+    const uid = 'sam_primeaux';
+    await env.DB.prepare(
+      `INSERT INTO agentsam_skill_invocation (
+        skill_id, user_id, workspace_id, conversation_id, trigger_method, input_summary,
+        success, duration_ms, tokens_in, tokens_out, invoked_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+    ).bind(
+      row.id,
+      uid,
+      'default',
+      sessionId || null,
+      'api',
+      'agent_chat',
+      success ? 1 : 0,
+      Math.floor(Number(latencyMs) || 0),
+      Math.floor(Number(inputTokens) || 0),
+      Math.floor(Number(outputTokens) || 0)
+    ).run();
+  } catch (e) {
+    console.warn('[agentsam_skill_invocation]', e?.message ?? e);
+  }
+}
+
 /** Mark agentsam_agent_run row completed with same cost/tokens as agent_telemetry (id = run row PK). */
 async function completeAgentsamAgentRun(env, runId, conversationId, inputTokens, outputTokens, costUsd) {
   if (!runId || !env?.DB) return;
@@ -6042,45 +6228,130 @@ async function completeAgentsamAgentRun(env, runId, conversationId, inputTokens,
   }
 }
 
+async function failAgentsamAgentRun(env, runId, conversationId, errorMessage) {
+  if (!runId || !env?.DB) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE agentsam_agent_run SET status = 'failed', error_message = ?, completed_at = datetime('now'), conversation_id = COALESCE(conversation_id, ?) WHERE id = ?`
+    ).bind(String(errorMessage || '').slice(0, 8000), conversationId || null, runId).run();
+  } catch (e) {
+    console.warn('[agentsam_agent_run] fail', e?.message ?? e);
+  }
+}
+
+async function resolveAgentAiIdForChat(env, agentParam) {
+  if (!env?.DB) return null;
+  try {
+    const ap = agentParam != null ? String(agentParam).trim() : '';
+    if (ap) {
+      const r = await env.DB.prepare(`SELECT id FROM agentsam_ai WHERE id = ? AND status = 'active' LIMIT 1`).bind(ap).first();
+      if (r?.id) return r.id;
+    }
+    const r2 = await env.DB.prepare(
+      `SELECT id FROM agentsam_ai WHERE status = 'active' ORDER BY CASE id WHEN 'ai_sam_v1' THEN 0 ELSE 1 END, sort_order LIMIT 1`
+    ).first();
+    return r2?.id || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Prepend subagent persona (user_id + sort_order) to system prompt when configured. */
+async function loadSubagentPersonaBlock(env, oauthUserId) {
+  if (!env?.DB || !oauthUserId) return '';
+  try {
+    const row = await env.DB.prepare(
+      `SELECT personality_tone, instructions_markdown, display_name FROM agentsam_subagent_profile
+       WHERE is_active = 1 AND user_id = ?
+       ORDER BY sort_order ASC LIMIT 1`
+    ).bind(String(oauthUserId)).first();
+    if (!row) return '';
+    const tone = String(row.personality_tone || '').trim();
+    const instr = String(row.instructions_markdown || '').trim();
+    const disp = String(row.display_name || '').trim();
+    if (!instr && !tone && !disp) return '';
+    let s = '';
+    if (disp) s += `[Persona: ${disp}]\n`;
+    if (tone) s += `Tone: ${tone}.\n`;
+    if (instr) s += instr;
+    return s.trim();
+  } catch (_) {
+    return '';
+  }
+}
+
 /** Start a per-request chat SSE row (linked to conversation for rollup queries). */
-async function insertChatSseAgentRun(env, id, conversationId, modelId, sessionLike) {
+async function insertChatSseAgentRun(env, id, conversationId, modelId, sessionLike, agentAiId = null) {
   if (!id || !env?.DB) return;
   const userId = sessionLike?.user_id ?? null;
   if (!userId) return;
   const workspaceId = sessionLike?.workspace_id ?? null;
   const convId = conversationId != null && conversationId !== '' ? conversationId : id;
   await env.DB.prepare(
-    `INSERT INTO agentsam_agent_run (id, user_id, workspace_id, conversation_id, status, trigger, model_id, started_at, created_at)
-     VALUES (?, ?, ?, ?, 'in_progress', 'chat', ?, datetime('now'), datetime('now'))
+    `INSERT INTO agentsam_agent_run (id, user_id, workspace_id, conversation_id, status, trigger, model_id, started_at, created_at, agent_ai_id)
+     VALUES (?, ?, ?, ?, 'running', 'chat', ?, datetime('now'), datetime('now'), ?)
      ON CONFLICT(id) DO NOTHING`
   )
-    .bind(id, userId, workspaceId, convId, modelId || null)
+    .bind(id, userId, workspaceId, convId, modelId || null, agentAiId || null)
     .run();
 }
 
-/** After telemetry row exists: link latest routing_decisions row for this session to that telemetry and mark complete. */
+/** After telemetry row exists: link routing_decisions row (by id if provided, else latest for session) to telemetry. */
 async function completeRoutingDecisionTelemetry(env, conversationId, telemetryId, inputTokens, outputTokens, costUsd, routingOpts) {
-  if (!routingOpts || typeof routingOpts.chatStartMs !== 'number' || !conversationId || !telemetryId || !env?.DB) return;
+  if (!telemetryId || !env?.DB) return;
+  const latencyMs = routingOpts && typeof routingOpts.chatStartMs === 'number'
+    ? Date.now() - routingOpts.chatStartMs
+    : null;
   try {
-    const latencyMs = Date.now() - routingOpts.chatStartMs;
-    await env.DB.prepare(
-      `UPDATE routing_decisions SET
-        telemetry_id = ?,
-        latency_ms = ?,
-        input_tokens = ?,
-        output_tokens = ?,
-        cost_usd = ?,
-        completed = 1
-      WHERE id = (
-        SELECT id FROM routing_decisions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-      )`
-    ).bind(telemetryId, latencyMs, Math.floor(Number(inputTokens) || 0), Math.floor(Number(outputTokens) || 0), Number(costUsd) || 0, conversationId).run();
+    if (routingOpts?.routingDecisionId) {
+      await env.DB.prepare(
+        `UPDATE routing_decisions SET
+          telemetry_id = ?,
+          latency_ms = COALESCE(?, latency_ms),
+          input_tokens = ?,
+          output_tokens = ?,
+          cost_usd = ?,
+          completed = 1,
+          updated_at = unixepoch()
+        WHERE id = ?`
+      ).bind(
+        telemetryId,
+        latencyMs,
+        Math.floor(Number(inputTokens) || 0),
+        Math.floor(Number(outputTokens) || 0),
+        Number(costUsd) || 0,
+        routingOpts.routingDecisionId
+      ).run();
+    } else if (conversationId) {
+      await env.DB.prepare(
+        `UPDATE routing_decisions SET
+          telemetry_id = ?,
+          latency_ms = ?,
+          input_tokens = ?,
+          output_tokens = ?,
+          cost_usd = ?,
+          completed = 1,
+          updated_at = unixepoch()
+        WHERE id = (
+          SELECT id FROM routing_decisions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
+        )`
+      ).bind(
+        telemetryId,
+        latencyMs ?? 0,
+        Math.floor(Number(inputTokens) || 0),
+        Math.floor(Number(outputTokens) || 0),
+        Number(costUsd) || 0,
+        conversationId
+      ).run();
+    }
   } catch (e) {
     console.warn('[routing_decisions] telemetry completion', e?.message ?? e);
   }
   // EMA write-back: update model_routing_rules with observed latency + success signal (α=0.15).
   // isSuccess: error paths emit done with 0 tokens; treat that as failure signal toward 0.0.
-  const taskType = routingOpts.taskType;
+  const taskType = routingOpts?.taskType;
+  if (!routingOpts || !taskType) return;
+  const emaLatency = latencyMs != null ? latencyMs : 0;
   if (taskType && env.DB) {
     try {
       const isSuccess = Number(inputTokens) > 0;
@@ -6091,7 +6362,7 @@ async function completeRoutingDecisionTelemetry(env, conversationId, telemetryId
             success_rate      = ROUND(COALESCE(success_rate, 1.0) * 0.85 + 1.0 * 0.15, 4),
             last_evaluated_at = unixepoch()
           WHERE task_type = ? AND is_active = 1`
-        ).bind(latencyMs, latencyMs, taskType).run();
+        ).bind(emaLatency, emaLatency, taskType).run();
       } else {
         // Failure: drive success_rate toward 0.0; latency is meaningless on failed calls
         await env.DB.prepare(
@@ -6255,7 +6526,7 @@ async function insertAiGenerationLog(env, opts) {
     qualityScore = null,
     status = 'completed',
     createdBy = 'worker',
-    tenantId = 'tenant_sam_primeaux',
+    tenantId: rawTenantId = null,
     metadataJson = {},
     sourceKind = 'worker',
     workspaceId = null,
@@ -6266,6 +6537,14 @@ async function insertAiGenerationLog(env, opts) {
     explicitId = null,
     insertOrIgnore = false,
   } = opts;
+  const tenantId =
+    (rawTenantId != null && String(rawTenantId).trim()) ||
+    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    null;
+  if (!tenantId) {
+    console.warn('[insertAiGenerationLog] missing tenant_id; skip');
+    return;
+  }
   const id =
     explicitId != null && String(explicitId).trim()
       ? String(explicitId).trim().slice(0, 120)
@@ -6500,15 +6779,6 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     neuronCostUsd = neuronsUsed * NEURON_RATE;
     if (!amountUsd || amountUsd === 0) amountUsd = neuronCostUsd;
   }
-  const telemetryEventType = 'chat_completion';
-  const telemetrySeverity = (amountUsd != null && Number(amountUsd) > 0.01) ? 'warning' : 'info';
-  let googleServiceName = null;
-  let googlePricingSource = null;
-  if (safeProvider === 'google') {
-    const vertex = shouldUseVertexForGoogleModel(env, safeModelKey);
-    googleServiceName = vertex ? 'vertex_ai' : 'gemini_api';
-    googlePricingSource = vertex ? 'vertex_official' : 'gemini_api_official';
-  }
   try {
     await env.DB.prepare(
       "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
@@ -6516,56 +6786,39 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
+  const spendTenantId =
+    String(routingOpts?.tenantId || '').trim() ||
+    (env.TENANT_ID ? String(env.TENANT_ID).trim() : '');
+  const modelRates = (routingOpts && routingOpts.modelRates) ? { ...routingOpts.modelRates } : {};
+  if (!modelRates[safeModelKey] && rowForTelemetry) {
+    modelRates[safeModelKey] = rowForTelemetry;
+  }
+  const wWorkers = safeProvider === 'workers_ai' || (safeModelKey && safeModelKey.startsWith('@cf/'));
   let telemetryRowId = null;
   try {
-    telemetryRowId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
-    ).bind(telemetryRowId, 'tenant_sam_primeaux', conversationId, 'llm_call', 'chat_completion', 1, safeModelKey, safeProvider, safeInput, safeCacheCreate, safeCacheRead, safeInput + safeCacheCreate + safeCacheRead, safeOutput, amountUsd, googleServiceName, googlePricingSource, inputRateCol, outputRateCol, neuronCostUsd, neuronsUsed, telemetryEventType, telemetrySeverity).run();
+    telemetryRowId = await writeTelemetry(env, {
+      sessionId: conversationId,
+      tenantId: spendTenantId,
+      provider: safeProvider,
+      model: safeModelKey,
+      inputTokens: safeInput,
+      outputTokens: safeOutput,
+      cacheReadTokens: safeCacheRead,
+      cacheWriteTokens: safeCacheCreate,
+      latencyMs: routingOpts && typeof routingOpts.chatStartMs === 'number' ? Date.now() - routingOpts.chatStartMs : null,
+      toolCallCount: routingOpts?.toolCallCount,
+      toolNamesUsed: routingOpts?.toolNamesUsed,
+      promptPreview: routingOpts?.promptPreview,
+      responsePreview: safeText,
+      finishReason: routingOpts?.finishReason,
+      success: true,
+      errorMessage: null,
+      routingDecisionId: routingOpts?.routingDecisionId,
+      agentRunId: agentsamAgentRunId,
+      computedCostUsdOverride: wWorkers ? amountUsd : undefined,
+    }, modelRates);
   } catch (e) {
-    console.error('[agent/chat] agent_telemetry INSERT failed:', e?.message ?? e);
-  }
-  const spendAndUsage = async () => {
-    try {
-      const spendTenantId = String(routingOpts?.tenantId || '').trim() || 'tenant_sam_primeaux';
-      const spendWorkspaceId = String(routingOpts?.workspaceId || '').trim() || 'default';
-      const ledgerProviderRaw = spendLedgerProvider(safeProvider);
-      const spProvider = ledgerProviderRaw === 'workers_ai' ? 'cloudflare_workers_ai' : ledgerProviderRaw;
-      await env.DB.prepare(
-        `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).bind('sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(), spendTenantId, spendWorkspaceId, 'inneranimalmedia', spProvider, 'api_direct', Math.floor(Date.now() / 1000), amountUsd, safeModelKey, safeInput, safeOutput, conversationId || 'unknown', 'proj_inneranimalmedia_main_prod_013').run();
-      if (conversationId && telemetryRowId) {
-        await env.DB.prepare(
-          `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, neurons_used, neuron_cost_usd, description, session_tag, project_id, ref_table, ref_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).bind(
-          'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase(),
-          spendTenantId,
-          spendWorkspaceId,
-          'inneranimalmedia',
-          spProvider,
-          'api_direct',
-          Math.floor(Date.now() / 1000),
-          amountUsd ?? 0,
-          safeModelKey,
-          safeInput,
-          safeOutput,
-          neuronsUsed,
-          neuronCostUsd,
-          'Agent chat completion',
-          conversationId,
-          'proj_inneranimalmedia_main_prod_013',
-          'agent_telemetry',
-          telemetryRowId
-        ).run();
-      }
-    } catch (e) {
-      console.error('[agent/chat] spend_ledger INSERT failed:', e?.message ?? e);
-    }
-  };
-  if (ctx && typeof ctx.waitUntil === 'function') {
-    ctx.waitUntil(spendAndUsage());
-  } else {
-    await spendAndUsage();
+    console.error('[agent/chat] writeTelemetry failed:', e?.message ?? e);
   }
   try {
     if (conversationId) {
@@ -6997,7 +7250,7 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
   }
   if (mode === 'agent') {
-    const agentToolNames = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear']);
+    const agentToolNames = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'cursor_run_agent', 'cursor_get_agent', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
     return toolDefinitions.filter((t) => t && agentToolNames.has(t.name));
   }
   return toolDefinitions.slice(0, 20);
@@ -7023,6 +7276,8 @@ function filterToolsByIntent(intent, message, toolDefinitions) {
       tools: ['resend_send_email','resend_send_broadcast','resend_list_domains','resend_create_api_key','generate_daily_summary_email','human_context_list'] },
     { keys: ['r2','bucket','file','upload','download','storage'],
       tools: ['r2_read','r2_write','r2_list','r2_search','r2_bucket_summary'] },
+    { keys: ['preview', 'browser', 'open url', 'show me', 'live preview'],
+      tools: ['preview_in_browser', 'r2_write', 'get_r2_url'] },
     { keys: ['image','generate image','edit image','cf images','cloudflare images'],
       tools: ['imgx_generate_image','imgx_edit_image','imgx_list_providers','r2_write','cf_images_upload','cf_images_list','cf_images_delete'] },
     { keys: ['3d','model','glb','meshy'],
@@ -7848,7 +8103,7 @@ function ensureAgentMemoryIndexInsertDefaults(sql) {
   }
   if (needTenant) {
     newCols.push('tenant_id');
-    newVals.push("'tenant_sam_primeaux'");
+    newVals.push('NULL');
   }
 
   const prefix = s.slice(0, colStart);
@@ -7888,6 +8143,10 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
   let classification = null;
   const MAX_ROUNDS = 8;
   console.log('[runToolLoop] provider:', provider, 'model:', modelKey, 'tools:', toolDefinitions.length);
+  let modelRatesLoop = {};
+  try {
+    modelRatesLoop = await loadAiModelRatesMap(env);
+  } catch (_) {}
 
   // Before any tool calls, classify intent of the last user message (cheap Haiku).
   const lastUserText = getLastUserMessageText(messages);
@@ -8052,6 +8311,46 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         break;
       }
       messages.push({ role: 'model', content: parts });
+    }
+
+    if (env.DB) {
+      try {
+        let rin = 0;
+        let rout = 0;
+        let crc = 0;
+        let crr = 0;
+        if (provider === 'anthropic' && data.usage) {
+          rin = data.usage.input_tokens || 0;
+          rout = data.usage.output_tokens || 0;
+          crc = data.usage.cache_creation_input_tokens || 0;
+          crr = data.usage.cache_read_input_tokens || 0;
+        } else if (provider === 'openai' && data.usage) {
+          rin = data.usage.prompt_tokens || 0;
+          rout = data.usage.completion_tokens || 0;
+          const ptd = data.usage.prompt_tokens_details;
+          if (ptd && typeof ptd === 'object' && typeof ptd.cached_tokens === 'number') crr = ptd.cached_tokens;
+        } else if (provider === 'google') {
+          const um = data.usageMetadata || data.usage_metadata;
+          if (um && typeof um === 'object') {
+            rin = Number(um.promptTokenCount || um.prompt_token_count || 0) || 0;
+            rout = Number(um.candidatesTokenCount || um.candidates_token_count || 0) || 0;
+            crr = Number(um.cachedContentTokenCount || 0) || 0;
+          }
+        }
+        await writeTelemetry(env, {
+          sessionId: conversationId,
+          tenantId:
+            (executionCtx && executionCtx.tenantId != null && String(executionCtx.tenantId).trim()) ||
+            (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+          provider: String(provider),
+          model: modelKey,
+          inputTokens: rin,
+          outputTokens: rout,
+          cacheReadTokens: crr,
+          cacheWriteTokens: crc,
+          success: true,
+        }, modelRatesLoop);
+      } catch (_) {}
     }
 
     const toolResults = [];
@@ -8384,17 +8683,36 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         const key = params.key || params.path;
         if (!key) { resultText = 'r2_write: key required'; }
         else {
-          const bucketName = (params.bucket || 'R2').toUpperCase();
-          const bucket = bucketName === 'TOOLS' ? env.TOOLS :
-                         bucketName === 'DASHBOARD' ? env.DASHBOARD :
-                         bucketName === 'ASSETS' ? env.ASSETS : env.R2;
+          let bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
+          if (bucketName === 'TOOLS') bucketName = 'DASHBOARD';
+          let bucket = null;
+          if (bucketName === 'DASHBOARD') bucket = env.DASHBOARD;
+          else if (bucketName === 'ASSETS') bucket = env.ASSETS;
+          else if (bucketName === 'DOCS_BUCKET') bucket = env.DOCS_BUCKET;
+          else if (bucketName === 'AUTORAG_BUCKET') bucket = env.AUTORAG_BUCKET;
+          else if (bucketName === 'R2') bucket = env.R2;
           if (!bucket) { resultText = `r2_write: bucket ${bucketName} not available`; }
           else {
             const ct = params.content_type || params.contentType || 'text/plain';
             await bucket.put(key, params.body ?? '', { httpMetadata: { contentType: ct } });
-            const bucketDomain = bucketName === 'TOOLS' ? 'tools.inneranimalmedia.com' : null;
-            const publicUrl = bucketDomain ? `https://${bucketDomain}/${key}` : null;
-            resultText = JSON.stringify({ ok: true, key, bucket: bucketName, public_url: publicUrl });
+            const publicUrl =
+              bucketName === 'DOCS_BUCKET' ? `https://docs.inneranimalmedia.com/${key}` :
+                bucketName === 'AUTORAG_BUCKET' ? `https://autorag.inneranimalmedia.com/${key}` : null;
+            const kl = String(key).toLowerCase();
+            const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
+            const uiEvents = [
+              { type: 'r2_file_updated', bucket: bucketName, key },
+              ...(isHtml ? [{ type: 'browser_navigate', url: `https://tools.inneranimalmedia.com/${key}` }] : []),
+            ];
+            resultText = JSON.stringify({
+              ok: true,
+              key,
+              bucket: bucketName,
+              public_url: publicUrl,
+              broadcast: true,
+              ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
+              ...(isHtml ? { ui_events: uiEvents } : {}),
+            });
           }
         }
       } else if (toolName === 'r2_search' && env.R2) {
@@ -8504,7 +8822,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         }
       }
 
-      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear']);
+      const BUILTIN_TOOLS = new Set(['terminal_execute', 'd1_query', 'd1_write', 'r2_read', 'r2_list', 'knowledge_search', 'rag_search', 'generate_execution_plan', 'playwright_screenshot', 'browser_screenshot', 'gdrive_list', 'gdrive_fetch', 'github_repos', 'github_file', 'cf_images_list', 'cf_images_upload', 'cf_images_delete', 'imgx_generate_image', 'imgx_edit_image', 'imgx_list_providers', 'attached_file_content', 'r2_write', 'r2_search', 'r2_bucket_summary', 'platform_info', 'list_workers', 'worker_deploy', 'telemetry_log', 'telemetry_query', 'telemetry_stats', 'human_context_list', 'human_context_add', 'a11y_audit_webpage', 'a11y_get_summary', 'context_search', 'context_optimize', 'context_chunk', 'context_summarize_code', 'context_extract_structure', 'context_progressive_disclosure', 'browser_navigate', 'browser_content', 'cloudconvert_create_job', 'cloudconvert_get_job', 'meshyai_text_to_3d', 'meshyai_image_to_3d', 'meshyai_get_task', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
       if (env.DB) {
         try {
           let category = 'builtin';
@@ -9334,6 +9652,29 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 
         // Check for function calls
         const fnCalls = parts.filter(p => p.functionCall);
+        if (env.DB) {
+          try {
+            let googleModelRates = opts.modelRates;
+            if (!googleModelRates) {
+              try { googleModelRates = await loadAiModelRatesMap(env); } catch (_) { googleModelRates = {}; }
+            }
+            await writeTelemetry(env, {
+              sessionId: conversationId,
+              tenantId:
+                (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
+                (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+              provider: 'google',
+              model: effectiveModelRow.model_key || modelKey,
+              inputTokens,
+              outputTokens,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              success: true,
+              routingDecisionId: opts.routingOpts?.routingDecisionId,
+              agentRunId: agentsamAgentRunId,
+            }, googleModelRates);
+          } catch (_) {}
+        }
         if (fnCalls.length === 0) break;
 
         // Execute tools
@@ -9350,7 +9691,10 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
           } catch (_) {}
           let result = {};
           try {
-            const out = await invokeMcpToolFromChat(env, name, args || {}, conversationId, { agent_id });
+            const out = await invokeMcpToolFromChat(env, name, args || {}, conversationId, {
+              agent_id,
+              tenantId: routingOpts?.tenantId,
+            });
             result = out?.result ?? out ?? {};
           } catch (e) {
             result = { error: e?.message ?? String(e) };
@@ -9605,6 +9949,7 @@ async function parseAgentChatRequestBody(request) {
       mode: String(fd.get('mode') || '').trim().toLowerCase(),
       model: String(fd.get('model') || fd.get('model_id') || '').trim(),
       conversationId: String(fd.get('conversationId') || fd.get('session_id') || '').trim(),
+      agent: String(fd.get('agent') || '').trim(),
     };
   }
   let body = {};
@@ -9618,6 +9963,7 @@ async function parseAgentChatRequestBody(request) {
     mode: String(body.mode || '').trim().toLowerCase(),
     model: String(body.model || body.model_id || '').trim(),
     conversationId: String(body.conversationId || body.session_id || '').trim(),
+    agent: body.agent != null ? String(body.agent).trim() : '',
   };
 }
 
@@ -9631,6 +9977,12 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
       if (typeof u.output_tokens === 'number') acc.out = Math.max(acc.out, u.output_tokens);
       if (typeof u.prompt_tokens === 'number') acc.in = Math.max(acc.in, u.prompt_tokens);
       if (typeof u.completion_tokens === 'number') acc.out = Math.max(acc.out, u.completion_tokens);
+      if (typeof u.cache_read_input_tokens === 'number') acc.cacheRead = Math.max(acc.cacheRead || 0, u.cache_read_input_tokens);
+      if (typeof u.cache_creation_input_tokens === 'number') acc.cacheWrite = Math.max(acc.cacheWrite || 0, u.cache_creation_input_tokens);
+      const ptd = u.prompt_tokens_details;
+      if (ptd && typeof ptd === 'object' && typeof ptd.cached_tokens === 'number') {
+        acc.cacheRead = Math.max(acc.cacheRead || 0, ptd.cached_tokens);
+      }
     }
     const um = o.usageMetadata;
     if (um && typeof um === 'object') {
@@ -9650,11 +10002,11 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
   }
 }
 
-async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null) {
+async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null, modelRates = null) {
   const reader = branch2.getReader();
   const dec = new TextDecoder();
   let buf = '';
-  const acc = { in: 0, out: 0, total: 0 };
+  const acc = { in: 0, out: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -9683,50 +10035,45 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   }
   let inputTok = acc.in;
   let outputTok = acc.out;
+  let cacheReadTok = acc.cacheRead || 0;
+  let cacheWriteTok = acc.cacheWrite || 0;
   if (apiPlatform === 'workers_ai') {
     inputTok = 0;
     outputTok = 0;
   }
-  const rateIn = Number(modelRow.input_rate_per_mtok) || 0;
-  const rateOut = Number(modelRow.output_rate_per_mtok) || 0;
-  const computedCostUsd = (inputTok * rateIn) / 1_000_000 + (outputTok * rateOut) / 1_000_000;
   if (!env.DB) return;
-  const telemetryRowId = crypto.randomUUID();
   const modelKey = String(modelRow.model_key || '');
   const provider = String(modelRow.provider || 'unknown');
+  const ratesMap = modelRates && typeof modelRates === 'object' ? modelRates : { [modelKey]: modelRow };
+  let telemetryRowId = null;
   try {
-    await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
-    )
-      .bind(
-        telemetryRowId,
-        telemetryTenantId,
-        conversationId || null,
-        'llm_call',
-        'chat_completion',
-        1,
-        modelKey,
-        provider,
-        inputTok,
-        0,
-        0,
-        inputTok,
-        outputTok,
-        computedCostUsd,
-        apiPlatform === 'gemini_api' ? 'gemini_api' : apiPlatform === 'vertex_ai' ? 'vertex_ai' : null,
-        null,
-        modelRow.input_rate_per_mtok ?? null,
-        modelRow.output_rate_per_mtok ?? null,
-        0,
-        0,
-        'chat',
-        null
-      )
-      .run();
+    telemetryRowId = await writeTelemetry(env, {
+      sessionId: conversationId,
+      tenantId:
+        (telemetryTenantId != null && String(telemetryTenantId).trim()) ||
+        (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+      provider,
+      model: modelKey,
+      inputTokens: inputTok,
+      outputTokens: outputTok,
+      cacheReadTokens: cacheReadTok,
+      cacheWriteTokens: cacheWriteTok,
+      success: true,
+      responsePreview: '',
+    }, ratesMap);
   } catch (e) {
-    console.error('[agent/chat-sse] agent_telemetry INSERT failed:', e?.message ?? e);
+    console.error('[agent/chat-sse] writeTelemetry failed:', e?.message ?? e);
   }
   if (agentsamRunId) {
+    const r = ratesMap[modelKey] || modelRow;
+    const computedCostUsd = r
+      ? (
+        (inputTok * (Number(r.input_rate_per_mtok) || 0)) +
+        (outputTok * (Number(r.output_rate_per_mtok) || 0)) +
+        (cacheReadTok * (Number(r.cache_read_rate_per_mtok) || 0)) +
+        (cacheWriteTok * (Number(r.cache_write_rate_per_mtok) || 0))
+      ) / 1_000_000
+      : 0;
     await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
   }
 }
@@ -9757,7 +10104,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     return jsonResponse({ error: 'Invalid request body', detail: String(e?.message || e) }, 400);
   }
 
-  const { message, mode: modeRaw, model: modelParam, conversationId } = parsed;
+  const { message, mode: modeRaw, model: modelParam, conversationId, agent: agentParamRaw } = parsed;
   if (!message) return jsonResponse({ error: 'message required' }, 400);
   if (!modelParam) return jsonResponse({ error: 'model required' }, 400);
   const mode = modeRaw || 'agent';
@@ -9782,6 +10129,19 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
+  let modelRatesMap = {};
+  try {
+    modelRatesMap = await loadAiModelRatesMap(env);
+  } catch (_) {}
+  const agentAiIdSse = await resolveAgentAiIdForChat(env, agentParamRaw || null);
+  const oauthPersonaUid = chatSseSession && (chatSseSession._session_user_id || chatSseSession.email || chatSseSession.user_id);
+  let personaPrefixSse = '';
+  if (oauthPersonaUid) {
+    try {
+      personaPrefixSse = await loadSubagentPersonaBlock(env, oauthPersonaUid);
+    } catch (_) {}
+  }
+
   const apiPlatform = String(modelRow.api_platform || '').trim();
   const modelKey = String(modelRow.model_key || modelParam);
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
@@ -9793,8 +10153,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   const chatSseRunId = crypto.randomUUID();
 
-  const tenantIdChatSse = chatSseSession?.tenant_id ?? null;
-  const skillWorkspaceKey = chatSseSession?.workspace_id ?? chatSseSession?.tenant_id ?? null;
+  const tenantIdChatSse = ingestBypass
+    ? (env.TENANT_ID ? String(env.TENANT_ID).trim() : null)
+    : resolveTenantIdForWorker(chatSseSession, env);
+  const skillWorkspaceKey = chatSseSession?.workspace_id ?? tenantIdChatSse ?? null;
   let chatSseSystemPrompt = AGENT_SAM_CHAT_SYSTEM;
   try {
     const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -9884,11 +10246,18 @@ ${commandsBlock || '(none)'}
 - Excalidraw: use excalidraw_open → excalidraw_load_library → excalidraw_add_elements
 - Terminal: use terminal_execute for shell commands
 - Browser: use cdt_navigate_page → cdt_take_screenshot for browser control. No Playwright needed — cdt_* tools are your browser.
-- Cursor Cloud Agents: use cursor_run_agent to spawn async coding agents on a branch`;
+- Cursor Cloud Agents: use cursor_run_agent to spawn async coding agents on a branch
+- **preview_in_browser**: Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show the user a live preview.
+- **get_r2_url**: Return the public HTTPS URL for an R2 key (params bucket + key).`;
 
-    chatSseSystemPrompt = `${AGENT_SAM_CHAT_SYSTEM}\n\n${toolsBlock}`;
+    const pfx = personaPrefixSse ? `${personaPrefixSse}\n\n` : '';
+    chatSseSystemPrompt = `${pfx}${AGENT_SAM_CHAT_SYSTEM}\n\n${toolsBlock}`;
   } catch (e) {
     console.warn('[agent/chat-sse] dynamic tools block failed', e?.message ?? e);
+  }
+
+  if (personaPrefixSse && chatSseSystemPrompt === AGENT_SAM_CHAT_SYSTEM) {
+    chatSseSystemPrompt = `${personaPrefixSse}\n\n${AGENT_SAM_CHAT_SYSTEM}`;
   }
 
   const mkUpstreamError = async (upstream, providerName) => {
@@ -9920,14 +10289,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'anthropic');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
+      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
+      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9946,14 +10315,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'google');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
+      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
+      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9986,14 +10355,14 @@ ${commandsBlock || '(none)'}
     }
     if (!upstream.ok) return mkUpstreamError(upstream, 'google');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
+      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
+      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -10019,14 +10388,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'openai');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
+      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
+      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -10062,21 +10431,21 @@ ${commandsBlock || '(none)'}
     }
     if (!upstream.ok) return mkUpstreamError(upstream, 'cursor');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
+      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
+      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
 
   if (apiPlatform === 'workers_ai') {
     if (!env.AI) return jsonResponse({ error: 'Workers AI binding not configured' }, 503);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
       console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
     const { readable, writable } = new TransformStream();
@@ -10085,6 +10454,7 @@ ${commandsBlock || '(none)'}
     const writeSse = (obj) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
     const runWai = async () => {
+      let usageAcc = null;
       try {
         let streamOrResult;
         try {
@@ -10098,7 +10468,10 @@ ${commandsBlock || '(none)'}
         } catch (e) {
           console.error('[agent/chat-sse] Workers AI', e?.message ?? e);
           await writeSse({ error: 'Provider error', detail: String(e?.message || e), provider: 'workers_ai', model: modelKey });
-          await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse);
+          await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse, null, modelRatesMap, {
+            success: false,
+            errorMessage: String(e?.message || e),
+          });
           return;
         }
 
@@ -10122,6 +10495,8 @@ ${commandsBlock || '(none)'}
                 } catch (_) {
                   continue;
                 }
+                const uLine = extractWorkersAiUsageFromJson(j);
+                if (uLine) usageAcc = uLine;
                 const piece =
                   (typeof j.response === 'string' ? j.response : null) ??
                   (typeof j.token === 'string' ? j.token : null) ??
@@ -10134,6 +10509,8 @@ ${commandsBlock || '(none)'}
             r.releaseLock();
           }
         } else {
+          const uObj = extractWorkersAiUsageFromJson(streamOrResult);
+          if (uObj) usageAcc = uObj;
           const full =
             (typeof streamOrResult?.response === 'string' ? streamOrResult.response : null) ??
             (typeof streamOrResult?.text === 'string' ? streamOrResult.text : null) ??
@@ -10141,12 +10518,15 @@ ${commandsBlock || '(none)'}
           if (full) await writeSse({ choices: [{ delta: { content: full } }] });
         }
 
-        await writeSse({ choices: [], usage: { prompt_tokens: 0, completion_tokens: 0 } });
+        await writeSse({
+          choices: [],
+          usage: usageAcc || { prompt_tokens: 0, completion_tokens: 0 },
+        });
         await writer.write(enc.encode('data: [DONE]\n\n'));
       } finally {
         await writer.close().catch(() => {});
       }
-      await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse);
+      await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse, usageAcc, modelRatesMap);
     };
 
     if (ctx && typeof ctx.waitUntil === 'function') {
@@ -10159,47 +10539,48 @@ ${commandsBlock || '(none)'}
   }
 }
 
-async function insertWorkersAiChatTelemetry(env, modelRow, conversationId, agentsamRunId = null, telemetryTenantId = null) {
+async function insertWorkersAiChatTelemetry(env, modelRow, conversationId, agentsamRunId = null, telemetryTenantId = null, usage = null, modelRates = null, extra = {}) {
   if (!env.DB) return;
   const modelKey = String(modelRow.model_key || '');
   const provider = String(modelRow.provider || 'workers_ai');
-  const inputTok = 0;
-  const outputTok = 0;
-  const computedCostUsd = 0;
-  try {
-    await env.DB.prepare(
-      `INSERT INTO agent_telemetry (id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, model_used, provider, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_input_tokens, output_tokens, computed_cost_usd, service_name, pricing_source, input_rate_per_mtok, output_rate_per_mtok, neuron_cost_usd, neurons_used, event_type, severity, created_at) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`
-    )
-      .bind(
-        crypto.randomUUID(),
-        telemetryTenantId,
-        conversationId || null,
-        'llm_call',
-        'chat_completion',
-        1,
-        modelKey,
-        provider,
-        inputTok,
-        0,
-        0,
-        inputTok,
-        outputTok,
-        computedCostUsd,
-        'workers_ai',
-        null,
-        modelRow.input_rate_per_mtok ?? null,
-        modelRow.output_rate_per_mtok ?? null,
-        0,
-        0,
-        'chat',
-        null
-      )
-      .run();
-  } catch (e) {
-    console.error('[agent/chat-sse] workers_ai telemetry INSERT failed:', e?.message ?? e);
+  const inputTok = Math.floor(Number(usage?.prompt_tokens) || 0);
+  const outputTok = Math.floor(Number(usage?.completion_tokens) || 0);
+  const success = extra.success !== false;
+  const errMsg = extra.errorMessage || null;
+  let rates = modelRates;
+  if (!rates) {
+    try {
+      rates = await loadAiModelRatesMap(env);
+    } catch (_) {
+      rates = {};
+    }
   }
+  try {
+    await writeTelemetry(
+      env,
+      {
+        sessionId: conversationId,
+        tenantId:
+          (telemetryTenantId != null && String(telemetryTenantId).trim()) ||
+          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+        provider,
+        model: modelKey,
+        inputTokens: inputTok,
+        outputTokens: outputTok,
+        success,
+        errorMessage: errMsg,
+        agentRunId: agentsamRunId,
+      },
+      rates
+    );
+  } catch (_) {}
   if (agentsamRunId) {
-    await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
+    const costUsd = computeUsdFromModelRatesRow(modelKey, rates[modelKey], inputTok, outputTok, 0, 0);
+    if (success) {
+      await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, costUsd);
+    } else {
+      await failAgentsamAgentRun(env, agentsamRunId, conversationId, errMsg || 'workers_ai_error');
+    }
   }
 }
 /** Parse data URL to { mediaType, base64 } for vision APIs */
@@ -10307,9 +10688,24 @@ function getR2Binding(env, bucketName) {
     'agent-sam-sandbox-cicd': env.ASSETS,
     'iam-platform': env.R2,
     'iam-docs': env.DOCS_BUCKET,
-    tools: env.TOOLS,
+    tools: env.DASHBOARD,
   };
   return map[bucketName] || null;
+}
+
+/** IAM Explorer /api/r2/file: allowlisted binding names only (no env.TOOLS). */
+function resolveR2BindingAllowlist(env, bucketNameRaw) {
+  const n = (bucketNameRaw || 'DASHBOARD').toUpperCase().trim();
+  const map = {
+    R2: env.R2,
+    DASHBOARD: env.DASHBOARD,
+    ASSETS: env.ASSETS,
+    DOCS_BUCKET: env.DOCS_BUCKET,
+    AUTORAG_BUCKET: env.AUTORAG_BUCKET,
+  };
+  const binding = map[n];
+  if (!binding) return null;
+  return { binding, name: n };
 }
 
 /** Logical R2 bucket names that have a non-null binding on this worker (wrangler / env). */
@@ -10317,10 +10713,12 @@ function listBoundR2BucketNames(env) {
   const names = [];
   if (env.ASSETS) names.push('inneranimalmedia-assets');
   if (env.AUTORAG_BUCKET) names.push('autorag');
-  if (env.DASHBOARD) names.push('agent-sam');
+  if (env.DASHBOARD) {
+    names.push('agent-sam');
+    names.push('tools');
+  }
   if (env.R2) names.push('iam-platform');
   if (env.DOCS_BUCKET) names.push('iam-docs');
-  if (env.TOOLS) names.push('tools');
   return names;
 }
 
@@ -10714,6 +11112,49 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
         status: 200,
         headers: { 'Content-Type': contentType, 'Content-Disposition': 'inline', 'Cache-Control': 'no-store' },
       });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/r2/file' && method === 'GET') {
+    const bucketParam = url.searchParams.get('bucket') || 'DASHBOARD';
+    const key = url.searchParams.get('key');
+    if (!key) return jsonResponse({ error: 'key required' }, 400);
+    const resolved = resolveR2BindingAllowlist(env, bucketParam);
+    if (!resolved || !resolved.binding.get) return jsonResponse({ error: 'Bucket not available' }, 400);
+    try {
+      const obj = await resolved.binding.get(key);
+      if (!obj) return jsonResponse({ error: 'Not found' }, 404);
+      let contentType = obj.httpMetadata?.contentType || null;
+      if (!contentType || contentType === 'application/octet-stream') {
+        contentType = getContentTypeFromKey(key) || contentType || 'application/octet-stream';
+      }
+      const content = await obj.text();
+      return jsonResponse({ key, content, contentType });
+    } catch (e) {
+      return jsonResponse({ error: String(e?.message || e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/r2/file' && method === 'POST') {
+    let body = {};
+    try {
+      body = await request.json();
+    } catch (_) {
+      return jsonResponse({ error: 'JSON body required' }, 400);
+    }
+    const bucketParam = body.bucket != null ? String(body.bucket) : 'DASHBOARD';
+    const key = body.key != null ? String(body.key) : '';
+    const content = body.content != null ? String(body.content) : '';
+    if (!key) return jsonResponse({ error: 'key required' }, 400);
+    const contentType =
+      body.contentType != null ? String(body.contentType) : getContentTypeFromKey(key) || 'text/plain; charset=utf-8';
+    const resolved = resolveR2BindingAllowlist(env, bucketParam);
+    if (!resolved || !resolved.binding.put) return jsonResponse({ error: 'Bucket not available' }, 400);
+    try {
+      await resolved.binding.put(key, content, { httpMetadata: { contentType } });
+      return jsonResponse({ ok: true, key });
     } catch (e) {
       return jsonResponse({ error: String(e?.message || e) }, 500);
     }
@@ -12025,6 +12466,58 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       } catch (e) {
         try { await _browseBrowser?.close(); } catch (_) {}
         return jsonResponse({ error: e?.message ?? String(e) }, 500);
+      }
+    }
+
+    if (pathLower === '/api/telemetry/summary' && method === 'GET') {
+      const session = await getSession(env, request);
+      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT
+             strftime('%Y-%m-%d', datetime(at.created_at, 'unixepoch')) AS day,
+             at.provider,
+             at.model_used,
+             SUM(COALESCE(at.input_tokens, 0)) AS total_input_tokens,
+             SUM(COALESCE(at.output_tokens, 0)) AS total_output_tokens,
+             SUM(COALESCE(at.computed_cost_usd, 0)) AS total_cost_usd,
+             COUNT(*) AS call_count,
+             AVG(CAST(json_extract(at.metadata_json, '$.request_latency_ms') AS REAL)) AS avg_latency_ms
+           FROM agent_telemetry at
+           LEFT JOIN ai_models m ON m.model_key = at.model_used
+           WHERE at.created_at >= CAST(strftime('%s', 'now', '-30 days') AS INTEGER)
+           GROUP BY day, at.provider, at.model_used
+           ORDER BY day DESC, at.provider, at.model_used
+           LIMIT 500`
+        ).all();
+        return jsonResponse({ groups: results || [] });
+      } catch (e) {
+        return jsonResponse({ error: e?.message || String(e) }, 500);
+      }
+    }
+
+    if (pathLower === '/api/telemetry/tools' && method === 'GET') {
+      const session = await getSession(env, request);
+      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT
+             tool_name,
+             COUNT(*) AS call_count,
+             AVG((julianday(completed_at) - julianday(invoked_at)) * 86400000.0) AS avg_latency_ms,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count,
+             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failure_count
+           FROM mcp_tool_calls
+           WHERE datetime(created_at) >= datetime('now', '-7 days')
+           GROUP BY tool_name
+           ORDER BY call_count DESC
+           LIMIT 200`
+        ).all();
+        return jsonResponse({ tools: results || [] });
+      } catch (e) {
+        return jsonResponse({ error: e?.message || String(e) }, 500);
       }
     }
 
@@ -13758,11 +14251,21 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         console.log('[execute-approved-tool] tool_name:', toolName);
         console.log('[execute-approved-tool] tool_input:', JSON.stringify(toolInput));
         let oauthUserIdExec;
+        let execTenantId;
         try {
           const au = await getAuthUser(request, env);
           oauthUserIdExec = au ? (au.email || au.id) : undefined;
-        } catch (_) { oauthUserIdExec = undefined; }
-        const out = await invokeMcpToolFromChat(env, toolName, toolInput, body.conversation_id ?? null, { skipApprovalCheck: true, executionCtx: ctx, oauthUserId: oauthUserIdExec });
+          execTenantId = au?.tenant_id;
+        } catch (_) {
+          oauthUserIdExec = undefined;
+          execTenantId = undefined;
+        }
+        const out = await invokeMcpToolFromChat(env, toolName, toolInput, body.conversation_id ?? null, {
+          skipApprovalCheck: true,
+          executionCtx: ctx,
+          oauthUserId: oauthUserIdExec,
+          tenantId: execTenantId,
+        });
         console.log('[execute-approved-tool] result:', JSON.stringify(out));
         if (out.error) return jsonResponse({ success: false, error: out.error }, 200);
         return jsonResponse({ success: true, result: out.result ?? out });
@@ -16134,9 +16637,17 @@ async function recordMcpToolCall(env, opts) {
     durationMs = 0,
     inputTokens: optInTok = 0,
     outputTokens: optOutTok = 0,
+    tenantId: optTenantId,
   } = opts;
   if (!env.DB) return;
-  const tenant = 'tenant_sam_primeaux';
+  const tenant =
+    (optTenantId != null && String(optTenantId).trim()) ||
+    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    null;
+  if (!tenant) {
+    console.warn('[recordMcpToolCall] missing tenant_id; skip mcp_tool_calls');
+    return;
+  }
   const sessionId = conversationId ?? '';
   const status = error ? 'failed' : 'completed';
   const output = error ? JSON.stringify({ error }) : (typeof result === 'string' ? result : JSON.stringify(result ?? {}));
@@ -16203,8 +16714,16 @@ async function recordMcpToolCall(env, opts) {
 }
 
 /** Create or update MCP agent session at chat start. Uses conversation_id (migration 135). panel from request agent_id (migration 162). No-op if columns missing. */
-async function upsertMcpAgentSession(env, conversationId, panelAgentId) {
+async function upsertMcpAgentSession(env, conversationId, panelAgentId, tenantId = null) {
   if (!env.DB || !conversationId) return;
+  const tid =
+    (tenantId != null && String(tenantId).trim()) ||
+    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    null;
+  if (!tid) {
+    console.warn('[upsertMcpAgentSession] missing tenant_id');
+    return;
+  }
   const now = new Date().toISOString();
   const nowUnix = Math.floor(Date.now() / 1000);
   const agentIdForRow = (panelAgentId != null && String(panelAgentId).trim()) ? String(panelAgentId).trim() : 'agent_sam';
@@ -16212,14 +16731,14 @@ async function upsertMcpAgentSession(env, conversationId, panelAgentId) {
   try {
     await env.DB.prepare(
       `INSERT INTO mcp_agent_sessions (id, agent_id, tenant_id, status, conversation_id, last_activity, tool_calls_count, panel, created_at, updated_at)
-       VALUES (?, ?, 'tenant_sam_primeaux', 'active', ?, ?, 0, ?, ?, ?)
+       VALUES (?, ?, ?, 'active', ?, ?, 0, ?, ?, ?)
        ON CONFLICT(conversation_id) DO UPDATE SET
          agent_id = excluded.agent_id,
          panel = excluded.panel,
          last_activity = excluded.last_activity,
          tool_calls_count = tool_calls_count + 1,
          updated_at = excluded.updated_at`
-    ).bind(crypto.randomUUID(), agentIdForRow, conversationId, now, panel, nowUnix, nowUnix).run();
+    ).bind(crypto.randomUUID(), agentIdForRow, tid, conversationId, now, panel, nowUnix, nowUnix).run();
   } catch (e) { console.warn('[upsertMcpAgentSession]', e?.message ?? e); }
 }
 
@@ -16419,9 +16938,15 @@ async function runGdriveOauthBuiltinTool(env, toolName, params, opts = {}) {
 async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opts = {}) {
   const allowRemoteMcp = opts.allowRemoteMcp !== false;
   const suppressTelemetry = !!opts.suppressTelemetry;
+  const defaultTenantForMcp =
+    (opts.tenantId != null && String(opts.tenantId).trim()) ||
+    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    null;
   const rec = async (o) => {
     if (suppressTelemetry) return;
-    await recordMcpToolCall(env, o);
+    const tid =
+      (o.tenantId != null && String(o.tenantId).trim()) || defaultTenantForMcp;
+    await recordMcpToolCall(env, { ...o, tenantId: tid });
   };
   const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'sam_primeaux');
   const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_samprimeaux');
@@ -17096,7 +17621,12 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       }
     }
     try {
-      const out = await runImgxBuiltinTool(env, tool_name, imgxParams);
+      const out = await runImgxBuiltinTool(env, tool_name, imgxParams, {
+        conversationId,
+        tenantId:
+          (opts.tenantId != null && String(opts.tenantId).trim()) ||
+          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+      });
       if (out && out.error) {
         await rec( { conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: null, error: out.error, serviceName: 'builtin' });
         return { error: out.error };
@@ -17181,15 +17711,36 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: 'r2_write: key required' };
     }
     try {
-      const bucketName = (params.bucket || 'R2').toUpperCase();
-      const bucket = bucketName === 'TOOLS' ? env.TOOLS :
-                     bucketName === 'DASHBOARD' ? env.DASHBOARD :
-                     bucketName === 'ASSETS' ? env.ASSETS : env.R2;
+      let bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
+      if (bucketName === 'TOOLS') bucketName = 'DASHBOARD';
+      let bucket = null;
+      if (bucketName === 'DASHBOARD') bucket = env.DASHBOARD;
+      else if (bucketName === 'ASSETS') bucket = env.ASSETS;
+      else if (bucketName === 'DOCS_BUCKET') bucket = env.DOCS_BUCKET;
+      else if (bucketName === 'AUTORAG_BUCKET') bucket = env.AUTORAG_BUCKET;
+      else if (bucketName === 'R2') bucket = env.R2;
       if (!bucket) return { error: `r2_write: bucket ${bucketName} not available` };
       const ct = params.content_type || params.contentType || 'text/plain; charset=utf-8';
       await bucket.put(key, body ?? '', { httpMetadata: { contentType: ct } });
-      const publicUrl = bucketName === 'TOOLS' ? `https://tools.inneranimalmedia.com/${key}` : null;
-      const resultText = JSON.stringify({ ok: true, key, bucket: bucketName, public_url: publicUrl });
+      const publicUrl =
+        bucketName === 'DOCS_BUCKET' ? `https://docs.inneranimalmedia.com/${key}` :
+          bucketName === 'AUTORAG_BUCKET' ? `https://autorag.inneranimalmedia.com/${key}` : null;
+      const kl = String(key).toLowerCase();
+      const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
+      const ui_events = [
+        { type: 'r2_file_updated', bucket: bucketName, key },
+        ...(isHtml ? [{ type: 'browser_navigate', url: `https://tools.inneranimalmedia.com/${key}` }] : []),
+      ];
+      const payload = {
+        ok: true,
+        key,
+        bucket: bucketName,
+        public_url: publicUrl,
+        broadcast: true,
+        ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
+        ...(isHtml ? { ui_events } : {}),
+      };
+      const resultText = JSON.stringify(payload);
       let byteLen = 0;
       if (typeof body === 'string') byteLen = body.length;
       else if (body && typeof body.byteLength === 'number') byteLen = body.byteLength;
@@ -17208,7 +17759,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         relatedIdsJson: conversationId ? [conversationId] : null,
       });
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
-      return { result: resultText };
+      return { result: payload };
     } catch (e) {
       const errMsg = `R2 error: ${e?.message ?? e}`;
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
@@ -17655,6 +18206,36 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       });
       return { error: errMsg };
     }
+  }
+
+  if (tool_name === 'preview_in_browser') {
+    const url = params.url || (params.r2Key ? `https://tools.inneranimalmedia.com/${params.r2Key}` : null);
+    if (!url) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: null, error: 'url or r2Key required', serviceName: 'builtin' });
+      return { error: 'url or r2Key required' };
+    }
+    const payload = { ok: true, url, ui_event: { type: 'browser_navigate', url } };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'ui', toolInput: params, result: JSON.stringify(payload), error: null, serviceName: 'builtin' });
+    return { result: payload };
+  }
+  if (tool_name === 'get_r2_url') {
+    const key = params.key ?? params.path ?? '';
+    const bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
+    if (!key) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'key required', serviceName: 'builtin' });
+      return { error: 'key required' };
+    }
+    let url = null;
+    if (bucketName === 'DASHBOARD' || bucketName === 'TOOLS') url = `https://tools.inneranimalmedia.com/${key}`;
+    else if (bucketName === 'DOCS_BUCKET') url = `https://docs.inneranimalmedia.com/${key}`;
+    else if (bucketName === 'AUTORAG_BUCKET') url = `https://autorag.inneranimalmedia.com/${key}`;
+    else {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: `bucket ${bucketName} not supported`, serviceName: 'builtin' });
+      return { error: `get_r2_url: bucket ${bucketName} not supported` };
+    }
+    const payload = { ok: true, url, bucket: bucketName, key };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: JSON.stringify(payload), error: null, serviceName: 'builtin' });
+    return { result: payload };
   }
 
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();
@@ -19160,7 +19741,9 @@ async function uploadImgxToDashboard(env, bytes, contentType, baseName, logCtx =
       prompt: logCtx.prompt ?? null,
       model: logCtx.model ?? null,
       responseText: logCtx.responseText ?? `DASHBOARD:${key}`,
-      tenantId: logCtx.tenantId || 'tenant_sam_primeaux',
+      tenantId:
+        (logCtx.tenantId != null && String(logCtx.tenantId).trim()) ||
+        (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
       createdBy: logCtx.createdBy || 'worker',
       metadataJson: {
         r2_key: key,
@@ -19198,7 +19781,7 @@ function listImgxProviders(env) {
   ];
 }
 
-async function runImgxBuiltinTool(env, toolName, params) {
+async function runImgxBuiltinTool(env, toolName, params, ctx = {}) {
   if (toolName === 'imgx_list_providers') {
     return { providers: listImgxProviders(env) };
   }
@@ -19268,6 +19851,39 @@ async function runImgxBuiltinTool(env, toolName, params) {
           byte_length: imageData.byteLength ?? imageData.length ?? 0,
         },
       });
+      try {
+        let rates = ctx.modelRates;
+        if (!rates && env.DB) {
+          try {
+            rates = await loadAiModelRatesMap(env);
+          } catch (_) {
+            rates = {};
+          }
+        }
+        let wIn = 0;
+        let wOut = 0;
+        if (result && typeof result === 'object' && result.usage) {
+          wIn = Math.floor(Number(result.usage.prompt_tokens) || 0);
+          wOut = Math.floor(Number(result.usage.completion_tokens) || 0);
+        }
+        await writeTelemetry(
+          env,
+          {
+            sessionId: ctx.conversationId || null,
+            tenantId:
+              (ctx.tenantId != null && String(ctx.tenantId).trim()) ||
+              (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+            provider: 'workers_ai',
+            model: '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+            inputTokens: wIn,
+            outputTokens: wOut,
+            success: true,
+            toolCallCount: 1,
+            toolNamesUsed: [toolName],
+          },
+          rates || {}
+        );
+      } catch (_) {}
       return {
         ok: true,
         image_url,
@@ -19331,6 +19947,34 @@ async function runImgxBuiltinTool(env, toolName, params) {
       metadata: { tool: 'imgx_generate_image', provider: 'openai' },
     });
     if (!stored.ok) return { error: stored.error || 'Image storage failed' };
+    try {
+      let rates = ctx.modelRates;
+      if (!rates && env.DB) {
+        try {
+          rates = await loadAiModelRatesMap(env);
+        } catch (_) {
+          rates = {};
+        }
+      }
+      const mdl = String(params.model || 'dall-e-3');
+      await writeTelemetry(
+        env,
+        {
+          sessionId: ctx.conversationId || null,
+          tenantId:
+            (ctx.tenantId != null && String(ctx.tenantId).trim()) ||
+            (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+          provider: 'openai',
+          model: mdl,
+          inputTokens: 0,
+          outputTokens: 0,
+          success: true,
+          toolCallCount: 1,
+          toolNamesUsed: [toolName],
+        },
+        rates || {}
+      );
+    } catch (_) {}
     return { ok: true, provider: 'openai', model: String(params.model || 'dall-e-3'), image_url: stored.url, key: stored.key };
   }
 
@@ -19703,6 +20347,40 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
       };
     });
     } // end preFilteredTools else
+    if (mode === 'agent') {
+      const SYNTHETIC_DASHBOARD_TOOLS = [
+        {
+          name: 'preview_in_browser',
+          description: 'Open a URL in the dashboard browser tab. Pass url directly or pass r2Key to construct the tools.inneranimalmedia.com URL. Use this after generating HTML to show a live preview.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Full https URL to open in the embedded browser' },
+              r2Key: { type: 'string', description: 'R2 object key; builds https://tools.inneranimalmedia.com/{r2Key}' },
+            },
+          },
+        },
+        {
+          name: 'get_r2_url',
+          description: 'Return the public HTTPS URL for an R2 object (bucket binding name + key).',
+          input_schema: {
+            type: 'object',
+            properties: {
+              bucket: { type: 'string', description: 'Binding: DASHBOARD, DOCS_BUCKET, AUTORAG_BUCKET' },
+              key: { type: 'string', description: 'Object key path' },
+            },
+            required: ['key'],
+          },
+        },
+      ];
+      const have = new Set(tools.map((t) => t.name));
+      for (const s of SYNTHETIC_DASHBOARD_TOOLS) {
+        if (!have.has(s.name)) {
+          tools.push(s);
+          have.add(s.name);
+        }
+      }
+    }
   } catch (e) {
     console.error('[chatWithToolsAnthropic] tool load failed:', e?.message ?? e);
   }
@@ -19726,6 +20404,8 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     d1_write: 'D1 database',
     r2_read: 'file',
     r2_write: 'file',
+    preview_in_browser: 'browser',
+    get_r2_url: 'file',
     github_fetch: 'GitHub',
     web_search: 'web',
     deploy_worker: 'deploy',
@@ -19803,6 +20483,29 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
     const data = await res.json();
     const content = data.content || [];
     lastUsage = { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0, cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0, cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0 };
+    if (env.DB) {
+      try {
+        let anthRates = opts.modelRates;
+        if (!anthRates) {
+          try { anthRates = await loadAiModelRatesMap(env); } catch (_) { anthRates = {}; }
+        }
+        await writeTelemetry(env, {
+          sessionId: conversationId,
+          tenantId:
+            (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
+            (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+          provider: 'anthropic',
+          model: model.model_key,
+          inputTokens: lastUsage.input_tokens,
+          outputTokens: lastUsage.output_tokens,
+          cacheReadTokens: lastUsage.cache_read_input_tokens,
+          cacheWriteTokens: lastUsage.cache_creation_input_tokens,
+          success: true,
+          routingDecisionId: opts.routingOpts?.routingDecisionId,
+          agentRunId: opts.agentsamAgentRunId,
+        }, anthRates);
+      } catch (_) {}
+    }
     const toolUseBlocks = content.filter((b) => b.type === 'tool_use');
     for (const b of toolUseBlocks) {
       console.log('[chatWithToolsAnthropic] Claude using tool', { tool_name: b.name, tool_id: b.id });
@@ -19914,7 +20617,11 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         }
         pendingStateEvents.push({ type: 'state', state: 'TOOL_CALL', context: { tool: toolLabel } });
       }
-      const out = await invokeMcpToolFromChat(env, name, input, conversationId, { executionCtx: ctx, oauthUserId: opts.oauthUserId });
+      const out = await invokeMcpToolFromChat(env, name, input, conversationId, {
+        executionCtx: ctx,
+        oauthUserId: opts.oauthUserId,
+        tenantId: opts.routingOpts?.tenantId,
+      });
       if (wantStream) {
         pendingStateEvents.push({ type: 'state', state: 'THINKING', context: {} });
       }
@@ -19925,13 +20632,28 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         error: out.error,
       });
       const resultText = out.error ? JSON.stringify({ error: out.error }) : (typeof out.result === 'string' ? out.result : JSON.stringify(out.result || {}));
-      // Emit ui_event SSE immediately if tool returned one (e.g. excalidraw tools)
+      // Emit ui_event SSE immediately if tool returned one (e.g. excalidraw tools, r2_write, preview_in_browser)
       if (wantStream && !out.error) {
         try {
           const resultObj = typeof out.result === 'string' ? JSON.parse(out.result) : (out.result || {});
-          const uiEvent = resultObj.ui_event;
-          if (uiEvent) {
+          const events = [];
+          if (Array.isArray(resultObj.ui_events) && resultObj.ui_events.length) {
+            events.push(...resultObj.ui_events);
+          } else if (resultObj.ui_event) {
+            events.push(resultObj.ui_event);
+          }
+          if (events.length) {
             pendingStateEvents.push({ type: 'tool_result', tool: name, result: JSON.stringify(resultObj) });
+            for (const evt of events) {
+              if (
+                opts.streamWriter &&
+                opts.streamEnc &&
+                evt &&
+                (evt.type === 'r2_file_updated' || evt.type === 'browser_navigate')
+              ) {
+                await opts.streamWriter.write(opts.streamEnc.encode('data: ' + JSON.stringify(evt) + '\n\n'));
+              }
+            }
           }
         } catch (_) {}
       }
@@ -20541,19 +21263,105 @@ async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, 
   ).bind(signalId, sessionId, signalType || 'heartbeat', source || 'dashboard', safePayload).run().catch(() => {});
 }
 
+/** Tenant for worker writes: session row first (from auth_users at login), then wrangler TENANT_ID for local/bootstrap only. Never hardcode a production tenant literal. */
+function resolveTenantIdForWorker(session, env) {
+  const st = session && session.tenant_id != null && String(session.tenant_id).trim();
+  if (st) return String(session.tenant_id).trim();
+  const et = env && env.TENANT_ID != null && String(env.TENANT_ID).trim();
+  if (et) return et;
+  return null;
+}
+
+/** Canonical tenant_id from D1 auth_users (set at account provisioning / migration). Safe if column missing. */
+async function fetchAuthUserTenantId(env, userKey) {
+  if (!env?.DB || userKey == null || String(userKey).trim() === '') return null;
+  const k = String(userKey).trim();
+  try {
+    const u = await env.DB.prepare(
+      `SELECT tenant_id FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`
+    ).bind(k, k).first();
+    if (u && u.tenant_id != null && String(u.tenant_id).trim() !== '') return String(u.tenant_id).trim();
+  } catch (e) {
+    console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
+  }
+  return null;
+}
+
+/** SESSION_CACHE (production-KV_SESSIONS): fast edge session blob; D1 auth_sessions remains source of truth for expiry audit. */
+const IAM_KV_SESSION_KEY_PREFIX = 'iam_sess_v1:';
+
+function ttlSecondsFromExpiresAtIso(expiresAtIso) {
+  if (!expiresAtIso) return 2592000;
+  const ms = new Date(expiresAtIso).getTime() - Date.now();
+  return Math.max(300, Math.min(2592000, Math.floor(ms / 1000)));
+}
+
+async function readIamSessionFromKv(env, sessionId) {
+  if (!env.SESSION_CACHE || !sessionId) return null;
+  try {
+    const raw = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || o.v !== 1 || !o.user_id) return null;
+    const expMs = o.expires_at ? new Date(o.expires_at).getTime() : 0;
+    if (expMs && expMs <= Date.now()) return null;
+    return o;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {
+  if (!env.SESSION_CACHE || !sessionId || !userId) return;
+  const tid = tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
+  const payload = { v: 1, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
+  try {
+    await env.SESSION_CACHE.put(IAM_KV_SESSION_KEY_PREFIX + sessionId, JSON.stringify(payload), {
+      expirationTtl: ttlSecondsFromExpiresAtIso(expiresAtIso),
+    });
+  } catch (e) {
+    console.warn('[writeIamSessionToKv]', e?.message ?? e);
+  }
+}
+
+async function resolveTenantAtLogin(env, userId) {
+  const fromUser = await fetchAuthUserTenantId(env, userId);
+  if (fromUser) return fromUser;
+  return resolveTenantIdForWorker(null, env);
+}
+
+function finalizeSessionShape(sessionId, userKey, expiresAtIso, tenantResolved) {
+  const userEmail = (userKey || '').toLowerCase();
+  if (SUPERADMIN_EMAILS.includes(userEmail)) {
+    const ctx = getSamContext(userEmail);
+    ctx.tenant_id = tenantResolved;
+    return ctx;
+  }
+  return { id: sessionId, user_id: userKey, expires_at: expiresAtIso, tenant_id: tenantResolved };
+}
+
 async function getSession(env, request) {
   if (!env.DB) return null;
   const cookie = request.headers.get('Cookie') || '';
   const m = cookie.match(/session=([^\s;]+)/);
   const sessionId = m?.[1];
   if (!sessionId) return null;
+
+  const kv = await readIamSessionFromKv(env, sessionId);
+  if (kv) {
+    const tenantKv =
+      (kv.tenant_id != null && String(kv.tenant_id).trim()) || resolveTenantIdForWorker(null, env);
+    return finalizeSessionShape(sessionId, kv.user_id, kv.expires_at, tenantKv);
+  }
+
   const row = await env.DB.prepare(
     `SELECT id, user_id, expires_at FROM auth_sessions WHERE id = ? AND datetime(expires_at) > datetime('now')`
   ).bind(sessionId).first();
   if (!row) return null;
-  const userEmail = (row.user_id || '').toLowerCase();
-  if (SUPERADMIN_EMAILS.includes(userEmail)) return getSamContext(userEmail);
-  return row;
+  const tenantFromUser = await fetchAuthUserTenantId(env, row.user_id);
+  const tenantResolved = tenantFromUser || resolveTenantIdForWorker(null, env);
+  void writeIamSessionToKv(env, sessionId, row.user_id, tenantResolved, row.expires_at);
+  return finalizeSessionShape(sessionId, row.user_id, row.expires_at, tenantResolved);
 }
 
 /** Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
@@ -20561,7 +21369,7 @@ async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
   const sessionUserId = session._session_user_id || session.user_id;
-  const tenantId = session.tenant_id || 'tenant_sam_primeaux';
+  const tenantId = resolveTenantIdForWorker(session, env);
   return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
 }
 
@@ -24053,6 +24861,8 @@ async function handleEmailPasswordLogin(request, url, env) {
     await env.DB.prepare(
       `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
     ).bind(sessionId, userId, expiresAt, ip, ua).run();
+    const tidLogin = await resolveTenantAtLogin(env, userId);
+    await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
     const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
     const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
@@ -24174,6 +24984,8 @@ async function handleBackupCodeLogin(request, url, env) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).bind(sessionId, email, expiresAt, ip, ua).run();
+  const tidMfa = await resolveTenantAtLogin(env, email);
+  await writeIamSessionToKv(env, sessionId, email, tidMfa, expiresAt);
   const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
   const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -24183,6 +24995,14 @@ async function handleBackupCodeLogin(request, url, env) {
 
 /** POST /api/auth/logout -- clear session cookie and redirect to sign-in. */
 async function handleLogout(request, url, env) {
+  const cookie = request.headers.get('Cookie') || '';
+  const sm = cookie.match(/session=([^\s;]+)/);
+  const sid = sm?.[1];
+  if (sid && env.SESSION_CACHE) {
+    try {
+      await env.SESSION_CACHE.delete(IAM_KV_SESSION_KEY_PREFIX + sid);
+    } catch (_) {}
+  }
   const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
   const headers = new Headers({ Location: `${origin(url)}/auth/signin` });
   headers.append('Set-Cookie', `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0; Domain=${domain}`);

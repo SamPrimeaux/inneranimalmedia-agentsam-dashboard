@@ -15,7 +15,6 @@ import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { MonacoEditorView } from './components/MonacoEditorView';
 import { LocalExplorer } from './components/LocalExplorer';
 import { BrowserView } from './components/BrowserView';
-import { GLBViewer } from './components/GLBViewer';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ToolLauncherBar } from './components/ToolLauncherBar';
 import { StatusBar } from './components/StatusBar';
@@ -768,7 +767,7 @@ const App: React.FC = () => {
                             return url;
                           });
                           setGlbViewerFilename(file.name);
-                          openTab('glb');
+                          openTab('engine');
                         }}
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -929,15 +928,6 @@ const App: React.FC = () => {
                           onClose={(e) => closeTab('browser', e)}
                       />
                   )}
-                  {openTabs.includes('glb') && (
-                      <Tab
-                          title="GLB"
-                          icon={<Box size={13} className="text-[var(--solar-green)]"/>}
-                          active={activeTab === 'glb'}
-                          onClick={() => setActiveTab('glb')}
-                          onClose={(e) => closeTab('glb', e)}
-                      />
-                  )}
                   {openTabs.includes('excalidraw') && (
                       <Tab
                           title="Draw"
@@ -952,7 +942,6 @@ const App: React.FC = () => {
                   <div className="ml-auto flex items-center gap-0.5 pr-2 shrink-0">
                       {!openTabs.includes('engine') && <QuickOpen label="Voxel" onClick={() => openTab('engine')} />}
                       {!openTabs.includes('browser') && <QuickOpen label="Browser" onClick={() => openTab('browser')} />}
-                      {!openTabs.includes('glb') && <QuickOpen label="GLB" onClick={() => openTab('glb')} />}
                       {!openTabs.includes('excalidraw') && <QuickOpen label="Draw" onClick={() => openTab('excalidraw')} />}
                   </div>
 
@@ -1018,12 +1007,6 @@ const App: React.FC = () => {
                       </div>
                   )}
 
-                  {activeTab === 'glb' && (
-                      <div className="absolute inset-0 z-10 overflow-hidden">
-                          <GLBViewer url={glbViewerUrl} filename={glbViewerFilename} />
-                      </div>
-                  )}
-
                   {activeTab === 'excalidraw' && (
                       <div className="absolute inset-0 z-10 flex flex-col">
                           <ExcalidrawView />
@@ -1080,7 +1063,7 @@ const App: React.FC = () => {
                                 return url;
                               });
                               setGlbViewerFilename(file.name);
-                              openTab('glb');
+                              openTab('engine');
                             }}
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}

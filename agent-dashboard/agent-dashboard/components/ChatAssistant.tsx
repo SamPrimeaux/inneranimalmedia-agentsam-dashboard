@@ -54,7 +54,7 @@ interface ChatAssistantProps {
   onR2FileUpdated?: (event: { type: 'r2_file_updated'; bucket: string; key: string }) => void;
   /** SSE: `browser_navigate` opens the Browser tab (e.g. after HTML write or preview_in_browser) */
   onBrowserNavigate?: (event: { type: 'browser_navigate'; url: string }) => void;
-  /** Dropped or attached .glb opens the GLB tab with a blob URL (parent owns viewer state). */
+  /** Dropped or attached .glb: parent uses a blob URL and should open the Voxel (engine) tab. */
   onGlbFileSelect?: (file: File) => void;
 }
 

@@ -2299,3 +2299,43 @@ Replace any static tool copy in `agentChatDirectSseHandler` with a D1-backed blo
 ### Known issues / next steps
 Large tool lists increase prompt tokens per `/api/agent/chat` SSE request; monitor telemetry if needed.
 
+## 2026-04-02 Chat SSE — mode-filtered MCP tools, cap 40, skills markdown gate, agentsam_agent_run lifecycle
+
+### What was asked
+Refactor `agentChatDirectSseHandler` only: filter `mcp_registered_tools` by `modes_json` for current mode, cap listed tools at 40 with overflow note, load `content_markdown` for skills only when the user message contains `/`, wire `agentsam_agent_run` insert + completion with token/cost (telemetry remains per-step in `agent_telemetry`).
+
+### Files changed
+- `worker.js`: `insertChatSseAgentRun` helper; `runSseTelemetrySideBranch(..., agentsamRunId)` calls `completeAgentsamAgentRun` after `agent_telemetry` insert; `insertWorkersAiChatTelemetry` optional 4th arg for same completion; handler early-rejects unsupported `api_platform` before prompt work; MCP query uses `modes_json` NULL/empty OR LIKE pattern for mode, `COALESCE(is_degraded,0)=0`, slice to 40; skills use two SELECT shapes; `chatSseRunId` + insert run only after upstream success (or before Workers AI stream); Workers AI error path completes run via telemetry helper.
+
+### Deploy status
+- Built: no — Worker deployed: no — Deploy approved by Sam: no
+
+### Notes
+Each successful stream request gets one `agentsam_agent_run` row (PK = `chatSseRunId`); rollup by `conversation_id` is via queries (not a single mutating row per thread). Upstream errors before `tee()` leave no run row.
+
+## 2026-04-02 Sandbox auth-signin R2 + chat SSE session-scoped run/telemetry
+
+### What was asked
+Verify login page sources; upload `static/auth-signin.html` to `agent-sam-sandbox-cicd` before promote; remove hardcoded `user_id` / `tenant_sam_primeaux` from `insertChatSseAgentRun` and related chat-SSE paths; use `getSession` object; commit and push.
+
+### Files changed
+- `worker.js` `insertChatSseAgentRun`: binds `user_id` / `workspace_id` / `conversation_id` from session + request; `ON CONFLICT(id) DO NOTHING`; skip insert when no `user_id` (ingest/anonymous).
+- `worker.js` `agentChatDirectSseHandler`: `chatSseSession` retained after auth; `tenantIdChatSse` / skill workspace key from session; all `insertChatSseAgentRun` and telemetry paths pass session tenant.
+- `worker.js` `runSseTelemetrySideBranch` / `insertWorkersAiChatTelemetry`: `telemetryTenantId` parameter replaces hardcoded tenant in `agent_telemetry` INSERT for this SSE flow.
+
+### Files NOT changed (and why)
+- `dashboard/auth-signin.html`: source verified only (uploaded from disk).
+- `FloatingPreviewPanel.jsx`, OAuth handlers: not in scope.
+
+### Deploy status
+- Built: no
+- R2 uploaded: yes — `agent-sam-sandbox-cicd/static/auth-signin.html` from `./dashboard/auth-signin.html` with `--remote` (`wrangler.jsonc`). Note: first put without `--remote` targeted local; repeated with `--remote` for Cloudflare bucket.
+- Worker deployed: no
+- Deploy approved by Sam: no
+
+### What is live now
+Sandbox R2 object updated on remote bucket; `worker.js` fix is committed on `main` (not deployed until sandbox/prod pipeline runs).
+
+### Known issues / next steps
+- Re-upload uses `--remote` for sandbox R2. Git reported `non-monotonic index` on `._pack-*.idx` (macOS resource fork noise); consider cleaning `._*` files under `.git/objects/pack` if git acts up.
+

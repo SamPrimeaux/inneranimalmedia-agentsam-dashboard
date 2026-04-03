@@ -2355,3 +2355,36 @@ Fix sandbox `GET /api/settings/workspaces` returning 500 (breaking workspace-awa
 ### Notes
 Chat endpoint accepts `Cookie: iam_session=<uuid>`; full benchmark requires a valid session. Optional: apply `migrations/148_workspace_default_and_theme.sql` to sandbox D1 so `theme` / `default_workspace_id` exist without relying on fallbacks.
 
+
+---
+
+## 2026-04-03 (continued)
+
+### Prod deploy completed
+- v16 promoted to inneranimalmedia.com/dashboard/agent
+- Resend notification delivered -> meauxbility@gmail.com (id=d229bee5)
+- WARN: cicd_notifications FK mismatch fixed (removed from cicd-d1-log.sh)
+- promote-to-prod.sh CURRENT_V parse fixed
+
+### D1 migrations applied
+- 212: cicd tables for sandbox v16 deploy (6 tables)
+- 213: mcp_registered_tools — voxel_spawn_model, voxel_generate_scene, workflow_run_pipeline
+- 214: roadmap_plans + roadmap_steps — plan_voxel_chess_livestream (16 steps)
+- pipelines/pipeline_runs tables created
+- ai_workflow_pipelines template row: wfpipe_promote_prod
+
+### Code fixes applied (Cursor)
+- worker.js: /api/generate system prompt → structured voxel entity JSON
+- worker.js: GET /api/meshy/latest route added
+- worker.js: POST /api/workflow/run route added
+- App.tsx: chat GLB drop → spawnEntity in VoxelEngine
+- VoxelEngine.ts: exportForBlender() implemented
+- App.tsx: GLB tab removed, openTab('glb') → openTab('engine')
+
+### Next session priorities (roadmap steps 2-6, 13-14)
+- Chess piece R2 asset pipeline
+- Chess board + piece rendering
+- LocalExplorer GitHub/Drive real endpoints
+- iam-welcome.sh startup UI refinement
+- Full end-to-end smoke test (step 16)
+

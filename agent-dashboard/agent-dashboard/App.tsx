@@ -36,7 +36,7 @@ import {
   formatWorkspaceStatusLine,
   type IdeWorkspaceSnapshot,
 } from './src/ideWorkspace';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom } from 'lucide-react';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye } from 'lucide-react';
 
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -208,6 +208,33 @@ const App: React.FC = () => {
     },
     [],
   );
+
+  const htmlPreviewBlobRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (htmlPreviewBlobRef.current) {
+        URL.revokeObjectURL(htmlPreviewBlobRef.current);
+        htmlPreviewBlobRef.current = null;
+      }
+    };
+  }, []);
+
+  /** Open current buffer as blob: URL in Browser tab (HTML / HTM only). */
+  const openHtmlPreview = useCallback(() => {
+    if (!activeFile?.content) return;
+    const name = activeFile.name || '';
+    if (!/\.html?$/i.test(name)) return;
+    if (htmlPreviewBlobRef.current) {
+      URL.revokeObjectURL(htmlPreviewBlobRef.current);
+      htmlPreviewBlobRef.current = null;
+    }
+    const u = URL.createObjectURL(new Blob([activeFile.content], { type: 'text/html; charset=utf-8' }));
+    htmlPreviewBlobRef.current = u;
+    setBrowserUrl(u);
+    setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
+    setActiveTab('browser');
+  }, [activeFile]);
 
   const handleSaveFile = useCallback(async (content: string) => {
     if (!activeFile) return;
@@ -773,6 +800,7 @@ const App: React.FC = () => {
                       />
                   )}
                   {openTabs.includes('code') && (
+                      <>
                       <Tab
                           title={
                               <span className="flex items-center gap-1">
@@ -785,6 +813,21 @@ const App: React.FC = () => {
                           onClick={() => setActiveTab('code')}
                           onClose={(e) => closeTab('code', e)}
                       />
+                      {activeFile && /\.html?$/i.test(activeFile.name) && (
+                          <button
+                              type="button"
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  openHtmlPreview();
+                              }}
+                              title="Preview HTML in Browser tab"
+                              className="shrink-0 h-8 px-2.5 flex items-center gap-1.5 text-[11px] font-medium rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)] hover:border-[var(--solar-cyan)]"
+                          >
+                              <Eye size={13} className="text-[var(--solar-cyan)]" />
+                              Preview
+                          </button>
+                      )}
+                      </>
                   )}
                   {openTabs.includes('engine') && (
                       <Tab

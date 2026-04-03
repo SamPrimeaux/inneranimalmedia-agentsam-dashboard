@@ -3,9 +3,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 const DEFAULT_URL = 'https://inneranimalmedia.com';
 
 function normalizeNavigate(raw: string): string {
-    let next = raw.trim();
+    const next = raw.trim();
     if (!next) return DEFAULT_URL;
-    if (!/^https?:\/\//i.test(next)) next = `https://${next}`;
+    // Blob / data URLs from local HTML preview — do not prefix with https://
+    if (/^(blob:|data:)/i.test(next)) return next;
+    if (!/^https?:\/\//i.test(next)) return `https://${next}`;
     return next;
 }
 

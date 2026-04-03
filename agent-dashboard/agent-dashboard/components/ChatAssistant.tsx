@@ -167,6 +167,32 @@ function hasWordMention(text: string, tag: string): boolean {
   return new RegExp(`@${tag}\\b`).test(text);
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Mention picker inserts `@${label}` (e.g. `@cms.html`), not literal `@file` — match those too. */
+function fileNameMentionedInMessage(userMessage: string, activeFileName?: string): boolean {
+  if (!activeFileName?.trim()) return false;
+  const t = activeFileName.trim();
+  const variants = new Set<string>([t]);
+  const base = t.includes('/') ? t.split('/').pop() || t : t;
+  if (base && base !== t) variants.add(base);
+  for (const v of variants) {
+    const re = new RegExp(`@${escapeRegExp(v)}(?:\\s|$|[,;:!?])`);
+    if (re.test(userMessage)) return true;
+  }
+  return false;
+}
+
+function messageRequestsEditorContext(userMessage: string, activeFileName?: string): boolean {
+  return (
+    hasWordMention(userMessage, 'file') ||
+    hasWordMention(userMessage, 'monaco') ||
+    fileNameMentionedInMessage(userMessage, activeFileName)
+  );
+}
+
 /** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
 async function buildMentionContext(
   userMessage: string,
@@ -180,10 +206,13 @@ async function buildMentionContext(
 ): Promise<string> {
   const { activeFileName, activeFileContent, activeFile, editorCursorLine, editorCursorColumn } = opts;
   const parts: string[] = [];
-  const wantsFileOrMonaco =
-    hasWordMention(userMessage, 'file') || hasWordMention(userMessage, 'monaco');
+  const wantsEditorCtx = messageRequestsEditorContext(userMessage, activeFileName);
+  const injectFileSnippet =
+    (hasWordMention(userMessage, 'file') || fileNameMentionedInMessage(userMessage, activeFileName)) &&
+    activeFileContent != null &&
+    activeFileContent !== '';
 
-  if (hasWordMention(userMessage, 'file') && activeFileContent != null && activeFileContent !== '') {
+  if (injectFileSnippet) {
     parts.push(
       `### @file\n${activeFileName || 'untitled'}\n\n${activeFileContent.slice(0, MENTION_FILE_MAX_CHARS)}`
     );
@@ -199,7 +228,7 @@ async function buildMentionContext(
     );
   }
 
-  if (wantsFileOrMonaco) {
+  if (wantsEditorCtx) {
     parts.push(formatAgentToolRouting(activeFile));
   }
 
@@ -262,7 +291,7 @@ function formatAgentToolRouting(activeFile: ActiveFile | null | undefined): stri
   ];
   if (!activeFile) {
     lines.push(
-      '- No file is open in the editor. Open a file from R2, GitHub, Drive, or the local folder, then use @file or @monaco.'
+      '- No file is open in the editor. Open a file from R2, GitHub, Drive, or the local folder, then use @file, @monaco, or @YourFileName (mention picker uses the file label).'
     );
     return lines.join('\n');
   }

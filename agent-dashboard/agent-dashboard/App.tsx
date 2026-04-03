@@ -761,13 +761,24 @@ const App: React.FC = () => {
                             openTab('code');
                         }}
                         onGlbFileSelect={(file) => {
-                          const url = URL.createObjectURL(file);
+                          const glbUrl = URL.createObjectURL(file);
                           setGlbViewerUrl((prev) => {
                             if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-                            return url;
+                            return glbUrl;
                           });
                           setGlbViewerFilename(file.name);
                           openTab('engine');
+                          if (engineRef.current) {
+                            engineRef.current.spawnEntity({
+                              id: `chat-glb-${Date.now()}`,
+                              name: file.name.replace(/\.glb$/i, ''),
+                              type: 'prop',
+                              position: { x: 0, y: 1, z: 0 },
+                              behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
+                              modelUrl: glbUrl,
+                              scale: 1,
+                            });
+                          }
                         }}
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -1057,13 +1068,24 @@ const App: React.FC = () => {
                                 openTab('code');
                             }}
                             onGlbFileSelect={(file) => {
-                              const url = URL.createObjectURL(file);
+                              const glbUrl = URL.createObjectURL(file);
                               setGlbViewerUrl((prev) => {
                                 if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
-                                return url;
+                                return glbUrl;
                               });
                               setGlbViewerFilename(file.name);
                               openTab('engine');
+                              if (engineRef.current) {
+                                engineRef.current.spawnEntity({
+                                  id: `chat-glb-${Date.now()}`,
+                                  name: file.name.replace(/\.glb$/i, ''),
+                                  type: 'prop',
+                                  position: { x: 0, y: 1, z: 0 },
+                                  behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
+                                  modelUrl: glbUrl,
+                                  scale: 1,
+                                });
+                              }
                             }}
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}

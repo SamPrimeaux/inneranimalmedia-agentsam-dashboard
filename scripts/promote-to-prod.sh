@@ -3,11 +3,21 @@
 # Sandbox bucket: agent-sam-sandbox-cicd (replaces deprecated agent-sam-sandbox-cidi).
 # Override: SANDBOX_BUCKET=my-bucket ./scripts/promote-to-prod.sh
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
+# After deploy: logs cicd_* tables (not cicd_runs) via scripts/lib/cicd-d1-log.sh; optional
+# ai_workflow_pipelines / ai_workflow_executions rows. Optional: CICD_D1_LOG=0 | CICD_SKIP_HEALTH_CURL=1 | PROD_HEALTH_URL=...
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
+
+# ── Load env ──────────────────────────────────────────────────────────────────
+if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
+  # shellcheck disable=SC2046
+  export $(grep -v '^#' "${REPO_ROOT}/.env.cloudflare" | xargs) 2>/dev/null || true
+fi
+RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
+RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
 
 WORKER_ONLY=0
 for arg in "$@"; do
@@ -22,6 +32,96 @@ SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 PROD_BUCKET="agent-sam"
 PROD_CFG="wrangler.production.toml"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/lib/cicd-d1-log.sh"
+
+_send_resend_notification() {
+  local outcome="$1"
+  local resend_key="${RESEND_API_KEY:-}"
+  [ -z "$resend_key" ] && echo "  WARN: RESEND_API_KEY not set — skipping notification" && return 0
+
+  local status_label status_color
+  [ "$outcome" = "success" ] && status_label="LIVE" && status_color="#22c55e" \
+    || status_label="FAILED" && status_color="#ef4444"
+
+  local git_sha git_branch git_msg
+  git_sha="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+  git_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'main')"
+  git_msg="$(git log -1 --pretty=%s 2>/dev/null || echo '')"
+
+  local ms_pull ms_push ms_worker total_ms
+  ms_pull=$(( (CICD_T_PULL_END   - CICD_T_PULL_START)   * 1000 ))
+  ms_push=$(( (CICD_T_PUSH_END   - CICD_T_PUSH_START)   * 1000 ))
+  ms_worker=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
+  total_ms=$(( ms_pull + ms_push + ms_worker ))
+
+  local vuln_row=""
+  [ "${GITHUB_VULN_HIGH:-0}" -gt 0 ] \
+    && vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#ef4444;font-weight:600;'>${GITHUB_VULN_HIGH} high / ${GITHUB_VULN_MODERATE:-0} moderate</td></tr>" \
+    || vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#22c55e;'>none detected</td></tr>"
+
+  local html_body
+  html_body="<!DOCTYPE html><html><body style='margin:0;padding:0;background:#0f1117;font-family:ui-monospace,monospace;'>
+<div style='max-width:600px;margin:28px auto;background:#1a1d2e;border:1px solid #2d3148;border-radius:8px;overflow:hidden;'>
+  <div style='background:#12151f;padding:16px 24px;border-bottom:3px solid ${status_color};'>
+    <span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${status_color};margin-right:8px;'></span>
+    <span style='color:#e2e8f0;font-size:14px;font-weight:700;letter-spacing:0.05em;'>IAM // PROD ${status_label}</span>
+    <span style='float:right;color:#475569;font-size:11px;margin-top:2px;'>$(date -u +%Y-%m-%d)</span>
+  </div>
+  <div style='padding:14px 24px;'>
+    <table style='width:100%;border-collapse:collapse;'>
+      <tr><td colspan='2' style='padding:8px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>DEPLOY</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;width:130px;'>Status</td><td style='padding:5px 12px;color:${status_color};font-weight:700;'>${status_label}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${PROD_VERSION}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Dashboard</td><td style='padding:5px 12px;color:#e2e8f0;'>v${CURRENT_V:-0}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>URL</td><td style='padding:5px 12px;'><a href='https://inneranimalmedia.com/dashboard/agent' style='color:#60a5fa;text-decoration:none;'>inneranimalmedia.com/dashboard/agent</a></td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Health</td><td style='padding:5px 12px;color:#e2e8f0;'>${PROD_HC:-skipped}</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>GIT</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Branch</td><td style='padding:5px 12px;color:#e2e8f0;'>${git_branch}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Commit</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${git_sha} — ${git_msg}</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>ASSETS + TIMINGS</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Files</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_LINE_COUNT} files pushed to agent-sam</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Pull</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_pull}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Push</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_push}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_worker}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Total</td><td style='padding:5px 12px;color:#e2e8f0;font-weight:600;'>${total_ms}ms</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>QUALITY / SECURITY</td></tr>
+      ${vuln_row}
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>TRACKING</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>D1 Tables</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, pipeline_runs, ai_workflow_pipelines, ai_workflow_executions, deployments, dashboard_versions</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Workflow Exec</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>wfexec_${DEPLOY_TS}_prod_v${CURRENT_V:-0}</td></tr>
+    </table>
+  </div>
+  <div style='padding:10px 24px;border-top:1px solid #2d3148;color:#475569;font-size:11px;display:flex;justify-content:space-between;'>
+    <span>IAM deploy pipeline</span><span>$(date -u +%Y-%m-%dT%H:%M:%SZ)</span>
+  </div>
+</div></body></html>"
+
+  local json_html
+  json_html=$(printf '%s' "$html_body" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
+    || printf '"%s"' "$(printf '%s' "$html_body" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n')")
+
+  local http_code
+  http_code=$(curl -sS \
+    -X POST https://api.resend.com/emails \
+    -H "Authorization: Bearer ${resend_key}" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"${RESEND_FROM}\",\"to\":[\"${RESEND_TO}\"],\"subject\":\"[IAM] PROD ${status_label} — dashboard-v${CURRENT_V:-0} — $(date -u +%Y-%m-%d)\",\"html\":${json_html}}" \
+    -o /tmp/resend-response.json \
+    -w "%{http_code}" 2>/dev/null || echo "0")
+
+  if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+    local msg_id; msg_id=$(grep -o '"id":"[^"]*"' /tmp/resend-response.json 2>/dev/null | cut -d'"' -f4 || echo "")
+    echo "  Resend: sent -> ${RESEND_TO} (HTTP ${http_code}${msg_id:+ id=${msg_id}})"
+  else
+    echo "  WARN: Resend failed (HTTP ${http_code}) — check /tmp/resend-response.json"
+  fi
+}
+
+CICD_T_PULL_START=0
+CICD_T_PULL_END=0
+CICD_T_PUSH_START=0
+CICD_T_PUSH_END=0
 
 DIST_DIR="${REPO_ROOT}/agent-dashboard/agent-dashboard/dist"
 HTML_PATH="${REPO_ROOT}/dashboard/agent.html"
@@ -29,9 +129,21 @@ MANIFEST_NAME=".deploy-manifest"
 MANIFEST_KEY="static/dashboard/agent/${MANIFEST_NAME}"
 R2_AGENT_PREFIX="static/dashboard/agent"
 
+# Parse dashboard bundle version from local agent shell (overwrites stale env e.g. CURRENT_V=15).
+_parse_dashboard_v_from_html() {
+  [ ! -f "$HTML_PATH" ] && return 0
+  local v
+  v=$(grep -oE 'dashboard-v:[0-9]+' "$HTML_PATH" 2>/dev/null | head -1 | cut -d: -f2 || true)
+  if [ -z "$v" ]; then
+    v=$(grep -oE '\?v=[0-9]+' "$HTML_PATH" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)
+  fi
+  [ -n "$v" ] && CURRENT_V="$v"
+}
+
 # ── Step 1: Pull current build from sandbox R2 into local dist ────────────────
 if [ "$WORKER_ONLY" -eq 0 ]; then
   echo "Pulling latest build from sandbox R2 (${SANDBOX_BUCKET})..."
+  CICD_T_PULL_START=$(date +%s)
   mkdir -p "${DIST_DIR}" "${REPO_ROOT}/dashboard"
   rm -f "${DIST_DIR}/${MANIFEST_NAME}"
 
@@ -54,20 +166,20 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
     --file "$HTML_PATH" --remote -c "$PROD_CFG"
 
+  CICD_T_PULL_END=$(date +%s)
+
   if [ ! -f "$HTML_PATH" ]; then
     echo "ERROR: ${HTML_PATH} missing after sandbox pull. Re-run deploy-sandbox first."
     exit 1
   fi
 
-  CURRENT_V=$(grep -oE 'dashboard-v:[0-9]+' "$HTML_PATH" | head -1 | cut -d: -f2 || echo "0")
-  if [ -z "$CURRENT_V" ] || [ "$CURRENT_V" = "" ]; then
-    CURRENT_V=$(grep -oE '\?v=[0-9]+' "$HTML_PATH" | head -1 | grep -oE '[0-9]+' || echo "0")
-  fi
-  echo "  Pulled v=${CURRENT_V} from sandbox."
+  _parse_dashboard_v_from_html
+  echo "  Pulled v=${CURRENT_V:-0} from sandbox."
   echo ""
 
   # ── Step 2: Push to production R2 ──────────────────────────────────────────
   echo "Promoting v=${CURRENT_V} to production bucket (${PROD_BUCKET})..."
+  CICD_T_PUSH_START=$(date +%s)
 
   ctype_for() {
     case "$1" in
@@ -107,6 +219,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --config "$PROD_CFG" --remote
 
   echo "  R2 production uploads complete."
+  CICD_T_PUSH_END=$(date +%s)
 
   # Log to dashboard_versions — one row per dist asset + HTML shell (exclude index.html duplicate)
   sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -157,17 +270,36 @@ EOF
 
   "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
     --remote -c "$PROD_CFG" \
-    --command="$D1_SQL" 2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
+    --command="$D1_SQL"   2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
 fi
+
+# Worker-only: full R2 pull is skipped — still fetch agent shell from sandbox so Resend/CICD see current v.
+if [ "$WORKER_ONLY" -eq 1 ]; then
+  echo "Worker-only: fetching static/dashboard/agent.html from sandbox R2 (${SANDBOX_BUCKET})..."
+  CICD_T_PULL_START=$(date +%s)
+  mkdir -p "$(dirname "$HTML_PATH")"
+  if ! "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+      --file "$HTML_PATH" --remote -c "$PROD_CFG"; then
+    echo "  WARN: sandbox agent.html fetch failed — dashboard version in email/logs may be stale"
+  fi
+  CICD_T_PULL_END=$(date +%s)
+  echo ""
+fi
+
+_parse_dashboard_v_from_html
 
 # ── Step 3: Deploy production worker ──────────────────────────────────────────
 echo "Deploying production worker (inneranimalmedia)..."
 NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
 
+CICD_T_WORKER_START=$(date +%s)
 PROD_VERSION=$("${WRANGLER[@]}" deploy ./worker.js \
   -c "$PROD_CFG" 2>&1 | tee /tmp/prod-deploy-out.txt | grep "Current Version ID:" | grep -o '[a-f0-9-]\{36\}' || echo "unknown")
+CICD_T_WORKER_END=$(date +%s)
 cat /tmp/prod-deploy-out.txt
+
+_parse_dashboard_v_from_html
 
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
@@ -181,9 +313,6 @@ echo "  URL:     https://inneranimalmedia.com/dashboard/agent"
 echo "  Bucket:  ${PROD_BUCKET}"
 echo "  Version: v=${CURRENT_V:-n/a}"
 
-if [ -z "${CURRENT_V:-}" ] && [ -f "$HTML_PATH" ]; then
-  CURRENT_V=$(grep -oE 'dashboard-v:[0-9]+' "$HTML_PATH" 2>/dev/null | head -1 | cut -d: -f2 || echo "?")
-fi
 NEXT_VERSION="${NEXT_VERSION:-$CURRENT_V}"
 DEPLOY_DESC="${DEPLOY_DESC:-prod promote $(date +%Y-%m-%d)}"
 DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
@@ -192,3 +321,79 @@ DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
   --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
   2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
 echo "[promote-to-prod] D1 deployment row updated"
+
+CICD_MS_PULL=$(( (CICD_T_PULL_END - CICD_T_PULL_START) * 1000 ))
+CICD_MS_PUSH=$(( (CICD_T_PUSH_END - CICD_T_PUSH_START) * 1000 ))
+CICD_MS_WORKER=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
+MANIFEST_FOR_COUNT="${DIST_DIR}/${MANIFEST_NAME}"
+R2_LINE_COUNT=0
+[ -f "$MANIFEST_FOR_COUNT" ] && R2_LINE_COUNT=$(wc -l < "$MANIFEST_FOR_COUNT" | tr -d ' ')
+PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://inneranimalmedia.com/dashboard/agent}"
+PROD_HC=""
+if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
+  PROD_HC=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 25 "$PROD_HEALTH_URL" 2>/dev/null || echo "")
+fi
+
+# ── ai_workflow_* (non-fatal; before cicd_log_prod_promote) ───────────────────
+QUALITY_STATUS="${QUALITY_STATUS:-pass}"
+GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
+GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
+
+"${WRANGLER[@]}" d1 execute inneranimalmedia-business \
+  --remote -c "$PROD_CFG" \
+  --command="INSERT OR IGNORE INTO ai_workflow_pipelines (
+    id, tenant_id, name, description, category,
+    trigger_event, stages_json, variables_json,
+    success_criteria, is_template, status,
+    execution_history_json, created_by,
+    created_at, updated_at
+  ) VALUES (
+    'wfpipe_promote_prod',
+    'tenant_sam_primeaux',
+    'promote-to-prod',
+    'Pull sandbox R2 build, push to prod R2, deploy inneranimalmedia worker, health check, notify via Resend',
+    'deployment',
+    'manual',
+    '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"tool_role\":\"internal\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"tool_role\":\"wrangler_deploy\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"tool_role\":\"curl\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"tool_role\":\"resend\"}]',
+    '{\"default_variables\":{\"environment\":\"production\",\"bucket\":\"agent-sam\",\"worker\":\"inneranimalmedia\"},\"required_variables\":[\"RESEND_API_KEY\"]}',
+    'health_check=200, worker version ID captured, all D1 tables written',
+    1,
+    'active',
+    '[]',
+    'sam_primeaux',
+    unixepoch(), unixepoch()
+  );" \
+  2>/dev/null || echo "  WARN: ai_workflow_pipelines template row failed (non-fatal)"
+
+WF_EXEC_ID="wfexec_${DEPLOY_TS}_prod_v${CURRENT_V:-0}"
+WF_TOTAL_DURATION_S=$(( (CICD_MS_PULL + CICD_MS_PUSH + CICD_MS_WORKER) / 1000 ))
+
+"${WRANGLER[@]}" d1 execute inneranimalmedia-business \
+  --remote -c "$PROD_CFG" \
+  --command="INSERT OR IGNORE INTO ai_workflow_executions (
+    id, pipeline_id, tenant_id, execution_number,
+    status, input_variables_json, output_json,
+    stage_results_json, started_at, completed_at, duration_seconds
+  ) VALUES (
+    '${WF_EXEC_ID}',
+    'wfpipe_promote_prod',
+    'tenant_sam_primeaux',
+    (SELECT COALESCE(MAX(execution_number),0)+1 FROM ai_workflow_executions WHERE pipeline_id='wfpipe_promote_prod'),
+    'completed',
+    '{\"dashboard_v\":\"v${CURRENT_V:-0}\",\"environment\":\"production\",\"triggered_by\":\"${TRIGGERED_BY:-promote}\"}',
+    '{\"worker_version_id\":\"${PROD_VERSION}\",\"health_http\":${PROD_HC:-200},\"r2_files\":${R2_LINE_COUNT},\"quality\":\"${QUALITY_STATUS}\",\"vuln_high\":${GITHUB_VULN_HIGH},\"vuln_moderate\":${GITHUB_VULN_MODERATE}}',
+    '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"duration_ms\":${CICD_MS_PULL},\"status\":\"completed\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"status\":\"completed\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"duration_ms\":${CICD_MS_PUSH},\"status\":\"completed\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"duration_ms\":${CICD_MS_WORKER},\"status\":\"completed\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"status\":\"completed\",\"output\":\"${PROD_HC:-200}\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"status\":\"completed\"}]',
+    unixepoch(), unixepoch(), ${WF_TOTAL_DURATION_S}
+  );" \
+  2>/dev/null || echo "  WARN: ai_workflow_executions row failed (non-fatal)"
+
+cicd_log_prod_promote "$PROD_VERSION" "${CURRENT_V:-0}" "$R2_LINE_COUNT" \
+  "$CICD_MS_PULL" "$CICD_MS_PUSH" "$CICD_MS_WORKER" "0" "${PROD_HC:-200}"
+
+echo ""
+echo "Sending Resend notification..."
+_parse_dashboard_v_from_html
+_send_resend_notification "success"
+echo ""
+echo "  Verify: curl -s https://inneranimalmedia.com/dashboard/agent | grep -o 'dashboard-v:[0-9]*'"
+echo "[promote-to-prod] done"

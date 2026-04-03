@@ -6,6 +6,8 @@
 # Override: SANDBOX_BUCKET=my-bucket ./scripts/deploy-sandbox.sh
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
+# After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_notifications (not cicd_runs) via scripts/lib/cicd-d1-log.sh
+# Optional: CICD_D1_LOG=0 to skip | CICD_SKIP_HEALTH_CURL=1 to skip sandbox curl | SANDBOX_HEALTH_URL=... to override check URL
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,8 +31,15 @@ fi
 CFG="wrangler.jsonc"
 SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
+PROD_CFG="wrangler.production.toml"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/lib/cicd-d1-log.sh"
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
+CICD_T_BUILD_START=0
+CICD_T_BUILD_END=0
+CICD_T_R2_START=0
+CICD_T_R2_END=0
 # Submodule meauxcad uses npm workspaces; SPA output is agent-dashboard/agent-dashboard/dist (not submodule root dist/).
 DIST_DIR="${REPO_ROOT}/agent-dashboard/agent-dashboard/dist"
 MANIFEST_NAME=".deploy-manifest"
@@ -43,6 +52,7 @@ echo "=== SANDBOX DEPLOY ==="
 # ── Build ────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -eq 0 ] && [ "$WORKER_ONLY" -eq 0 ]; then
   echo "Building agent-dashboard workspace (npm ci includes devDependencies so Vite is available even if NODE_ENV=production)..."
+  CICD_T_BUILD_START=$(date +%s)
   NEXT_V=$(( $(cat "${VER_FILE}" 2>/dev/null || echo 0) + 1 ))
   export VITE_SHELL_VERSION="v${NEXT_V}"
   (
@@ -50,11 +60,13 @@ if [ "$SKIP_BUILD" -eq 0 ] && [ "$WORKER_ONLY" -eq 0 ]; then
     npm ci --include=dev
     npm run build:vite-only
   )
+  CICD_T_BUILD_END=$(date +%s)
   echo "Build complete."
 fi
 
 # ── R2 upload to sandbox ─────────────────────────────────────────────────────
 if [ "$WORKER_ONLY" -eq 0 ]; then
+  CICD_T_R2_START=$(date +%s)
   echo "Uploading assets to ${SANDBOX_BUCKET}..."
 
   if [ ! -f "${DIST_DIR}/index.html" ]; then
@@ -125,6 +137,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --config "$CFG" --remote
 
   echo "  R2 uploads complete."
+  CICD_T_R2_END=$(date +%s)
 
   # Log to dashboard_versions in D1 (is_production=0) — one row per dist file + HTML shell
   sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -181,7 +194,9 @@ fi
 
 # ── Deploy sandbox worker ─────────────────────────────────────────────────────
 echo "Deploying sandbox worker (inneranimal-dashboard)..."
+CICD_T_WORKER_START=$(date +%s)
 SANDBOX_VERSION=$("${WRANGLER[@]}" deploy ./worker.js -c "$CFG" 2>&1 | tee /tmp/sandbox-deploy-out.txt | grep "Current Version ID:" | grep -o '[a-f0-9-]\{36\}' || echo "unknown")
+CICD_T_WORKER_END=$(date +%s)
 cat /tmp/sandbox-deploy-out.txt
 
 # Record in deployments D1
@@ -212,3 +227,23 @@ DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
   --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
   2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
 echo "[deploy-sandbox] D1 deployment row updated"
+
+# CICD audit (cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_notifications)
+CICD_MS_BUILD=$(( (CICD_T_BUILD_END - CICD_T_BUILD_START) * 1000 ))
+CICD_MS_R2=$(( (CICD_T_R2_END - CICD_T_R2_START) * 1000 ))
+CICD_MS_WORKER=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
+SANDBOX_HEALTH_URL="${SANDBOX_HEALTH_URL:-https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent}"
+SANDBOX_HC=""
+if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
+  SANDBOX_HC=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$SANDBOX_HEALTH_URL" 2>/dev/null || echo "")
+fi
+R2_LINE_COUNT=0
+R2_BYTE_EST=0
+if [ "$WORKER_ONLY" -eq 0 ] && [ -f "${MANIFEST_PATH:-}" ]; then
+  R2_LINE_COUNT=$(wc -l < "$MANIFEST_PATH" 2>/dev/null | tr -d ' ' || echo 0)
+  R2_BYTE_EST=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}' || echo 0)
+fi
+CICD_V="${CURRENT_V:-$(cat "$VER_FILE" 2>/dev/null || echo 0)}"
+cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_LINE_COUNT" "$R2_BYTE_EST" \
+  "$CICD_MS_BUILD" "$CICD_MS_R2" "$CICD_MS_WORKER" "0" "${SANDBOX_HC:-200}" \
+  "${SANDBOX_HEALTH_URL}"

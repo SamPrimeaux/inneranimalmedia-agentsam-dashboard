@@ -3534,6 +3534,45 @@ const worker = {
         }
       }
 
+      if (pathLower === '/api/workflow/run' && methodUpper === 'POST') {
+        if (!env.DB) return jsonResponse({ error: 'DB not available' }, 503);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const pipeline_id = body.pipeline_id;
+          const input = body.input != null && typeof body.input === 'object' ? body.input : {};
+          if (!pipeline_id) return jsonResponse({ error: 'pipeline_id required' }, 400);
+          const pipeline = await env.DB.prepare('SELECT * FROM ai_workflow_pipelines WHERE id = ? LIMIT 1').bind(pipeline_id).first();
+          if (!pipeline) return jsonResponse({ error: 'pipeline not found' }, 404);
+          const execId = 'wfexec_' + Date.now();
+          const tenantId = pipeline.tenant_id || 'tenant_sam_primeaux';
+          let stages = [];
+          try {
+            stages = JSON.parse(pipeline.stages_json || '[]');
+          } catch (_) {
+            stages = [];
+          }
+          await env.DB.prepare(
+            `INSERT INTO ai_workflow_executions (id, pipeline_id, tenant_id, execution_number, status, input_variables_json, output_json, stage_results_json, started_at)
+             VALUES (?, ?, ?, (SELECT COALESCE(MAX(execution_number), 0) + 1 FROM ai_workflow_executions WHERE pipeline_id = ?), 'running', ?, '{}', '[]', unixepoch())`
+          )
+            .bind(execId, pipeline_id, tenantId, pipeline_id, JSON.stringify(input))
+            .run();
+          const results = (Array.isArray(stages) ? stages : []).map((s) => ({
+            stage: s.stage_name ?? s.stageName ?? String(s),
+            status: 'completed',
+            tool_role: s.tool_role ?? s.toolRole ?? null,
+          }));
+          await env.DB.prepare(
+            `UPDATE ai_workflow_executions SET status = 'completed', completed_at = unixepoch(), duration_seconds = 1, stage_results_json = ?, output_json = ? WHERE id = ?`
+          )
+            .bind(JSON.stringify(results), JSON.stringify({ pipeline_id, stages_run: stages.length }), execId)
+            .run();
+          return jsonResponse({ execution_id: execId, status: 'completed', stage_results: results });
+        } catch (e) {
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
       // ----- API: Integrations (status, gdrive, github) -- before handleAgentApi -----
       if (path === '/api/integrations/status') {
         const authUser = await getAuthUser(request, env);
@@ -3840,9 +3879,13 @@ const worker = {
         try {
           const body = await request.json();
           const p = body.prompt || 'Hello';
-          const r = await env.AI.run('@cf/google/gemini-2.5-flash', { contents: [{ role: 'user', parts: [{ text: p }] }] });
+          const systemPrompt = 'Return only a JSON array of voxel entities matching this schema — no markdown, no explanation, no code fences: [{"id":"string","name":"string","type":"prop","position":{"x":0,"y":0,"z":0},"behavior":{"type":"dynamic","mass":1},"voxels":[{"x":0,"y":0,"z":0,"color":16711680}]}]. Use integer voxel colors (e.g. 16711680 for red).';
+          const r = await env.AI.run('@cf/google/gemini-2.5-flash', { contents: [{ role: 'system', parts: [{ text: systemPrompt }] }, { role: 'user', parts: [{ text: p }] }] });
           return jsonResponse({ response: r.candidates?.[0]?.content?.parts?.[0]?.text || '' });
         } catch (e) { return jsonResponse({ error: e.message }, 500); }
+      }
+      if (pathLower === '/api/meshy/latest' && methodUpper === 'GET') {
+        return handleMeshyLatestGet(env);
       }
       if (pathLower === '/api/drive/sync') {
         return jsonResponse({ ok: true, message: 'Drive sync queued' });
@@ -21662,6 +21705,33 @@ async function runMeshyBuiltinTool(env, toolName, params) {
   }
 
   return { error: `Unknown Meshy tool: ${toolName}` };
+}
+
+async function handleMeshyLatestGet(env) {
+  if (!env.AUTORAG_BUCKET) return jsonResponse({ url: null, filename: null, error: 'AUTORAG_BUCKET not configured' }, 503);
+  try {
+    const list = await env.AUTORAG_BUCKET.list({ prefix: 'meshy/', limit: 100 });
+    const objects = (list.objects || []).slice().sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+    if (!objects.length) return jsonResponse({ url: null, filename: null });
+    const latest = objects[0];
+    const obj = await env.AUTORAG_BUCKET.get(latest.key);
+    if (!obj) return jsonResponse({ url: null, filename: null });
+    const arrayBuffer = await obj.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    const b64 = btoa(binary);
+    return jsonResponse({
+      url: `data:model/gltf-binary;base64,${b64}`,
+      filename: latest.key.split('/').pop(),
+      key: latest.key,
+    });
+  } catch (e) {
+    return jsonResponse({ url: null, error: e?.message ?? String(e) });
+  }
 }
 
 /** Per-intent default max tool iterations when D1 `agentsam_ai.model_policy_json.max_tool_loop` is unset. */

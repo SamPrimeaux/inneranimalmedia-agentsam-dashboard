@@ -638,6 +638,17 @@ export class VoxelEngine {
     this.handleResizeDimensions(rect.width, rect.height);
   }
 
+  public exportForBlender(): void {
+    const payload = Array.from(this.entities.values()).map((e) => e.data);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `voxel-scene-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   public cleanup() {
     cancelAnimationFrame(this.animationId);
     this.resizeObserver.disconnect();

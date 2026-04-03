@@ -10441,7 +10441,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
       const routingOpts = opts.routingOpts || null;
       await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts, 0, 0, true);
-      enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+      await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
         conversationId,
         provider: 'google',
         modelKey: effectiveModelRow.model_key || modelKey,
@@ -21442,6 +21442,11 @@ function enqueueAgentChatDoPersist(env, ctx, conversationId, modelKey, assistant
  * Does not replace per-iteration writeTelemetry (metric_name llm_turn); this row uses metric_name llm_call.
  * cost_breakdown_json / workspace_id / agent_id live in metadata_json (no extra D1 columns in baseline schema).
  */
+/**
+ * Inserts metric_name llm_call into agent_telemetry. Prefer ctx.waitUntil so the write survives
+ * after the HTTP response finishes; if waitUntil is missing, returns a Promise callers should await
+ * when they are already in an async continuation (e.g. SSE tool-loop .then).
+ */
 function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
   conversationId,
   provider,
@@ -21455,74 +21460,78 @@ function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
   agentId,
   agentRunId,
 }) {
-  if (!env?.DB || !ctx || typeof ctx.waitUntil !== 'function') return;
+  if (!env?.DB) return undefined;
   const tenantId = tenantIdFromEnv(env) || 'unknown';
   const workspaceId = tenantIdFromEnv(env) || null;
 
-  ctx.waitUntil(
-    (async () => {
-      try {
-        let ratesMap = routingOpts && routingOpts.modelRates ? { ...routingOpts.modelRates } : {};
-        const mk = String(modelKey || '');
-        if (!ratesMap[mk] && modelRow) ratesMap[mk] = modelRow;
-        if (!ratesMap[mk] && env.DB) {
-          try {
-            const loaded = await loadAiModelRatesMap(env);
-            ratesMap = { ...loaded, ...ratesMap };
-          } catch (_) {}
-        }
-        const row = ratesMap[mk] || modelRow;
-        const tin = Math.floor(Number(inputTokens) || 0);
-        const tout = Math.floor(Number(outputTokens) || 0);
-        const crd = Math.floor(Number(cacheReadTokens) || 0);
-        const cwd = Math.floor(Number(cacheWriteTokens) || 0);
-        const computedCostUsd = computeUsdFromModelRatesRow(mk, row, tin, tout, crd, cwd);
-        const costBreakdown = { input: tin, output: tout, cache_read: crd, cache_write: cwd };
-        const metaObj = {
-          kind: 'llm_call_final',
-          cost_breakdown: costBreakdown,
-          cost_breakdown_json: JSON.stringify(costBreakdown),
-          agent_id: agentId ?? null,
-          workspace_id: workspaceId,
-          agent_run_id: agentRunId ?? null,
-          routing_decision_id: routingOpts?.routingDecisionId ?? null,
-        };
-        const totIn = tin + crd + cwd;
-        const id = crypto.randomUUID();
-        const ts = Math.floor(Date.now() / 1000);
-        await env.DB.prepare(
-          `INSERT INTO agent_telemetry (
-            id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
-            model_used, provider, input_tokens, output_tokens,
-            cache_read_input_tokens, cache_creation_input_tokens,
-            computed_cost_usd, total_input_tokens,
-            event_type, severity, created_at, updated_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
-        ).bind(
-          id,
-          tenantId,
-          conversationId != null ? String(conversationId) : null,
-          'usage_count',
-          'llm_call',
-          1,
-          ts,
-          JSON.stringify(metaObj),
-          mk,
-          String(provider || 'unknown'),
-          tin,
-          tout,
-          crd,
-          cwd,
-          Number.isFinite(Number(computedCostUsd)) ? Number(computedCostUsd) : 0,
-          totIn,
-          'chat',
-          'info',
-        ).run();
-      } catch (e) {
-        console.warn('[enqueueAgentTelemetryFinalLlmCall]', e?.message ?? e);
+  const run = async () => {
+    try {
+      let ratesMap = routingOpts && routingOpts.modelRates ? { ...routingOpts.modelRates } : {};
+      const mk = String(modelKey || '');
+      if (!ratesMap[mk] && modelRow) ratesMap[mk] = modelRow;
+      if (!ratesMap[mk] && env.DB) {
+        try {
+          const loaded = await loadAiModelRatesMap(env);
+          ratesMap = { ...loaded, ...ratesMap };
+        } catch (_) {}
       }
-    })(),
-  );
+      const row = ratesMap[mk] || modelRow;
+      const tin = Math.floor(Number(inputTokens) || 0);
+      const tout = Math.floor(Number(outputTokens) || 0);
+      const crd = Math.floor(Number(cacheReadTokens) || 0);
+      const cwd = Math.floor(Number(cacheWriteTokens) || 0);
+      const computedCostUsd = computeUsdFromModelRatesRow(mk, row, tin, tout, crd, cwd);
+      const costBreakdown = { input: tin, output: tout, cache_read: crd, cache_write: cwd };
+      const metaObj = {
+        kind: 'llm_call_final',
+        cost_breakdown: costBreakdown,
+        cost_breakdown_json: JSON.stringify(costBreakdown),
+        agent_id: agentId ?? null,
+        workspace_id: workspaceId,
+        agent_run_id: agentRunId ?? null,
+        routing_decision_id: routingOpts?.routingDecisionId ?? null,
+      };
+      const totIn = tin + crd + cwd;
+      const id = crypto.randomUUID();
+      const ts = Math.floor(Date.now() / 1000);
+      await env.DB.prepare(
+        `INSERT INTO agent_telemetry (
+          id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
+          model_used, provider, input_tokens, output_tokens,
+          cache_read_input_tokens, cache_creation_input_tokens,
+          computed_cost_usd, total_input_tokens,
+          event_type, severity, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
+      ).bind(
+        id,
+        tenantId,
+        conversationId != null ? String(conversationId) : null,
+        'usage_count',
+        'llm_call',
+        1,
+        ts,
+        JSON.stringify(metaObj),
+        mk,
+        String(provider || 'unknown'),
+        tin,
+        tout,
+        crd,
+        cwd,
+        Number.isFinite(Number(computedCostUsd)) ? Number(computedCostUsd) : 0,
+        totIn,
+        'chat',
+        'info',
+      ).run();
+    } catch (e) {
+      console.warn('[enqueueAgentTelemetryFinalLlmCall]', e?.message ?? e);
+    }
+  };
+
+  if (ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(run());
+    return undefined;
+  }
+  return run();
 }
 
 /** OpenAI chat completions with tools; runs tool_calls loop. When opts.stream is true, returns SSE stream matching Anthropic contract. */
@@ -21900,7 +21909,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
         );
         await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'openai' });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
-        enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+        await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,
           provider: 'openai',
           modelKey: model.model_key,
@@ -22088,7 +22097,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
         );
         await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'openai' });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
-        enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+        await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,
           provider: 'openai',
           modelKey: model.model_key,
@@ -22136,7 +22145,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
   const _finalOut = lastUsage.output_tokens || 0;
   const _finalText = lastContent || '(Tool loop limit reached.)';
   enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, _finalText, _finalIn, _finalOut);
-  enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+  await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
     conversationId,
     provider: 'openai',
     modelKey: model.model_key,
@@ -22449,6 +22458,19 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const toolDesc = (tools.find((t) => t.name === actionBlock.name) || {}).description || actionBlock.name;
         const preview = toolApprovalPreview(actionBlock.name, actionBlock.input);
         if (wantStream) {
+          enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+            conversationId,
+            provider: 'anthropic',
+            modelKey: model.model_key,
+            modelRow: model,
+            routingOpts: opts.routingOpts || null,
+            inputTokens: lastUsage.input_tokens,
+            outputTokens: lastUsage.output_tokens,
+            cacheReadTokens: lastUsage.cache_read_input_tokens || 0,
+            cacheWriteTokens: lastUsage.cache_creation_input_tokens || 0,
+            agentId: agent_id,
+            agentRunId: opts.agentsamAgentRunId ?? null,
+          });
           const streamBody = new ReadableStream({
             start(controller) {
               flushPendingToolStates(controller);
@@ -22469,6 +22491,19 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
           });
           return new Response(streamBody, { headers: { 'Content-Type': 'text/event-stream' } });
         }
+        await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+          conversationId,
+          provider: 'anthropic',
+          modelKey: model.model_key,
+          modelRow: model,
+          routingOpts: opts.routingOpts || null,
+          inputTokens: lastUsage.input_tokens,
+          outputTokens: lastUsage.output_tokens,
+          cacheReadTokens: lastUsage.cache_read_input_tokens || 0,
+          cacheWriteTokens: lastUsage.cache_creation_input_tokens || 0,
+          agentId: agent_id,
+          agentRunId: opts.agentsamAgentRunId ?? null,
+        });
         return jsonResponse({
           tool_approval_request: true,
           text: lastContent,
@@ -22495,10 +22530,10 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         } catch (_) {}
         return;
       }
-      await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
+        await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
       await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
       enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, inputTokens, outputTokens);
-      enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+      await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
         conversationId,
         provider: 'anthropic',
         modelKey: model.model_key,
@@ -22654,7 +22689,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
         await logAssistantCodeArtifactIfPresent(env, { fullText: lastContent, modelKey: model.model_key, conversationId, provider: 'anthropic' });
         enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, lastContent, finalInputTokens, finalOutputTokens);
-        enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+        await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           conversationId,
           provider: 'anthropic',
           modelKey: model.model_key,
@@ -22693,7 +22728,7 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
   const _finalOut = lastUsage.output_tokens || 0;
   const _finalText = lastContent || '(Tool loop limit reached.)';
   enqueueAgentChatDoPersist(env, ctx, conversationId, model.model_key, _finalText, _finalIn, _finalOut);
-  enqueueAgentTelemetryFinalLlmCall(env, ctx, {
+  await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
     conversationId,
     provider: 'anthropic',
     modelKey: model.model_key,

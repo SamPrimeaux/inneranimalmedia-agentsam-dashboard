@@ -5913,6 +5913,22 @@ async function completeAgentsamAgentRun(env, runId, conversationId, inputTokens,
   }
 }
 
+/** Start a per-request chat SSE row (linked to conversation for rollup queries). */
+async function insertChatSseAgentRun(env, id, conversationId, modelId, sessionLike) {
+  if (!id || !env?.DB) return;
+  const userId = sessionLike?.user_id ?? null;
+  if (!userId) return;
+  const workspaceId = sessionLike?.workspace_id ?? null;
+  const convId = conversationId != null && conversationId !== '' ? conversationId : id;
+  await env.DB.prepare(
+    `INSERT INTO agentsam_agent_run (id, user_id, workspace_id, conversation_id, status, trigger, model_id, started_at, created_at)
+     VALUES (?, ?, ?, ?, 'in_progress', 'chat', ?, datetime('now'), datetime('now'))
+     ON CONFLICT(id) DO NOTHING`
+  )
+    .bind(id, userId, workspaceId, convId, modelId || null)
+    .run();
+}
+
 /** After telemetry row exists: link latest routing_decisions row for this session to that telemetry and mark complete. */
 async function completeRoutingDecisionTelemetry(env, conversationId, telemetryId, inputTokens, outputTokens, costUsd, routingOpts) {
   if (!routingOpts || typeof routingOpts.chatStartMs !== 'number' || !conversationId || !telemetryId || !env?.DB) return;
@@ -9505,7 +9521,7 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
   }
 }
 
-async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId) {
+async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null) {
   const reader = branch2.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -9555,7 +9571,7 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
     )
       .bind(
         telemetryRowId,
-        'tenant_sam_primeaux',
+        telemetryTenantId,
         conversationId || null,
         'llm_call',
         'chat_completion',
@@ -9581,6 +9597,9 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   } catch (e) {
     console.error('[agent/chat-sse] agent_telemetry INSERT failed:', e?.message ?? e);
   }
+  if (agentsamRunId) {
+    await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
+  }
 }
 
 function sseResponseHeaders() {
@@ -9596,9 +9615,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
   const ingestBypass = isIngestSecretAuthorized(request, env, secretFn);
+  let chatSseSession = null;
   if (!ingestBypass) {
-    const sess = await getSession(env, request).catch(() => null);
-    if (!sess?.user_id) return jsonResponse({ error: 'Session invalid', code: 401 }, 401);
+    chatSseSession = await getSession(env, request).catch(() => null);
+    if (!chatSseSession?.user_id) return jsonResponse({ error: 'Session invalid', code: 401 }, 401);
   }
 
   let parsed;
@@ -9633,19 +9653,33 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
-  const tenantIdChatSse = 'tenant_sam_primeaux';
+  const apiPlatform = String(modelRow.api_platform || '').trim();
+  const modelKey = String(modelRow.model_key || modelParam);
+  const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
+
+  const sseSupportedPlatforms = new Set(['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'cursor', 'workers_ai']);
+  if (!sseSupportedPlatforms.has(apiPlatform)) {
+    return jsonResponse({ error: 'Unsupported api_platform', api_platform: apiPlatform, model: modelKey }, 400);
+  }
+
+  const chatSseRunId = crypto.randomUUID();
+
+  const tenantIdChatSse = chatSseSession?.tenant_id ?? null;
+  const skillWorkspaceKey = chatSseSession?.workspace_id ?? chatSseSession?.tenant_id ?? null;
   let chatSseSystemPrompt = AGENT_SAM_CHAT_SYSTEM;
   try {
     const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-    const [skillRows, commandRows, mcpToolRows] = await Promise.all([
-      env.DB.prepare(
-        `SELECT name, description, slash_trigger
+    const skillSql = message.includes('/')
+      ? `SELECT name, description, content_markdown, slash_trigger
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`
-      )
-        .bind(tenantIdChatSse)
-        .all(),
+      : `SELECT name, description, slash_trigger
+         FROM agentsam_skill
+         WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
+         ORDER BY sort_order`;
+    const [skillRows, commandRows, mcpToolRows] = await Promise.all([
+      env.DB.prepare(skillSql).bind(skillWorkspaceKey).all(),
       env.DB.prepare(
         `SELECT slug, name, description, category
          FROM agent_commands
@@ -9657,27 +9691,47 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
       env.DB.prepare(
         `SELECT tool_name, tool_category, description
          FROM mcp_registered_tools
-         WHERE enabled = 1
+         WHERE COALESCE(enabled, 1) = 1
+           AND COALESCE(is_degraded, 0) = 0
+           AND (
+             modes_json IS NULL OR TRIM(modes_json) = ''
+             OR modes_json LIKE ('%' || '"' || ? || '"' || '%')
+           )
          ORDER BY tool_category, tool_name`
-      ).all(),
+      )
+        .bind(mode)
+        .all(),
     ]);
 
+    const MCP_SSE_CAP = 40;
+    const mcpAll = mcpToolRows.results || [];
+    const mcpOverCap = mcpAll.length > MCP_SSE_CAP;
+    const mcpSlice = mcpOverCap ? mcpAll.slice(0, MCP_SSE_CAP) : mcpAll;
+    const mcpRemaining = mcpOverCap ? mcpAll.length - MCP_SSE_CAP : 0;
+
     const mcpByCategory = {};
-    for (const t of mcpToolRows.results || []) {
+    for (const t of mcpSlice) {
       const cat = promptLine(t.tool_category) || 'Other';
       if (!mcpByCategory[cat]) mcpByCategory[cat] = [];
       mcpByCategory[cat].push(`  - \`${t.tool_name}\`: ${promptLine(t.description)}`);
     }
-    const mcpBlock = Object.keys(mcpByCategory)
+    let mcpBlock = Object.keys(mcpByCategory)
       .sort()
       .map((cat) => `**${cat}**\n${mcpByCategory[cat].join('\n')}`)
       .join('\n\n');
+    if (mcpRemaining > 0) {
+      mcpBlock += `\n\n(+ ${mcpRemaining} more tools available — ask to load a specific category.)`;
+    }
 
     const skillsBlock = (skillRows.results || [])
       .map((s) => {
         const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
         const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
-        return `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
+        let line = `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
+        if (message.includes('/') && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
+          line += `\n  ${String(s.content_markdown).trim()}`;
+        }
+        return line;
       })
       .join('\n');
 
@@ -9708,10 +9762,6 @@ ${commandsBlock || '(none)'}
     console.warn('[agent/chat-sse] dynamic tools block failed', e?.message ?? e);
   }
 
-  const apiPlatform = String(modelRow.api_platform || '').trim();
-  const modelKey = String(modelRow.model_key || modelParam);
-  const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
-
   const mkUpstreamError = async (upstream, providerName) => {
     const body_text = await upstream.text();
     console.error('[agent/chat-sse] Provider error', providerName, upstream.status, body_text.slice(0, 4000));
@@ -9741,11 +9791,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'anthropic');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId));
+      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
     } else {
-      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId);
+      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9764,11 +9817,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'google');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId));
+      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
     } else {
-      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId);
+      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9801,11 +9857,14 @@ ${commandsBlock || '(none)'}
     }
     if (!upstream.ok) return mkUpstreamError(upstream, 'google');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId));
+      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
     } else {
-      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId);
+      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9831,11 +9890,14 @@ ${commandsBlock || '(none)'}
     });
     if (!upstream.ok) return mkUpstreamError(upstream, 'openai');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId));
+      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
     } else {
-      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId);
+      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -9871,17 +9933,23 @@ ${commandsBlock || '(none)'}
     }
     if (!upstream.ok) return mkUpstreamError(upstream, 'cursor');
     if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId));
+      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse));
     } else {
-      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId);
+      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
 
   if (apiPlatform === 'workers_ai') {
     if (!env.AI) return jsonResponse({ error: 'Workers AI binding not configured' }, 503);
+    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession).catch((e) =>
+      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    );
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const enc = new TextEncoder();
@@ -9901,6 +9969,7 @@ ${commandsBlock || '(none)'}
         } catch (e) {
           console.error('[agent/chat-sse] Workers AI', e?.message ?? e);
           await writeSse({ error: 'Provider error', detail: String(e?.message || e), provider: 'workers_ai', model: modelKey });
+          await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse);
           return;
         }
 
@@ -9948,7 +10017,7 @@ ${commandsBlock || '(none)'}
       } finally {
         await writer.close().catch(() => {});
       }
-      await insertWorkersAiChatTelemetry(env, modelRow, conversationId);
+      await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse);
     };
 
     if (ctx && typeof ctx.waitUntil === 'function') {
@@ -9959,11 +10028,9 @@ ${commandsBlock || '(none)'}
 
     return new Response(readable, { headers: sseResponseHeaders() });
   }
-
-  return jsonResponse({ error: 'Unsupported api_platform', api_platform: apiPlatform, model: modelKey }, 400);
 }
 
-async function insertWorkersAiChatTelemetry(env, modelRow, conversationId) {
+async function insertWorkersAiChatTelemetry(env, modelRow, conversationId, agentsamRunId = null, telemetryTenantId = null) {
   if (!env.DB) return;
   const modelKey = String(modelRow.model_key || '');
   const provider = String(modelRow.provider || 'workers_ai');
@@ -9976,7 +10043,7 @@ async function insertWorkersAiChatTelemetry(env, modelRow, conversationId) {
     )
       .bind(
         crypto.randomUUID(),
-        'tenant_sam_primeaux',
+        telemetryTenantId,
         conversationId || null,
         'llm_call',
         'chat_completion',
@@ -10001,6 +10068,9 @@ async function insertWorkersAiChatTelemetry(env, modelRow, conversationId) {
       .run();
   } catch (e) {
     console.error('[agent/chat-sse] workers_ai telemetry INSERT failed:', e?.message ?? e);
+  }
+  if (agentsamRunId) {
+    await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
   }
 }
 /** Parse data URL to { mediaType, base64 } for vision APIs */

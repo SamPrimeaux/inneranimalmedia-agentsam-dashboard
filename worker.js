@@ -8496,11 +8496,20 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         }
       } else if (toolName === 'r2_read') {
         const key = params.key ?? params.path ?? '';
-        try {
-          const obj = await env.R2.get(key);
-          resultText = obj ? await obj.text() : `Key not found: ${key}`;
-        } catch (e) {
-          resultText = `R2 error: ${e.message}`;
+        if (!key) {
+          resultText = 'r2_read: key required';
+        } else {
+          try {
+            const { binding: bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+            if (!bucket) {
+              resultText = `r2_read: bucket ${params.bucket} not available`;
+            } else {
+              const obj = await bucket.get(key);
+              resultText = obj ? await obj.text() : `Key not found: ${key}`;
+            }
+          } catch (e) {
+            resultText = `R2 error: ${e.message}`;
+          }
         }
       } else if (toolName === 'r2_list') {
         const prefix = params.prefix ?? '';
@@ -8683,15 +8692,8 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         const key = params.key || params.path;
         if (!key) { resultText = 'r2_write: key required'; }
         else {
-          let bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
-          if (bucketName === 'TOOLS') bucketName = 'DASHBOARD';
-          let bucket = null;
-          if (bucketName === 'DASHBOARD') bucket = env.DASHBOARD;
-          else if (bucketName === 'ASSETS') bucket = env.ASSETS;
-          else if (bucketName === 'DOCS_BUCKET') bucket = env.DOCS_BUCKET;
-          else if (bucketName === 'AUTORAG_BUCKET') bucket = env.AUTORAG_BUCKET;
-          else if (bucketName === 'R2') bucket = env.R2;
-          if (!bucket) { resultText = `r2_write: bucket ${bucketName} not available`; }
+          const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
+          if (!bucket) { resultText = `r2_write: bucket ${params.bucket} not available`; }
           else {
             const ct = params.content_type || params.contentType || 'text/plain';
             await bucket.put(key, params.body ?? '', { httpMetadata: { contentType: ct } });
@@ -10242,7 +10244,7 @@ ${skillsBlock || '(none)'}
 ${commandsBlock || '(none)'}
 
 ## IDE State
-- Monaco: file currently open is passed as contextFile in this message
+- Monaco / open file: user can type @file or @monaco in the message to attach editor content, cursor snapshot, and an **Agent tool targets** block with exact bucket/key/repo for that turn. Use those ids with r2_read / r2_write / github_file / terminal_execute when the user wants real persistence — not chat-only code.
 - Excalidraw: use excalidraw_open → excalidraw_load_library → excalidraw_add_elements
 - Terminal: use terminal_execute for shell commands
 - Browser: use cdt_navigate_page → cdt_take_screenshot for browser control. No Playwright needed — cdt_* tools are your browser.
@@ -10685,12 +10687,44 @@ function getR2Binding(env, bucketName) {
     'inneranimalmedia-assets': env.ASSETS,
     autorag: env.AUTORAG_BUCKET,
     'agent-sam': env.DASHBOARD,
+    dashboard: env.DASHBOARD,
     'agent-sam-sandbox-cicd': env.ASSETS,
     'iam-platform': env.R2,
     'iam-docs': env.DOCS_BUCKET,
     tools: env.DASHBOARD,
   };
   return map[bucketName] || null;
+}
+
+function canonicalNameForAgentR2Binding(env, binding) {
+  if (!binding) return 'R2';
+  if (binding === env.DASHBOARD) return 'DASHBOARD';
+  if (binding === env.R2) return 'R2';
+  if (binding === env.ASSETS) return 'ASSETS';
+  if (binding === env.DOCS_BUCKET) return 'DOCS_BUCKET';
+  if (binding === env.AUTORAG_BUCKET) return 'AUTORAG_BUCKET';
+  return 'R2';
+}
+
+/** Default read = iam-platform (R2); default write = DASHBOARD (agent-sam). Accepts logical names e.g. agent-sam. */
+function resolveAgentR2BucketBinding(env, bucketRaw, defaultKind) {
+  const empty = () =>
+    defaultKind === 'write'
+      ? { binding: env.DASHBOARD, name: 'DASHBOARD' }
+      : { binding: env.R2, name: 'R2' };
+  if (bucketRaw == null || String(bucketRaw).trim() === '') return empty();
+  const lower = String(bucketRaw).trim().toLowerCase().replace(/_/g, '-');
+  const hit = getR2Binding(env, lower);
+  if (hit) return { binding: hit, name: canonicalNameForAgentR2Binding(env, hit) };
+  if (lower === 'r2') return env.R2 ? { binding: env.R2, name: 'R2' } : empty();
+  let bn = String(bucketRaw).toUpperCase();
+  if (bn === 'TOOLS') bn = 'DASHBOARD';
+  if (bn === 'DASHBOARD' && env.DASHBOARD) return { binding: env.DASHBOARD, name: 'DASHBOARD' };
+  if (bn === 'ASSETS' && env.ASSETS) return { binding: env.ASSETS, name: 'ASSETS' };
+  if (bn === 'DOCS_BUCKET' && env.DOCS_BUCKET) return { binding: env.DOCS_BUCKET, name: 'DOCS_BUCKET' };
+  if (bn === 'AUTORAG_BUCKET' && env.AUTORAG_BUCKET) return { binding: env.AUTORAG_BUCKET, name: 'AUTORAG_BUCKET' };
+  if (bn === 'R2' && env.R2) return { binding: env.R2, name: 'R2' };
+  return { binding: null, name: bn };
 }
 
 /** IAM Explorer /api/r2/file: allowlisted binding names only (no env.TOOLS). */
@@ -17567,10 +17601,21 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
-  if (tool_name === 'r2_read' && env.R2) {
+  if (tool_name === 'r2_read') {
     const key = params.key ?? params.path ?? '';
+    if (!key) {
+      const errMsg = 'r2_read: key required';
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
+    const { binding: bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+    if (!bucket) {
+      const errMsg = `r2_read: bucket ${params.bucket} not available`;
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
     try {
-      const obj = await env.R2.get(key);
+      const obj = await bucket.get(key);
       const resultText = obj ? await obj.text() : `Key not found: ${key}`;
       await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
@@ -17711,15 +17756,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: 'r2_write: key required' };
     }
     try {
-      let bucketName = (params.bucket || 'DASHBOARD').toString().toUpperCase();
-      if (bucketName === 'TOOLS') bucketName = 'DASHBOARD';
-      let bucket = null;
-      if (bucketName === 'DASHBOARD') bucket = env.DASHBOARD;
-      else if (bucketName === 'ASSETS') bucket = env.ASSETS;
-      else if (bucketName === 'DOCS_BUCKET') bucket = env.DOCS_BUCKET;
-      else if (bucketName === 'AUTORAG_BUCKET') bucket = env.AUTORAG_BUCKET;
-      else if (bucketName === 'R2') bucket = env.R2;
-      if (!bucket) return { error: `r2_write: bucket ${bucketName} not available` };
+      const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
+      if (!bucket) return { error: `r2_write: bucket ${params.bucket} not available` };
       const ct = params.content_type || params.contentType || 'text/plain; charset=utf-8';
       await bucket.put(key, body ?? '', { httpMetadata: { contentType: ct } });
       const publicUrl =

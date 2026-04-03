@@ -37,6 +37,11 @@
   /* Scene / 3D */
   --scene-bg:      #060e14;
 
+  /* Bottom panel / xterm (deeper than panels — reads as “real” terminal) */
+  --terminal-chrome:   var(--solar-base02);
+  --terminal-surface:  #05080c;
+  --terminal-tab-muted: var(--text-muted);
+
   /* Interactive / Brand */
   --accent-primary:   var(--solar-blue);
   --accent-secondary: var(--solar-cyan);
@@ -119,5 +124,16 @@ body {
 
 .animate-slide-up {
     animation: slide-up 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* xterm.js — flush to chrome, no default padding gap */
+.xterm-shell-viewport .xterm {
+  padding: 8px 12px 12px;
+}
+.xterm-shell-viewport .xterm-viewport {
+  overflow-y: auto !important;
+}
+.xterm-shell-viewport:focus-within .xterm-focus .xterm-cursor-layer {
+  z-index: 2;
 }
 

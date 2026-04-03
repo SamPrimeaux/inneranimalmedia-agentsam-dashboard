@@ -37,6 +37,11 @@ interface ChatAssistantProps {
   onFileSelect?: (file: Pick<ActiveFile, 'name' | 'content'> & Partial<ActiveFile>) => void;
   onRunInTerminal?: (cmd: string) => void;
   activeFileName?: string;
+  /** Full open-file metadata so @file / @monaco can include tool routing (r2_read, r2_write, github_file). */
+  activeFile?: ActiveFile | null;
+  /** Current editor cursor (for @monaco injection only). */
+  editorCursorLine?: number;
+  editorCursorColumn?: number;
   /** SSE: agent tool `r2_write` emits `r2_file_updated` for Monaco sync */
   onR2FileUpdated?: (event: { type: 'r2_file_updated'; bucket: string; key: string }) => void;
   /** SSE: `browser_navigate` opens the Browser tab (e.g. after HTML write or preview_in_browser) */
@@ -154,6 +159,142 @@ function formatHttpErrorMessage(status: number, bodyText: string): string {
   return bodyText.trim() || `HTTP ${status}`;
 }
 
+const MENTION_CONTEXT_HEADER = '\n\n--- On-demand context (this message only) ---\n';
+const MENTION_FILE_MAX_CHARS = 8000;
+const MENTION_R2_LIST_MAX_ROWS = 250;
+
+function hasWordMention(text: string, tag: string): boolean {
+  return new RegExp(`@${tag}\\b`).test(text);
+}
+
+/** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
+async function buildMentionContext(
+  userMessage: string,
+  opts: {
+    activeFileName?: string;
+    activeFileContent?: string | null;
+    activeFile?: ActiveFile | null;
+    editorCursorLine?: number;
+    editorCursorColumn?: number;
+  }
+): Promise<string> {
+  const { activeFileName, activeFileContent, activeFile, editorCursorLine, editorCursorColumn } = opts;
+  const parts: string[] = [];
+  const wantsFileOrMonaco =
+    hasWordMention(userMessage, 'file') || hasWordMention(userMessage, 'monaco');
+
+  if (hasWordMention(userMessage, 'file') && activeFileContent != null && activeFileContent !== '') {
+    parts.push(
+      `### @file\n${activeFileName || 'untitled'}\n\n${activeFileContent.slice(0, MENTION_FILE_MAX_CHARS)}`
+    );
+  }
+
+  if (hasWordMention(userMessage, 'monaco')) {
+    const totalLines =
+      activeFileContent != null && activeFileContent !== '' ? activeFileContent.split('\n').length : 0;
+    const cl = editorCursorLine ?? 1;
+    const cc = editorCursorColumn ?? 1;
+    parts.push(
+      `### @monaco\nFile: ${activeFileName || '(none)'}\nTotal lines: ${totalLines}\nCursor: line ${cl}, column ${cc}`
+    );
+  }
+
+  if (wantsFileOrMonaco) {
+    parts.push(formatAgentToolRouting(activeFile));
+  }
+
+  const r2Re = /@r2:([^\s]+)/g;
+  const seenBuckets = new Set<string>();
+  const r2Buckets: string[] = [];
+  let rm: RegExpExecArray | null;
+  while ((rm = r2Re.exec(userMessage)) !== null) {
+    const b = rm[1];
+    if (b && !seenBuckets.has(b)) {
+      seenBuckets.add(b);
+      r2Buckets.push(b);
+    }
+  }
+  for (const bucket of r2Buckets) {
+    try {
+      const res = await fetch(`/api/r2/list?${new URLSearchParams({ bucket, prefix: '' })}`, {
+        credentials: 'same-origin',
+      });
+      const data = (await res.json()) as { objects?: Array<{ key?: string; size?: number }> };
+      if (!res.ok) {
+        parts.push(`### @r2:${bucket}\n(list failed: HTTP ${res.status})`);
+        continue;
+      }
+      const objects = Array.isArray(data.objects) ? data.objects : [];
+      const body = objects
+        .slice(0, MENTION_R2_LIST_MAX_ROWS)
+        .map((o) => `${o.key ?? ''}\t${String(o.size ?? '')}`)
+        .join('\n');
+      parts.push(`### @r2:${bucket}\n${body || '(empty)'}`);
+    } catch (e) {
+      parts.push(`### @r2:${bucket}\n(${String(e instanceof Error ? e.message : e)})`);
+    }
+  }
+
+  if (hasWordMention(userMessage, 'd1')) {
+    let d1 = '';
+    try {
+      d1 = sessionStorage.getItem('iam_d1_last_result') || '';
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    parts.push(
+      `### @d1\n${
+        d1 ||
+        '(No stored D1 result in this session. SQL explorer can set sessionStorage key iam_d1_last_result.)'
+      }`
+    );
+  }
+
+  if (parts.length === 0) return userMessage;
+  return `${userMessage}${MENTION_CONTEXT_HEADER}${parts.join('\n\n')}`;
+}
+
+/** Tells the model exactly which tools and parameters map to the open editor buffer (must match worker tool loop). */
+function formatAgentToolRouting(activeFile: ActiveFile | null | undefined): string {
+  const lines: string[] = [
+    '### Agent tool targets (read/write this buffer)',
+    'If the user asks to change, save, or sync this file, call the matching tool with the exact ids below — do not only paste code in chat when persistence is requested.',
+  ];
+  if (!activeFile) {
+    lines.push(
+      '- No file is open in the editor. Open a file from R2, GitHub, Drive, or the local folder, then use @file or @monaco.'
+    );
+    return lines.join('\n');
+  }
+  if (activeFile.r2Key) {
+    const b = activeFile.r2Bucket || 'DASHBOARD';
+    lines.push(
+      `- R2: r2_read({ bucket: "${b}", key: "${activeFile.r2Key}" }) before large edits; r2_write({ bucket: "${b}", key: "${activeFile.r2Key}", body: <full file text>, content_type: as appropriate e.g. application/javascript, text/html }). Bucket may be DASHBOARD (agent-sam) or logical names like agent-sam — both resolve. After r2_write the dashboard reloads this key.`
+    );
+  }
+  if (activeFile.githubRepo && activeFile.githubPath) {
+    lines.push(
+      `- GitHub: github_file with repo="${activeFile.githubRepo}" path="${activeFile.githubPath}" for read. Commits may require a separate flow or user action if write is not available.`
+    );
+  }
+  if (activeFile.driveFileId) {
+    lines.push(
+      `- Google Drive: use gdrive_fetch / gdrive_list with this file id where applicable: ${activeFile.driveFileId}`
+    );
+  }
+  if (activeFile.handle) {
+    lines.push(
+      '- Local file (File System Access in the browser): the worker cannot write to this path directly. Use terminal_execute if the repo exists in the user PTY, or ask the user to save in the editor.'
+    );
+  }
+  if (!activeFile.r2Key && !activeFile.githubPath && !activeFile.driveFileId && !activeFile.handle) {
+    lines.push(
+      '- New buffer with no storage binding. To persist, use r2_write with an explicit bucket and key the user names, or ask where to save.'
+    );
+  }
+  return lines.join('\n');
+}
+
 const getLangMeta = (lang: string) => {
   const map: Record<string, { ext: string; icon: React.ReactNode }> = {
     tsx: { ext: 'tsx', icon: <FileCode size={15} /> },
@@ -173,6 +314,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   activeProject,
   activeFileContent,
   activeFileName,
+  activeFile,
+  editorCursorLine,
+  editorCursorColumn,
   messages,
   setMessages,
   onFileSelect,
@@ -505,14 +649,20 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     setMentionOpen(false);
     setSlashOpen(false);
 
+    const messageForApi = await buildMentionContext(userMessage, {
+      activeFileName,
+      activeFileContent: activeFileContent ?? null,
+      activeFile: activeFile ?? null,
+      editorCursorLine,
+      editorCursorColumn,
+    });
+
     const form = new FormData();
-    form.append('message', userMessage);
+    form.append('message', messageForApi);
     form.append('mode', mode);
     form.append('model', selectedModelKey);
     form.append('conversationId', conversationId || '');
     form.append('contextMode', String(activeProject));
-    if (activeFileContent != null) form.append('contextCode', activeFileContent);
-    if (activeFileName) form.append('contextFile', activeFileName);
     attachments.forEach((a) => form.append('files', a.file));
 
     const applyAssistantError = (msg: string) => {

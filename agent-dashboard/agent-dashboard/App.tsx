@@ -652,6 +652,9 @@ const App: React.FC = () => {
                         activeProject={activeProject} 
                         activeFileContent={activeFile?.content}
                         activeFileName={activeFile?.name}
+                        activeFile={activeFile}
+                        editorCursorLine={cursorPos.line}
+                        editorCursorColumn={cursorPos.col}
                         messages={chatMessages} 
                         setMessages={setChatMessages} 
                         onFileSelect={(file) => {
@@ -936,6 +939,9 @@ const App: React.FC = () => {
                             activeProject={activeProject} 
                             activeFileContent={activeFile?.content}
                             activeFileName={activeFile?.name}
+                            activeFile={activeFile}
+                            editorCursorLine={cursorPos.line}
+                            editorCursorColumn={cursorPos.col}
                             messages={chatMessages} 
                             setMessages={setChatMessages} 
                             onFileSelect={(file) => {

@@ -5137,6 +5137,18 @@ const worker = {
         return Response.redirect(url.origin + '/dashboard/overview', 302);
       }
 
+      // Session gate: all /dashboard/* HTML (overview, agent, fragments, etc.) — static /static/* and /auth/* stay public
+      if (env.DASHBOARD && pathLower.startsWith('/dashboard/')) {
+        const dashHtmlMethod = (request.method || 'GET').toUpperCase();
+        if (dashHtmlMethod === 'GET' || dashHtmlMethod === 'HEAD') {
+          const dashSession = await getSession(env, request);
+          if (!dashSession?.user_id) {
+            const nextParam = encodeURIComponent(request.url);
+            return Response.redirect(`${url.origin}/auth/signin?next=${nextParam}`, 302);
+          }
+        }
+      }
+
       // Dashboard page fragments: /dashboard/pages/<name>.html -> static/dashboard/pages/<name>.html (for shell #page-content injection)
       const dashboardPagesMatch = pathLower.match(/^\/dashboard\/pages\/([^/]+\.html)$/);
       if (dashboardPagesMatch && env.DASHBOARD) {

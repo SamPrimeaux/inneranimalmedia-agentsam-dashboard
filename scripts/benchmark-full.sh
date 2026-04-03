@@ -12,6 +12,15 @@ else
   BASE="https://inneranimalmedia.com"
 fi
 
+# /api/agent/chat requires auth. Set IAM_SESSION_COOKIE or put the raw session id in ~/.iam-session-cookie
+if [ -z "${IAM_SESSION_COOKIE:-}" ] && [ -f "${HOME}/.iam-session-cookie" ]; then
+  IAM_SESSION_COOKIE=$(tr -d '[:space:]' < "${HOME}/.iam-session-cookie" 2>/dev/null || true)
+fi
+declare -a BENCH_CHAT_COOKIE=()
+if [ -n "${IAM_SESSION_COOKIE:-}" ]; then
+  BENCH_CHAT_COOKIE=(-H "Cookie: iam_session=${IAM_SESSION_COOKIE}")
+fi
+
 QUICK_MODE=false
 [[ "${2:-}" == "--quick" ]] && QUICK_MODE=true
 
@@ -35,6 +44,7 @@ test_model() {
   local raw
   raw=$(curl -s -X POST "$BASE/api/agent/chat" \
     -H "Content-Type: application/json" \
+    "${BENCH_CHAT_COOKIE[@]}" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"model_id\":\"$model\",\"stream\":true}" \
     --max-time 35 2>/dev/null)
 
@@ -95,6 +105,11 @@ echo -e "${BOLD}╔════════════════════�
 echo -e "${BOLD}║         AGENT SAM — FULL MODEL BENCHMARK                        ║${RESET}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════════════╝${RESET}"
 echo -e "  Target : ${CYAN}$BASE${RESET}"
+if [ -n "${IAM_SESSION_COOKIE:-}" ]; then
+  echo -e "  Auth   : ${GREEN}iam_session set${RESET} (env or ~/.iam-session-cookie)"
+else
+  echo -e "  Auth   : ${YELLOW}no IAM_SESSION_COOKIE — chat requests may 401${RESET}"
+fi
 echo -e "  Time   : $(date '+%Y-%m-%d %H:%M:%S')"
 if [ "$QUICK_MODE" = true ]; then
   echo -e "  ${YELLOW}Quick mode — 6 models only${RESET}"

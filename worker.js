@@ -5148,11 +5148,40 @@ const worker = {
           }
           try {
             const [wsRows, rows, us] = await Promise.all([
-              env.DB.prepare("SELECT id, name, category, brand FROM workspaces WHERE id LIKE 'ws_%' ORDER BY name").all(),
-              env.DB.prepare(
-                'SELECT workspace_id, brand, plans, budget, time, theme FROM user_workspace_settings WHERE user_id = ?'
-              ).bind(settingsSessionUserId).all(),
-              env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first(),
+              (async () => {
+                try {
+                  return await env.DB.prepare("SELECT id, name, category, brand FROM workspaces WHERE id LIKE 'ws_%' ORDER BY name").all();
+                } catch (e) {
+                  if (String(e?.message || '').includes('no such column: brand')) {
+                    return await env.DB.prepare("SELECT id, name, category FROM workspaces WHERE id LIKE 'ws_%' ORDER BY name").all();
+                  }
+                  throw e;
+                }
+              })(),
+              (async () => {
+                try {
+                  return await env.DB.prepare(
+                    'SELECT workspace_id, brand, plans, budget, time, theme FROM user_workspace_settings WHERE user_id = ?'
+                  ).bind(settingsSessionUserId).all();
+                } catch (e) {
+                  if (String(e?.message || '').includes('no such column: theme')) {
+                    return await env.DB.prepare(
+                      'SELECT workspace_id, brand, plans, budget, time FROM user_workspace_settings WHERE user_id = ?'
+                    ).bind(settingsSessionUserId).all();
+                  }
+                  throw e;
+                }
+              })(),
+              (async () => {
+                try {
+                  return await env.DB.prepare('SELECT default_workspace_id FROM user_settings WHERE user_id = ? LIMIT 1').bind(settingsSessionUserId).first();
+                } catch (e) {
+                  if (String(e?.message || '').includes('no such column: default_workspace_id')) {
+                    return null;
+                  }
+                  throw e;
+                }
+              })(),
             ]);
             const rowsResult = rows;
             const usRow = us;

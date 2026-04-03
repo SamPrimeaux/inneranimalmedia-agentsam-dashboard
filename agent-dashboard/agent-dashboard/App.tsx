@@ -38,6 +38,28 @@ import {
 } from './src/ideWorkspace';
 import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye } from 'lucide-react';
 
+function escapeHtmlForPreview(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Tab-bar Preview is shown for these extensions (blob / wrapped HTML in Browser tab). */
+function isRenderablePreviewFilename(name: string): boolean {
+  return /\.(html?|svg|md|jsx|tsx)$/i.test(name.trim());
+}
+
+function previewButtonTitle(name: string): string {
+  if (/\.(html|htm)$/i.test(name)) return 'Preview HTML in Browser tab';
+  if (/\.svg$/i.test(name)) return 'Preview SVG in Browser tab';
+  if (/\.md$/i.test(name)) return 'Preview Markdown in Browser tab';
+  if (/\.jsx$/i.test(name)) return 'Open JSX preview (build step required) in Browser tab';
+  if (/\.tsx$/i.test(name)) return 'Open TSX preview (build step required) in Browser tab';
+  return 'Preview in Browser tab';
+}
+
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
@@ -220,16 +242,42 @@ const App: React.FC = () => {
     };
   }, []);
 
-  /** Open current buffer as blob: URL in Browser tab (HTML / HTM only). */
-  const openHtmlPreview = useCallback(() => {
+  /** Open current buffer in Browser tab: HTML/HTM/SVG blobs; Markdown wrapped in HTML; JSX/TSX info + source. */
+  const openEditorPreview = useCallback(() => {
     if (!activeFile?.content) return;
     const name = activeFile.name || '';
-    if (!/\.html?$/i.test(name)) return;
+    if (!isRenderablePreviewFilename(name)) return;
+
     if (htmlPreviewBlobRef.current) {
       URL.revokeObjectURL(htmlPreviewBlobRef.current);
       htmlPreviewBlobRef.current = null;
     }
-    const u = URL.createObjectURL(new Blob([activeFile.content], { type: 'text/html; charset=utf-8' }));
+
+    let blob: Blob;
+
+    if (/\.(html|htm)$/i.test(name)) {
+      blob = new Blob([activeFile.content], { type: 'text/html; charset=utf-8' });
+    } else if (/\.svg$/i.test(name)) {
+      blob = new Blob([activeFile.content], { type: 'image/svg+xml;charset=utf-8' });
+    } else if (/\.md$/i.test(name)) {
+      const doc = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escapeHtmlForPreview(
+        name
+      )}</title><style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:1rem auto;padding:0 1rem;line-height:1.5;color:var(--text-main, #111)}</style></head><body><pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:13px">${escapeHtmlForPreview(
+        activeFile.content
+      )}</pre></body></html>`;
+      blob = new Blob([doc], { type: 'text/html; charset=utf-8' });
+    } else if (/\.(jsx|tsx)$/i.test(name)) {
+      const isTsx = /\.tsx$/i.test(name);
+      const srcEsc = escapeHtmlForPreview(activeFile.content.slice(0, 12000));
+      const doc = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escapeHtmlForPreview(
+        name
+      )}</title><style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:1rem;line-height:1.5;color:var(--text-main, #111)}.note{margin-bottom:1rem;padding:0.75rem;border:1px solid #ccc;border-radius:6px;background:#f5f5f5}</style></head><body><p class="note"><strong>React preview requires a build step.</strong> ${isTsx ? 'TSX' : 'JSX'} must be compiled (Vite, webpack, etc.). Use your dev server URL for the real preview.</p><p style="font-size:12px;color:#555">Source (truncated)</p><pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px">${srcEsc}</pre></body></html>`;
+      blob = new Blob([doc], { type: 'text/html; charset=utf-8' });
+    } else {
+      return;
+    }
+
+    const u = URL.createObjectURL(blob);
     htmlPreviewBlobRef.current = u;
     setBrowserUrl(u);
     setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
@@ -813,14 +861,14 @@ const App: React.FC = () => {
                           onClick={() => setActiveTab('code')}
                           onClose={(e) => closeTab('code', e)}
                       />
-                      {activeFile && /\.html?$/i.test(activeFile.name) && (
+                      {activeFile && isRenderablePreviewFilename(activeFile.name) && (
                           <button
                               type="button"
                               onClick={(e) => {
                                   e.stopPropagation();
-                                  openHtmlPreview();
+                                  openEditorPreview();
                               }}
-                              title="Preview HTML in Browser tab"
+                              title={previewButtonTitle(activeFile.name)}
                               className="shrink-0 h-8 px-2.5 flex items-center gap-1.5 text-[11px] font-medium rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)] hover:border-[var(--solar-cyan)]"
                           >
                               <Eye size={13} className="text-[var(--solar-cyan)]" />

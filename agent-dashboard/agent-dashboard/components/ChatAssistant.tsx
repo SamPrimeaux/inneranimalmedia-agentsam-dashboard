@@ -131,6 +131,70 @@ function isStreamErrorPayload(
   );
 }
 
+/** Decode minimal XML entities inside `<parameter>` bodies from streamed tool XML. */
+function decodeMonacoParameterText(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function parseMonacoInvokeParameterBlock(inner: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  const paramRe = /<parameter\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/parameter>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = paramRe.exec(inner)) !== null) {
+    const k = m[1].trim().toLowerCase();
+    params[k] = decodeMonacoParameterText(m[2].trim());
+  }
+  return params;
+}
+
+/**
+ * Remove complete `<invoke name="monaco">...</invoke>` blocks, parse filename/content, return files to open in the editor.
+ * Handles both `<invoke>` / `<antml:invoke>` and matching closing tags (streamed model output varies).
+ */
+function extractMonacoInvokesFromBuffer(text: string): { text: string; files: Array<{ name: string; content: string }> } {
+  const files: Array<{ name: string; content: string }> = [];
+  let out = text;
+  const blockRe = /<(?:antml:)?invoke\b[^>]*\bname\s*=\s*["']monaco["'][^>]*>([\s\S]*?)<\/(?:antml:)?invoke>/i;
+  for (let guard = 0; guard < 64; guard++) {
+    const m = out.match(blockRe);
+    if (!m || m.index === undefined) break;
+    const inner = m[1] || '';
+    const params = parseMonacoInvokeParameterBlock(inner);
+    const nameRaw = params.filename || params.file || params.path || '';
+    const filename = (nameRaw || 'snippet.txt').trim() || 'snippet.txt';
+    const content = params.content ?? '';
+    if (content.length > 0) {
+      files.push({ name: filename, content });
+    } else {
+      console.warn('[ChatAssistant] monaco invoke skipped: missing or empty content parameter', {
+        filename,
+        paramKeys: Object.keys(params),
+      });
+    }
+    out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
+  }
+  return { text: out, files };
+}
+
+/** While the model is still streaming a monaco XML block, hide the partial tag from the bubble. */
+function hideIncompleteMonacoInvokeTail(text: string): string {
+  const openRe = /<(?:antml:)?invoke\b[^>]*\bname\s*=\s*["']monaco["'][^>]*>/gi;
+  let lastOpen = -1;
+  let m: RegExpExecArray | null;
+  while ((m = openRe.exec(text)) !== null) {
+    lastOpen = m.index;
+  }
+  if (lastOpen < 0) return text;
+  const tail = text.slice(lastOpen);
+  if (/<\/(?:antml:)?invoke>/i.test(tail)) return text;
+  return text.slice(0, lastOpen);
+}
+
 /** True when streamed text has clearly entered raw HTML/CSS/SVG body (before r2_file_updated). */
 function looksLikeEmbeddedFileDumpStart(full: string): boolean {
   const tail = full.slice(-14000);
@@ -201,6 +265,49 @@ function getEditorLightweightPath(af: ActiveFile | null | undefined): string | n
   if (af.githubRepo && af.githubPath) return `${af.githubRepo}/${af.githubPath}`;
   if (af.driveFileId?.trim()) return `drive:${af.driveFileId}`;
   return null;
+}
+
+/** Display path for always-on editor line (lightweight path, else filename). */
+function getEditorDisplayPath(af: ActiveFile, activeFileName?: string): string {
+  const light = getEditorLightweightPath(af);
+  if (light) return light;
+  if (af.name?.trim()) return af.name.trim();
+  if (activeFileName?.trim()) return activeFileName.trim();
+  return '(unnamed)';
+}
+
+function languageFromFileName(fileName: string): string {
+  const base = fileName.split(/[/\\]/).pop() || fileName;
+  const ext = (base.includes('.') ? base.split('.').pop() : '')?.toLowerCase() || '';
+  const map: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'tsx',
+    mts: 'typescript',
+    cts: 'typescript',
+    js: 'javascript',
+    jsx: 'jsx',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    json: 'json',
+    md: 'markdown',
+    mdx: 'mdx',
+    html: 'html',
+    htm: 'html',
+    css: 'css',
+    scss: 'scss',
+    sass: 'sass',
+    less: 'less',
+    svg: 'svg',
+    py: 'python',
+    rs: 'rust',
+    go: 'go',
+    sql: 'sql',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    xml: 'xml',
+  };
+  return map[ext] || (ext || 'text');
 }
 
 /** Append file / Monaco / R2 / D1 snippets only when the user typed the matching @ token (not system prompt). */
@@ -289,17 +396,12 @@ async function buildMentionContext(
     );
   }
 
-  const noFileMonacoFilenameMention =
-    !hasWordMention(userMessage, 'file') &&
-    !hasWordMention(userMessage, 'monaco') &&
-    !fileNameMentionedInMessage(userMessage, activeFileName);
-  if (noFileMonacoFilenameMention) {
-    const p = getEditorLightweightPath(activeFile);
-    if (p) {
-      const n =
-        activeFileContent != null && activeFileContent !== '' ? activeFileContent.split('\n').length : 0;
-      parts.push(`### Editor context\nCurrently open: ${p} (${n} lines)`);
-    }
+  if (activeFile) {
+    const path = getEditorDisplayPath(activeFile, activeFileName);
+    const n =
+      activeFileContent != null && activeFileContent !== '' ? activeFileContent.split('\n').length : 0;
+    const lang = languageFromFileName(activeFile.name || activeFileName || '');
+    parts.push(`### Editor context\nCurrently open: ${path} (${n} lines) [${lang}]`);
   }
 
   if (parts.length === 0) return userMessage;
@@ -737,6 +839,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let assistantContent = '';
+      let assistantStreamBuf = '';
       let sseCarry = '';
       let fileEchoSuppress = false;
 
@@ -776,7 +879,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               const r2evt = data as { type: 'r2_file_updated'; bucket: string; key: string };
               onR2FileUpdated?.(r2evt);
               fileEchoSuppress = false;
-              assistantContent += `\n[FILE_CREATED:${r2evt.key}]\n`;
+              assistantStreamBuf += `\n[FILE_CREATED:${r2evt.key}]\n`;
+              assistantContent = assistantStreamBuf;
               setMessages((prev) => {
                 const last = [...prev];
                 last[last.length - 1] = { role: 'assistant', content: assistantContent };
@@ -800,13 +904,23 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               }
             }
             const delta = extractSseAssistantDelta(data);
-            if (delta) {
-              const combined = assistantContent + delta;
-              if (!fileEchoSuppress && looksLikeEmbeddedFileDumpStart(combined)) {
+            if (delta && !fileEchoSuppress) {
+              const trialBuf = assistantStreamBuf + delta;
+              const extracted = extractMonacoInvokesFromBuffer(trialBuf);
+              const nextBuf = extracted.text;
+              const nextVisible = hideIncompleteMonacoInvokeTail(nextBuf);
+              if (looksLikeEmbeddedFileDumpStart(nextVisible)) {
                 fileEchoSuppress = true;
-              }
-              if (!fileEchoSuppress) {
-                assistantContent += delta;
+              } else {
+                assistantStreamBuf = nextBuf;
+                for (const f of extracted.files) {
+                  try {
+                    onFileSelect?.({ name: f.name, content: f.content, originalContent: '' });
+                  } catch (e) {
+                    console.warn('[ChatAssistant] onFileSelect failed for monaco invoke', e);
+                  }
+                }
+                assistantContent = nextVisible;
                 setMessages((prev) => {
                   const last = [...prev];
                   last[last.length - 1] = { role: 'assistant', content: assistantContent };
@@ -816,13 +930,23 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             }
             if (data && typeof data === 'object' && typeof (data as { text?: string }).text === 'string') {
               const legacy = (data as { text: string }).text;
-              if (legacy && !delta) {
-                const combined = assistantContent + legacy;
-                if (!fileEchoSuppress && looksLikeEmbeddedFileDumpStart(combined)) {
+              if (legacy && !delta && !fileEchoSuppress) {
+                const trialBuf = assistantStreamBuf + legacy;
+                const extracted = extractMonacoInvokesFromBuffer(trialBuf);
+                const nextBuf = extracted.text;
+                const nextVisible = hideIncompleteMonacoInvokeTail(nextBuf);
+                if (looksLikeEmbeddedFileDumpStart(nextVisible)) {
                   fileEchoSuppress = true;
-                }
-                if (!fileEchoSuppress) {
-                  assistantContent += legacy;
+                } else {
+                  assistantStreamBuf = nextBuf;
+                  for (const f of extracted.files) {
+                    try {
+                      onFileSelect?.({ name: f.name, content: f.content, originalContent: '' });
+                    } catch (e) {
+                      console.warn('[ChatAssistant] onFileSelect failed for monaco invoke', e);
+                    }
+                  }
+                  assistantContent = nextVisible;
                   setMessages((prev) => {
                     const last = [...prev];
                     last[last.length - 1] = { role: 'assistant', content: assistantContent };
@@ -859,8 +983,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const renderMessageContent = (content: string, msgIndex: number) => {
     let display = content
       .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, '')
-      .replace(/<invoke[\s\S]*?<\/antml:invoke>/gi, '')
       .replace(/<antml:invoke[\s\S]*?<\/antml:invoke>/gi, '')
+      .replace(/<invoke[\s\S]*?<\/antml:invoke>/gi, '')
+      .replace(/<invoke[\s\S]*?<\/invoke>/gi, '')
       .trim();
     display = display.replace(
       /\[FILE_CREATED:(.+?)\]/g,

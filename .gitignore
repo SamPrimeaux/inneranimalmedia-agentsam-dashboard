@@ -46,3 +46,7 @@ reports/
 *.tmp
 *.bak*
 audit-*.txt
+
+# macOS metadata junk
+migrations/._*
+**/.DS_Store

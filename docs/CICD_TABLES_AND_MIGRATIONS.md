@@ -14,7 +14,7 @@ Migration **files** in `migrations/` may still use a legacy middle segment in th
 | **`cicd_pipeline_runs`** | One row per logical pipeline run (`run_id` PK). Tracks environment, status, optional commit hash, notes. |
 | **`cicd_run_steps`** | Child rows keyed by `run_id` + `id`. Per-step result: tool name, test type, status, latency, previews. |
 | **`cicd_runs`** | Aggregate deploy / CI run rows (paired with worker mirroring to `deployments` where applicable). |
-| **`cicd_events`** | Event stream (push, R2 bundle, worker version, manual deploy gate, etc.). |
+| **`cicd_events`** | Event stream (push, R2 bundle, worker version, manual deploy gate, **local repo edits**, etc.). |
 | **`cicd_notifications`** | Optional notification / delivery log when wired. |
 
 Legacy migrations and older worker code may still mention superseded table names; new work should target the **`cicd_*`** tables above.
@@ -55,6 +55,19 @@ Replace the filename with the migration you intend to run. **Never** run against
 - **`cicd_events` / `cicd_runs`:** Deploy scripts, webhooks, and `recordGithubCicdFollowups`-style paths.
 
 Manual migrations (203, 205, …) backfill when webhooks or CI did not fire.
+
+### Local refine / repair (no deploy)
+
+To record **git HEAD** (full SHA + last commit subject), branch, origin repo, optional note, and dirty-file metadata **without** deploying:
+
+```bash
+./scripts/log-repo-edit-to-cicd-events.sh [--note "what changed"] [--wip]
+```
+
+- **`source`** = `local_dev`, **`event_type`** = `repo_edit`, **`git_commit_sha`** = current `HEAD`, **`git_commit_message`** = `git log -1 --pretty=%s`.
+- **`r2_key`** = JSON: `kind`, `short_hash`, `wip_flag`, `dirty_files`, optional `note`, optional `changed_paths_sample` (when the tree is dirty).
+- **`CICD_DEV_LOG_D1=0`** skips the insert (dry run / disable).
+- **Optional:** `git config core.hooksPath .githooks` and `chmod +x .githooks/post-commit` to append one row **after each commit** (hook always exits 0; D1 failures are ignored).
 
 ---
 

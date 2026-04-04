@@ -85,6 +85,88 @@ type ChatModelRow = {
 
 const LS_CONV = 'iam-agent-chat-conversation-id';
 
+/** Dispatched when the persisted conversation id changes (new chat, row select, or hydrate). App loads message history. */
+export const IAM_AGENT_CHAT_CONVERSATION_CHANGE = 'iam-agent-chat-conversation-change';
+
+type AgentSessionRow = {
+  id: string;
+  session_type?: string;
+  status?: string;
+  started_at?: number | string;
+  message_count?: number;
+  has_artifacts?: boolean;
+  name?: string | null;
+};
+
+function sessionStartedAtMs(s: AgentSessionRow): number {
+  const st = s.started_at;
+  if (typeof st === 'number') return st < 1e12 ? st * 1000 : st;
+  if (typeof st === 'string') {
+    const n = Number(st);
+    if (!Number.isNaN(n) && n > 0) return n < 1e12 ? n * 1000 : n;
+    const p = Date.parse(st);
+    if (!Number.isNaN(p)) return p;
+  }
+  return 0;
+}
+
+function relativeSessionTime(s: AgentSessionRow): string {
+  const t = sessionStartedAtMs(s);
+  if (!t) return '';
+  const diffMs = Math.max(0, Date.now() - t);
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo`;
+  const y = Math.floor(d / 365);
+  return `${y}y`;
+}
+
+function startOfTodayLocal(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function startOfWeekMondayLocal(): number {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function sessionGroupLabel(ts: number): 'Today' | 'This Week' | 'Older' {
+  if (!ts) return 'Older';
+  const startToday = startOfTodayLocal();
+  if (ts >= startToday) return 'Today';
+  const startWeek = startOfWeekMondayLocal();
+  if (ts >= startWeek) return 'This Week';
+  return 'Older';
+}
+
+function groupSessionsByBucket(rows: AgentSessionRow[]): { label: string; items: AgentSessionRow[] }[] {
+  const withTs = rows.map((r) => ({ row: r, ts: sessionStartedAtMs(r) }));
+  withTs.sort((a, b) => b.ts - a.ts);
+  const buckets: Record<'Today' | 'This Week' | 'Older', AgentSessionRow[]> = {
+    Today: [],
+    'This Week': [],
+    Older: [],
+  };
+  for (const { row, ts } of withTs) {
+    buckets[sessionGroupLabel(ts)].push(row);
+  }
+  const order: ('Today' | 'This Week' | 'Older')[] = ['Today', 'This Week', 'Older'];
+  return order.filter((l) => buckets[l].length > 0).map((label) => ({ label, items: buckets[label] }));
+}
+
 const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor'] as const;
 const MODEL_PLATFORM_LABEL: Record<string, string> = {
   anthropic_api: 'Anthropic',
@@ -605,6 +687,57 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
   );
 
+  const [sessions, setSessions] = useState<AgentSessionRow[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const sessionListRef = useRef<HTMLDivElement>(null);
+  const hydratedFromLsRef = useRef(false);
+
+  const loadSessions = useCallback(async () => {
+    setSessionsLoading(true);
+    try {
+      const r = await fetch('/api/agent/sessions', { credentials: 'same-origin' });
+      const data = r.ok ? await r.json() : [];
+      setSessions(Array.isArray(data) ? (data as AgentSessionRow[]) : []);
+    } catch {
+      setSessions([]);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions, conversationId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || hydratedFromLsRef.current) return;
+    hydratedFromLsRef.current = true;
+    const id = localStorage.getItem(LS_CONV)?.trim();
+    if (id) {
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id } })
+        );
+      });
+    }
+  }, []);
+
+  const handleNewChat = useCallback(() => {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_CONV);
+    setConversationId('');
+    sessionListRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id: null } }));
+  }, []);
+
+  const handleSelectSession = useCallback((id: string) => {
+    if (!id) return;
+    localStorage.setItem(LS_CONV, id);
+    setConversationId(id);
+    window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id } }));
+  }, []);
+
+  const sessionGroups = useMemo(() => groupSessionsByBucket(sessions), [sessions]);
+
   const [pendingToolApproval, setPendingToolApproval] = useState<{
     tool: ToolApprovalPayload;
   } | null>(null);
@@ -1115,6 +1248,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               if (typeof cid === 'string' && cid) {
                 setConversationId(cid);
                 localStorage.setItem(LS_CONV, cid);
+                void loadSessions();
               }
             }
             const delta = extractSseAssistantDelta(data);
@@ -1380,9 +1514,86 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         .chat-hide-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
+        <div className="shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38vh,280px)] min-h-0">
+          <div className="flex justify-end px-3 pt-2 pb-1 shrink-0">
+            <button
+              type="button"
+              onClick={handleNewChat}
+              className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--solar-cyan)] hover:brightness-110 px-2 py-1.5 rounded-md hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              New Chat
+            </button>
+          </div>
+          <div
+            ref={sessionListRef}
+            className="flex-1 min-h-[72px] overflow-y-auto chat-hide-scroll"
+            aria-label="Chat sessions"
+          >
+            {sessionsLoading ? (
+              <>
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="min-h-[56px] px-4 border-b border-[var(--border-subtle)] flex items-center gap-3 animate-pulse"
+                  >
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <div className="h-3.5 rounded-md bg-[var(--bg-elevated)] w-[72%] max-w-full" />
+                      <div className="h-3 rounded-md bg-[var(--bg-elevated)] w-[36%] max-w-full" />
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : sessions.length === 0 ? (
+              <div className="flex min-h-[120px] items-center justify-center px-4 text-[0.8125rem] text-[var(--text-muted)]">
+                No chats yet
+              </div>
+            ) : (
+              sessionGroups.map((g) => (
+                <div key={g.label}>
+                  <div className="text-[0.6875rem] uppercase tracking-widest text-[var(--text-muted)] px-4 py-2">
+                    {g.label}
+                  </div>
+                  {g.items.map((s) => {
+                    const active = s.id === conversationId;
+                    const mc = typeof s.message_count === 'number' ? s.message_count : 0;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => handleSelectSession(s.id)}
+                        className={`w-full text-left min-h-[56px] px-4 border-b border-[var(--border-subtle)] flex items-start gap-3 py-2 transition-colors hover:bg-[var(--bg-hover)] ${
+                          active ? 'bg-[var(--bg-elevated)] border-l-2 border-l-[var(--solar-cyan)] pl-[calc(1rem-2px)]' : ''
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0 pt-0.5">
+                          <div className="text-[0.875rem] text-[var(--text-primary)] truncate">
+                            {(s.name && String(s.name).trim()) || 'Untitled'}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                            <span className="text-[0.6875rem] text-[var(--text-muted)]">{mc} msgs</span>
+                            {s.has_artifacts ? (
+                              <code className="text-[0.625rem] font-mono text-[var(--solar-cyan)] px-1 py-px rounded border border-[var(--border-subtle)]">
+                                artifacts
+                              </code>
+                            ) : null}
+                          </div>
+                        </div>
+                        <span className="text-[0.6875rem] text-[var(--text-muted)] shrink-0 tabular-nums pt-1">
+                          {relativeSessionTime(s)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
+          className="flex-1 min-h-0 overflow-y-auto px-4 pt-6 space-y-6 w-full chat-hide-scroll"
+          style={{ paddingBottom: '80px' }}
         >
           {messages.map((msg, i) => (
             <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>

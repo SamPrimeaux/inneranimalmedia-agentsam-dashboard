@@ -31,8 +31,12 @@
 
   /* Typography */
   --text-main:     var(--solar-base0);
+  --text-primary:  var(--text-main);
   --text-muted:    #7a9aaa;
   --text-heading:  var(--solar-base1);
+
+  /* Surfaces (chat session row active, etc.) */
+  --bg-elevated:   color-mix(in srgb, var(--bg-panel) 88%, var(--solar-cyan) 12%);
 
   /* Scene / 3D */
   --scene-bg:      #060e14;

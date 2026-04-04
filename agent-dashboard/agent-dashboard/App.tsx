@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
-import { ChatAssistant } from './components/ChatAssistant';
+import { ChatAssistant, IAM_AGENT_CHAT_CONVERSATION_CHANGE } from './components/ChatAssistant';
 import { WelcomeLauncher } from './components/WelcomeLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
@@ -265,6 +265,49 @@ const App: React.FC = () => {
       if (prev[0].content === next) return prev;
       return [{ role: 'assistant', content: next }];
     });
+  }, [workspaceDisplayName]);
+
+  useEffect(() => {
+    const onConv = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string | null }>).detail?.id?.trim() ?? '';
+      if (!id) {
+        setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+        return;
+      }
+      void fetch(`/api/agent/sessions/${encodeURIComponent(id)}/messages`, { credentials: 'same-origin' })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((rows: unknown) => {
+          if (!Array.isArray(rows) || rows.length === 0) {
+            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+            return;
+          }
+          const mapped: { role: 'user' | 'assistant'; content: string }[] = [];
+          for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const o = row as { role?: string; content?: unknown };
+            const role = o.role === 'user' ? 'user' : o.role === 'assistant' ? 'assistant' : null;
+            if (!role) continue;
+            const raw = o.content;
+            const content =
+              typeof raw === 'string'
+                ? raw
+                : raw != null && typeof raw === 'object'
+                  ? JSON.stringify(raw)
+                  : '';
+            mapped.push({ role, content: content.trim() ? content : '(empty)' });
+          }
+          if (mapped.length === 0) {
+            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+            return;
+          }
+          setChatMessages(mapped);
+        })
+        .catch(() => {
+          setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+        });
+    };
+    window.addEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onConv);
+    return () => window.removeEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onConv);
   }, [workspaceDisplayName]);
 
   const narrowBackToCenter = useCallback(() => {
@@ -874,6 +917,7 @@ const App: React.FC = () => {
                     {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
                     <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
+                    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                     <ChatAssistant 
                         activeProject={activeProject} 
                         activeFileContent={activeFile?.content}
@@ -911,6 +955,7 @@ const App: React.FC = () => {
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
                         onBrowserNavigate={handleBrowserNavigateFromAgent}
                     />
+                    </div>
                 </div>
                 {/* Grab Bar */}
                 <div 
@@ -1194,7 +1239,7 @@ const App: React.FC = () => {
                     {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
                     <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
-                    <div className="flex-1 relative overflow-hidden">
+                    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                          <ChatAssistant 
                             activeProject={activeProject} 
                             activeFileContent={activeFile?.content}

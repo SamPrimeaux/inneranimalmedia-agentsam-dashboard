@@ -1,4 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import {
+  fetchAndApplyActiveCmsTheme,
+  fetchActiveCmsThemeSlug,
+} from '../src/applyCmsTheme';
 
 interface Theme {
   id: string | number;
@@ -8,59 +12,47 @@ interface Theme {
   preview_color?: string;
 }
 
-export const ThemeSwitcher: React.FC = () => {
+interface ThemeSwitcherProps {
+  workspaceId?: string | null;
+}
+
+export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ workspaceId }) => {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/themes')
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (Array.isArray(data.themes)) {
           setThemes(data.themes as Theme[]);
         }
       })
       .catch(console.error);
 
-    const stubs = ['/api/colors/all'];
-    stubs.forEach(url => console.log('TODO: wire', url));
+    fetchActiveCmsThemeSlug(workspaceId)
+      .then((slug) => {
+        if (slug) setActiveSlug(slug);
+      })
+      .catch(() => {});
+  }, [workspaceId]);
 
-    // Initial active theme from localStorage or default
-    const cached = localStorage.getItem('mcad_theme_slug');
-    if (cached) setActiveSlug(cached);
-  }, []);
-
-  const applyTheme = (theme: Theme) => {
-    let config: Record<string, string> = {};
+  const applyTheme = async (theme: Theme) => {
     try {
-      config =
-        typeof theme.config === 'string'
-          ? (JSON.parse(theme.config) as Record<string, string>)
-          : (theme.config as unknown as Record<string, string>) || {};
-    } catch {
-      config = {};
+      const res = await fetch('/api/themes/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          theme_id: String(theme.id),
+        }),
+      });
+      if (!res.ok) return;
+      const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
+      if (payload?.slug) setActiveSlug(payload.slug);
+    } catch (e) {
+      console.error(e);
     }
-    
-    // Apply CSS variables instantly
-    Object.entries(config).forEach(([k, v]) => {
-      document.documentElement.style.setProperty(k, v as string);
-    });
-
-    // Persist to DB (Standardized IAM Route)
-    fetch('/api/themes/apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        theme_id: String(theme.id),
-      }),
-    }).catch(() => {});
-
-
-    // Update state and local storage
-    setActiveSlug(theme.slug);
-    localStorage.setItem('mcad_theme_slug', theme.slug);
-    localStorage.setItem('mcad_theme_css', theme.config);
   };
 
   return (
@@ -70,6 +62,7 @@ export const ThemeSwitcher: React.FC = () => {
         {themes.map((theme) => (
           <button
             key={theme.id}
+            type="button"
             onClick={() => applyTheme(theme)}
             className={`flex items-center gap-3 p-2 rounded-lg border transition-all ${
               activeSlug === theme.slug
@@ -77,13 +70,11 @@ export const ThemeSwitcher: React.FC = () => {
                 : 'border-[var(--border-subtle)] bg-[var(--bg-panel)] hover:bg-[var(--bg-hover)]'
             }`}
           >
-            <div 
+            <div
               className="w-6 h-6 rounded-full border border-[var(--border-subtle)]"
               style={{ backgroundColor: theme.preview_color || 'var(--border-subtle)' }}
             />
-            <span className="text-xs font-medium text-[var(--text-main)]">
-              {theme.name}
-            </span>
+            <span className="text-xs font-medium text-[var(--text-main)]">{theme.name}</span>
           </button>
         ))}
       </div>

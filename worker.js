@@ -212,18 +212,60 @@ function parseCmsThemeConfig(raw) {
   }
 }
 
+/**
+ * Map cms_themes.config-derived CSS variables to agent-dashboard `index.css` tokens
+ * (`--bg-app`, `--text-main`, terminal chrome, accents).
+ */
+function mergeAgentDashboardIdeTokens(variables, cfg) {
+  const data = { ...variables };
+  const get = (k) =>
+    data[k] != null && String(data[k]).trim() !== '' ? String(data[k]) : null;
+  if (!data['--bg-app']) {
+    data['--bg-app'] = get('--bg-canvas') || get('--bg-surface') || (cfg.bg != null ? String(cfg.bg) : null);
+  }
+  if (!data['--bg-panel']) {
+    data['--bg-panel'] = get('--bg-elevated') || get('--bg-panel') || (cfg.surface != null ? String(cfg.surface) : null);
+  }
+  if (!data['--text-main']) {
+    data['--text-main'] =
+      get('--color-text') || get('--text-primary') || (cfg.text != null ? String(cfg.text) : null);
+  }
+  if (!data['--text-muted']) {
+    data['--text-muted'] =
+      get('--text-muted') || get('--text-secondary') || (cfg.textSecondary != null ? String(cfg.textSecondary) : null);
+  }
+  if (!data['--text-heading'] && data['--text-main']) data['--text-heading'] = data['--text-main'];
+  if (!data['--border-subtle'] && get('--border')) data['--border-subtle'] = get('--border');
+  if (!data['--border-focus'] && get('--color-primary')) data['--border-focus'] = get('--color-primary');
+  if (!data['--scene-bg'] && data['--bg-app']) data['--scene-bg'] = data['--bg-app'];
+  if (!data['--terminal-surface'] && data['--bg-panel']) data['--terminal-surface'] = data['--bg-panel'];
+  if (!data['--terminal-chrome'] && data['--bg-panel']) data['--terminal-chrome'] = data['--bg-panel'];
+  if (!data['--terminal-tab-muted'] && data['--text-muted']) data['--terminal-tab-muted'] = data['--text-muted'];
+  const primary = get('--color-primary');
+  if (!data['--solar-cyan'] && primary) data['--solar-cyan'] = primary;
+  if (!data['--solar-blue'] && primary) data['--solar-blue'] = primary;
+  return data;
+}
+
 /** Build `/api/themes/active` payload from a cms_themes row (joined or direct). */
 function activeThemeJsonFromCmsRow(row) {
   if (!row?.slug) return null;
   const fam = (row.theme_family || '').toLowerCase();
   const isDark = fam === 'dark' || (fam !== 'light' && fam !== 'high_contrast_light' && !fam);
   const cfg = parseCmsThemeConfig(row.config);
-  const cssVars = cfg.css_vars && typeof cfg.css_vars === 'object' ? cfg.css_vars : {};
+  const base = variablesFromCmsThemeConfig(cfg);
+  const data = mergeAgentDashboardIdeTokens(base, cfg);
+  const resolvedDark =
+    typeof cfg.is_dark === 'boolean'
+      ? cfg.is_dark
+      : typeof cfg.is_dark === 'number'
+        ? cfg.is_dark !== 0
+        : isDark;
   const out = {
     name: row.name || row.slug,
     slug: row.slug,
-    is_dark: isDark,
-    data: cssVars,
+    is_dark: resolvedDark,
+    data,
   };
   if (cfg.terminal && typeof cfg.terminal === 'object') out.terminal = cfg.terminal;
   if (cfg.monaco != null && String(cfg.monaco).trim() !== '') out.monaco_theme = String(cfg.monaco).trim();

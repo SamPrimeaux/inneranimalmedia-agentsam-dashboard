@@ -55,7 +55,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     }, []);
 
     return (
-        <div className="h-6 bg-[var(--bg-app)] border-t border-[var(--border-subtle)]/30 w-full flex items-center justify-between text-[11px] font-mono text-[var(--text-main)]/90 shrink-0 z-[100] relative">
+        <div className="shrink-0 z-[100] relative w-full bg-[var(--bg-app)] border-t border-[var(--border-subtle)]/30 pb-[env(safe-area-inset-bottom,0px)]">
+            <div className="h-6 flex items-center justify-between text-[11px] font-mono text-[var(--text-main)]/90 w-full">
             {/* Left Box */}
             <div className="flex items-center gap-1 sm:gap-3 h-full px-1 min-w-0">
                 <div className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full bg-[var(--solar-cyan)]/15">
@@ -117,7 +118,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                     <Bell size={13} className="opacity-70" />
                 </div>
             </div>
-
+            </div>
         </div>
     );
 };

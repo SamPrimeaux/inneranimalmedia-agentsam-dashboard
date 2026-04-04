@@ -2444,3 +2444,21 @@ Optimal first milestone: **document the target host(s), auth method (key per mac
 - [ ] SSH scope written down (repo runbook section or `project_memory` stub) before any code or keys.  
 - [ ] No new Cloudflare resources without explicit approval.
 
+
+---
+
+## 2026-04-04 — Full prod deploy (sandbox → promote)
+
+### Pipeline
+- `./scripts/deploy-sandbox.sh` — Vite build, R2 `agent-sam-sandbox-cicd` (`static/dashboard/agent/*`), sandbox worker `inneranimal-dashboard`.
+- `./scripts/promote-to-prod.sh` — Pull sandbox manifest → push `agent-sam` prod R2 → deploy `inneranimalmedia` worker (`wrangler.production.toml`), D1 `dashboard_versions` / `deployments` / CICD tables, Resend notification.
+
+### Result
+- Sandbox: dashboard **v=21**, worker `inneranimal-dashboard` (version id in deploy log).
+- Production: dashboard **v=21**, worker `inneranimalmedia` @ `318a8385-9414-4fe7-ba3a-fa2f928ccf5c`.
+- Resend: **HTTP 200** to `meauxbility@gmail.com` (id `94ebeca7-ac51-4e99-8659-344bcb0fab76`).
+
+### Notes
+- Includes worker fix for **`/api/themes/active`** (`cms_themes` / `variablesFromCmsThemeConfig` + IDE token aliases) and dashboard CMS theme client (`applyCmsTheme.ts`).
+- Unauthenticated `curl` to `/dashboard/agent` may 302 to login shell; use logged-in browser or R2 object check for `dashboard-v` in the Vite `index.html` bundle.
+

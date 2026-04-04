@@ -55,9 +55,11 @@ const StatusDot: React.FC<{ on: boolean }> = ({ on }) => (
 interface SettingsPanelProps {
   onClose: () => void;
   onFileSelect?: (file: { name: string; content: string }) => void;
+  /** Default workspace from /api/settings/workspaces — scopes cms_themes + active theme. */
+  workspaceId?: string | null;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSelect }) => {
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSelect, workspaceId }) => {
   const [activeSection, setActiveSection] = useState('General');
   const [search, setSearch] = useState('');
   const [mcps, setMcps] = useState<MCP[]>([]);
@@ -463,7 +465,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
             <div className="flex flex-col gap-4">
               <h2 className="text-[13px] font-bold text-[var(--text-heading)] uppercase tracking-widest">Workspace Themes</h2>
               <p className="text-[12px] text-[var(--text-muted)]">Select a theme to instantly update the workspace aesthetics. Themes are stored in the <code className="font-mono text-[var(--solar-cyan)]">cms_themes</code> table.</p>
-              <ThemeSwitcher />
+              <ThemeSwitcher workspaceId={workspaceId} />
             </div>
           )}
 

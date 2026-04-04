@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
@@ -28,6 +28,7 @@ import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { MCPPanel } from './components/MCPPanel';
 import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
+import { fetchAndApplyActiveCmsTheme, applyCachedCmsThemeFallback } from './src/applyCmsTheme';
 import {
   loadWorkspace,
   saveWorkspace,
@@ -35,7 +36,7 @@ import {
   formatWorkspaceStatusLine,
   type IdeWorkspaceSnapshot,
 } from './src/ideWorkspace';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye } from 'lucide-react';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -59,6 +60,16 @@ function previewButtonTitle(name: string): string {
   return 'Preview in Browser tab';
 }
 
+const PRODUCT_NAME = 'Agent Sam';
+
+function buildAgentSamGreeting(workspaceDisplayLine: string): string {
+  const w = workspaceDisplayLine.trim();
+  if (!w || w === 'No workspace') {
+    return `${PRODUCT_NAME}: pick a workspace in Settings or open a local folder, then tell me what you want to build.`;
+  }
+  return `Hi! I'm ${PRODUCT_NAME}. Current workspace: ${w}. What should we work on?`;
+}
+
 const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
@@ -76,8 +87,12 @@ const App: React.FC = () => {
 
   // IDE State
   type TabId = 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright' | null>('files');
-  const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>('right');
+  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
+  );
+  const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
+  );
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   /** Layout: optional split editor chrome (reserved for Monaco split view). */
   const [splitLayout, setSplitLayout] = useState(false);
@@ -91,17 +106,54 @@ const App: React.FC = () => {
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
   /** Increment to trigger File System Access picker from Welcome "Open Folder" after files panel mounts. */
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
+  /** ≤768px: secondary rail actions (sheet above bottom tab bar). */
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 768,
+  );
+  const mobileSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const fn = () => setIsNarrowViewport(mq.matches);
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
   /** From GET /api/settings/workspaces (`current` = default_workspace_id); drives theme ?workspace= */
   const [authWorkspaceId, setAuthWorkspaceId] = useState<string | null>(null);
+  /** Rows from same API — used for human-readable workspace name in chrome + chat. */
+  const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; name: string }>>([]);
+
+  const workspaceDisplayName = useMemo(() => {
+    const id = authWorkspaceId?.trim();
+    if (id && workspaceRows.length > 0) {
+      const row = workspaceRows.find((w) => w.id === id);
+      if (row?.name?.trim()) return row.name.trim();
+      return id;
+    }
+    return formatWorkspaceStatusLine(ideWorkspace);
+  }, [authWorkspaceId, workspaceRows, ideWorkspace]);
 
   useEffect(() => {
     fetch('/api/settings/workspaces', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { current?: string } | null) => {
+      .then((d: { current?: string; data?: Array<{ id?: string; name?: string }> } | null) => {
         if (d?.current && typeof d.current === 'string') setAuthWorkspaceId(d.current);
+        if (Array.isArray(d?.data)) {
+          setWorkspaceRows(
+            d.data
+              .filter((r) => r && typeof r.id === 'string')
+              .map((r) => ({ id: r.id as string, name: typeof r.name === 'string' ? r.name : r.id as string })),
+          );
+        }
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    document.title = `${workspaceDisplayName} — ${PRODUCT_NAME}`;
+  }, [workspaceDisplayName]);
 
   const fetchLiveStatus = useCallback(async () => {
     try {
@@ -202,13 +254,69 @@ const App: React.FC = () => {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   };
-  const [chatMessages, setChatMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([
-      { role: 'assistant', content: 'Hi! I\'m your Meaaux Studio Agent. How can I assist with your workspace?' }
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>(() => [
+    { role: 'assistant', content: buildAgentSamGreeting(formatWorkspaceStatusLine(loadWorkspace())) },
   ]);
 
+  useEffect(() => {
+    setChatMessages((prev) => {
+      if (prev.length !== 1 || prev[0].role !== 'assistant') return prev;
+      const next = buildAgentSamGreeting(workspaceDisplayName);
+      if (prev[0].content === next) return prev;
+      return [{ role: 'assistant', content: next }];
+    });
+  }, [workspaceDisplayName]);
+
+  const narrowBackToCenter = useCallback(() => {
+    setActiveActivity(null);
+    setAgentPosition('off');
+  }, []);
+
   const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright') => {
-      setActiveActivity(prev => prev === activity ? null : activity);
+    setActiveActivity((prev) => {
+      if (prev === activity) return null;
+      return activity;
+    });
   };
+
+  useEffect(() => {
+    if (!isNarrowViewport || activeActivity == null) return;
+    setAgentPosition('off');
+  }, [activeActivity, isNarrowViewport]);
+
+  const cycleAgentPosition = useCallback(() => {
+    setAgentPosition((p) => (p === 'right' ? 'left' : p === 'left' ? 'off' : 'right'));
+  }, []);
+
+  const onChatLayoutToggle = useCallback(() => {
+    if (!isNarrowViewport) {
+      cycleAgentPosition();
+      return;
+    }
+    if (activeActivity) {
+      setActiveActivity(null);
+      return;
+    }
+    cycleAgentPosition();
+  }, [isNarrowViewport, activeActivity, cycleAgentPosition]);
+
+  const mobileEdgeSwipeHandlers = useMemo(
+    () => ({
+      onTouchStart: (e: React.TouchEvent) => {
+        if (!isNarrowViewport) return;
+        const t = e.touches[0];
+        mobileSwipeStartRef.current = t.clientX <= 28 ? { x: t.clientX, y: t.clientY } : null;
+      },
+      onTouchEnd: (e: React.TouchEvent) => {
+        if (!isNarrowViewport || !mobileSwipeStartRef.current) return;
+        const t = e.changedTouches[0];
+        const s = mobileSwipeStartRef.current;
+        if (t.clientX - s.x > 56 && Math.abs(t.clientY - s.y) < 80) narrowBackToCenter();
+        mobileSwipeStartRef.current = null;
+      },
+    }),
+    [isNarrowViewport, narrowBackToCenter],
+  );
 
   // ── File save (File System Access API write-back) ────────────────────────
   const isDirty = !!activeFile && activeFile.originalContent !== undefined && activeFile.content !== activeFile.originalContent;
@@ -391,34 +499,19 @@ const App: React.FC = () => {
     setTimeout(() => terminalRef.current?.writeToTerminal(text), 100);
   }, [isTerminalOpen]);
 
-  // Dynamic CMS Theme Fetcher (tenant from session + env; workspace_id matches cms_themes.workspace_id)
+  // Themes: cms_themes + settings.appearance.theme via GET /api/themes/active (workspace_id scopes rows)
   useEffect(() => {
-    const cached = localStorage.getItem('mcad_theme_css');
-    if (cached) {
-      try {
-        const vars = JSON.parse(cached);
-        Object.entries(vars).forEach(([k, v]) => {
-          document.documentElement.style.setProperty(k, String(v));
-        });
-      } catch(e) {}
-    }
-
-    const ws = authWorkspaceId?.trim() || '';
-    const themeUrl = ws
-      ? `/api/themes/active?workspace_id=${encodeURIComponent(ws)}`
-      : '/api/themes/active';
-    fetch(themeUrl, { credentials: 'same-origin' })
-      .then((res) => res.json())
-      .then((data: { data?: Record<string, string> }) => {
-        const vars = data?.data;
-        if (vars && typeof vars === 'object' && Object.keys(vars).length > 0) {
-          Object.entries(vars).forEach(([k, v]) => {
-            document.documentElement.style.setProperty(k, String(v));
-          });
-          localStorage.setItem('mcad_theme_css', JSON.stringify(vars));
-        }
+    fetchAndApplyActiveCmsTheme(authWorkspaceId)
+      .then((payload) => {
+        const hasVars =
+          payload?.data &&
+          typeof payload.data === 'object' &&
+          Object.keys(payload.data).length > 0;
+        if (!hasVars) applyCachedCmsThemeFallback();
       })
-      .catch(console.error);
+      .catch(() => {
+        applyCachedCmsThemeFallback();
+      });
   }, [authWorkspaceId]);
 
   // Cmd+J Listener
@@ -650,13 +743,32 @@ const App: React.FC = () => {
     }
   };
 
+  const narrowBlocksCenter = isNarrowViewport && (!!activeActivity || agentPosition !== 'off');
+  const narrowNeedsBack = narrowBlocksCenter;
+
   return (
     <div className="w-full h-screen bg-[var(--bg-app)] overflow-hidden text-[var(--text-main)] font-sans flex flex-col">
       {/* 1. TOP WINDOW BAR */}
       <div className="h-10 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] flex items-center justify-between px-3 shrink-0">
-          <div className="flex items-center gap-1.5 opacity-80 pl-2 shrink-0">
-              <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="IAM" className="w-5 h-5 object-contain drop-shadow" />
-              <span className="text-[12px] font-bold tracking-wide text-white">IAM Explorer</span>
+          <div className="flex items-center gap-1 opacity-80 pl-1 shrink-0 min-w-0">
+              {narrowNeedsBack && (
+                <button
+                  type="button"
+                  className="md:hidden shrink-0 p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors"
+                  title="Back to editor"
+                  aria-label="Back to editor"
+                  onClick={narrowBackToCenter}
+                >
+                  <ChevronLeft size={18} strokeWidth={1.75} />
+                </button>
+              )}
+              <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="" className="w-5 h-5 object-contain drop-shadow" />
+              <span className="flex flex-col leading-tight min-w-0">
+                <span className="text-[12px] font-bold tracking-wide text-[var(--text-main)]">{PRODUCT_NAME}</span>
+                <span className="text-[9px] font-medium text-[var(--text-muted)] truncate max-w-[140px]" title={workspaceDisplayName}>
+                  {workspaceDisplayName}
+                </span>
+              </span>
           </div>
           
           {/* Center Dropdown / Project Search Bar */}
@@ -665,7 +777,7 @@ const App: React.FC = () => {
                   <Search size={12} className="text-[var(--text-muted)] absolute left-2.5" />
                   <input 
                       type="text"
-                      placeholder="MeauxCAD / Project Search..."
+                      placeholder={`${workspaceDisplayName} — search projects, files, commands…`}
                       className="w-full bg-transparent pl-7 pr-2 py-1 text-[11px] focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-main)]"
                   />
               </div>
@@ -673,6 +785,14 @@ const App: React.FC = () => {
 
           {/* Right layout cluster: split | side panel | bottom aux | terminal (IAM shell) */}
           <div className="flex gap-0.5 items-center mr-1 shrink-0">
+              <button
+                  type="button"
+                  title="More tools (same as activity rail)"
+                  className="md:hidden p-1.5 rounded transition-colors text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]"
+                  onClick={() => setMobileMoreOpen(true)}
+              >
+                  <MoreHorizontal size={15} strokeWidth={1.75} />
+              </button>
               <button
                   type="button"
                   title="Toggle split editor layout"
@@ -685,7 +805,7 @@ const App: React.FC = () => {
                   type="button"
                   title="Toggle agent panel (right / left / hidden)"
                   className="p-1.5 text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)] rounded transition-colors"
-                  onClick={() => setAgentPosition((p) => (p === 'right' ? 'left' : p === 'left' ? 'off' : 'right'))}
+                  onClick={onChatLayoutToggle}
               >
                   {agentPosition === 'left' ? <PanelLeftClose size={15} strokeWidth={1.75} /> : <PanelRightClose size={15} strokeWidth={1.75} />}
               </button>
@@ -719,9 +839,9 @@ const App: React.FC = () => {
           </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-          {/* 2. ACTIVITY BAR (Extreme Left) */}
-          <div className="w-12 bg-[var(--bg-panel)] flex flex-col items-center py-4 gap-4 border-r border-[var(--border-subtle)] shrink-0 z-50">
+      <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
+          {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
+          <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-4 border-r border-[var(--border-subtle)] shrink-0 z-50">
               <ActivityIcon icon={PenTool} title="Draw" active={openTabs.includes('excalidraw')} onClick={() => openTab('excalidraw')} />
               <ActivityIcon icon={Search} title="Search" active={activeActivity === 'search'} onClick={() => toggleActivity('search')} />
               <ActivityIcon icon={GitBranch} title="Source Control" active={activeActivity === 'git'} onClick={() => toggleActivity('git')} />
@@ -743,10 +863,17 @@ const App: React.FC = () => {
           {agentPosition === 'left' && (
               <>
                 <div 
-                    className="bg-[var(--bg-panel)] flex flex-col shrink-0 transition-opacity relative group z-30 opacity-100 glass-panel"
-                    style={{ width: agentW, borderRight: '1px solid var(--border-subtle)' }}
+                    className={`bg-[var(--bg-panel)] flex flex-col shrink-0 transition-opacity relative group z-30 opacity-100 glass-panel max-md:fixed max-md:inset-0 max-md:z-[45] max-md:w-full max-md:max-w-none max-md:shrink ${
+                      activeActivity ? 'max-md:hidden' : ''
+                    }`}
+                    style={
+                      isNarrowViewport
+                        ? { borderRight: '1px solid var(--border-subtle)' }
+                        : { width: agentW, borderRight: '1px solid var(--border-subtle)' }
+                    }
+                    {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
-                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">Agent</div>
+                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
                     <ChatAssistant 
                         activeProject={activeProject} 
                         activeFileContent={activeFile?.content}
@@ -787,7 +914,7 @@ const App: React.FC = () => {
                 </div>
                 {/* Grab Bar */}
                 <div 
-                  className="w-1 cursor-col-resize hover:bg-[var(--solar-cyan)] active:bg-[var(--solar-cyan)] transition-colors shrink-0 z-50"
+                  className="max-md:hidden w-1 cursor-col-resize hover:bg-[var(--solar-cyan)] active:bg-[var(--solar-cyan)] transition-colors shrink-0 z-50"
                   onPointerDown={(e) => startResize('agent', e)}
                 />
               </>
@@ -795,8 +922,9 @@ const App: React.FC = () => {
 
           <div 
               className={`transition-all duration-75 shrink-0 bg-[var(--bg-panel)] flex flex-col z-40 overflow-hidden shadow-2xl md:shadow-none hover:border-[var(--solar-cyan)] relative group
-              ${activeActivity ? 'absolute inset-y-0 left-12 md:relative md:left-0 border-r border-[var(--border-subtle)] opacity-100' : 'border-none opacity-0'} glass-panel`}
-              style={{ width: activeActivity ? (window.innerWidth < 768 ? 'calc(100% - 3rem)' : sidebarW) : 0 }}
+              ${activeActivity ? 'absolute inset-y-0 left-0 md:relative md:left-0 max-md:!w-full max-md:z-[46] max-md:inset-0 border-r border-[var(--border-subtle)] opacity-100' : 'border-none opacity-0'} glass-panel`}
+              style={{ width: activeActivity ? sidebarW : 0 }}
+              {...(narrowNeedsBack && !!activeActivity ? mobileEdgeSwipeHandlers : {})}
           >
               <div className="w-full h-full flex flex-col relative">                  
                   {activeActivity === 'cad' ? (
@@ -833,6 +961,7 @@ const App: React.FC = () => {
                       <MCPPanel />
                   ) : activeActivity === 'settings' ? (
                       <SettingsPanel
+                          workspaceId={authWorkspaceId}
                           onClose={() => setActiveActivity(null)}
                           onFileSelect={(file) => {
                               setActiveFile({ ...file, originalContent: file.content });
@@ -879,7 +1008,9 @@ const App: React.FC = () => {
           )}
 
           {/* 4. MAIN EDITOR AREA */}
-          <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative">
+          <div
+              className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative ${narrowBlocksCenter ? 'max-md:hidden' : ''}`}
+          >
               {/* Editor Tabs — lazy, closeable */}
               <div className="h-10 flex items-center shrink-0 pl-0 relative z-10 overflow-x-auto overflow-y-hidden no-scrollbar">
                   {openTabs.includes('welcome') && (
@@ -1029,8 +1160,11 @@ const App: React.FC = () => {
                       <XTermShell
                           ref={terminalRef}
                           onClose={() => setIsTerminalOpen(false)}
-                          iamOrigin="https://inneranimalmedia.com"
+                          iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
                           workspaceCdCommand="cd ~/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard"
+                          workspaceLabel={workspaceDisplayName}
+                          workspaceId={authWorkspaceId || undefined}
+                          productLabel={PRODUCT_NAME}
                           outputLines={shellOutputLines}
                           onOutputLine={(line) =>
                             setShellOutputLines((prev) => [...prev.slice(-250), line])
@@ -1045,14 +1179,21 @@ const App: React.FC = () => {
               <>
                 {/* Agent Grab Bar */}
                 <div 
-                  className="w-1 cursor-col-resize hover:bg-[var(--solar-cyan)] active:bg-[var(--solar-cyan)] transition-colors shrink-0 z-50"
+                  className="max-md:hidden w-1 cursor-col-resize hover:bg-[var(--solar-cyan)] active:bg-[var(--solar-cyan)] transition-colors shrink-0 z-50"
                   onPointerDown={(e) => startResize('agent', e)}
                 />
                 <div 
-                    className="bg-[var(--bg-panel)] flex flex-col shrink-0 transition-opacity z-30 relative group opacity-100 glass-panel"
-                    style={{ width: agentW, borderLeft: '1px solid var(--border-subtle)' }}
+                    className={`bg-[var(--bg-panel)] flex flex-col shrink-0 transition-opacity z-30 relative group opacity-100 glass-panel max-md:fixed max-md:inset-0 max-md:z-[45] max-md:w-full max-md:max-w-none max-md:shrink ${
+                      isNarrowViewport && activeActivity ? 'max-md:hidden' : ''
+                    }`}
+                    style={
+                      isNarrowViewport
+                        ? { borderLeft: '1px solid var(--border-subtle)' }
+                        : { width: agentW, borderLeft: '1px solid var(--border-subtle)' }
+                    }
+                    {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
-                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">Agent</div>
+                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
                     <div className="flex-1 relative overflow-hidden">
                          <ChatAssistant 
                             activeProject={activeProject} 
@@ -1100,11 +1241,108 @@ const App: React.FC = () => {
       {/* 8. STATUS BAR (FOOTER) */}
       {toastMsg && (
         <div
-          className="fixed bottom-16 left-1/2 z-[200] -translate-x-1/2 px-4 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[11px] text-[var(--text-main)] shadow-lg max-w-md text-center"
+          className="fixed bottom-16 left-1/2 z-[200] -translate-x-1/2 px-4 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[11px] text-[var(--text-main)] shadow-lg max-w-md text-center max-md:[bottom:calc(56px+1.5rem+env(safe-area-inset-bottom,0px)+8px)]"
           role="status"
         >
           {toastMsg}
         </div>
+      )}
+
+      {/* Mobile (≤768px): bottom tab bar above StatusBar */}
+      <nav
+        className="md:hidden fixed inset-x-0 z-[90] flex items-stretch justify-around gap-0 border-t border-[var(--border-subtle)] bg-[var(--bg-panel)]/95 backdrop-blur-sm"
+        style={{ bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))' }}
+        aria-label="Primary"
+      >
+        <button
+          type="button"
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${agentPosition !== 'off' && !activeActivity ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={onChatLayoutToggle}
+        >
+          <MessageSquare size={24} strokeWidth={1.5} aria-hidden />
+          <span>Chat</span>
+        </button>
+        <button
+          type="button"
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'sql' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => toggleActivity('sql')}
+        >
+          <Database size={24} strokeWidth={1.5} aria-hidden />
+          <span>Database</span>
+        </button>
+        <button
+          type="button"
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'projects' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => toggleActivity('projects')}
+        >
+          <FolderOpen size={24} strokeWidth={1.5} aria-hidden />
+          <span>Explorer</span>
+        </button>
+        <button
+          type="button"
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'actions' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => toggleActivity('actions')}
+        >
+          <Github size={24} strokeWidth={1.5} aria-hidden />
+          <span>Deploy</span>
+        </button>
+        <button
+          type="button"
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'settings' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => toggleActivity('settings')}
+        >
+          <Settings size={24} strokeWidth={1.5} aria-hidden />
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      {mobileMoreOpen && (
+        <>
+          <button
+            type="button"
+            className="md:hidden fixed inset-0 z-[95] bg-[var(--text-main)]/25 backdrop-blur-[2px]"
+            aria-label="Close more tools"
+            onClick={() => setMobileMoreOpen(false)}
+          />
+          <div
+            className="md:hidden fixed left-2 right-2 z-[96] max-h-[min(72vh,calc(100dvh-10rem))] flex flex-col rounded-t-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden"
+            style={{ bottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px) + 52px)' }}
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border-subtle)] shrink-0">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">More</span>
+              <button
+                type="button"
+                className="p-2 rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-main)]"
+                title="Close"
+                onClick={() => setMobileMoreOpen(false)}
+              >
+                <XIcon size={18} strokeWidth={1.75} />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-2 flex flex-col gap-0.5">
+              <MobileMoreRow
+                  icon={PenTool}
+                  label="Draw"
+                  onClick={() => {
+                    setMobileMoreOpen(false);
+                    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                      setActiveActivity(null);
+                      setAgentPosition('off');
+                    }
+                    openTab('excalidraw');
+                  }}
+              />
+              <MobileMoreRow icon={Search} label="Search" onClick={() => { setMobileMoreOpen(false); toggleActivity('search'); }} />
+              <MobileMoreRow icon={GitBranch} label="Source Control" onClick={() => { setMobileMoreOpen(false); toggleActivity('git'); }} />
+              <MobileMoreRow icon={Bug} label="Run & Debug" onClick={() => { setMobileMoreOpen(false); toggleActivity('debug'); }} />
+              <MobileMoreRow icon={Network} label="Remote Explorers" onClick={() => { setMobileMoreOpen(false); toggleActivity('remote'); }} />
+              <MobileMoreRow icon={Layers} label="Tools & MCP" onClick={() => { setMobileMoreOpen(false); toggleActivity('mcps'); }} />
+              <MobileMoreRow icon={Cloud} label="Cloud Sync" onClick={() => { setMobileMoreOpen(false); toggleActivity('drive'); }} />
+              <MobileMoreRow icon={Monitor} label="Playwright Jobs" onClick={() => { setMobileMoreOpen(false); toggleActivity('playwright'); }} />
+              <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); toggleActivity('cad'); }} />
+            </div>
+          </div>
+        </>
       )}
 
       <StatusBar 
@@ -1129,6 +1367,19 @@ const App: React.FC = () => {
 };
 
 // --- Helper UI Components ---
+type LucideLike = React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+
+const MobileMoreRow: React.FC<{ icon: LucideLike; label: string; onClick: () => void }> = ({ icon: Icon, label, onClick }) => (
+  <button
+    type="button"
+    className="flex w-full items-center gap-3 min-h-[44px] rounded-lg px-3 text-left text-[13px] text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors border border-transparent hover:border-[var(--border-subtle)]"
+    onClick={onClick}
+  >
+    <Icon size={20} strokeWidth={1.5} className="shrink-0 text-[var(--text-muted)]" />
+    <span>{label}</span>
+  </button>
+);
+
 const ActivityIcon: React.FC<{ icon: any, active: boolean, onClick: () => void, title?: string }> = ({ icon: Icon, active, onClick, title }) => (
     <div 
         onClick={onClick}

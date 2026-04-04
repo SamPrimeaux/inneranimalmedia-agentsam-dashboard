@@ -4,16 +4,26 @@ import { FitAddon } from '@xterm/addon-fit';
 import { X, ChevronDown, ChevronUp, TriangleAlert, CircleCheck } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
 
-/**
- * IAM Branding Assets
- */
-const IAM_LOGO = `
-\x1b[1;36m   ___                       ___        _   _       \x1b[0m
-\x1b[1;36m  |_ _|_ _ _ _  ___ _ _     / __| __ _ | |_| |      \x1b[0m
-\x1b[1;36m   | || ' \\ ' \\/ -_) '_|   | (__ / _\` ||  _| |__    \x1b[0m
-\x1b[1;36m  |___|_||_|_|_|\\___|_|     \\___|\\__,_| \\__|_|____| \x1b[0m
-\x1b[1;2m            S T U D I O   S A N D B O X            \x1b[0m
-`;
+const DEFAULT_PRODUCT = 'Agent Sam';
+
+/** ANSI banner: product + workspace (xterm theme still tracks CSS vars). */
+function buildAgentSamTerminalBanner(
+  workspaceLabel: string,
+  productLabel: string,
+  workspaceId?: string,
+): string {
+  const w = (workspaceLabel || 'Workspace').replace(/\s+/g, ' ').trim();
+  const line = w.length > 52 ? `${w.slice(0, 49)}...` : w;
+  const id = workspaceId?.trim();
+  const lines = [
+    `\x1b[1;36m────────────────────────────────────────────────────\x1b[0m`,
+    `\x1b[1;36m  ${productLabel}\x1b[0m`,
+    `\x1b[2m  Workspace: ${line}\x1b[0m`,
+  ];
+  if (id) lines.push(`\x1b[2m  Workspace id: ${id}\x1b[0m`);
+  lines.push(`\x1b[1;36m────────────────────────────────────────────────────\x1b[0m`);
+  return lines.join('\r\n');
+}
 
 export type ShellTab = 'terminal' | 'output' | 'problems';
 
@@ -35,8 +45,12 @@ interface XTermShellProps {
   workspaceCdCommand?: string;
   /** Optional override for “Open agent” URL. */
   agentDashboardUrl?: string;
-  /** Show IAM welcome chip row (mirrors scripts/iam-welcome.sh menu in the GUI). */
+  /** Show quick-action chip row (mirrors scripts/iam-welcome.sh menu in the GUI). */
   showIamWelcomeBar?: boolean;
+  /** Human-readable workspace (from /api/settings/workspaces + local IDE context). */
+  workspaceLabel?: string;
+  workspaceId?: string;
+  productLabel?: string;
 }
 
 const MIN_HEIGHT = 140;
@@ -56,6 +70,9 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       workspaceCdCommand = 'cd ~/Downloads/march1st-inneranimalmedia',
       agentDashboardUrl: agentDashboardUrlProp,
       showIamWelcomeBar = true,
+      workspaceLabel = '',
+      workspaceId,
+      productLabel = DEFAULT_PRODUCT,
     },
     ref,
   ) => {
@@ -100,7 +117,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       setActiveTab('terminal');
       if (!xtermRef.current) return;
       xtermRef.current.writeln(
-        '\x1b[38;5;240m  Theme: use the dashboard Settings / theme controls in the UI.\x1b[0m',
+        '\x1b[38;5;240m  Theme: use the dashboard Settings / theme controls (CSS variables update this terminal).\x1b[0m',
       );
     }, []);
 
@@ -114,7 +131,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         return;
       }
       const cmds = [
-        'echo "=== IAM diagnostics (host shell) ==="',
+        `echo "=== ${productLabel} diagnostics (host shell) ==="`,
         'node --version 2>/dev/null || echo "node: not found"',
         'npm --version 2>/dev/null || echo "npm: not found"',
         'npx wrangler --version 2>/dev/null || echo "wrangler: not found"',
@@ -122,7 +139,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       cmds.forEach((c, i) => {
         window.setTimeout(() => ws.send(`${c}\r`), i * 220);
       });
-    }, []);
+    }, [productLabel]);
 
     // ── WebSocket Connectivity ────────────────────────────────────────────────
     useEffect(() => {
@@ -148,9 +165,9 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             // Initial UI setup on first open
             if (xtermRef.current) {
               xtermRef.current.clear();
-              xtermRef.current.writeln(IAM_LOGO);
+              xtermRef.current.writeln(buildAgentSamTerminalBanner(workspaceLabel, productLabel, workspaceId));
               xtermRef.current.writeln(
-                '\x1b[2m  Host splash menu: copy scripts/iam-welcome.sh from the repo to ~/iam-welcome.sh, or use the IAM actions row above.\x1b[0m',
+                '\x1b[2m  Host menu: copy scripts/iam-welcome.sh to ~/iam-welcome.sh, or use the quick actions row above.\x1b[0m',
               );
 
               fetch('/api/agent/memory/list', { method: 'GET' })
@@ -162,12 +179,16 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   if (greeting && xtermRef.current) {
                     xtermRef.current.writeln(`\r\n\x1b[1;36m>\x1b[0m ${greeting}\r\n`);
                   } else if (xtermRef.current) {
-                    xtermRef.current.writeln('\r\n\x1b[2m  MeauxCAD Terminal — connected to PTY\x1b[0m\r\n');
+                    xtermRef.current.writeln(
+                      `\r\n\x1b[2m  ${productLabel} terminal — connected to PTY\x1b[0m\r\n`,
+                    );
                   }
                 })
                 .catch(() => {
                   if (xtermRef.current) {
-                    xtermRef.current.writeln('\r\n\x1b[2m  MeauxCAD Terminal — PTY session active\x1b[0m\r\n');
+                    xtermRef.current.writeln(
+                      `\r\n\x1b[2m  ${productLabel} terminal — PTY session active\x1b[0m\r\n`,
+                    );
                   }
                 });
             }
@@ -212,7 +233,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
           socketRef.current = null;
         }
       };
-    }, [isCollapsed, activeTab]);
+    }, [isCollapsed, activeTab, workspaceLabel, productLabel, workspaceId]);
 
     // ── Theme Reactivity ───────────────────────────────────────────────────
     useEffect(() => {
@@ -233,7 +254,10 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         };
       });
 
-      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme', 'class', 'style'],
+      });
       return () => observer.disconnect();
     }, []);
 
@@ -339,7 +363,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
     return (
       <div
-        className={`fixed bottom-0 left-0 right-0 z-50 flex flex-col border-t border-[var(--border-subtle)] shadow-[0_-8px_32px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-out ${
+        className={`fixed left-0 right-0 z-40 flex flex-col border-t border-[var(--border-subtle)] shadow-[0_-8px_32px_rgba(0,0,0,0.45)] transition-transform duration-300 ease-out bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] ${
           isCollapsed ? 'translate-y-[calc(100%-36px)]' : 'translate-y-0'
         }`}
         style={{
@@ -436,10 +460,10 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   <div
                     className="shrink-0 flex flex-wrap items-center gap-1.5 px-2 py-1.5 border-b border-[var(--border-subtle)] bg-[var(--terminal-surface)]"
                     role="toolbar"
-                    aria-label="IAM welcome actions"
+                    aria-label={`${productLabel} quick actions`}
                   >
-                    <span className="text-[9px] font-bold tracking-widest text-[var(--terminal-tab-muted)] uppercase mr-1">
-                      IAM
+                    <span className="text-[9px] font-bold tracking-widest text-[var(--terminal-tab-muted)] uppercase mr-1 max-w-[120px] truncate" title={productLabel}>
+                      {productLabel}
                     </span>
                     {(
                       [

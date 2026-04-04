@@ -790,7 +790,7 @@ const App: React.FC = () => {
   const narrowNeedsBack = narrowBlocksCenter;
 
   return (
-    <div className="w-full h-screen bg-[var(--bg-app)] overflow-hidden text-[var(--text-main)] font-sans flex flex-col">
+    <div className="w-full h-[100dvh] bg-[var(--bg-app)] overflow-hidden text-[var(--text-main)] font-sans flex flex-col">
       {/* 1. TOP WINDOW BAR */}
       <div className="h-10 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] flex items-center justify-between px-3 shrink-0">
           <div className="flex items-center gap-1 opacity-80 pl-1 shrink-0 min-w-0">

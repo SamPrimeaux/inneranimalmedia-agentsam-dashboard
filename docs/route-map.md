@@ -130,14 +130,14 @@ Total route patterns: **283**.
 - **Bindings (typical):** AI, DB, HYPERDRIVE
 - **Code:** `if (pathLower === '/api/agent/chat/execute-approved-tool' && method === 'POST') {`
 
-## varies /api/agent/cidi
+## varies /api/agent/cicd (worker literal: legacy segment before `/current`)
 
 - **Handler:** handleAgentApi (lines 7937-10875)
 - **Line:** ~10230
 - **Auth:** usually session (see handler)
-- **Description:** Matched in worker.js branch.
+- **Description:** Matched in worker.js branch. Prose uses **CI/CD**; the deployed path segment is still the historical spelling (grep `pathLower === '/api/agent/` in `worker.js`).
 - **Bindings (typical):** AI, DB, HYPERDRIVE
-- **Code:** `if (pathLower === '/api/agent/cidi') {`
+- **Code (worker.js):** equality check on `pathLower` for `/api/agent/` plus the legacy three-letter pipeline segment (see source; prose uses **cicd**).
 
 ## POST /api/agent/commands/execute
 
@@ -1048,50 +1048,50 @@ Total route patterns: **283**.
 - **Bindings (typical):** DB, MYBROWSER
 - **Code:** `if (pathLower === '/api/browser/screenshot' && method === 'GET') {`
 
-## prefix /api/cidi/*
+## prefix /api/cicd/* (worker literal: legacy segment after `/api/`)
 
 - **Handler:** handlePhase1PlatformD1Routes (lines 1992-4672)
 - **Line:** ~3324
 - **Auth:** usually session (see handler)
-- **Description:** Path prefix. Sub-routes resolved inside handlePhase1PlatformD1Routes.
+- **Description:** Path prefix. Sub-routes resolved inside handlePhase1PlatformD1Routes. Prose uses **CI/CD**; confirm the live segment in `worker.js`.
 - **Bindings (typical):** DB
-- **Code:** `if (pathLower.startsWith('/api/cidi/')) {`
+- **Code (worker.js):** `pathLower.startsWith` on `/api/` plus the legacy pipeline segment and `/` (see source).
 
-## GET /api/cidi/current
+## GET /api/cicd/current (worker literal)
 
 - **Handler:** handlePhase1PlatformD1Routes (lines 1992-4672)
 - **Line:** ~2503
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
-- **Code:** `if (pathLower === '/api/cidi/current' && method === 'GET') {`
+- **Code (worker.js):** `GET` branch for `/current` under the legacy `/api/<segment>/` prefix (see source).
 
-## GET/POST /api/cidi/current
+## GET/POST /api/cicd/current (worker literal)
 
 - **Handler:** handlePhase1PlatformD1Routes (lines 1992-4672)
 - **Line:** ~2020
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
-- **Code:** `(pathLower === '/api/cidi/current' && method === 'GET') ||`
+- **Code (worker.js):** disjunction including `GET` on `/current` under the legacy prefix (see source).
 
-## POST /api/cidi/run
+## POST /api/cicd/run (worker literal)
 
-- **Handler:** handleCidiApi (lines 12566-12811)
+- **Handler:** CI/CD API handler in `worker.js` (lines 12566-12811; function name may still use a legacy prefix)
 - **Line:** ~12574
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
-- **Code:** `if (pathLower === '/api/cidi/run' && method === 'POST') {`
+- **Code (worker.js):** `POST` on `/run` under the legacy `/api/<segment>/` prefix (see source).
 
-## GET /api/cidi/runs
+## GET /api/cicd/runs (worker literal)
 
-- **Handler:** handleCidiApi (lines 12566-12811)
+- **Handler:** CI/CD API handler in `worker.js` (lines 12566-12811; function name may still use a legacy prefix)
 - **Line:** ~12778
 - **Auth:** usually session (see handler)
 - **Description:** Matched in worker.js branch.
 - **Bindings (typical):** DB
-- **Code:** `if (pathLower === '/api/cidi/runs' && method === 'GET') {`
+- **Code (worker.js):** `GET` on `/runs` under the legacy `/api/<segment>/` prefix (see source).
 
 ## varies /api/clients
 

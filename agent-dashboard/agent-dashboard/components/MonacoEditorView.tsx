@@ -44,7 +44,61 @@ const LANG_MAP: Record<string, string> = {
   wrangler: 'toml',
 };
 
-const THEME_DEF = {
+/** Append RRGGBBAA alpha when value is #RRGGBB (Monaco). */
+function hexWithAlpha(hex: string, alphaHex2: string, fallback: string): string {
+  const t = hex.trim();
+  if (/^#[0-9a-fA-F]{6}$/i.test(t)) return `${t}${alphaHex2}`;
+  return fallback;
+}
+
+/** Resolve :root CSS custom properties (cms_themes / index.css) for Monaco. */
+function monacoColorsFromDocument(): Record<string, string> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+  const st = getComputedStyle(document.documentElement);
+  const g = (name: string, fallback: string) => {
+    const raw = st.getPropertyValue(name).trim();
+    return raw || fallback;
+  };
+  const scene = g('--scene-bg', '#060e14');
+  const panel = g('--bg-panel', '#0a2d38');
+  const border = g('--border-subtle', '#1e3e4a');
+  const cyan = g('--solar-cyan', '#2dd4bf');
+  const fg = g('--solar-base0', '#839496');
+  const lineNum = g('--text-chrome-muted', '#2a4d58');
+  const green = g('--solar-green', '#859900');
+  const red = g('--solar-red', '#dc322f');
+  const yellow = g('--solar-yellow', '#b58900');
+  const selection = g('--editor-selection-bg', '#0a4a5c');
+  const scrollThumb = g('--monaco-scrollbar-thumb', hexWithAlpha(border, '80', `${border}80`));
+  const scrollHover = g('--monaco-scrollbar-hover', hexWithAlpha(cyan, '40', `${cyan}40`));
+  return {
+    'editor.background': scene,
+    'editor.foreground': fg,
+    'editor.lineHighlightBackground': panel,
+    'editorCursor.foreground': cyan,
+    'editorWhitespace.foreground': border,
+    'editorIndentGuide.background1': border,
+    'editorIndentGuide.activeBackground1': cyan,
+    'editor.selectionBackground': selection,
+    'editorGutter.background': scene,
+    'editorLineNumber.foreground': lineNum,
+    'editorLineNumber.activeForeground': cyan,
+    'scrollbarSlider.background': scrollThumb,
+    'scrollbarSlider.hoverBackground': scrollHover,
+    'minimap.background': scene,
+    'editorOverviewRuler.addedForeground': green,
+    'editorOverviewRuler.deletedForeground': red,
+    'editorOverviewRuler.modifiedForeground': yellow,
+    'diffEditor.insertedTextBackground': hexWithAlpha(green, '20', 'rgba(133,153,0,0.125)'),
+    'diffEditor.removedTextBackground': hexWithAlpha(red, '20', 'rgba(220,50,47,0.125)'),
+    'diffEditor.insertedLineBackground': hexWithAlpha(green, '10', 'rgba(133,153,0,0.063)'),
+    'diffEditor.removedLineBackground': hexWithAlpha(red, '10', 'rgba(220,50,47,0.063)'),
+  };
+}
+
+const MONACO_THEME_BASE = {
   base: 'vs-dark' as const,
   inherit: true,
   rules: [
@@ -56,29 +110,6 @@ const THEME_DEF = {
     { token: 'operator', foreground: '93a1a1' },
     { token: 'delimiter', foreground: '657b83' },
   ],
-  colors: {
-    'editor.background': '#060e14',
-    'editor.foreground': '#839496',
-    'editor.lineHighlightBackground': '#0a2d38',
-    'editorCursor.foreground': '#2dd4bf',
-    'editorWhitespace.foreground': '#1e3e4a',
-    'editorIndentGuide.background1': '#1e3e4a',
-    'editorIndentGuide.activeBackground1': '#2dd4bf',
-    'editor.selectionBackground': '#0a4a5c',
-    'editorGutter.background': '#060e14',
-    'editorLineNumber.foreground': '#2a4d58',
-    'editorLineNumber.activeForeground': '#2dd4bf',
-    'scrollbarSlider.background': '#1e3e4a80',
-    'scrollbarSlider.hoverBackground': '#2dd4bf40',
-    'minimap.background': '#060e14',
-    'editorOverviewRuler.addedForeground': '#859900',
-    'editorOverviewRuler.deletedForeground': '#dc322f',
-    'editorOverviewRuler.modifiedForeground': '#b58900',
-    'diffEditor.insertedTextBackground': '#85990020',
-    'diffEditor.removedTextBackground': '#dc322f20',
-    'diffEditor.insertedLineBackground': '#85990010',
-    'diffEditor.removedLineBackground': '#dc322f10',
-  }
 };
 
 const EDITOR_OPTIONS = {
@@ -115,10 +146,13 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [gitActionHint, setGitActionHint] = useState<string | null>(null);
 
-  // Define custom theme once Monaco loads
+  // Custom theme from :root CSS vars (cms_themes / index.css)
   useEffect(() => {
     if (monaco && !isThemeReady.current) {
-      monaco.editor.defineTheme('meauxcad-dark', THEME_DEF);
+      monaco.editor.defineTheme('meauxcad-dark', {
+        ...MONACO_THEME_BASE,
+        colors: monacoColorsFromDocument(),
+      });
       monaco.editor.setTheme('meauxcad-dark');
       isThemeReady.current = true;
     }
@@ -253,7 +287,7 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
 
   if (!fileData) {
     return (
-      <div className="flex-1 bg-[#060e14] flex items-center justify-center select-none h-full">
+      <div className="flex-1 bg-[var(--scene-bg)] flex items-center justify-center select-none h-full">
         <div className="flex flex-col items-center gap-4 text-[var(--text-muted)] text-center px-8">
           <FileCode2 size={40} className="opacity-20" />
           <p className="text-[13px] font-medium">No file open</p>
@@ -269,9 +303,9 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   const language = LANG_MAP[ext] || 'plaintext';
 
   return (
-    <div className="flex flex-col h-full w-full bg-[#060e14] overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
       {/* ── File Toolbar ── */}
-      <div className="h-9 flex items-center justify-between px-3 border-b border-[var(--border-subtle)] bg-[#0a2d38] shrink-0 gap-2">
+      <div className="h-9 flex items-center justify-between px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0 gap-2">
         {/* File info */}
         <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
           <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />

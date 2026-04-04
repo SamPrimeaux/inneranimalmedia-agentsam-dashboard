@@ -13,7 +13,7 @@
 
 **WARNING**
 
-- Sandbox R2 bucket **`agent-sam-sandbox-cidi`** is retired in favor of **`agent-sam-sandbox-cicd`**. Confirm no external automation still targets **`cidi`**.
+- Sandbox R2 bucket **`agent-sam-sandbox-cicd`** is retired in favor of **`agent-sam-sandbox-cicd`**. Confirm no external automation still targets **`cicd`**.
 
 ---
 

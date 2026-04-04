@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# deploy-gate.sh — IAM / MeauxCAD CIDI Quality Gate
+# deploy-gate.sh — IAM / CI/CD quality gate (+ optional AI Test Suite direct deploy)
 # Tracks every deploy, enforces protocol, writes to D1.
 # Usage:
 #   ./scripts/deploy-gate.sh sandbox  --note "fix excalidraw bridge"
 #   ./scripts/deploy-gate.sh promote  --note "promote v203 to prod"
-#   ./scripts/deploy-gate.sh meauxcad --note "theme system wired"
+#   ./scripts/deploy-gate.sh aitestsuite --note "shell bump"
 #   ./scripts/deploy-gate.sh audit    (read-only compliance check)
 # ============================================================
 set -euo pipefail
@@ -14,17 +14,20 @@ set -euo pipefail
 DB_ID="cf87b717-d4e2-4cf8-bab0-a81268e32d49"
 IAM_WORKER="inneranimalmedia"
 SANDBOX_WORKER="inneranimal-dashboard"
-MEAUXCAD_WORKER="meauxcad"
+AITESTSUITE_WORKER="${AITESTSUITE_WORKER:-aitestsuite}"
 IAM_PROD_CONFIG="wrangler.production.toml"
-SANDBOX_CONFIG="wrangler.toml"           
+SANDBOX_CONFIG="wrangler.toml"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# TODO: When AI Test Suite sources live in this repo, add wrangler.aitestsuite.toml + aitestsuite-worker.js at REPO_ROOT (do not add speculatively).
+AITESTSUITE_SCRIPT="$REPO_ROOT/aitestsuite-worker.js"
+AITESTSUITE_CONFIG="$REPO_ROOT/wrangler.aitestsuite.toml"
 DIST_DIR="$REPO_ROOT/agent-dashboard/agent-dashboard/dist"
 DASHBOARD_HTML="$REPO_ROOT/dashboard/agent.html"
 BENCHMARK_SCRIPT="$REPO_ROOT/scripts/benchmark-full.sh"
 CF_ENV_WRAPPER="$REPO_ROOT/scripts/with-cloudflare-env.sh"
 BENCHMARK_PASS_THRESHOLD=31   # required passing tests
-R2_CAD_BUCKET="cad"           # MeauxCAD R2 bucket
-MEAUXCAD_DIR="/Users/samprimeaux/.gemini/antigravity/scratch/meauxcad"
+# Optional: set to audit R2 for AI Test Suite (otherwise audit lists D1 deploy rows only)
+AITESTSUITE_R2_BUCKET="${AITESTSUITE_R2_BUCKET:-}"
 # ────────────────────────────────────────────────────────────
 
 # ── Colors ──────────────────────────────────────────────────
@@ -332,20 +335,22 @@ write_dashboard_versions() {
   ok "dashboard_versions written for dist assets + agent.html (ver=$ver)"
 }
 
-# ── SECTION 8: MeauxCAD R2 (cad bucket) asset audit ────────
-audit_meauxcad_r2() {
+# ── SECTION 8: AI Test Suite — optional R2 + D1 deploy audit ─
+audit_aitestsuite_r2() {
   hr
-  log "MeauxCAD R2 bucket '$R2_CAD_BUCKET' — last uploaded objects"
+  log "AI Test Suite worker '$AITESTSUITE_WORKER' — deploy + optional R2"
   hr
 
-  # List objects via wrangler r2 object list (bucket-level only via CLI)
-  "$CF_ENV_WRAPPER" wrangler r2 object list "$R2_CAD_BUCKET" \
-    --config "$IAM_PROD_CONFIG" --remote 2>/dev/null | head -20 \
-    || warn "Could not list '$R2_CAD_BUCKET' — bucket may not exist yet or env var missing"
+  if [[ -n "$AITESTSUITE_R2_BUCKET" ]]; then
+    "$CF_ENV_WRAPPER" wrangler r2 object list "$AITESTSUITE_R2_BUCKET" \
+      --config "$IAM_PROD_CONFIG" --remote 2>/dev/null | head -20 \
+      || warn "Could not list '$AITESTSUITE_R2_BUCKET' — check binding or env"
+  else
+    log "AITESTSUITE_R2_BUCKET unset — skipping R2 object list (set env to enable)."
+  fi
 
-  # Check D1 for any meauxcad deploy records
   d1 "SELECT id, version, git_hash, environment, status, timestamp
-      FROM deployments WHERE worker_name='$MEAUXCAD_WORKER'
+      FROM deployments WHERE worker_name='$AITESTSUITE_WORKER'
       ORDER BY created_at DESC LIMIT 5;"
 }
 
@@ -405,21 +410,44 @@ compliance_report() {
   hr
 }
 
-# ── SECTION 10: Write CIDI Activity Log to D1 ────────────────
-write_cidi_log() {
+# ── SECTION 10: Write CICD event row to D1 (cicd_events) ─────
+write_cicd_log() {
   local action="$1" worker="$2" note="$3" score="$4"
-  local hash; hash=$(git_hash)
-  local now; now=$(date -u +"%Y-%m-%d %H:%M:%S")
+  local hash_full branch repo remote
+  hash_full=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+  branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+  remote=$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || true)
+  if [[ "$remote" =~ github\.com[:/]([^/]+/[^/.]+)(\.git)?$ ]]; then
+    repo="${BASH_REMATCH[1]}"
+  else
+    repo="SamPrimeaux/inneranimalmedia-agentsam-dashboard"
+  fi
+  local note_esc repo_esc branch_esc hash_esc worker_esc action_esc r2key_esc
+  note_esc=$(echo "$note" | sed "s/'/''/g")
+  repo_esc=$(echo "$repo" | sed "s/'/''/g")
+  branch_esc=$(echo "$branch" | sed "s/'/''/g")
+  hash_esc=$(echo "$hash_full" | sed "s/'/''/g")
+  worker_esc=$(echo "$worker" | sed "s/'/''/g")
+  action_esc=$(echo "$action" | sed "s/'/''/g")
+  local ts evid
+  ts=$(date -u +"%Y%m%d%H%M%S")
+  evid="evt_dgate_${ts}_$$"
+  r2key_esc=$(printf '{"git_hash":"%s","compliance_score":%s,"gate":"deploy-gate.sh"}' "$(git_hash)" "$score" | sed "s/'/''/g")
 
-  d1 "INSERT INTO cidi_activity_log
-        (workflow_id, action_type, change_description, changed_by, changed_at, metadata_json)
+  d1 "INSERT OR IGNORE INTO cicd_events
+        (id, source, event_type, repo_name, git_branch, git_commit_sha, git_commit_message, git_actor, worker_name, r2_bucket, r2_key)
       VALUES (
-        '$worker',
-        '$action',
-        '$(echo "$note" | sed "s/'/''/g")',
+        '${evid}',
+        'deploy_gate',
+        '${action_esc}',
+        '${repo_esc}',
+        '${branch_esc}',
+        '${hash_esc}',
+        '${note_esc}',
         'sam_primeaux',
-        '$now',
-        '{\"git_hash\":\"$hash\",\"compliance_score\":$score,\"gate\":\"deploy-gate.sh\"}'
+        '${worker_esc}',
+        NULL,
+        '${r2key_esc}'
       );"
 }
 
@@ -434,11 +462,11 @@ case "$MODE" in
     preflight
     # audit_assets
     audit_deployments
-    audit_meauxcad_r2
+    audit_aitestsuite_r2
     # audit_roadmap
     compliance_report
     # Calculate score based on compliance_report logic (mocked here for simplicity)
-    write_cidi_log "audit" "all" "scheduled audit" "5"
+    write_cicd_log "audit" "all" "scheduled audit" "5"
     ;;
 
   sandbox)
@@ -454,7 +482,7 @@ case "$MODE" in
     local_ver="v$(date +%Y%m%d)"
     hash=$(git_hash)
     write_deploy_record "sandbox" "$SANDBOX_WORKER" "$local_ver" ""
-    write_cidi_log "deploy_sandbox" "$SANDBOX_WORKER" "$DEPLOY_NOTE" "5"
+    write_cicd_log "deploy_sandbox" "$SANDBOX_WORKER" "$DEPLOY_NOTE" "5"
     compliance_report
     hr; ok "Sandbox deploy complete — verify at https://inneranimal-dashboard.meauxbility.workers.dev"
     ;;
@@ -468,39 +496,37 @@ case "$MODE" in
     local_ver="v$(date +%Y%m%d)"
     hash=$(git_hash)
     write_deploy_record "production" "$IAM_WORKER" "$local_ver" ""
-    write_cidi_log "deploy_production" "$IAM_WORKER" "$DEPLOY_NOTE" "5"
+    write_cicd_log "deploy_production" "$IAM_WORKER" "$DEPLOY_NOTE" "5"
     compliance_report
     hr; ok "Production deploy complete — https://inneranimalmedia.com"
     ;;
 
-  meauxcad)
-    [[ -z "$DEPLOY_NOTE" ]] && die "--note required. Example: ./scripts/deploy-gate.sh meauxcad --note 'theme system wired'"
+  aitestsuite)
+    # Direct deploy only — no sandbox → benchmark → promote pipeline for this worker.
+    [[ -z "$DEPLOY_NOTE" ]] && die "--note required. Example: ./scripts/deploy-gate.sh aitestsuite --note 'shell bump'"
     preflight
-    hr; log "Building MeauxCAD..."; hr
-    MCAD_DIR="${MEAUXCAD_DIR:-$REPO_ROOT/../meauxcad}"
-    [[ -d "$MCAD_DIR" ]] || die "MeauxCAD repo not found at $MCAD_DIR — set MEAUXCAD_DIR env var"
-    cd "$MCAD_DIR" && npm run build
-    hr; log "Deploying MeauxCAD worker ($MEAUXCAD_WORKER)..."; hr
-    "$CF_ENV_WRAPPER" wrangler deploy --config wrangler.jsonc
-    
-    hr; log "Uploading assets to MeauxCAD R2 ($R2_CAD_BUCKET)..."; hr
-    # Upload everything in dist/ to the cad bucket
-    for f in $(find dist -type f); do
-      rel_path=${f#dist/}
-      # log "Uploading $rel_path..."
-      "$CF_ENV_WRAPPER" wrangler r2 object put "$R2_CAD_BUCKET/$rel_path" --file "$f" --config wrangler.jsonc --remote
-    done
+    if [[ ! -f "$AITESTSUITE_CONFIG" ]] || [[ ! -f "$AITESTSUITE_SCRIPT" ]]; then
+      die "Missing $AITESTSUITE_CONFIG or $AITESTSUITE_SCRIPT — add AI Test Suite entrypoint at repo root when ready (see TODO in deploy-gate.sh config)."
+    fi
+    hr; log "Direct deploy AI Test Suite worker ($AITESTSUITE_WORKER) — no sandbox/benchmark gate..."; hr
+    deploy_log=$(mktemp "${TMPDIR:-/tmp}/aitestsuite-deploy.XXXXXX.log")
+    set +o pipefail
+    "$CF_ENV_WRAPPER" wrangler deploy "$AITESTSUITE_SCRIPT" -c "$AITESTSUITE_CONFIG" 2>&1 | tee "$deploy_log"
+    deploy_status="${PIPESTATUS[0]}"
+    set -o pipefail
+    VERSION_ID=$(grep -E "Current Version ID:|Version ID:" "$deploy_log" 2>/dev/null | tail -1 | awk '{print $NF}' || true)
+    rm -f "$deploy_log"
+    [[ "$deploy_status" -eq 0 ]] || die "wrangler deploy failed for AI Test Suite worker"
 
-    hash=$(git_hash)
-    write_deploy_record "production" "$MEAUXCAD_WORKER" "mcad-$(date +%Y%m%d)" ""
-    write_cidi_log "deploy_meauxcad" "$MEAUXCAD_WORKER" "$DEPLOY_NOTE" "5"
-    audit_meauxcad_r2
+    write_cicd_log "deploy_aitestsuite" "$AITESTSUITE_WORKER" "$DEPLOY_NOTE" "2" || true
+    write_deploy_record "production" "$AITESTSUITE_WORKER" "aitestsuite-$(date +%Y%m%d)" "${VERSION_ID:-}" || true
+    audit_aitestsuite_r2
     compliance_report
-    hr; ok "MeauxCAD deploy complete — https://meauxcad.meauxbility.workers.dev"
+    hr; ok "AI Test Suite deployed — https://aitestsuite.meauxbility.workers.dev"
     ;;
 
   *)
-    echo "Usage: $0 [audit|sandbox|promote|meauxcad] [--note 'description'] [--tag session-tag]"
+    echo "Usage: $0 [audit|sandbox|promote|aitestsuite] [--note 'description'] [--tag session-tag]"
     exit 1
     ;;
 

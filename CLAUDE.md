@@ -30,7 +30,7 @@ Use this file when working in **march1st-inneranimalmedia** via **Claude Code CL
 - **`agent.html`:** no wholesale rewrite.
 - **New Cloudflare Workers / D1 DBs / R2 buckets / `wrangler secret put`** — forbidden without Sam saying it is intentional.
 
-## Deploy and CIDI (summary)
+## Deploy and CI/CD (summary)
 
 - **Sandbox first:** `cd agent-dashboard && npm run build:vite-only && cd .. && ./scripts/deploy-sandbox.sh`
 - **Benchmark:** `./scripts/benchmark-full.sh sandbox` before promote.
@@ -48,9 +48,9 @@ Use this file when working in **march1st-inneranimalmedia** via **Claude Code CL
 
 ## D1 pointers
 
-- **CIDI tables + migration index:** `docs/CIDI_TABLES_AND_MIGRATIONS.md` (`cidi_pipeline_runs`, `cidi_run_results`, `cidi_activity_log`, `cicd_runs`, migrations 175/203/204/205).
-- CIDI steps: `plan_steps` where `project_id = 'proj_iam_tools_agent_workspace'`.
-- Canonical CIDI JSON: `project_memory` key `CIDI_THREE_STEP_SYSTEM`, `project_id = 'inneranimalmedia'`.
+- **CI/CD tables + migration index:** `docs/CICD_TABLES_AND_MIGRATIONS.md` (`cicd_pipeline_runs`, `cicd_run_steps`, `cicd_events`, `cicd_runs`, migrations 175/203/204/205).
+- CI/CD steps: `plan_steps` where `project_id = 'proj_iam_tools_agent_workspace'`.
+- Canonical CI/CD JSON: `project_memory` row for the three-step deploy pipeline (`project_id = 'inneranimalmedia'`). **Query the key stored by migration 204** until a follow-up migration renames it; docs call this the **CI/CD three-step system**.
 - Tools/editor assets: `TOOLS_IAM_EDITOR_ASSETS_v1` (MeauxCAD bundle + Monaco AMD metadata).
 
 ## Current Monaco integration goal (Claude Code scope)

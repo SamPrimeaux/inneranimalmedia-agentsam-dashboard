@@ -2,8 +2,8 @@
 
 This repo is the single source of truth for the **Agent Sam** dashboard, the Cloudflare Worker that serves it, public marketing pages, the MCP server, and the terminal server. Use this README to orient and pick up exactly where you left off (see **Where we left off** and **Key docs**).
 
-**Full system map (2-zone Cloudflare CIDI, sibling repos, D1 clusters, Mermaid + ASCII):**  
-[`docs/SYSTEM_CIDI_ARCHITECTURE_README.md`](docs/SYSTEM_CIDI_ARCHITECTURE_README.md)
+**Full system map (2-zone Cloudflare CI/CD, sibling repos, D1 clusters, Mermaid + ASCII):**  
+[`docs/SYSTEM_CICD_ARCHITECTURE_README.md`](docs/SYSTEM_CICD_ARCHITECTURE_README.md)
 
 ---
 
@@ -101,7 +101,7 @@ Worker never uses **iam-platform** for serving worker/dashboard code; that bucke
 | Script | Purpose |
 |--------|--------|
 | `./scripts/with-cloudflare-env.sh <cmd>` | Loads `.env.cloudflare` (or env) so `CLOUDFLARE_API_TOKEN` is set; **always** use for wrangler R2/deploy commands. |
-| `./scripts/upload-repo-to-r2-sandbox.sh` | Syncs dashboard HTML + Vite outputs to R2 **agent-sam-sandbox-cidi** (CIDI sandbox zone). |
+| `./scripts/upload-repo-to-r2-sandbox.sh` | Syncs dashboard HTML + Vite outputs to R2 **agent-sam-sandbox-cicd** (CI/CD sandbox zone). |
 | `PROMOTE_OK=1 ./scripts/promote-agent-dashboard-to-production.sh` | Builds agent-dashboard; uploads `agent.html` + bundle to **agent-sam** (production R2 only; no Worker deploy). |
 | `npm run deploy` | Runs `./scripts/deploy-with-record.sh`: sources env, deploys worker via wrangler, records deploy in D1. **Do not run without explicit "deploy approved".** |
 | `./agent-dashboard/deploy-to-r2.sh` | Builds agent-dashboard (and optionally overview-dashboard, time-tracking-dashboard), uploads JS/CSS/HTML to R2 **agent-sam**. Does not deploy the worker. Run from repo root. |
@@ -171,8 +171,8 @@ After building, upload changed assets and any changed dashboard HTML to R2 (see 
 
 | Doc | Purpose |
 |-----|--------|
-| `docs/SYSTEM_CIDI_ARCHITECTURE_README.md` | **Architecture:** production vs sandbox Workers, R2 buckets, MCP + PTY repos, Mermaid diagrams, D1 table clusters, CIDI 2-step UI lane. |
-| `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` | **Agents:** which D1 tables to touch per action; webhooks; `workflow_locks`; copy-paste Cursor prompt. |
+| `docs/SYSTEM_CICD_ARCHITECTURE_README.md` | **Architecture:** production vs sandbox Workers, R2 buckets, MCP + PTY repos, Mermaid diagrams, D1 table clusters, CI/CD 2-step UI lane. |
+| `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` | **Agents:** which D1 tables to touch per action; webhooks; `workflow_locks`; copy-paste Cursor prompt. |
 | `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` | **Agents:** sandbox UI iteration and safe promotion to production R2. |
 | `docs/LOCATIONS_AND_DEPLOY_AUDIT.md` | Worker/dashboard locations, R2 keys, deploy flow, quick commands. |
 | `docs/cursor-session-log.md` | Per-session what was asked, files changed, deploy status, what is live, known issues. |
@@ -181,7 +181,7 @@ After building, upload changed assets and any changed dashboard HTML to R2 (see 
 | `docs/memory/today-todo.md` | Today's priorities (synced to D1 and R2). |
 | `docs/MCP_CURSOR_TERMINAL_SYNC.md` | MCP endpoint, Cursor config, terminal health check. |
 | `docs/API_METRICS_AND_AGENT_COST_TRACKING.md` | API metrics, agent cost tracking (agent_telemetry, spend_ledger, etc.). |
-| `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md` | **D1 namespaces audit** (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cidi*`) + **Universal Sync Law** (one writer per concern, correlation IDs, tool contract, boot parity). |
+| `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md` | **D1 namespaces audit** (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cicd*`) + **Universal Sync Law** (one writer per concern, correlation IDs, tool contract, boot parity). |
 | `.cursor/rules/` | Project rules: deploy, file protection, R2-before-deploy, D1 schema, MCP reference, session-start D1 context. |
 | `.cursor/commands/` | Cursor **slash commands** (project): `/iam` (monorepo + deploy matrix), `/iampty` (iam-pty tunnel, tokens, lockdown), `/subagent` (delegation guardrails), `/skills` (which SKILL.md to open), `/rules` (rules index + tracking). |
 

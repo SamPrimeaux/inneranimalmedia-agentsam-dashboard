@@ -70,8 +70,8 @@ Use Wrangler or the Cloudflare dashboard for uploads. Do not commit secrets.
 
 - **Sandbox deploy:** `scripts/deploy-sandbox.sh` (writes **`agent-sam-sandbox-cicd`**, deploys **`inneranimal-dashboard`**).
 - **Prod promote:** `scripts/promote-to-prod.sh` (reads **`agent-sam-sandbox-cicd`**, writes **`agent-sam`**).
-- **Lab vs CIDI flow:** `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`.
-- **Older bucket name:** Some historical docs and scripts use **`agent-sam-sandbox-cidi`**. The **current** sandbox pipeline in this repo targets **`agent-sam-sandbox-cicd`** — keep scripts and bindings aligned.
+- **Lab vs CICD flow:** `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`.
+- **Older bucket name:** Some historical docs and scripts use **`agent-sam-sandbox-cicd`**. The **current** sandbox pipeline in this repo targets **`agent-sam-sandbox-cicd`** — keep scripts and bindings aligned.
 
 ---
 

@@ -241,7 +241,7 @@ export const LocalExplorer: React.FC<{
                     className="flex items-center gap-2 px-4 py-2 hover:bg-[var(--bg-hover)] cursor-pointer group"
                 >
                     {expandedSections.r2 ? <ChevronDown size={14} className="text-[var(--text-muted)] group-hover:text-white" /> : <ChevronRight size={14} className="text-[var(--text-muted)] group-hover:text-white" />}
-                    <Cloud size={14} className="text-[#f38020] group-hover:text-white" />
+                    <Cloud size={14} className="text-[var(--solar-orange)] group-hover:text-[var(--text-heading)]" />
                     <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Cloudflare R2</span>
                 </div>
                 {expandedSections.r2 && (

@@ -2,7 +2,7 @@
 
 **Scope:** This audit is built from **migrations/** and **`worker.js` references** in this monorepo. It does **not** replace `PRAGMA table_info` on production D1. If live D1 has extra columns or tables, treat this doc as **intent + wiring map** and reconcile with Studio.
 
-**Naming note:** There is **`cidi_active_workflows`** (view, referenced in older docs/TOMORROW), not `cidi_active_log`. **`cidi_recent_completions`** is a **VIEW** over `cidi` (filter completed + recent `actual_completion_date`). You cannot INSERT into views.
+**Naming note:** There is **`cicd_active_workflows`** (view, referenced in older docs/TOMORROW), not `cicd_active_log`. **`cicd_recent_completions`** is a **VIEW** over `cicd` (filter completed + recent `actual_completion_date`). You cannot INSERT into views.
 
 ---
 
@@ -40,7 +40,7 @@
 | `mcp_usage_log` | 134 + triggers 157/161 | Daily rollup from `mcp_tool_calls` |
 | `mcp_agent_sessions` | 121 + 135 | MCP panel sessions; `conversation_id` link |
 | `mcp_command_suggestions` | 121, part2, seeds | Dashboard prompts |
-| `mcp_workflows` / `mcp_workflow_runs` | 159, 160 | CIDI-style workflow runner in worker |
+| `mcp_workflows` / `mcp_workflow_runs` | 159, 160 | CICD-style workflow runner in worker |
 | `v_mcp_tool_drift` | 158 | View: registered tools vs recent calls |
 
 **Worker:** reads `mcp_registered_tools` for builtins + invoke path; updates `mcp_services.health_status` in places; inserts `mcp_workflow_runs`.
@@ -85,16 +85,16 @@ Other `ai_*` tables (e.g. `ai_rag_search_history`, `ai_knowledge_base`) may exis
 
 ---
 
-### 1.5 `cidi*` (workflows + activity)
+### 1.5 `cicd*` (workflows + activity)
 
 | Object | Migration in repo | Worker |
 |--------|-------------------|--------|
-| `cidi` | **None** (table assumed in D1) | **GET `/api/agent/cidi`**, daily plan reads |
-| `cidi_activity_log` | **None** | JOIN for activity_count; **INSERT** on CI/CIDI follow-ups (`recordGithubCicdFollowups`, webhook `update_cidi` path) |
-| `cidi_active_workflows` | **View** (not in repo migrations here) | Mentioned in handoff docs |
-| `cidi_recent_completions` | **VIEW** | Derived from `cidi`; no direct INSERT |
+| `cicd` | **None** (table assumed in D1) | **GET `/api/agent/cicd`**, daily plan reads |
+| `cicd_events` | **None** | JOIN for activity_count; **INSERT** on CI/CICD follow-ups (`recordGithubCicdFollowups`, webhook `update_cicd` path) |
+| `cicd_active_workflows` | **View** (not in repo migrations here) | Mentioned in handoff docs |
+| `cicd_recent_completions` | **VIEW** | Derived from `cicd`; no direct INSERT |
 
-**Gap:** Add **CREATE TABLE IF NOT EXISTS** migrations for `cidi` + `cidi_activity_log` + views so schema = repo truth (per `PLATFORM_TABLES_AUDIT_AND_WIRING.md`).
+**Gap:** Add **CREATE TABLE IF NOT EXISTS** migrations for `cicd` + `cicd_events` + views so schema = repo truth (per `PLATFORM_TABLES_AUDIT_AND_WIRING.md`).
 
 ---
 
@@ -116,7 +116,7 @@ For each concern below, **exactly one** primary write path is allowed in applica
 | High-level MCP rollup | `mcp_usage_log` | DB trigger from `mcp_tool_calls` (see 161) |
 | Security-ish audit events | `agent_audit_log` | `writeAuditLog` helper only |
 | Cursor parity settings | `agentsam_*` | `/api/agentsam/*` handlers only |
-| CIDI narrative | `cidi_activity_log` | Same transaction or `waitUntil` as the `cidi` / `cicd_runs` change that caused it |
+| CICD narrative | `cicd_events` | Same transaction or `waitUntil` as the `cicd` / `cicd_runs` change that caused it |
 | Deploy history | `cloudflare_deployments` | `post-deploy-record.sh` / `npm run deploy` / internal record API |
 
 **Violation to avoid:** ad-hoc INSERTs from scripts into `agent_audit_log` or `mcp_tool_calls` without shared helpers (breaks correlation).
@@ -156,23 +156,23 @@ Cursor rules (`.cursor/rules`, `.cursorrules`) and local **Skills** are **develo
 
 ### Law 7 — Schema migrations before production data writes
 
-No new `agent_*` / `mcp_*` / `cidi*` / `agentsam_*` table or column may be **required** by worker code until:
+No new `agent_*` / `mcp_*` / `cicd*` / `agentsam_*` table or column may be **required** by worker code until:
 
 1. `migrations/*.sql` exists with `CREATE TABLE IF NOT EXISTS` / `ALTER` guarded for idempotency  
 2. `docs/PLATFORM_TABLES_AUDIT_AND_WIRING.md` or this file updated with writer + reader  
 3. For memory visible to Agent Sam: optional upload to `iam-platform/memory/schema-and-records.md` per `AGENT_MEMORY_SCHEMA_AND_RECORDS.md`
 
-### Law 8 — CIDI activity is append-only narrative
+### Law 8 — CICD activity is append-only narrative
 
-- **`cidi`**: state of a workflow (status, dates, ownership).  
-- **`cidi_activity_log`**: **append-only** explanation (who/what/when + `metadata_json`).  
+- **`cicd`**: state of a workflow (status, dates, ownership).  
+- **`cicd_events`**: **append-only** explanation (who/what/when + `metadata_json`).  
 Never “fix” history by DELETE; use compensating **new** rows with `backfill_id` in metadata when scripting (idempotent backfills).
 
 ### Law 9 — Sandbox vs production Workers
 
 Same D1 binding on sandbox and prod means **writes from sandbox hit production data**.
 
-**Rule:** Any script or UI that **mutates** `cidi`, `mcp_*`, or `agentsam_*` from sandbox must be **explicitly labeled** in runbooks; prefer **read-only** verification on sandbox or separate `tenant_id` / feature flags if you split data later.
+**Rule:** Any script or UI that **mutates** `cicd`, `mcp_*`, or `agentsam_*` from sandbox must be **explicitly labeled** in runbooks; prefer **read-only** verification on sandbox or separate `tenant_id` / feature flags if you split data later.
 
 ### Law 10 — Human gates for irreversible actions
 
@@ -185,7 +185,7 @@ Deploy, `wrangler secret put`, production R2 overwrite of `agent-dashboard.js`, 
 - [ ] New tool? `mcp_registered_tools` seed + worker dispatch + telemetry path  
 - [ ] New LLM model? `ai_models` (if used) + boot + Settings picker  
 - [ ] New table? migration + this doc or PLATFORM_TABLES + writer function name  
-- [ ] CIDI change? `cidi` UPDATE + `cidi_activity_log` INSERT  
+- [ ] CICD change? `cicd` UPDATE + `cicd_events` INSERT  
 - [ ] Cursor-only workflow? Document in `/iam` or `agentsam_rules_document` so Agent Sam users see parity  
 
 ---
@@ -194,7 +194,7 @@ Deploy, `wrangler secret put`, production R2 overwrite of `agent-dashboard.js`, 
 
 - `docs/PLATFORM_TABLES_AUDIT_AND_WIRING.md` — per-table wiring status  
 - `docs/memory/AGENT_MEMORY_SCHEMA_AND_RECORDS.md` — canonical metrics tables  
-- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — webhooks, deployments, roadmap  
+- `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` — webhooks, deployments, roadmap  
 - `docs/AGENT_SAM_WORKSTATION_MASTER_PLAN.md` — capabilities / command execution vision  
 - `migrations/163_agentsam_cursor_parity.sql` — full `agentsam_*` DDL  
 

@@ -67,7 +67,7 @@ export const GoogleDriveExplorer: React.FC<{
                 <div className="flex flex-col gap-3 w-full max-w-[220px]">
                   <button 
                     onClick={handleConnect}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--solar-blue)] border border-[var(--solar-blue)] hover:brightness-110 rounded text-[11px] font-bold text-[#00212b] transition-all"
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--solar-blue)] border border-[var(--solar-blue)] hover:brightness-110 rounded text-[11px] font-bold text-[var(--solar-base03)] transition-all"
                   >
                     <ExternalLink size={14} /> Connect Google Drive
                   </button>

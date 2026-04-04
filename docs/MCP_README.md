@@ -163,7 +163,7 @@ Includes: `service_name`, `service_type`, `endpoint_url`, `worker_id`, `authenti
 | id | name | category | trigger | status | runs (ok/total) |
 |----|------|----------|---------|--------|------------------|
 | wf_2step_ui_deploy | 2Step — UI Sandbox → Production | deploy | manual | active | 0/0 |
-| wf_cidi_agent_ui_sandbox_to_prod | CIDI — Agent UI: sandbox R2 then production R2 | deploy | manual | active | 0/0 |
+| wf_cicd_agent_ui_sandbox_to_prod | CICD — Agent UI: sandbox R2 then production R2 | deploy | manual | active | 0/0 |
 | wf_client_onboard | Client Onboarding — Full Setup | client | manual | active | 0/0 |
 | wf_cost_telemetry_report | Cost & Telemetry Report | ops | manual | active | 0/0 |
 | wf_d1_schema_audit | D1 Schema Audit | maintenance | manual | active | 0/0 |

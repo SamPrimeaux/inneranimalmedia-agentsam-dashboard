@@ -1,6 +1,6 @@
 -- 205: CIDI audit trail — repo sync (overnight suite, morning-plan metrics, INTERNAL_API_SECRET handoff, CIDI docs).
 -- Apply: ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/205_cidi_cursor_sync_overnight_docs_20260401.sql
--- Tables: cicd_runs, cidi_activity_log, cidi_pipeline_runs, cidi_run_results (see docs/CIDI_TABLES_AND_MIGRATIONS.md).
+-- Tables: cicd_runs, cidi_activity_log, cidi_pipeline_runs, cidi_run_results (see docs/CICD_TABLES_AND_MIGRATIONS.md).
 
 INSERT OR REPLACE INTO cicd_runs (
   id,

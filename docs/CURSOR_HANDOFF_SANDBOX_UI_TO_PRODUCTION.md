@@ -1,6 +1,6 @@
 # Cursor handoff: sandbox UI refinement and safe promotion to production
 
-Copy everything below the line into a new Cursor chat when working on **inneranimal-dashboard** (Workers) + **agent-sam-sandbox-cidi** (R2), then promoting UI to **inneranimalmedia** + **agent-sam**.
+Copy everything below the line into a new Cursor chat when working on **inneranimal-dashboard** (Workers) + **agent-sam-sandbox-cicd** (R2), then promoting UI to **inneranimalmedia** + **agent-sam**.
 
 ---
 
@@ -8,7 +8,7 @@ Copy everything below the line into a new Cursor chat when working on **innerani
 
 1. **Production Worker** (`inneranimalmedia`, `inneranimalmedia.com`) is the real product. **Never** change `handleGoogleOAuthCallback` or `handleGitHubOAuthCallback` in `worker.js` without explicit line-by-line owner approval. **Never** deploy production without Sam typing exactly: `deploy approved`.
 
-2. **Sandbox Worker** (`inneranimal-dashboard`, `*.workers.dev`) is for **cosmetic / UI** iteration. It should use **sandbox R2** (`agent-sam-sandbox-cidi`) for `DASHBOARD` / `ASSETS` (or equivalent) so production bucket **agent-sam** is not overwritten by experiments.
+2. **Sandbox Worker** (`inneranimal-dashboard`, `*.workers.dev`) is for **cosmetic / UI** iteration. It should use **sandbox R2** (`agent-sam-sandbox-cicd`) for `DASHBOARD` / `ASSETS` (or equivalent) so production bucket **agent-sam** is not overwritten by experiments.
 
 3. **Production D1** (`inneranimalmedia-business`) is shared if the sandbox Worker binds it. Treat that as **production data**: prefer read-only or no-DB flows for pure UI; do not run destructive migrations or bulk deletes from sandbox unless Sam explicitly approves.
 
@@ -27,7 +27,7 @@ Copy everything below the line into a new Cursor chat when working on **innerani
 
 8. **Roadmap (D1):** `roadmap_steps` rows **`step_agent_theme_initial_paint`** and **`step_sandbox_agent_promote_workflow`** on `plan_iam_dashboard_v1` (`order_index` 28–29). Re-run SQL: `scripts/d1-roadmap-sandbox-agent-workflow-20260322.sql`.
 
-9. **Future Agent `/workflow` (multistep CIDI):** Implement as a **recipe**, **`agent_commands`** slash entry, or **plan** that runs: (1) build, (2) sandbox upload, (3) human “ready for prod”, (4) `PROMOTE_OK=1` promote script, (5) optional Worker deploy after `deploy approved`. Do not auto-deploy production from an agent tool without that gate.
+9. **Future Agent `/workflow` (multistep CICD):** Implement as a **recipe**, **`agent_commands`** slash entry, or **plan** that runs: (1) build, (2) sandbox upload, (3) human “ready for prod”, (4) `PROMOTE_OK=1` promote script, (5) optional Worker deploy after `deploy approved`. Do not auto-deploy production from an agent tool without that gate.
 
 ---
 
@@ -46,7 +46,7 @@ cd overview-dashboard && npm run build && cd ..
 ./scripts/upload-repo-to-r2-sandbox.sh
 ```
 
-The script uploads `overview-dashboard/dist/*` → `static/dashboard/overview/` on **agent-sam-sandbox-cidi**. Re-deploy sandbox Worker only if Worker code changed (HTML/JS on R2 does not require Worker deploy).
+The script uploads `overview-dashboard/dist/*` → `static/dashboard/overview/` on **agent-sam-sandbox-cicd**. Re-deploy sandbox Worker only if Worker code changed (HTML/JS on R2 does not require Worker deploy).
 
 ---
 
@@ -63,7 +63,7 @@ The script uploads `overview-dashboard/dist/*` → `static/dashboard/overview/` 
    ./scripts/upload-repo-to-r2-sandbox.sh
    ```
 
-   Optional: `SANDBOX_BUCKET=agent-sam-sandbox-cidi` if you ever rename the bucket.
+   Optional: `SANDBOX_BUCKET=agent-sam-sandbox-cicd` if you ever rename the bucket.
 
 5. If **only** R2 objects changed, **no** Worker deploy is required for HTML/JS served from R2.
 6. If **Worker routes / API / bindings** changed for the sandbox project, deploy **only** `inneranimal-dashboard` (or the sandbox wrangler project Sam uses). **Do not** deploy `inneranimalmedia` unless promoting.

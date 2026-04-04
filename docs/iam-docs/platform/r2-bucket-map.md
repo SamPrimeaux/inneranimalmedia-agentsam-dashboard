@@ -1,6 +1,6 @@
 # R2 bucket map (Inner Animal Media)
 
-Bindings from **`wrangler.production.toml`** (production). Sandbox **`wrangler.jsonc`** mirrors most bindings but uses **`agent-sam-sandbox-cidi`** for ASSETS/DASHBOARD instead of split buckets below.
+Bindings from **`wrangler.production.toml`** (production). Sandbox **`wrangler.jsonc`** mirrors most bindings but uses **`agent-sam-sandbox-cicd`** for ASSETS/DASHBOARD instead of split buckets below.
 
 | Binding | Bucket name | Purpose |
 |---------|-------------|---------|
@@ -36,7 +36,7 @@ Bindings from **`wrangler.production.toml`** (production). Sandbox **`wrangler.j
 - **`screenshots/agent/{timestamp}-{uuid}.png`** — browser tool captures when binding present.
 - Public URLs use host **`https://docs.inneranimalmedia.com/`** + object key (R2 custom domain; not Worker `fetch`).
 
-### `agent-sam-sandbox-cidi` (sandbox only)
+### `agent-sam-sandbox-cicd` (sandbox only)
 
 - Replaces both ASSETS and DASHBOARD bucket names in **`wrangler.jsonc`** for the **`inneranimal-dashboard`** worker.
 

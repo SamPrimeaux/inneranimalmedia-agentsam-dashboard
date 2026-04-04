@@ -26,4 +26,4 @@ npx wrangler deploy ./worker.js -c ./wrangler.jsonc
 
 ## Bindings note
 
-`wrangler.jsonc` mirrors sandbox R2 (`agent-sam-sandbox-cidi` for ASSETS/DASHBOARD) and includes **`AUTORAG_BUCKET` → `autorag`** for parity with production indexing uploads. Queues are intentionally omitted on sandbox (see comment in `wrangler.jsonc`).
+`wrangler.jsonc` mirrors sandbox R2 (`agent-sam-sandbox-cicd` for ASSETS/DASHBOARD) and includes **`AUTORAG_BUCKET` → `autorag`** for parity with production indexing uploads. Queues are intentionally omitted on sandbox (see comment in `wrangler.jsonc`).

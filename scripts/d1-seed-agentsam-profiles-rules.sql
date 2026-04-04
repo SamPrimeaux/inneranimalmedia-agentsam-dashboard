@@ -38,7 +38,7 @@ This document mirrors repo governance. Full detail: `docs/AGENT_SAM_UNIVERSAL_SY
 
 - **One writer per concern:** chat/transcript, `agent_telemetry`, `mcp_registered_tools` + `recordMcpToolCall`, `agent_audit_log` via helpers, `agentsam_*` via `/api/agentsam/*` only.
 - **Tool names:** `mcp_registered_tools.tool_name` is the contract; change seed + worker + docs together.
-- **CIDI:** Append `cidi_activity_log` when `cidi` or CI state changes; `cidi_recent_completions` is a view (no direct INSERT).
+- **CI/CD:** Append `cicd_events` when pipeline or CI state changes; `cicd_recent_completions` is a view (no direct INSERT).
 - **Sandbox + shared D1:** Writes from sandbox Worker hit production data — treat mutating actions as production-impactful.
 
 ## After sessions
@@ -166,9 +166,9 @@ INSERT INTO agentsam_subagent_profile (
   'feedfacecafe0006',
   'sam_primeaux',
   '',
-  'cidi-lane',
-  'CIDI promotion lane',
-  'Guide sandbox-to-production: `wrangler.jsonc` inneranimal-dashboard vs `wrangler.production.toml`. R2 sandbox bucket vs agent-sam. Require human gates: PROMOTE_OK, deploy approved. Log activity narrative in `cidi_activity_log` when changing workflow state.',
+  'cicd-lane',
+  'CI/CD promotion lane',
+  'Guide sandbox-to-production: `wrangler.jsonc` inneranimal-dashboard vs `wrangler.production.toml`. R2 sandbox bucket vs agent-sam. Require human gates: PROMOTE_OK, deploy approved. Log activity narrative in `cicd_events` when changing workflow state.',
   '["read","deploy-docs"]',
   NULL,
   1,

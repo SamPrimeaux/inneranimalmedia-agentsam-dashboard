@@ -165,7 +165,7 @@ subtasks, event_queue, **tools**, **commands**, command_executions, command_temp
 
 ### 2.1 Tabs / panels
 
-- **Toolbar modes (main pane):** `chat` | `files` | `search` | `cli` | `terminal` | `ide` | `cidi` | `preview`.
+- **Toolbar modes (main pane):** `chat` | `files` | `search` | `cli` | `terminal` | `ide` | `cicd` | `preview`.
 - **Floating right panel tabs:** `preview` | `browser` | `terminal`.
   - **Preview:** HTML source / iframe preview (srcDoc); Edit, Refresh, Copy.
   - **Browser:** URL input + Go/Refresh; calls **POST `/api/playwright/screenshot`** and polls **GET `/api/playwright/jobs/:id`**; shows screenshot image; auto-refresh every 10s when tab active.
@@ -226,7 +226,7 @@ subtasks, event_queue, **tools**, **commands**, command_executions, command_temp
 - `POST /api/agent/terminal/complete` — Marks execution completed/failed.
 - `POST /api/agent/chat` — Main chat; no tool-call loop.
 - `GET /api/agent/models`, `GET /api/agent/sessions` — D1 reads.
-- `GET /api/agent/mcp`, `GET /api/agent/cidi` — Lists.
+- `GET /api/agent/mcp`, `GET /api/agent/cicd` — Lists.
 - `GET /api/agent/telemetry` — Telemetry.
 - `POST /api/agent/rag/query` — RAG query.
 - `GET /api/agent/context/bootstrap`, `GET /api/agent/bootstrap` — Bootstrap (includes R2 memory).

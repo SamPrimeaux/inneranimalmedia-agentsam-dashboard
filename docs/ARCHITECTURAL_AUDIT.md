@@ -172,7 +172,7 @@ Sub-routes (by path segments after `/api/finance/`):
 - `POST /api/agent/chat` — Chat completion (streaming or non-streaming); uses AI, gateway, D1 (conversations, messages, telemetry, spend_ledger).
 - `POST /api/agent/playwright` — Enqueue playwright job (MY_QUEUE) or run sync.
 - `GET /api/agent/mcp` — MCP services list.
-- `GET /api/agent/cidi` — Cidi list with activity count.
+- `GET /api/agent/cicd` — CI/CD list with activity count.
 - `GET /api/agent/telemetry` — Telemetry by provider (last 7 days).
 - `POST /api/agent/rag/query` — AI RAG (autorag).
 - `GET /api/agent/context/bootstrap` — Compiled context bootstrap (D1 cache + R2 memory).
@@ -279,8 +279,8 @@ Every D1 use is via `env.DB.prepare(...).run()`, `.first()`, `.all()`, or `env.D
 - **cloudflare_deployments** — SELECT; UPDATE (status, deployment_notes). Routes: /api/overview/*, /api/agent/terminal/complete, sendDailyDigest.
 - **commands** — SELECT (with custom_commands). Route: /api/commands.
 - **custom_commands** — SELECT. Route: /api/commands.
-- **cidi** — SELECT with cidi_activity_log. Route: /api/agent/cidi.
-- **cidi_activity_log** — JOIN in cidi query. Route: /api/agent/cidi.
+- **cicd** — SELECT with cicd_events. Route: /api/agent/cicd.
+- **cicd_events** — JOIN in cicd query. Route: /api/agent/cicd.
 - **cms_themes** — SELECT. Route: /api/themes.
 - **email_logs** — SELECT (dedupe digest); INSERT (after Resend). Route: worker.scheduled (sendDailyDigest).
 - **financial_transactions** — SELECT (summary, breakdown, monthly, etc.). Route: /api/finance/*.

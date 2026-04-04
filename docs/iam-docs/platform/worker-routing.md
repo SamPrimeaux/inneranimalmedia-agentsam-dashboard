@@ -52,7 +52,7 @@ Use ripgrep: **`handleAgentsamApi`** and **`pathLower === '/api/agentsam`** insi
 
 - **MCP:** `/api/mcp/*` — `handleMcpApi`
 - **Images, draw, terminal, playwright** — see grep `pathLower === '/api/` in fetch
-- **Spend / billing / CIDI** — `/api/spend`, `/api/billing`, `/api/cidi/current`
+- **Spend / billing / CICD** — `/api/spend`, `/api/billing`, `/api/cicd/current`
 - **Deploy rollback:** `POST /api/deploy/rollback` (~2184)
 
 ## Pre-prompt RAG pipeline

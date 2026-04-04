@@ -172,7 +172,7 @@ Grep: `pathLower === '/api/agent...'`, `pathLower === '/api/r2...'`, `pathLower 
 | /api/agent/chat | POST | 3157 |
 | /api/agent/playwright | POST | 3780 |
 | /api/agent/mcp | (branch) | 3794 |
-| /api/agent/cidi | (branch) | 3801 |
+| /api/agent/cicd | (branch) | 3801 |
 | /api/agent/telemetry | (branch) | 3812 |
 | /api/agent/rag/query | POST | 3823 |
 | /api/agent/rag/index-memory | POST | 3840 |

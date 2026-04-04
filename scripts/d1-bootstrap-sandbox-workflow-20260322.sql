@@ -1,5 +1,5 @@
--- CIDI bootstrap: sandbox R2 registry, MCP workflow (2-step agent UI lane), worker_registry cleanup.
--- Run: ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-cidi-bootstrap-20260322.sql
+-- CI/CD bootstrap: sandbox R2 registry, MCP workflow (2-step agent UI lane), worker_registry cleanup.
+-- Run: ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-bootstrap-sandbox-workflow-20260322.sql
 
 INSERT OR REPLACE INTO r2_buckets (
   id, tenant_id, bucket_name, display_name, description, region, public_access,
@@ -8,7 +8,7 @@ INSERT OR REPLACE INTO r2_buckets (
   'r2_agent_sam_sandbox_cidi',
   'system',
   'agent-sam-sandbox-cidi',
-  'Agent Sam — Sandbox (CIDI)',
+  'Agent Sam — Sandbox (CI/CD)',
   'Dashboard static mirror for UI iteration; production bucket remains agent-sam. Region WNAM.',
   'wnam',
   0,
@@ -38,8 +38,8 @@ INSERT OR REPLACE INTO mcp_workflows (
 ) VALUES (
   'wf_cidi_agent_ui_sandbox_to_prod',
   'tenant_sam_primeaux',
-  'CIDI — Agent UI: sandbox R2 then production R2',
-  'Step 1: sync repo dashboard + Vite outputs to agent-sam-sandbox-cidi (./scripts/upload-repo-to-r2-sandbox.sh). Step 2: after Sam approval, promote agent shell + bundle to agent-sam (PROMOTE_OK=1 ./scripts/promote-agent-dashboard-to-production.sh). Worker deploy only with deploy approved. Full playbook: docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md',
+  'CI/CD — Agent UI: sandbox R2 then production R2',
+  'Step 1: sync repo dashboard + Vite outputs to agent-sam-sandbox-cidi (./scripts/upload-repo-to-r2-sandbox.sh). Step 2: after Sam approval, promote agent shell + bundle to agent-sam (PROMOTE_OK=1 ./scripts/promote-agent-dashboard-to-production.sh). Worker deploy only with deploy approved. Full playbook: docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md',
   'deploy',
   'manual',
   '{"repo":"march1st-inneranimalmedia","sandbox_bucket":"agent-sam-sandbox-cidi","prod_bucket":"agent-sam"}',
@@ -57,7 +57,7 @@ UPDATE worker_registry SET
   workers_dev_subdomain = 'inneranimal-dashboard.meauxbility.workers.dev',
   r2_buckets = '["agent-sam-sandbox-cidi","agent-sam-sandbox-cidi"]',
   bindings_count = 3,
-  notes = COALESCE(notes, '') || ' | CIDI: R2 sandbox agent-sam-sandbox-cidi (DASHBOARD+ASSETS); promote via scripts/promote-agent-dashboard-to-production.sh after approval.',
+  notes = COALESCE(notes, '') || ' | CI/CD: R2 sandbox agent-sam-sandbox-cidi (DASHBOARD+ASSETS); promote via scripts/promote-agent-dashboard-to-production.sh after approval.',
   updated_at = unixepoch()
 WHERE id = 'wr_inneranimal_dashboard_001';
 

@@ -57,7 +57,7 @@ ec95987 deploy: embedded dashboard HTML + shell v131 + worker respondWithDashboa
 c64bcbf feat: topbar trim, sidenav footer, iam_shell_nav intercept
 2a13f77 docs: session log — wrangler.jsonc push note
 abe028c chore(wrangler): inneranimal-dashboard sandbox config (R2 sandbox bucket, full bindings, no routes/queues)
-2b2afbd Worker: agentsam API routing and CIDI cicd follow-ups; MCP health; dashboard and docs sync
+2b2afbd Worker: agentsam API routing and CICD cicd follow-ups; MCP health; dashboard and docs sync
 ```
 
 ## This knowledge upload

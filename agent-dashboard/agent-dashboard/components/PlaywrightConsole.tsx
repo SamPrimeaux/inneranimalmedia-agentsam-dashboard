@@ -99,10 +99,10 @@ export const PlaywrightConsole: React.FC = () => {
 
     const getStatusIcon = (status: string) => {
         switch (status) {
-            case 'completed': return <CheckCircle2 size={14} className="text-[#859900]" />;
-            case 'failed': return <AlertCircle size={14} className="text-[#dc322f]" />;
-            case 'running': return <RefreshCw size={14} className="text-[#268bd2] animate-spin" />;
-            default: return <Clock size={14} className="text-[#b58900]" />;
+            case 'completed': return <CheckCircle2 size={14} className="text-[var(--solar-green)]" />;
+            case 'failed': return <AlertCircle size={14} className="text-[var(--solar-red)]" />;
+            case 'running': return <RefreshCw size={14} className="text-[var(--solar-blue)] animate-spin" />;
+            default: return <Clock size={14} className="text-[var(--solar-yellow)]" />;
         }
     };
 

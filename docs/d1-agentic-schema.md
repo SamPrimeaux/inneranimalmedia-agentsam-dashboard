@@ -2029,7 +2029,7 @@ CREATE TABLE hook_subscriptions (
   repo_filter TEXT,
   action_type TEXT NOT NULL CHECK(action_type IN (
     'write_d1','notify_agent','call_worker',
-    'update_cidi','log_deployment','trigger_build',
+    'update_cicd','log_deployment','trigger_build',
     'send_notification','custom_handler'
   )),
   action_config_json TEXT NOT NULL,

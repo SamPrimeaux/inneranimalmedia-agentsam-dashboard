@@ -8,10 +8,10 @@
 
 Many tables exist in D1 (from migrations or other sources) but:
 
-- **No writer** — code never INSERTs (e.g. `activity_log`, `cidi_activity_log`, `cicd_runs`).
+- **No writer** — code never INSERTs (e.g. `activity_log`, `cicd_events`, `cicd_runs`).
 - **Writer exists but path rarely runs** — e.g. `ai_rag_search_history` only on `/api/search` and `invokeMcpToolFromChat` knowledge_search; `mcp_tool_calls` only for non-builtin tools when invoked via Anthropic/execute-approved-tool.
 - **Overlap / duplication** — e.g. `time_entries` / `timesheets` vs canonical `project_time_entries`; `cost_tracking` vs `spend_ledger` + `agent_telemetry`.
-- **Table in D1 but no migration in repo** — e.g. `cidi`, `cidi_activity_log`, `activity_log`, `agent_memory_for_context`; we can't assume schema.
+- **Table in D1 but no migration in repo** — e.g. `cicd`, `cicd_events`, `activity_log`, `agent_memory_for_context`; we can't assume schema.
 
 Optimal approach: **one canonical table per concern**, **one clear write path**, **dashboard reads from that table**.
 
@@ -73,25 +73,25 @@ Optimal approach: **one canonical table per concern**, **one clear write path**,
 
 ---
 
-### cidi
+### cicd
 
 | Item | Status |
 |------|--------|
 | Migration in repo | No (116 references it as used by /api/agent/boot but does not create it) |
-| Worker read | Yes. **GET /api/agent/cidi** — SELECT cidi JOIN cidi_activity_log, returns list with activity_count. Daily plan cron also reads cidi (pending/in_progress/blocked). |
+| Worker read | Yes. **GET /api/agent/cicd** — SELECT cicd JOIN cicd_events, returns list with activity_count. Daily plan cron also reads cicd (pending/in_progress/blocked). |
 | Worker write | No (no INSERT/UPDATE in worker) |
-| Recommendation | (1) If table exists in D1, add a migration to this repo that does CREATE IF NOT EXISTS so schema is versioned. (2) Add write path: e.g. POST /api/agent/cidi (or internal) to create/update workflows so the Agent or dashboard can populate it; or a script that seeds from roadmap_steps / another source. |
+| Recommendation | (1) If table exists in D1, add a migration to this repo that does CREATE IF NOT EXISTS so schema is versioned. (2) Add write path: e.g. POST /api/agent/cicd (or internal) to create/update workflows so the Agent or dashboard can populate it; or a script that seeds from roadmap_steps / another source. |
 
 ---
 
-### cidi_active_workflows, cidi_activity_log
+### cicd_active_workflows, cicd_events
 
 | Item | Status |
 |------|--------|
-| Migration in repo | No. cidi_activity_log is JOINed in /api/agent/cidi (activity_count). |
-| Worker read | cidi_activity_log — yes (JOIN in cidi query). cidi_active_workflows — mentioned in agentsam-clean as a view (cl.name fix). |
-| Worker write | No INSERT into cidi_activity_log in worker. |
-| Recommendation | (1) Add migrations: **cidi** and **cidi_activity_log** (and optional view cidi_active_workflows) so schema is in repo. (2) Whenever a cidi workflow is updated (e.g. status change), INSERT a row into cidi_activity_log (cidi_id, event_type, created_at, etc.). Wire that to the same API or script that writes cidi. |
+| Migration in repo | No. cicd_events is JOINed in /api/agent/cicd (activity_count). |
+| Worker read | cicd_events — yes (JOIN in cicd query). cicd_active_workflows — mentioned in agentsam-clean as a view (cl.name fix). |
+| Worker write | No INSERT into cicd_events in worker. |
+| Recommendation | (1) Add migrations: **cicd** and **cicd_events** (and optional view cicd_active_workflows) so schema is in repo. (2) Whenever a cicd workflow is updated (e.g. status change), INSERT a row into cicd_events (cicd_workflow_id, event_type, created_at, etc.). Wire that to the same API or script that writes cicd. |
 
 ---
 
@@ -100,8 +100,8 @@ Optimal approach: **one canonical table per concern**, **one clear write path**,
 | Item | Status |
 |------|--------|
 | Migration in repo | No |
-| Worker | No references in this repo (different from cidi_activity_log) |
-| Recommendation | **Decide purpose.** If "activity_log" is for general platform events (logins, page views, deploy clicks): add migration and one central place (e.g. POST /api/internal/activity or a helper) that INSERTs. Call it from auth callback, deploy record, key dashboard actions. If it duplicates cidi_activity_log or agent_audit_log, consolidate into one and deprecate the other. |
+| Worker | No references in this repo (different from cicd_events) |
+| Recommendation | **Decide purpose.** If "activity_log" is for general platform events (logins, page views, deploy clicks): add migration and one central place (e.g. POST /api/internal/activity or a helper) that INSERTs. Call it from auth callback, deploy record, key dashboard actions. If it duplicates cicd_events or agent_audit_log, consolidate into one and deprecate the other. |
 
 ---
 
@@ -230,7 +230,7 @@ Optimal approach: **one canonical table per concern**, **one clear write path**,
 | P1 | **cicd_runs** | Add migration 142; add webhook or POST /api/internal/cicd-run to INSERT on workflow run. Overview already reads. |
 | P1 | **ci_di_workflow_runs** | Ensure record-workflow-run.sh runs (e.g. post-merge). Optionally surface in Overview. |
 | P1 | **ai_rag_search_history** | Add migration; optionally add INSERT in runToolLoop + RAG pre-inject; add dashboard read. |
-| P2 | **cidi**, **cidi_activity_log** | Add migrations; add write API or script; wire activity_log INSERT on workflow update. |
+| P2 | **cicd**, **cicd_events** | Add migrations; add write API or script; wire activity_log INSERT on workflow update. |
 | P2 | **activity_log** | Define scope; add migration + single write path (auth, deploy, key actions). |
 | P2 | **mcp_tool_calls**, **mcp_usage_log**, **mcp_agent_sessions** | Ensure recordMcpToolCall and upsertMcpAgentSession run on all tool/chat paths; optionally log builtins in runToolLoop. |
 | P3 | **cost_tracking** | Prefer aggregating spend_ledger + agent_telemetry; or add one table and wire once. |
@@ -251,8 +251,8 @@ Optimal approach: **one canonical table per concern**, **one clear write path**,
 ## 4. Next steps (concrete)
 
 1. **Run verification queries** (from OVERVIEW_DASHBOARD_DB_AUDIT.md) for the tables above to confirm which exist and have rows.
-2. **Add missing migrations** for: ai_rag_search_history, cicd_runs (142), cidi, cidi_activity_log, activity_log (if you keep it). Prefer CREATE IF NOT EXISTS so existing D1 tables are not broken.
-3. **Add one write path per empty table** — e.g. GitHub webhook → cicd_runs; workflow script → ci_di_workflow_runs; chat/tool handlers → mcp_*, ai_rag_search_history; cidi API or script → cidi + cidi_activity_log.
+2. **Add missing migrations** for: ai_rag_search_history, cicd_runs (142), cicd, cicd_events, activity_log (if you keep it). Prefer CREATE IF NOT EXISTS so existing D1 tables are not broken.
+3. **Add one write path per empty table** — e.g. GitHub webhook → cicd_runs; workflow script → ci_di_workflow_runs; chat/tool handlers → mcp_*, ai_rag_search_history; cicd API or script → cicd + cicd_events.
 4. **Wire Overview/dashboard** to read the new/updated tables (e.g. CI/CD runs, RAG history, MCP usage) so the UI reflects reality.
 
 After this, the platform and D1 stay in sync and the "huge disconnect" shrinks to zero for the tables you care about.

@@ -159,7 +159,7 @@ Use the table in **`AGENT_SETTINGS_15_TABS_WIREFRAME.txt`** (General … Docs). 
 
 | Area | Examples | APIs |
 |------|-----------|------|
-| Boot | Load agents, models, MCP, CIDI | `GET /api/agent/boot` |
+| Boot | Load agents, models, MCP, CICD | `GET /api/agent/boot` |
 | Session | Title, star, delete | `PATCH/DELETE /api/agent/sessions/:id` |
 | Messages | Send | `POST /api/agent/chat` (stream optional) |
 | Queue | Cancel | `/api/agent/queue/*` |
@@ -230,7 +230,7 @@ This is an **implementation plan**, not a pasted git patch. Each phase should be
 |------|------------|
 | `FloatingPreviewPanel.jsx` rewrite drift | Surgical edits only; extract new components |
 | `agent.html` breakage | One-tag-at-a-time rule; prefer Vite bundle changes |
-| Sandbox vs prod R2 | Stage on `agent-sam-sandbox-cidi` first |
+| Sandbox vs prod R2 | Stage on `agent-sam-sandbox-cicd` first |
 | Shared D1 on sandbox worker | Treat D1 writes as production-grade; UI-only experiments safe |
 
 ---

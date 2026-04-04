@@ -19,7 +19,7 @@
 | **ai_models** | Model catalog; `/api/agent/models`, chat resolves `model_id` | **No migration in repo** — ensure exists + has rows |
 | **mcp_services** | MCP registry; `/api/agent/boot`, `/api/agent/mcp` | **No migration in repo** — ensure exists |
 | **iam_agent_sam_prompts** | System prompts per agent; `/api/agent/boot` | **No migration in repo** — optional |
-| **cidi** | CIDI workflows; `/api/agent/cidi` (with cidi_activity_log) | **No migration in repo** — optional |
+| **cicd** | CICD workflows; `/api/agent/cicd` (with cicd_events) | **No migration in repo** — optional |
 | **cloudflare_deployments** | Deploy history; overview, activity strip | 113 |
 | **workflow_checkpoints** | Checkpoints; overview, activity strip | 113 |
 | **financial_transactions** | Finance summary/transactions | Used by worker; name may differ (finance_transactions in some paths) |
@@ -77,10 +77,10 @@ npx wrangler d1 execute inneranimalmedia-business --remote --config wrangler.pro
 
 | Endpoint | Method | Purpose | Depends on |
 |----------|--------|---------|------------|
-| `/api/agent/boot` | GET | Agents, mcp_services, models, sessions, prompts, cidi | agent_ai_sam, mcp_services, ai_models, agent_sessions, iam_agent_sam_prompts, cidi |
+| `/api/agent/boot` | GET | Agents, mcp_services, models, sessions, prompts, cicd | agent_ai_sam, mcp_services, ai_models, agent_sessions, iam_agent_sam_prompts, cicd |
 | `/api/agent/models` | GET | List models (optional `?provider=`) | ai_models |
 | `/api/agent/mcp` | GET | List MCP services | mcp_services |
-| `/api/agent/cidi` | GET | CIDI workflows + activity count | cidi, cidi_activity_log |
+| `/api/agent/cicd` | GET | CICD workflows + activity count | cicd, cicd_events |
 | `/api/agent/workspace/:id` | GET / PUT | Get or update workspace state | agent_workspace_state |
 | `/api/agent/telemetry` | GET | Last 7 days token/call summary by provider | agent_telemetry |
 
@@ -150,7 +150,7 @@ npx wrangler d1 execute inneranimalmedia-business --remote --config wrangler.pro
      - **Sessions:** List from `/api/agent/sessions`, link to “open” (load messages into chat).
      - **Telemetry:** GET `/api/agent/telemetry` → show table or summary.
      - **MCP:** GET `/api/agent/mcp` → list services and status.
-     - **CIDI:** GET `/api/agent/cidi` → list workflows (if table exists).
+     - **CICD:** GET `/api/agent/cicd` → list workflows (if table exists).
    - Each section shows the request (e.g. “GET /api/agent/telemetry”) and the response (formatted JSON or table). This gives one place to confirm every tool and DB-backed endpoint.
 
 ### Order of work
@@ -160,7 +160,7 @@ npx wrangler d1 execute inneranimalmedia-business --remote --config wrangler.pro
 3. Fix chat memory (load messages on session switch, send full history).  
 4. Add platform summary + optional RAG injection to chat.  
 5. Add RAG seed/verification and “RAG query” test panel.  
-6. Add the rest of the tool-test panels (bootstrap, sessions, telemetry, MCP, CIDI) so you can run and verify every tool from the UI.
+6. Add the rest of the tool-test panels (bootstrap, sessions, telemetry, MCP, CICD) so you can run and verify every tool from the UI.
 
 ---
 
@@ -175,7 +175,7 @@ npx wrangler d1 execute inneranimalmedia-business --remote --config wrangler.pro
 - **ai_models:** GET `/api/agent/boot`, GET `/api/agent/models`, chat (resolve model_id)  
 - **mcp_services:** GET `/api/agent/boot`, GET `/api/agent/mcp`  
 - **iam_agent_sam_prompts:** GET `/api/agent/boot`  
-- **cidi**, **cidi_activity_log:** GET `/api/agent/cidi`  
+- **cicd**, **cicd_events:** GET `/api/agent/cicd`  
 - **cloudflare_deployments,** **workflow_checkpoints,** **project_time_entries,** **agent_sessions,** etc.: overview/activity-strip
 
 Once 116 is applied and browser + agent UIs are updated, you can use the tool-test panels to verify each of these against your DB and bindings.

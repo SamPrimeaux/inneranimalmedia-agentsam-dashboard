@@ -105,7 +105,7 @@ export const MCPPanel: React.FC = () => {
                   </div>
                   
                   {results[tool.id] && (
-                    <div className="mt-3 p-2 bg-[#060e14] border border-[var(--border-subtle)] rounded-lg font-mono text-[10px] overflow-hidden">
+                    <div className="mt-3 p-2 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-lg font-mono text-[10px] overflow-hidden">
                       <div className="flex items-center gap-1.5 mb-1 text-[var(--text-muted)] uppercase tracking-tighter">
                         {results[tool.id].error ? <AlertCircle size={10} className="text-red-400" /> : <CheckCircle2 size={10} className="text-green-400" />}
                         Result

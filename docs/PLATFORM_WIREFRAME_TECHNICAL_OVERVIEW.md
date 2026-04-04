@@ -133,7 +133,7 @@ Technical overview of the platform: bindings, routes, data flow, and integration
 - `POST /api/agent/chat` — Chat completion; streams; tool calls (MCP invoke, internal Playwright); writes agent_telemetry.
 - `POST /api/agent/playwright` — Enqueue Playwright job (MY_QUEUE).
 - `POST /api/agent/mcp` — MCP-related.
-- `POST /api/agent/cidi`, `GET/POST /api/agent/telemetry` — Cidi and telemetry.
+- `POST /api/agent/cicd`, `GET/POST /api/agent/telemetry` — CI/CD lane and telemetry.
 - `POST /api/agent/rag/query`, `/api/agent/rag/index-memory`, `/api/agent/rag/compact-chats` — RAG (VECTORIZE, embeddings).
 - `GET /api/integrations/drive/list`, `/api/integrations/github/list`, `/api/integrations/status` — Integrations.
 - `GET /api/agent/today-todo`, `PUT /api/agent/today-todo` — Today todo.

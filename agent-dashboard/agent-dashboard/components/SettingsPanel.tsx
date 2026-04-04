@@ -30,9 +30,9 @@ const categoryIcon = (cat: string) => {
     analytics: { icon: <BarChart2 size={14} />, color: 'text-[var(--solar-yellow)]' },
     ui:        { icon: <Box size={14} />,     color: 'text-[var(--solar-magenta)]' },
     code:      { icon: <Code2 size={14} />,   color: 'text-[var(--solar-green)]' },
-    network:   { icon: <Network size={14} />, color: 'text-[#60a5fa]' },
+    network:   { icon: <Network size={14} />, color: 'text-[var(--solar-blue)]' },
     docs:      { icon: <BookOpen size={14} />,color: 'text-[var(--solar-orange)]' },
-    search:    { icon: <Search size={14} />,  color: 'text-[#a78bfa]' },
+    search:    { icon: <Search size={14} />,  color: 'text-[var(--solar-violet)]' },
   };
   const key = Object.keys(map).find(k => cat?.toLowerCase().includes(k));
   return key ? map[key] : { icon: <Wrench size={14} />, color: 'text-[var(--text-muted)]' };
@@ -43,7 +43,7 @@ const Toggle: React.FC<{ on: boolean; onChange: (v: boolean) => void }> = ({ on,
     onClick={() => onChange(!on)}
     className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${on ? 'bg-[var(--solar-cyan)]' : 'bg-[var(--border-subtle)]'}`}
   >
-    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-[var(--toggle-knob)] shadow transition-transform ${on ? 'translate-x-4' : 'translate-x-0.5'}`} />
   </button>
 );
 
@@ -187,7 +187,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
       {/* ── Header ── */}
       <div className="h-10 flex items-center justify-between px-4 border-b border-[var(--border-subtle)] bg-[var(--bg-app)] shrink-0">
         <span className="font-semibold text-[12px] tracking-widest uppercase text-[var(--text-heading)]">Settings</span>
-        <button onClick={onClose} className="p-1.5 hover:bg-[var(--bg-hover)] rounded transition-colors text-[var(--text-muted)] hover:text-white text-[11px] uppercase tracking-wider">
+        <button onClick={onClose} className="p-1.5 hover:bg-[var(--bg-hover)] rounded transition-colors text-[var(--text-muted)] hover:text-[var(--text-heading)] text-[11px] uppercase tracking-wider">
           Close
         </button>
       </div>
@@ -197,9 +197,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
         <div className="w-44 shrink-0 border-r border-[var(--border-subtle)] flex flex-col overflow-hidden">
           {/* User pill */}
           <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[var(--border-subtle)]">
-            <div className="w-7 h-7 rounded-full bg-[var(--solar-blue)] flex items-center justify-center text-white font-bold text-[11px] shrink-0">S</div>
+            <div className="w-7 h-7 rounded-full bg-[var(--solar-blue)] flex items-center justify-center text-[var(--toggle-knob)] font-bold text-[11px] shrink-0">S</div>
             <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-semibold text-white truncate">sam_primeaux</span>
+              <span className="text-[11px] font-semibold text-[var(--text-heading)] truncate">sam_primeaux</span>
               <span className="text-[10px] text-[var(--solar-cyan)]">Pro Plan</span>
             </div>
           </div>
@@ -355,7 +355,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
 
                           {/* Expanded config row */}
                           {expandedMcp === mcp.id && (
-                            <div className="bg-[#060e14] border border-t-0 border-[var(--solar-cyan)]/40 rounded-b-xl p-4 flex flex-col gap-2.5 animate-in slide-in-from-top-2 duration-150">
+                            <div className="bg-[var(--scene-bg)] border border-t-0 border-[var(--solar-cyan)]/40 rounded-b-xl p-4 flex flex-col gap-2.5 animate-in slide-in-from-top-2 duration-150">
                               <div className="grid grid-cols-2 gap-3 text-[11px]">
                                 <div>
                                   <span className="text-[var(--text-muted)] block mb-0.5">Category</span>

@@ -209,7 +209,7 @@ Support **browser + editor** (or equivalent) **open simultaneously** — tab mod
 - Cursor hook → `continual-learning-stop.ts` (or repo equivalent).
 - Meet page: Cloudflare Calls + TURN.
 - GitHub `workflow_run` → verify `cicd_runs` on real push.
-- CIDI `client_id` migration (legacy → proper `client_` format).
+- CICD `client_id` migration (legacy → proper `client_` format).
 - `wrangler.production.toml` warnings: `esbuild` / `ai_search` unexpected fields — clean up when safe.
 
 ---

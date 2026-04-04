@@ -8,7 +8,7 @@ This suite does not call `promote-to-prod.sh`, `wrangler deploy` (prod), or `wra
 
 ## End-to-end coverage map and cost governance
 
-**Goal:** Any operator (human or Claude Code) can run **stack-wide** checks that touch **LLM providers**, the **IAM worker** (`/api/agent/chat`, internal routes), **D1** (`agentsam_*` / `mcp_*` / `cidi_*` / routing tables), and **optional provider Batch APIs** — without unbounded spend.
+**Goal:** Any operator (human or Claude Code) can run **stack-wide** checks that touch **LLM providers**, the **IAM worker** (`/api/agent/chat`, internal routes), **D1** (`agentsam_*` / `mcp_*` / `cicd_*` / routing tables), and **optional provider Batch APIs** — without unbounded spend.
 
 ### When things run
 

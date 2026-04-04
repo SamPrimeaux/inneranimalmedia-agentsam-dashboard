@@ -57,7 +57,7 @@ export const WelcomeLauncher: React.FC<WelcomeLauncherProps> = ({ onOpenFolder, 
                 {/* Primary CTA */}
                 <button
                     onClick={onOpenFolder}
-                    className="w-full bg-[var(--solar-cyan)] hover:brightness-110 text-[#00212b] font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 mb-3 transition shadow-[0_0_20px_rgba(45,212,191,0.2)]"
+                    className="w-full bg-[var(--solar-cyan)] hover:brightness-110 text-[var(--solar-base03)] font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 mb-3 transition shadow-[0_0_20px_color-mix(in_srgb,var(--solar-cyan)_20%,transparent)]"
                 >
                     <FolderOpen size={18} />
                     Open Folder

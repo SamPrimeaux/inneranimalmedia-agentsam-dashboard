@@ -2,11 +2,11 @@
 # deploy-sandbox.sh — build + upload to sandbox R2 + deploy inneranimal-dashboard
 # Canonical Agent Dashboard UI: agent-dashboard/ (Vite dist/, including assets/* chunks).
 # Legacy bundle (reference): agent-dashboard-legacy/
-# Sandbox bucket: agent-sam-sandbox-cicd (replaces deprecated agent-sam-sandbox-cidi).
+# Sandbox bucket: agent-sam-sandbox-cicd (canonical CI/CD staging bucket for dashboard assets).
 # Override: SANDBOX_BUCKET=my-bucket ./scripts/deploy-sandbox.sh
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
-# After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_notifications (not cicd_runs) via scripts/lib/cicd-d1-log.sh
+# After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs via scripts/lib/cicd-d1-log.sh (D1 writes non-fatal).
 # Optional: CICD_D1_LOG=0 to skip | CICD_SKIP_HEALTH_CURL=1 to skip sandbox curl | SANDBOX_HEALTH_URL=... to override check URL
 set -euo pipefail
 
@@ -49,6 +49,11 @@ R2_AGENT_PREFIX="static/dashboard/agent"
 
 echo "=== SANDBOX DEPLOY ==="
 
+CICD_SB_DEPLOY_START_UNIX=$(date +%s)
+export CICD_PHASE_SANDBOX_START_UNIX="$CICD_SB_DEPLOY_START_UNIX"
+export WORKER_NAME="${WORKER_NAME:-inneranimal-dashboard}"
+SANDBOX_GIT_HASH=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+
 # ── Build ────────────────────────────────────────────────────────────────────
 if [ "$SKIP_BUILD" -eq 0 ] && [ "$WORKER_ONLY" -eq 0 ]; then
   echo "Building agent-dashboard workspace (npm ci includes devDependencies so Vite is available even if NODE_ENV=production)..."
@@ -68,6 +73,8 @@ fi
 if [ "$WORKER_ONLY" -eq 0 ]; then
   CICD_T_R2_START=$(date +%s)
   echo "Uploading assets to ${SANDBOX_BUCKET}..."
+  R2_CICD_LOG="/tmp/sandbox-r2-cicd-${DEPLOY_TS}.log"
+  : > "$R2_CICD_LOG"
 
   if [ ! -f "${DIST_DIR}/index.html" ]; then
     echo "ERROR: ${DIST_DIR}/index.html missing. Run build first or omit --skip-build."
@@ -112,29 +119,29 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     echo "  Uploading ${R2_AGENT_PREFIX}/${rel}..."
     "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/${R2_AGENT_PREFIX}/${rel}" \
       --file "$filepath" --content-type "$ct" \
-      --config "$CFG" --remote
+      --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
   done < "$MANIFEST_PATH"
 
   echo "  Uploading ${R2_AGENT_PREFIX}/${MANIFEST_NAME}..."
   "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/${R2_AGENT_PREFIX}/${MANIFEST_NAME}" \
     --file "$MANIFEST_PATH" \
     --content-type "text/plain" \
-    --config "$CFG" --remote
+    --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
 
   echo "  Uploading static/dashboard/agent.html (from dist/index.html)..."
   "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
     --file "${DIST_DIR}/index.html" --content-type "text/html" \
-    --config "$CFG" --remote
+    --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
 
   # Workspace shell — same keys worker serves for /dashboard/iam-workspace-shell + /static/dashboard/shell.css
   echo "  Uploading static/dashboard/iam-workspace-shell.html..."
   "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/static/dashboard/iam-workspace-shell.html" \
     --file "${REPO_ROOT}/dashboard/iam-workspace-shell.html" --content-type "text/html" \
-    --config "$CFG" --remote
+    --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
   echo "  Uploading static/dashboard/shell.css..."
   "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/static/dashboard/shell.css" \
     --file "${REPO_ROOT}/static/dashboard/shell.css" --content-type "text/css" \
-    --config "$CFG" --remote
+    --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
 
   echo "  R2 uploads complete."
   CICD_T_R2_END=$(date +%s)
@@ -190,22 +197,44 @@ EOF
   "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
     --remote -c wrangler.production.toml \
     --command="$D1_SQL" 2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
+
+  if [ -d "$DIST_DIR" ]; then
+    if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
+      export CICD_R2_BUNDLE_BYTES
+    else
+      CICD_R2_BUNDLE_BYTES=$(($(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1}') * 1024))
+      export CICD_R2_BUNDLE_BYTES
+    fi
+  fi
 fi
 
 # ── Deploy sandbox worker ─────────────────────────────────────────────────────
 echo "Deploying sandbox worker (inneranimal-dashboard)..."
 CICD_T_WORKER_START=$(date +%s)
-SANDBOX_VERSION=$("${WRANGLER[@]}" deploy ./worker.js -c "$CFG" 2>&1 | tee /tmp/sandbox-deploy-out.txt | grep "Current Version ID:" | grep -o '[a-f0-9-]\{36\}' || echo "unknown")
+"${WRANGLER[@]}" deploy ./worker.js -c "$CFG" 2>&1 | tee /tmp/sandbox-deploy-out.txt
 CICD_T_WORKER_END=$(date +%s)
 cat /tmp/sandbox-deploy-out.txt
+
+SANDBOX_VERSION=$(grep "Current Version ID:" /tmp/sandbox-deploy-out.txt | awk '{print $NF}' | head -1 || true)
+[[ "$SANDBOX_VERSION" =~ ^[a-f0-9-]{36}$ ]] || SANDBOX_VERSION="unknown"
+
+export CICD_PHASE_SANDBOX_END_UNIX="$CICD_T_WORKER_END"
+export CICD_PHASE_SANDBOX_DURATION_MS=$(( (CICD_T_WORKER_END - CICD_SB_DEPLOY_START_UNIX) * 1000 ))
+[ "${CICD_PHASE_SANDBOX_DURATION_MS:-0}" -lt 0 ] && export CICD_PHASE_SANDBOX_DURATION_MS=0
+
+printf '%s\n' "$SANDBOX_VERSION" > "${REPO_ROOT}/agent-dashboard/.last-sandbox-worker-version" 2>/dev/null || true
 
 # Record in deployments D1
 NEXT_V="${NEXT_V:-$(( $(cat "${VER_FILE}" 2>/dev/null || echo 0) + 1 ))}"
 NOTES="Sandbox deploy v${NEXT_V} | shell:v${NEXT_V} | $(date +%Y-%m-%d)"
+NOTES_ESC=$(printf '%s' "$NOTES" | sed "s/'/''/g")
+GH_ESC=$(printf '%s' "$SANDBOX_GIT_HASH" | sed "s/'/''/g")
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c wrangler.production.toml \
-  --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at) VALUES ('${SANDBOX_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'sandbox', 'inneranimal-dashboard', 'sandbox_auto', '${NOTES}', datetime('now'))" \
+  --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at, git_hash, version, description) VALUES ('${SANDBOX_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'sandbox', 'inneranimal-dashboard', 'sandbox_auto', '${NOTES_ESC}', datetime('now'), '${GH_ESC}', 'v${NEXT_V}', '')" \
   2>/dev/null || echo "  WARN: deployments D1 record failed (non-fatal)"
+
+cicd_crosslink_deployment_after_worker "$SANDBOX_VERSION" "$SANDBOX_GIT_HASH" "${CICD_PHASE_SANDBOX_DURATION_MS:-0}"
 
 echo ""
 echo "=== SANDBOX DEPLOY COMPLETE ==="
@@ -223,7 +252,7 @@ NEXT_VERSION="${NEXT_VERSION:-$CURRENT_V}"
 DEPLOY_DESC="${DEPLOY_DESC:-sandbox deploy $(date +%Y-%m-%d)}"
 DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
-  --remote --config wrangler.production.toml \
+  --remote -c wrangler.production.toml \
   --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
   2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
 echo "[deploy-sandbox] D1 deployment row updated"
@@ -235,15 +264,50 @@ CICD_MS_WORKER=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
 SANDBOX_HEALTH_URL="${SANDBOX_HEALTH_URL:-https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent}"
 SANDBOX_HC=""
 if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
-  SANDBOX_HC=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 20 "$SANDBOX_HEALTH_URL" 2>/dev/null || echo "")
+  SANDBOX_HC_RAW=$(curl -sS -o /dev/null -w "%{http_code}|%{time_total}" --max-time 20 "$SANDBOX_HEALTH_URL" 2>/dev/null || echo "000|0")
+  SANDBOX_HC=$(echo "$SANDBOX_HC_RAW" | cut -d'|' -f1)
+  SANDBOX_HC_TIME=$(echo "$SANDBOX_HC_RAW" | cut -d'|' -f2)
+  export CICD_CF_HEALTH_STATUS_CODE="${SANDBOX_HC}"
+  export CICD_CF_HEALTH_URL="${SANDBOX_HEALTH_URL}"
+  CICD_CF_HEALTH_RESPONSE_MS=$(awk -v t="${SANDBOX_HC_TIME:-0}" 'BEGIN { printf "%.0f", t * 1000 }')
+  export CICD_CF_HEALTH_RESPONSE_MS
+  if [[ "$SANDBOX_HC" =~ ^2[0-9][0-9]$ ]]; then export CICD_CF_HEALTH_STATUS=healthy
+  elif [[ "$SANDBOX_HC" =~ ^[23][0-9][0-9]$ ]]; then export CICD_CF_HEALTH_STATUS=degraded
+  else export CICD_CF_HEALTH_STATUS=down
+  fi
 fi
 R2_LINE_COUNT=0
 R2_BYTE_EST=0
+R2_FILES_UPDATED=0
 if [ "$WORKER_ONLY" -eq 0 ] && [ -f "${MANIFEST_PATH:-}" ]; then
   R2_LINE_COUNT=$(wc -l < "$MANIFEST_PATH" 2>/dev/null | tr -d ' ' || echo 0)
   R2_BYTE_EST=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}' || echo 0)
+  R2_FILES_UPDATED=$((R2_LINE_COUNT + 4))
+  if [ -f "${R2_CICD_LOG:-}" ]; then
+    r2_parsed=$(grep -oE '[0-9]+ files' "$R2_CICD_LOG" 2>/dev/null | head -1 | awk '{print $1}')
+    if [[ "$r2_parsed" =~ ^[0-9]+$ ]] && [ "$r2_parsed" -gt 0 ]; then
+      R2_FILES_UPDATED="$r2_parsed"
+    fi
+    r2_cnt=$(grep -ciE 'upload complete|uploaded|Created object|Success' "$R2_CICD_LOG" 2>/dev/null || echo 0)
+    r2_cnt=$(echo "$r2_cnt" | tr -d '[:space:]')
+    if [[ "$r2_cnt" =~ ^[0-9]+$ ]] && [ "$r2_cnt" -gt "$R2_FILES_UPDATED" ]; then
+      R2_FILES_UPDATED="$r2_cnt"
+    fi
+  fi
 fi
+if [ -z "${CICD_R2_BUNDLE_BYTES:-}" ] && [ -d "${DIST_DIR:-}" ]; then
+  if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
+    export CICD_R2_BUNDLE_BYTES
+  else
+    CICD_R2_BUNDLE_BYTES=$(($(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1}') * 1024))
+    export CICD_R2_BUNDLE_BYTES
+  fi
+fi
+CICD_WALL_END=$(date +%s)
+export CICD_WALL_TOTAL_MS=$(( (CICD_WALL_END - CICD_SB_DEPLOY_START_UNIX) * 1000 ))
+[ "${CICD_WALL_TOTAL_MS:-0}" -lt 0 ] && export CICD_WALL_TOTAL_MS=0
+
 CICD_V="${CURRENT_V:-$(cat "$VER_FILE" 2>/dev/null || echo 0)}"
-cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_LINE_COUNT" "$R2_BYTE_EST" \
+cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_FILES_UPDATED" "$R2_BYTE_EST" \
   "$CICD_MS_BUILD" "$CICD_MS_R2" "$CICD_MS_WORKER" "0" "${SANDBOX_HC:-200}" \
   "${SANDBOX_HEALTH_URL}"

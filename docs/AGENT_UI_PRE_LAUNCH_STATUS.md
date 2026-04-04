@@ -57,8 +57,8 @@
 ### 3. Preview panel: “live build” of a local or staging site
 - The preview panel is an **iframe** to a **URL**. It does not run `npm run dev` or `wrangler dev` for you. So “live preview of my app” means: you (or the agent) provide a URL that already serves the app (e.g. production, staging, or a tunnel to your local dev server). The agent can open that URL via OPEN_IN_PREVIEW. True “run dev server and show it” would require either running the dev server in the terminal and then opening `http://localhost:...` (or tunnel URL) in the preview, or a separate “run and capture” flow.
 
-### 4. MCP / CIDI in the chat flow
-- **MCP** and **CIDI** are loaded from boot and shown in the UI; the **chat API** does not yet call MCP tools or CIDI workflows during the conversation. So the agent can’t execute MCP or CIDI steps from the chat automatically. That would require wiring tool calls or workflow triggers into the chat request.
+### 4. MCP / CICD in the chat flow
+- **MCP** and **CICD** are loaded from boot and shown in the UI; the **chat API** does not yet call MCP tools or CICD workflows during the conversation. So the agent can’t execute MCP or CICD steps from the chat automatically. That would require wiring tool calls or workflow triggers into the chat request.
 
 ---
 

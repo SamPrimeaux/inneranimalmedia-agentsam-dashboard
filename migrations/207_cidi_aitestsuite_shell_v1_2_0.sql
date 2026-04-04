@@ -1,7 +1,7 @@
 -- 207: CIDI audit — AITestSuite (SamPrimeaux/meauxcad) shell v1.2.0, Worker aitestsuite, cache ?v=semver-timestamp.
 -- Git: main @ a8854e309cefa830aecda03d3f522a49da15770a
 -- Apply: ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/207_cidi_aitestsuite_shell_v1_2_0.sql
--- Tables: cicd_runs, cidi_activity_log, cidi_pipeline_runs, cidi_run_results (see docs/CIDI_TABLES_AND_MIGRATIONS.md).
+-- Tables: cicd_runs, cidi_activity_log, cidi_pipeline_runs, cidi_run_results (see docs/CICD_TABLES_AND_MIGRATIONS.md).
 
 INSERT OR REPLACE INTO cicd_runs (
   id,

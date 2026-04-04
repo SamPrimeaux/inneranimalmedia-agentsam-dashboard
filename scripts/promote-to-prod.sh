@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # promote-to-prod.sh — pull sandbox R2 build → push to production R2 → deploy worker
-# Sandbox bucket: agent-sam-sandbox-cicd (replaces deprecated agent-sam-sandbox-cidi).
+# Sandbox bucket: agent-sam-sandbox-cicd (canonical CI/CD staging bucket for dashboard assets).
 # Override: SANDBOX_BUCKET=my-bucket ./scripts/promote-to-prod.sh
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
-# After deploy: logs cicd_* tables (not cicd_runs) via scripts/lib/cicd-d1-log.sh; optional
+# After deploy: logs cicd_* tables including cicd_runs via scripts/lib/cicd-d1-log.sh; optional
 # ai_workflow_pipelines / ai_workflow_executions rows. Optional: CICD_D1_LOG=0 | CICD_SKIP_HEALTH_CURL=1 | PROD_HEALTH_URL=...
 set -euo pipefail
 
@@ -26,6 +26,10 @@ done
 
 echo "=== PROMOTE TO PRODUCTION ==="
 echo ""
+
+CICD_PROMOTE_WALL_START=$(date +%s)
+PROMOTE_GIT_HASH=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")
+export WORKER_NAME="${WORKER_NAME:-inneranimalmedia}"
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
 SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
@@ -294,17 +298,31 @@ NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
 
 CICD_T_WORKER_START=$(date +%s)
-PROD_VERSION=$("${WRANGLER[@]}" deploy ./worker.js \
-  -c "$PROD_CFG" 2>&1 | tee /tmp/prod-deploy-out.txt | grep "Current Version ID:" | grep -o '[a-f0-9-]\{36\}' || echo "unknown")
+"${WRANGLER[@]}" deploy ./worker.js \
+  -c "$PROD_CFG" 2>&1 | tee /tmp/prod-deploy-out.txt
 CICD_T_WORKER_END=$(date +%s)
 cat /tmp/prod-deploy-out.txt
 
+PROD_VERSION=$(grep "Current Version ID:" /tmp/prod-deploy-out.txt | awk '{print $NF}' | head -1 || true)
+[[ "$PROD_VERSION" =~ ^[a-f0-9-]{36}$ ]] || PROD_VERSION="unknown"
+
+export CICD_PHASE_PROMOTE_START_UNIX="$CICD_T_WORKER_START"
+export CICD_PHASE_PROMOTE_END_UNIX="$CICD_T_WORKER_END"
+export CICD_PHASE_PROMOTE_DURATION_MS=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
+[ "${CICD_PHASE_PROMOTE_DURATION_MS:-0}" -lt 0 ] && export CICD_PHASE_PROMOTE_DURATION_MS=0
+
 _parse_dashboard_v_from_html
+
+NOTES_ESC=$(printf '%s' "$NOTES" | sed "s/'/''/g")
+GH_ESC=$(printf '%s' "$PROMOTE_GIT_HASH" | sed "s/'/''/g")
+TRIGGERED_ESC=$(printf '%s' "$TRIGGERED_BY" | sed "s/'/''/g")
 
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
-  --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at) VALUES ('${PROD_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'production', 'inneranimalmedia', '${TRIGGERED_BY}', '${NOTES}', datetime('now'))" \
+  --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at, git_hash, version, description) VALUES ('${PROD_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'production', 'inneranimalmedia', '${TRIGGERED_ESC}', '${NOTES_ESC}', datetime('now'), '${GH_ESC}', 'v${CURRENT_V:-0}', '')" \
   2>/dev/null || echo "  WARN: deployments D1 record failed (non-fatal)"
+
+cicd_crosslink_deployment_after_worker "$PROD_VERSION" "$PROMOTE_GIT_HASH" "${CICD_PHASE_PROMOTE_DURATION_MS:-0}"
 
 echo ""
 echo "=== PRODUCTION PROMOTE COMPLETE ==="
@@ -331,7 +349,17 @@ R2_LINE_COUNT=0
 PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://inneranimalmedia.com/dashboard/agent}"
 PROD_HC=""
 if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
-  PROD_HC=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 25 "$PROD_HEALTH_URL" 2>/dev/null || echo "")
+  PROD_HC_RAW=$(curl -sS -o /dev/null -w "%{http_code}|%{time_total}" --max-time 25 "$PROD_HEALTH_URL" 2>/dev/null || echo "000|0")
+  PROD_HC=$(echo "$PROD_HC_RAW" | cut -d'|' -f1)
+  PROD_HC_TIME=$(echo "$PROD_HC_RAW" | cut -d'|' -f2)
+  export CICD_CF_HEALTH_STATUS_CODE="${PROD_HC}"
+  export CICD_CF_HEALTH_URL="${PROD_HEALTH_URL}"
+  CICD_CF_HEALTH_RESPONSE_MS=$(awk -v t="${PROD_HC_TIME:-0}" 'BEGIN { printf "%.0f", t * 1000 }')
+  export CICD_CF_HEALTH_RESPONSE_MS
+  if [[ "$PROD_HC" =~ ^2[0-9][0-9]$ ]]; then export CICD_CF_HEALTH_STATUS=healthy
+  elif [[ "$PROD_HC" =~ ^[23][0-9][0-9]$ ]]; then export CICD_CF_HEALTH_STATUS=degraded
+  else export CICD_CF_HEALTH_STATUS=down
+  fi
 fi
 
 # ── ai_workflow_* (non-fatal; before cicd_log_prod_promote) ───────────────────
@@ -386,6 +414,17 @@ WF_TOTAL_DURATION_S=$(( (CICD_MS_PULL + CICD_MS_PUSH + CICD_MS_WORKER) / 1000 ))
     unixepoch(), unixepoch(), ${WF_TOTAL_DURATION_S}
   );" \
   2>/dev/null || echo "  WARN: ai_workflow_executions row failed (non-fatal)"
+
+if [ -d "$DIST_DIR" ]; then
+  if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
+    export CICD_R2_BUNDLE_BYTES
+  else
+    CICD_R2_BUNDLE_BYTES=$(($(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1}') * 1024))
+    export CICD_R2_BUNDLE_BYTES
+  fi
+fi
+export CICD_WALL_TOTAL_MS=$(( ($(date +%s) - CICD_PROMOTE_WALL_START) * 1000 ))
+[ "${CICD_WALL_TOTAL_MS:-0}" -lt 0 ] && export CICD_WALL_TOTAL_MS=0
 
 cicd_log_prod_promote "$PROD_VERSION" "${CURRENT_V:-0}" "$R2_LINE_COUNT" \
   "$CICD_MS_PULL" "$CICD_MS_PUSH" "$CICD_MS_WORKER" "0" "${PROD_HC:-200}"

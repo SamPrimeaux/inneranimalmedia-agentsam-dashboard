@@ -23,8 +23,8 @@ export const ToolLauncherBar: React.FC<ToolLauncherBarProps> = ({ onNavigate }) 
       label: 'Excalidraw',
       sublabel: 'Whiteboard & Diagrams',
       url: 'https://excalidraw.com',
-      color: 'text-[#a78bfa]',
-      glowColor: 'hover:border-[#a78bfa]/50 hover:shadow-[0_0_20px_rgba(167,139,250,0.15)]',
+      color: 'text-[var(--solar-violet)]',
+      glowColor: 'hover:border-[var(--solar-violet)]/50 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--solar-violet)_15%,transparent)]',
     },
     {
       id: 'meshy',
@@ -41,8 +41,8 @@ export const ToolLauncherBar: React.FC<ToolLauncherBarProps> = ({ onNavigate }) 
       label: 'Blender',
       sublabel: '3D Creation Suite',
       url: 'https://www.blender.org/download',
-      color: 'text-[#fb923c]',
-      glowColor: 'hover:border-[#fb923c]/50 hover:shadow-[0_0_20px_rgba(251,146,60,0.15)]',
+      color: 'text-[var(--solar-orange)]',
+      glowColor: 'hover:border-[var(--solar-orange)]/50 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--solar-orange)_15%,transparent)]',
     },
     {
       id: 'spline',

@@ -61,7 +61,7 @@ export const GitHubActionsPanel: React.FC = () => {
             </div>
             
             <div className="p-3 border-t border-[var(--border-subtle)] bg-[var(--bg-app)] shrink-0 flex justify-center">
-                <button className="text-[10px] bg-[var(--solar-blue)] text-[#00212b] px-3 py-1.5 rounded font-semibold w-full flex items-center justify-center gap-1 hover:brightness-110">
+                <button className="text-[10px] bg-[var(--solar-blue)] text-[var(--solar-base03)] px-3 py-1.5 rounded font-semibold w-full flex items-center justify-center gap-1 hover:brightness-110">
                     <Github size={10} /> View on GitHub
                 </button>
             </div>

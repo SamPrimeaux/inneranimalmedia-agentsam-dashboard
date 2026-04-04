@@ -5,6 +5,8 @@
 
 set -e
 TARGET=${1:-sandbox}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ "$TARGET" = "sandbox" ]; then
   BASE="https://inneranimal-dashboard.meauxbility.workers.dev"
@@ -324,6 +326,20 @@ done
 echo ""
 echo -e "  ${GREEN}✅ PASS: $PASS${RESET}  ${RED}❌ FAIL/ERROR: $FAIL${RESET}"
 echo ""
+
+if [ "$TARGET" = "sandbox" ] && [ -f "${REPO_ROOT}/scripts/with-cloudflare-env.sh" ]; then
+  VID=$(tr -d '[:space:]' < "${REPO_ROOT}/agent-dashboard/.last-sandbox-worker-version" 2>/dev/null || true)
+  TOTAL=$((PASS + FAIL + SKIP))
+  [ "${TOTAL:-0}" -eq 0 ] && TOTAL=1
+  SCORE="${PASS}/${TOTAL}"
+  BENCH_ST="passed"
+  [ "${FAIL:-0}" -gt 0 ] && BENCH_ST="failed"
+  if [[ "$VID" =~ ^[a-f0-9-]{36}$ ]]; then
+    VID_ESC=$(printf '%s' "$VID" | sed "s/'/''/g")
+    SCORE_ESC=$(printf '%s' "$SCORE" | sed "s/'/''/g")
+    (cd "$REPO_ROOT" && ./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --command="UPDATE cicd_runs SET phase_benchmark_score='${SCORE_ESC}', phase_benchmark_status='${BENCH_ST}', phase_benchmark_completed_at=unixepoch() WHERE cf_worker_version_id='${VID_ESC}';" 2>/dev/null) || true
+  fi
+fi
 
 # Cost leaders
 echo -e "${BOLD}── COST LEADERS ────────────────────────────────────────────────────${RESET}"

@@ -237,7 +237,7 @@ for intent, prompt in routing_tests.items():
 section("4 — AUTORAG Q&A CHALLENGE")
 
 rag_questions = [
-    ("What is the CIDI pipeline?", "sandbox"),
+    ("What is the CICD pipeline?", "sandbox"),
     ("What tables does Agent Sam use for telemetry?", "agent_telemetry"),
     ("What is the deploy command for production?", "promote-to-prod"),
     ("What is the workspace ID for Sam?", "ws_samprimeaux"),

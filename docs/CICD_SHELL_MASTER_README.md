@@ -1,6 +1,6 @@
-# CIDI first run: master shell handoff (single source of truth)
+# CICD first run: master shell handoff (single source of truth)
 
-Give this entire file to Claude (or any coding agent) as the **only** briefing document for rebuilding the IAM workspace shell as a **production-grade** React + TypeScript app and completing the **first full 3-step CIDI cycle** without stubs.
+Give this entire file to Claude (or any coding agent) as the **only** briefing document for rebuilding the IAM workspace shell as a **production-grade** React + TypeScript app and completing the **first full 3-step CICD cycle** without stubs.
 
 **If the deliverable violates the gates in section 2, do not ship it.**
 
@@ -10,7 +10,7 @@ Give this entire file to Claude (or any coding agent) as the **only** briefing d
 
 - **One** primary interactive shell (not five scattered HTML files with duplicated layout).
 - **Upgrade path:** from `dashboard/iam-workspace-shell.html` + `static/dashboard/shell.css` (reference UX/layout) to **`agent-dashboard/`** as **TypeScript + TSX**, with **client-side routing**, **real worker API calls only**, and **documented R2/zip export**.
-- **Align** with the canonical CIDI pipeline already in D1 (`project_memory.key = CIDI_THREE_STEP_SYSTEM`) and `plan_steps` for `proj_iam_tools_agent_workspace`.
+- **Align** with the canonical CICD pipeline already in D1 (`project_memory.key = CICD_THREE_STEP_SYSTEM`) and `plan_steps` for `proj_iam_tools_agent_workspace`.
 
 ---
 
@@ -24,7 +24,7 @@ Give this entire file to Claude (or any coding agent) as the **only** briefing d
 | **G4 Theme** | Theme uses **CSS variables** only in JSX/CSS (no raw hex in components per project rules). Theme bootstrap uses **`GET /api/settings/theme?slug=`** (or shared hook) compatible with `cms_themes`. |
 | **G5 Build** | `cd agent-dashboard && npm run build:vite-only` succeeds with **TypeScript** enabled for new TSX files (incremental `allowJs` OK during migration). |
 | **G6 Artifacts** | Deliverable includes **one** of: (a) instructions to produce a **zip** of the built `dist/` + `dashboard/agent.html` (or new shell HTML), or (b) **exact** `wrangler r2 object put` commands for **agent-sam** keys under `static/dashboard/...` — so Sam can upload from terminal without guesswork. |
-| **G7 CIDI readiness** | Documented checklist for **Step 1** sandbox deploy, **Step 2** benchmark, **Step 3** promote — with URLs and version `v=` verification. |
+| **G7 CICD readiness** | Documented checklist for **Step 1** sandbox deploy, **Step 2** benchmark, **Step 3** promote — with URLs and version `v=` verification. |
 
 ---
 
@@ -33,13 +33,13 @@ Give this entire file to Claude (or any coding agent) as the **only** briefing d
 | Item | Value |
 |------|--------|
 | **Prod worker** | `inneranimalmedia` — `worker.js`, `wrangler.production.toml` (do not edit bindings without approval). |
-| **Sandbox worker** | `inneranimal-dashboard` — `wrangler.jsonc`, R2 bucket `agent-sam-sandbox-cidi`. |
+| **Sandbox worker** | `inneranimal-dashboard` — `wrangler.jsonc`, R2 bucket `agent-sam-sandbox-cicd`. |
 | **Dashboard HTML shell** | Served from R2 **DASHBOARD** binding: keys like `static/dashboard/<name>.html`. |
 | **Agent React bundle** | `agent-dashboard/` builds to `dist/`; referenced from `dashboard/agent.html` as `/static/dashboard/agent/agent-dashboard.js` (Vite `base`). |
 | **Reference shell** | `dashboard/iam-workspace-shell.html` + `static/dashboard/shell.css` — **layout and IA reference**, to be **reimplemented** in TSX, not copy-pasted as the long-term app. |
 | **TOOLS public** | `https://tools.inneranimalmedia.com` — artifacts, docs under `code/`; not the app API. |
 | **Remote MCP protocol** | `https://mcp.inneranimalmedia.com/mcp` — **separate** Worker; dashboard uses **`/api/mcp/*`** on the main worker for in-app integration. |
-| **D1** | `inneranimalmedia-business`; canonical CIDI doc: `SELECT value FROM project_memory WHERE project_id = 'inneranimalmedia' AND key = 'CIDI_THREE_STEP_SYSTEM';` |
+| **D1** | `inneranimalmedia-business`; canonical CICD doc: `SELECT value FROM project_memory WHERE project_id = 'inneranimalmedia' AND key = 'CICD_THREE_STEP_SYSTEM';` |
 
 ---
 
@@ -69,7 +69,7 @@ Use **`docs/route-map.md`** (generated from `worker.js`) as the route catalog. M
 
 ---
 
-## 6. Three-step CIDI (first full run)
+## 6. Three-step CICD (first full run)
 
 | Step | Action | Verify |
 |------|--------|--------|
@@ -88,7 +88,7 @@ Use **`docs/route-map.md`** (generated from `worker.js`) as the route catalog. M
 ```bash
 # After build, upload dist assets (deploy-sandbox.sh does this automatically)
 # Manual one-off:
-npx wrangler r2 object put agent-sam-sandbox-cidi/static/dashboard/agent/agent-dashboard.js \
+npx wrangler r2 object put agent-sam-sandbox-cicd/static/dashboard/agent/agent-dashboard.js \
   --file=agent-dashboard/dist/agent-dashboard.js --content-type=application/javascript \
   --config wrangler.jsonc --remote
 ```
@@ -126,13 +126,13 @@ You are implementing the **Inner Animal Media (IAM) workspace shell** as the **s
 
 ### Inputs you must read
 
-1. This file in full (gates, architecture, CIDI).
+1. This file in full (gates, architecture, CICD).
 2. Repository paths:
    - `dashboard/iam-workspace-shell.html` and `static/dashboard/shell.css` — **visual/IA reference**
    - `agent-dashboard/src/` — current React app
    - `worker.js` — **only** add routes if required; no OAuth changes without explicit approval
    - `docs/route-map.md` — **API truth**
-3. D1 canonical: `project_memory` key `CIDI_THREE_STEP_SYSTEM` for `project_id = inneranimalmedia`.
+3. D1 canonical: `project_memory` key `CICD_THREE_STEP_SYSTEM` for `project_id = inneranimalmedia`.
 
 ### Hard requirements
 
@@ -144,7 +144,7 @@ You are implementing the **Inner Animal Media (IAM) workspace shell** as the **s
    - Source changes under `agent-dashboard/`
    - Optional `dashboard/*.html` updates **only** if required for script tags / `v=` bump
    - **README section** in your reply: exact `deploy-sandbox.sh` order, benchmark command, and **R2 upload** or **zip** instructions for Sam.
-6. **CIDI**: Your output must include a **checklist** for steps 1–3 with verification URLs.
+6. **CICD**: Your output must include a **checklist** for steps 1–3 with verification URLs.
 
 ### Out of scope unless Sam approves
 
@@ -155,16 +155,16 @@ You are implementing the **Inner Animal Media (IAM) workspace shell** as the **s
 1. Summary of files changed (paths).
 2. Route table (path, component, auth).
 3. API map (feature to worker endpoint).
-4. CIDI checklist.
+4. CICD checklist.
 5. Known limitations (must be empty or explicitly approved gaps).
 
 ---
 
 ## 10. Maintainer
 
-This document is the **single** handoff for “first full CIDI shell run.” Update it when:
+This document is the **single** handoff for “first full CICD shell run.” Update it when:
 
-- `CIDI_THREE_STEP_SYSTEM` JSON changes in D1
+- `CICD_THREE_STEP_SYSTEM` JSON changes in D1
 - New mandatory gates are added
 - Shell route is merged into `/dashboard/agent` only
 

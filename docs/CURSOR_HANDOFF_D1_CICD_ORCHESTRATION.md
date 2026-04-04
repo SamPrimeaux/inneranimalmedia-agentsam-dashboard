@@ -1,4 +1,4 @@
-# Cursor handoff: D1 + CIDI orchestration (deploys, webhooks, workflows, quality, R2)
+# Cursor handoff: D1 + CICD orchestration (deploys, webhooks, workflows, quality, R2)
 
 Paste the **block at the end** into a new Cursor chat. Use this file as the canonical playbook when touching **inneranimalmedia-business** D1, **sandbox** Workers, or **promotion** to production.
 
@@ -28,8 +28,8 @@ Paste the **block at the end** into a new Cursor chat. Use this file as the cano
 | **Quality** | `quality_runs`, `quality_results`, `quality_gates`, `quality_gate_sets`, `quality_checks` | After CI/Playwright/overnight; link `run` → `results`. |
 | **R2** | `r2_buckets`, `r2_intended_paths`, `r2_object_inventory`, `r2_object_media` | New bucket → `r2_buckets`; optional inventory sync from scripts. |
 | **Roadmap** | `roadmap_plans`, `roadmap_steps` | When Sam finishes a milestone; keep `plan_iam_dashboard_v1` in sync with reality. |
-| **MCP / CIDI** | `mcp_workflows` | Defined workflows; runner may log to `workflow_runs` / `workflow_executions` if wired. |
-| **Dev lane (agent context)** | `dev_workflows` | Registry row `dw_cidi_inneranimal_platform` (dual Worker + R2 + repos + scripts). Schema is fixed on D1 (`steps_json`, `command_sequence`, `category`, etc.); (re)seed with `scripts/d1-dev-workflows-insert-cidi-setup.sql`. |
+| **MCP / CICD** | `mcp_workflows` | Defined workflows; runner may log to `workflow_runs` / `workflow_executions` if wired. |
+| **Dev lane (agent context)** | `dev_workflows` | Registry row `dw_cicd_inneranimal_platform` (dual Worker + R2 + repos + scripts). Schema is fixed on D1 (`steps_json`, `command_sequence`, `category`, etc.); (re)seed with `scripts/d1-dev-workflows-insert-platform-setup.sql`. |
 | **Workspaces** | `workspaces`, `workspace_projects`, `projects` | When client or project scope changes. |
 | **Registry** | `worker_registry`, `github_repositories` | When Workers or repos change names, URLs, or bindings. |
 | **Schema** | `schema_versions`, `tracking_metrics` | After migrations or metric definition changes. |
@@ -91,13 +91,13 @@ WHERE id = 1;
 
 ---
 
-## 6. MCP workflow for 2-step Agent UI (CIDI)
+## 6. MCP workflow for 2-step Agent UI (CICD)
 
-- **Id:** `wf_cidi_agent_ui_sandbox_to_prod`
+- **Id:** `wf_cicd_agent_ui_sandbox_to_prod`
 - **Step 1:** D1 sanity query + **handoff** to `./scripts/upload-repo-to-r2-sandbox.sh`
 - **Step 2:** Roadmap check + **handoff** to `PROMOTE_OK=1 ./scripts/promote-agent-dashboard-to-production.sh` (**`requires_approval` = true**)
 
-Created/updated by **`scripts/d1-cidi-bootstrap-20260322.sql`**.
+Created/updated by **`scripts/d1-bootstrap-sandbox-workflow-20260322.sql`**.
 
 ---
 
@@ -105,25 +105,25 @@ Created/updated by **`scripts/d1-cidi-bootstrap-20260322.sql`**.
 
 | Script | Role |
 |--------|------|
-| `scripts/upload-repo-to-r2-sandbox.sh` | Repo → **agent-sam-sandbox-cidi** |
+| `scripts/upload-repo-to-r2-sandbox.sh` | Repo → **agent-sam-sandbox-cicd** |
 | `scripts/promote-agent-dashboard-to-production.sh` | Agent HTML + Vite dist → **agent-sam** (`PROMOTE_OK=1`) |
 | `scripts/deploy-with-record.sh` / `post-deploy-record.sh` | Production deploy + logging (when Sam approves) |
-| `scripts/d1-cidi-bootstrap-20260322.sql` | R2 row + MCP workflow + `worker_registry` touch-up |
+| `scripts/d1-bootstrap-sandbox-workflow-20260322.sql` | R2 row + MCP workflow + `worker_registry` touch-up |
 
 ---
 
 ## 8. `worker_registry` — `inneranimal-dashboard`
 
-Row **`wr_inneranimal_dashboard_001`** should list **`workers_dev_subdomain`** = full host **`inneranimal-dashboard.meauxbility.workers.dev`**, **`worker_type`** = **`staging`** (DB CHECK allows production|development|staging|test|deprecated — not `preview`), **`r2_buckets`** JSON including **`agent-sam-sandbox-cidi`**. Bootstrap SQL updates this; refine **`bindings_detail`** when you have an exact binding export from Cloudflare.
+Row **`wr_inneranimal_dashboard_001`** should list **`workers_dev_subdomain`** = full host **`inneranimal-dashboard.meauxbility.workers.dev`**, **`worker_type`** = **`staging`** (DB CHECK allows production|development|staging|test|deprecated — not `preview`), **`r2_buckets`** JSON including **`agent-sam-sandbox-cicd`**. Bootstrap SQL updates this; refine **`bindings_detail`** when you have an exact binding export from Cloudflare.
 
 ---
 
 ## Copy-paste prompt for the other Cursor
 
 ```markdown
-You are the D1 / CIDI orchestration agent for Inner Animal Media.
+You are the D1 / CICD orchestration agent for Inner Animal Media.
 
-Read first: docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md and docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md.
+Read first: docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md and docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md.
 
 Rules:
 - Production Worker deploy only after Sam types: deploy approved.
@@ -132,7 +132,7 @@ Rules:
 - After deploys: insert or update deployments + deployment_tracking (and deployment_changes if you have file list); optional metrics tables only when you have real timings.
 - Webhooks: “not firing” is usually path/source mismatch, verify failing (fix Worker env first), or missing webhook_endpoints row — not a second endpoint for the same URL. secret_hash NULL can be fine; never store plaintext secrets in D1.
 - workflow_locks: optional mutex for concurrent automation (lock_key, expires_at).
-- Agent UI promotion path: wf_cidi_agent_ui_sandbox_to_prod in mcp_workflows; scripts upload-repo-to-r2-sandbox.sh and PROMOTE_OK=1 promote-agent-dashboard-to-production.sh.
+- Agent UI promotion path: wf_cicd_agent_ui_sandbox_to_prod in mcp_workflows; scripts upload-repo-to-r2-sandbox.sh and PROMOTE_OK=1 promote-agent-dashboard-to-production.sh.
 
 When Sam asks to “sync DB for this action,” respond with: (1) which tables, (2) exact SQL or script path, (3) what must stay empty if data unknown.
 

@@ -1,4 +1,4 @@
-# CIDI deploy (canonical)
+# CI/CD deploy (canonical)
 
 ```bash
 cd agent-dashboard && npm run build:vite-only && cd ..

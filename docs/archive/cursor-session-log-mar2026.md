@@ -624,7 +624,7 @@ Implement backup code sign-in (real, no mock), real multi-GitHub login support, 
 ### Files changed
 - `worker.js`: Single canonical `/api/integrations/status` returns `google`, `github`, `github_accounts` (SELECT provider, account_identifier); all integration routes and tool handlers use `integrationUserId = authUser.email || authUser.id` and pass 4th arg to getIntegrationToken ('' for google_drive, `url.searchParams.get('account') || ''` for GitHub); removed duplicate status block that used pathLower. GDrive/github list/file/raw routes and agent tools (gdrive_list, gdrive_fetch, github_repos, github_file) and /api/git/status already use integrationUserId and account param where applicable.
 - `dashboard/user-settings.html`: Integrations card copy updated for multi-GitHub; loadIntegrationsStatus() uses `d.github_accounts` and renders each GitHub account by account_identifier; no mock data.
-- `migrations/144_user_oauth_tokens_multi_github.sql`: Comment added re cidi_client_metrics view; if full-file run fails, drop view then run steps manually.
+- `migrations/144_user_oauth_tokens_multi_github.sql`: Comment added re cicd_client_metrics view; if full-file run fails, drop view then run steps manually.
 - `docs/cursor-session-log.md`: This entry.
 
 ### Files NOT changed (and why)
@@ -639,17 +639,17 @@ Backup code sign-in at auth-signin (POST /api/auth/backup-code); integrations st
 ### Migrations run
 - **142_user_backup_codes.sql**: Ran successfully (user_backup_codes table + indexes).
 - **143_secret_audit_log_created_at.sql**: Skipped — failed with duplicate column name: created_at (column already exists).
-- **144_user_oauth_tokens_multi_github.sql**: Run manually in four steps; view `cidi_client_metrics` (referenced missing cl.company_name) blocked RENAME. Dropped view, then ALTER RENAME succeeded. Table user_oauth_tokens now has PK (user_id, provider, account_identifier); existing rows migrated with account_identifier = ''.
+- **144_user_oauth_tokens_multi_github.sql**: Run manually in four steps; view `cicd_client_metrics` (referenced missing cl.company_name) blocked RENAME. Dropped view, then ALTER RENAME succeeded. Table user_oauth_tokens now has PK (user_id, provider, account_identifier); existing rows migrated with account_identifier = ''.
 
 ### Known issues / next steps
-- View `cidi_client_metrics` was dropped on production to allow 144 RENAME. If that view is needed, recreate it with a definition that matches current schema (e.g. ensure cl has company_name or use another column).
+- View `cicd_client_metrics` was dropped on production to allow 144 RENAME. If that view is needed, recreate it with a definition that matches current schema (e.g. ensure cl has company_name or use another column).
 
 ---
 
 ## [2026-03-18] Platform tables audit — connect and populate
 
 ### What was asked
-Audit tables (agent_memory_for_context, ai_rag_search_history, ci_di_workflow_runs, cicd_*, cidi, cidi_activity_log, activity_log, cloudflare_deployments, cost_tracking, deployment_health_checks, github_*, mcp_*, time_entries, timesheets) and the disconnect between schema and platform; suggest optimal config and how to start populating.
+Audit tables (agent_memory_for_context, ai_rag_search_history, ci_di_workflow_runs, cicd_*, cicd, cicd_events, activity_log, cloudflare_deployments, cost_tracking, deployment_health_checks, github_*, mcp_*, time_entries, timesheets) and the disconnect between schema and platform; suggest optimal config and how to start populating.
 
 ### Files changed
 - `docs/PLATFORM_TABLES_AUDIT_AND_WIRING.md`: New audit. Per-table: migration in repo?, worker read/write?, recommendation (consolidate vs add migration vs wire). Priority wiring checklist (P0–P3). Optimal config (one canonical table per concern, single write path, migrations in repo, dashboard reads). Next steps: verify, add migrations, add write paths, wire UI.
@@ -664,7 +664,7 @@ Audit tables (agent_memory_for_context, ai_rag_search_history, ci_di_workflow_ru
 No change. Tables remain as-is until migrations and wiring are applied per audit.
 
 ### Known issues / next steps
-- Run verification queries for listed tables; add migrations for ai_rag_search_history, cicd_runs, cidi, cidi_activity_log, activity_log as needed; add write paths (webhooks, record-workflow-run, recordMcpToolCall for builtins, etc.); wire Overview/dashboard to read new tables.
+- Run verification queries for listed tables; add migrations for ai_rag_search_history, cicd_runs, cicd, cicd_events, activity_log as needed; add write paths (webhooks, record-workflow-run, recordMcpToolCall for builtins, etc.); wire Overview/dashboard to read new tables.
 
 ---
 
@@ -1592,7 +1592,7 @@ Worker and dashboard at v=31. WS onmessage parses PTY JSON (session_id, output);
 URGENT: Add scheduled handler for 8:30am CST (13:30 UTC) that queries D1 (tasks, projects, memory, rules, workflows), calls Workers AI for email body, sends via Resend. Add cron to wrangler.production.toml. Deploy before 1:30pm UTC.
 
 ### Files changed
-- `worker.js` lines 4102-4105: Added branch for event.cron === '30 13 * * *' calling sendDailyPlanEmail(env). Lines 4496-4573: New function sendDailyPlanEmail(env) — Promise.all of 5 D1 queries (cidi tasks, projects, agent_memory_index, agent_cursor_rules, cidi pending workflows), prompt for Agent Sam daily plan, env.AI.run('@cf/meta/llama-3.1-8b-instruct'), extract email body, fetch Resend API with from Agent Sam, to sam@inneranimals.com, subject "Daily Plan — [date]".
+- `worker.js` lines 4102-4105: Added branch for event.cron === '30 13 * * *' calling sendDailyPlanEmail(env). Lines 4496-4573: New function sendDailyPlanEmail(env) — Promise.all of 5 D1 queries (CI/CD tasks, projects, agent_memory_index, agent_cursor_rules, cicd pending workflows), prompt for Agent Sam daily plan, env.AI.run('@cf/meta/llama-3.1-8b-instruct'), extract email body, fetch Resend API with from Agent Sam, to sam@inneranimals.com, subject "Daily Plan — [date]".
 - `wrangler.production.toml` lines 91-99: Added "30 13 * * *" to crons array.
 
 ### Files NOT changed (and why)
@@ -5425,7 +5425,7 @@ Audit grep on worker.js; surgical fix so d1_write INSERT into `agent_memory_inde
 Add POST `/api/hooks/github|cursor|stripe|internal`, GET `/api/hooks/health`; verify signatures; INSERT `webhook_events`; match `hook_subscriptions`; run action handlers; INSERT `hook_executions`; update event + endpoint counters; `npm run deploy`; D1 verify `webhook_endpoints` / `hook_subscriptions`.
 
 ### Files changed
-- `worker.js`: webhook crypto helpers, `handleInboundWebhook`, `handleHooksHealth`, `executeHookSubscriptionAction` (`write_d1` sql / table+map / github raw, `log_deployment` into real `deployment_tracking`, `update_cidi` with production `cidi_activity_log` columns, `notify_agent` → `agent_request_queue`); routes after `/api/health`. Implementation aligned to production D1 column names (`is_active`, `payload_json`, `error_message`, TEXT datetimes, `hook_subscriptions.endpoint_id` = `webhook_endpoints.id` by `source`).
+- `worker.js`: webhook crypto helpers, `handleInboundWebhook`, `handleHooksHealth`, `executeHookSubscriptionAction` (`write_d1` sql / table+map / github raw, `log_deployment` into real `deployment_tracking`, `update_cicd` with production `cicd_events` columns, `notify_agent` → `agent_request_queue`); routes after `/api/health`. Implementation aligned to production D1 column names (`is_active`, `payload_json`, `error_message`, TEXT datetimes, `hook_subscriptions.endpoint_id` = `webhook_endpoints.id` by `source`).
 
 ### Deploy status
 - Worker deployed: yes — **Version ID** `1c55eb10-24d3-4880-9b12-bf188de190ce`
@@ -5435,7 +5435,7 @@ Add POST `/api/hooks/github|cursor|stripe|internal`, GET `/api/hooks/health`; ve
 Hooks resolve `webhook_endpoints` by `source` (`github`, `cursor`, `stripe`, `internal`). Secrets: `GITHUB_WEBHOOK_SECRET`, `CURSOR_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`, `WEBHOOK_IAM_SECRET` or `INTERNAL_API_SECRET`. Cursor accepts `X-Cursor-Signature` or Cursor doc `X-Webhook-Signature` (`sha256=` HMAC). Optional `WEBHOOK_NOTIFY_DEFAULT_SESSION_ID` for `notify_agent` without `session_id`.
 
 ### Known issues / next steps
-- DB `endpoint_path` values may still reference `/api/webhooks/...`; live URLs must use `/api/hooks/...` per this worker. `update_cidi` with `update_active_workflows` returns not-implemented. `write_d1` configs that only set `action`/`field` without `sql`/`map` may need config or code follow-up.
+- DB `endpoint_path` values may still reference `/api/webhooks/...`; live URLs must use `/api/hooks/...` per this worker. `update_cicd` with `update_active_workflows` returns not-implemented. `write_d1` configs that only set `action`/`field` without `sql`/`map` may need config or code follow-up.
 
 ## 2026-03-21 MASTER BRIEF — webhooks, CloudConvert, Meshy, webhook_events cron (worker.js)
 
@@ -5664,10 +5664,10 @@ Add a row to `infrastructure_documentation` so the D1 canonical / sync doc stays
 ### Known issues / next steps
 - `last_synced_at` is NULL until the MD is uploaded to R2 at that key; bump `size_bytes` / preview in the SQL if the file grows.
 
-## 2026-03-22 R2 sandbox upload — agent-sam-sandbox-cidi (MPA mirror)
+## 2026-03-22 R2 sandbox upload — agent-sam-sandbox-cicd (MPA mirror)
 
 ### What was asked
-Upload production dashboard / agent code into new bucket `agent-sam-sandbox-cidi` with clear layout; prioritize `/dashboard/agent` safety for sandbox UI work.
+Upload production dashboard / agent code into new bucket `agent-sam-sandbox-cicd` with clear layout; prioritize `/dashboard/agent` safety for sandbox UI work.
 
 ### Files changed
 - `scripts/upload-repo-to-r2-sandbox.sh` — uploads manifest, `agent-sam/static/**`, repo `static/dashboard/**`, all `dashboard/*.html` (except auth duplicate), `dashboard/pages/*.html`, `dashboard/*.jsx`, `static/auth-signin.html`, `agent-dashboard/dist` to `static/dashboard/agent/`, `source/worker.js`; skips `.DS_Store`; fixed R2 keys to use full `static/dashboard/...` for repo static tree; auth-signin only at `static/auth-signin.html`.
@@ -5691,7 +5691,7 @@ Prompt for another Cursor on sandbox vs production deploy/workflow; overview pag
 - `scripts/upload-repo-to-r2-sandbox.sh` — upload `overview-dashboard/dist/*` to `static/dashboard/overview/`.
 
 ### Operations
-- Uploaded `overview-dashboard/dist/*` to `agent-sam-sandbox-cidi/static/dashboard/overview/`.
+- Uploaded `overview-dashboard/dist/*` to `agent-sam-sandbox-cicd/static/dashboard/overview/`.
 
 ### Deploy status
 - Production worker: not deployed
@@ -5699,7 +5699,7 @@ Prompt for another Cursor on sandbox vs production deploy/workflow; overview pag
 ## 2026-03-22 Agent theme FOUC + roadmap + promote script
 
 ### What was asked
-Fix recurring `/dashboard/agent` weird first paint until navigation; document roadmap_steps; scripts/workflow for sandbox to prod agent UI; multistep CIDI vision.
+Fix recurring `/dashboard/agent` weird first paint until navigation; document roadmap_steps; scripts/workflow for sandbox to prod agent UI; multistep CICD vision.
 
 ### Files changed
 - `dashboard/agent.html` — after fonts: `styles_themes.css` (pub R2) + `/static/dashboard/shell.css`; theme block always `fetch('/api/settings/theme')` and apply `data-theme` + `applyDynamicTheme`, not only when `localStorage` had a preset.
@@ -5708,31 +5708,31 @@ Fix recurring `/dashboard/agent` weird first paint until navigation; document ro
 - `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` — items 6–9: FOUC cause, promote script, roadmap ids, future `/workflow` note.
 
 ### Operations
-- Remote D1: executed roadmap SQL. Uploaded `dashboard/agent.html` to **agent-sam-sandbox-cidi** `static/dashboard/agent.html`.
+- Remote D1: executed roadmap SQL. Uploaded `dashboard/agent.html` to **agent-sam-sandbox-cicd** `static/dashboard/agent.html`.
 
 ### Deploy status
 - Production **agent-sam** / worker: not updated (Sam can run promote script + R2 put + deploy approved when ready).
 
-## 2026-03-22 SYSTEM_CIDI_ARCHITECTURE_README + README links
+## 2026-03-22 SYSTEM_CICD_ARCHITECTURE_README + README links
 
 ### What was asked
-Visual wireframe + Mermaid system map (2-zone CIDI, D1 clusters, MCP + iam-pty repos); ensure docs live in inneranimalmedia-agentsam-dashboard repo for other Cursor.
+Visual wireframe + Mermaid system map (2-zone CICD, D1 clusters, MCP + iam-pty repos); ensure docs live in inneranimalmedia-agentsam-dashboard repo for other Cursor.
 
 ### Files changed
-- `docs/SYSTEM_CIDI_ARCHITECTURE_README.md` — ASCII two-zone diagram, CIDI 2-step flow, 3 Mermaid charts (components, repos, D1 clusters), URL table, agent rules, cross-links to handoff SQL/scripts.
+- `docs/SYSTEM_CICD_ARCHITECTURE_README.md` — ASCII two-zone diagram, CICD 2-step flow, 3 Mermaid charts (components, repos, D1 clusters), URL table, agent rules, cross-links to handoff SQL/scripts.
 - `README.md` — link to architecture doc; Key docs rows for SYSTEM + two CURSOR_HANDOFF files; sandbox/promote scripts in table; MCP + Terminal sibling GitHub links.
 
 ### Deploy status
 - Git push: yes — `origin` https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard.git (after rebase conflict fix in `docs/cursor-session-log.md`).
 
-## 2026-03-22 D1 CIDI orchestration handoff + bootstrap SQL
+## 2026-03-22 D1 CICD orchestration handoff + bootstrap SQL
 
 ### What was asked
-Master prompt/script for other Cursor to sync many D1 tables on actions; validate github_repositories UPDATE; mcp_workflows 2-step CIDI; r2_buckets sandbox; webhooks/workflow_locks guidance; worker_registry.
+Master prompt/script for other Cursor to sync many D1 tables on actions; validate github_repositories UPDATE; mcp_workflows 2-step CICD; r2_buckets sandbox; webhooks/workflow_locks guidance; worker_registry.
 
 ### Files changed
-- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map, webhook pipeline, workflow_locks, copy-paste Cursor prompt, MCP workflow id reference.
-- `scripts/d1-cidi-bootstrap-20260322.sql` — `r2_buckets` `r2_agent_sam_sandbox_cidi`, `mcp_workflows` `wf_cidi_agent_ui_sandbox_to_prod`, `worker_registry` `wr_inneranimal_dashboard_001` (worker_type **staging** — CHECK disallows `preview`), `github_repositories` id=1 `status_notes`.
+- `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` — table map, webhook pipeline, workflow_locks, copy-paste Cursor prompt, MCP workflow id reference.
+- `scripts/d1-bootstrap-sandbox-workflow-20260322.sql` — `r2_buckets` sandbox row (legacy id / bucket strings in script), `mcp_workflows` workflow row (legacy id in script), `worker_registry` `wr_inneranimal_dashboard_001` (worker_type **staging** — CHECK disallows `preview`), `github_repositories` id=1 `status_notes`.
 
 ### Operations
 - Remote D1: executed bootstrap SQL (4 statements, success).
@@ -5740,10 +5740,10 @@ Master prompt/script for other Cursor to sync many D1 tables on actions; validat
 ### Deploy status
 - Worker: not deployed
 
-## 2026-03-22 R2 sandbox clone script (agent-sam to agent-sam-sandbox-cidi)
+## 2026-03-22 R2 sandbox clone script (agent-sam to agent-sam-sandbox-cicd)
 
 ### What was asked
-Clone or push live `agent-sam` contents into new bucket `agent-sam-sandbox-cidi` for safe sandbox/testing; prefer wrangler or terminal bulk approach.
+Clone or push live `agent-sam` contents into new bucket `agent-sam-sandbox-cicd` for safe sandbox/testing; prefer wrangler or terminal bulk approach.
 
 ### Files changed
 - `scripts/r2-clone-agent-sam-to-sandbox.sh` — `aws s3 sync` against `https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com`, optional `SYNC_PREFIX`, `DRY_RUN`, `DELETE`; documents rclone alternative.
@@ -5761,7 +5761,7 @@ Clone or push live `agent-sam` contents into new bucket `agent-sam-sandbox-cidi`
 Document that “webhooks not firing” is usually path/source mismatch, verification failure, or missing `webhook_endpoints` row — not a duplicate endpoint for the same URL; `secret_hash` NULL can be fine; fix Worker env first. Note GitHub hook working at `/api/webhooks/github`.
 
 ### Files changed
-- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — section 4 expanded: triage order, `/api/webhooks/*` vs `/api/hooks/*` D1 path alignment, anti-pattern (duplicate rows), production confirmation for repo **inneranimalmedia-agentsam-dashboard** `ping` to `https://inneranimalmedia.com/api/webhooks/github`; copy-paste prompt bullet updated.
+- `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` — section 4 expanded: triage order, `/api/webhooks/*` vs `/api/hooks/*` D1 path alignment, anti-pattern (duplicate rows), production confirmation for repo **inneranimalmedia-agentsam-dashboard** `ping` to `https://inneranimalmedia.com/api/webhooks/github`; copy-paste prompt bullet updated.
 
 ### Files NOT changed (and why)
 - `worker.js`: no code change.
@@ -5777,14 +5777,14 @@ Unchanged Worker behavior; handoff doc + session log on GitHub **main**.
 ### Known issues / next steps
 - If GitHub uses `/api/hooks/github`, ensure D1 `endpoint_path` matches that path (Worker supports both routes with distinct `endpointPath` lookups).
 
-## [2026-03-22] dev_workflows seed script (CIDI platform row)
+## [2026-03-22] dev_workflows seed script (CICD platform row)
 
 ### What was asked
-Explain “local WIP”; add a `dev_workflows` row for the CIDI / dual-zone + MCP + PTY setup.
+Explain “local WIP”; add a `dev_workflows` row for the CICD / dual-zone + MCP + PTY setup.
 
 ### Files changed
-- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — `CREATE TABLE IF NOT EXISTS dev_workflows` + index + `INSERT OR REPLACE` row `dw_cidi_inneranimal_platform` (`related_json` documents prod/sandbox, repos, scripts, webhook path note).
-- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map row for `dev_workflows` + script path.
+- `scripts/d1-dev-workflows-insert-platform-setup.sql` — `CREATE TABLE IF NOT EXISTS dev_workflows` + index + `INSERT OR REPLACE` row `dw_cicd_inneranimal_platform` (`related_json` documents prod/sandbox, repos, scripts, webhook path note).
+- `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` — table map row for `dev_workflows` + script path.
 
 ### Deploy status
 - D1: not executed from this session; Sam runs wrangler `d1 execute` with the script after approving new table on `inneranimalmedia-business`.
@@ -5794,7 +5794,7 @@ Explain “local WIP”; add a `dev_workflows` row for the CIDI / dual-zone + MC
 Repo-only until SQL is applied on remote D1.
 
 ### Known issues / next steps
-- No Worker/dashboard reader for `dev_workflows` yet; row is for agents and ad-hoc queries (`SELECT * FROM dev_workflows WHERE id='dw_cidi_inneranimal_platform'`).
+- No Worker/dashboard reader for `dev_workflows` yet; row is for agents and ad-hoc queries (`SELECT * FROM dev_workflows WHERE id='dw_cicd_inneranimal_platform'`).
 
 ## [2026-03-22] dev_workflows INSERT aligned to remote D1 schema + executed
 
@@ -5802,11 +5802,11 @@ Repo-only until SQL is applied on remote D1.
 Match remote `dev_workflows` table shape; run wrangler `d1 execute` with the seed script.
 
 ### Files changed
-- `scripts/d1-dev-workflows-insert-cidi-setup.sql` — removed wrong `CREATE TABLE`; `INSERT OR REPLACE` uses production columns (`category`, `steps_json`, `command_sequence`, `estimated_time_minutes`, `is_template`, `tags`, `created_by`, `use_count`, etc.).
-- `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` — table map note: remote schema, not local CREATE.
+- `scripts/d1-dev-workflows-insert-platform-setup.sql` — removed wrong `CREATE TABLE`; `INSERT OR REPLACE` uses production columns (`category`, `steps_json`, `command_sequence`, `estimated_time_minutes`, `is_template`, `tags`, `created_by`, `use_count`, etc.).
+- `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` — table map note: remote schema, not local CREATE.
 
 ### Operations
-- Remote D1: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-dev-workflows-insert-cidi-setup.sql` — success (1 query, rows written reported).
+- Remote D1: `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=scripts/d1-dev-workflows-insert-platform-setup.sql` — success (1 query, rows written reported).
 
 ### Deploy status
 - Worker: no
@@ -6148,7 +6148,7 @@ SQL / D1 Studio–friendly script for DB tables/themes/implementations to compar
 ## [2026-03-22] Sandbox R2: finance shell-only — upload Finance.js at static/dashboard/
 
 ### What was asked
-Sandbox `inneranimal-dashboard.../dashboard/finance` showed shell only; mirror prod finance on bucket `agent-sam-sandbox-cidi`.
+Sandbox `inneranimal-dashboard.../dashboard/finance` showed shell only; mirror prod finance on bucket `agent-sam-sandbox-cicd`.
 
 ### Root cause
 `dashboard/finance.html` loads `/static/dashboard/Finance.js`; `upload-repo-to-r2-sandbox.sh` only copied `overview-dashboard/dist/*` to `static/dashboard/overview/`, not to `static/dashboard/`.
@@ -6248,16 +6248,16 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - If `settings` table or `appearance.theme` row is absent in D1, boot `cssVars` injection is skipped silently (try/catch). Confirm schema in prod or adjust query to match `user_preferences` / `user_settings` if needed.
 - Optional seed for `agentsam_browser_trusted_origin` not run (separate approval step in spec).
 
-## 2026-03-22 Boot theme comment + CIDI cicd_runs follow-ups (deployments + activity log)
+## 2026-03-22 Boot theme comment + CICD cicd_runs follow-ups (deployments + activity log)
 
 ### What was asked
-- Confirm deployments D1 query and live routes (agentsam); approve boot theme as `settings` + `cms_themes` (surgical); implement CIDI Step A (`cicd_runs` success -> `deployments`) and Step B (`cidi_activity_log` for Agent Sam dashboard repo); hold Step C SQL.
+- Confirm deployments D1 query and live routes (agentsam); approve boot theme as `settings` + `cms_themes` (surgical); implement CICD Step A (`cicd_runs` success -> `deployments`) and Step B (`cicd_events` for Agent Sam dashboard repo); hold Step C SQL.
 
 ### Files changed
-- `worker.js`: Comment on boot theme join (`appearance.theme` / `tenant_sam_primeaux`). Added `GITHUB_REPO_CIDI_WORKFLOW`, `githubActorFromWebhookPayload`, `githubCommitMessageFromWebhookPayload`, `recordGithubCicdFollowups` (INSERT OR IGNORE `deployments` with `triggered_by='github_push'`; INSERT `cidi_activity_log` when repo maps to `CIDI-IAM-AGENTSAM-20260322` and CIDI row is `in_progress`). `runWriteD1MapInsert` invokes follow-ups when `table === 'cicd_runs'` and changes > 0 (uses `ctx.waitUntil` when provided). `handleInboundWebhook` accepts `executionCtx`; all webhook routes pass Workers `ctx` for background follow-ups.
+- `worker.js`: Comment on boot theme join (`appearance.theme` / `tenant_sam_primeaux`). Added `GITHUB_REPO_CICD_WORKFLOW`, `githubActorFromWebhookPayload`, `githubCommitMessageFromWebhookPayload`, `recordGithubCicdFollowups` (INSERT OR IGNORE `deployments` with `triggered_by='github_push'`; INSERT `cicd_events` when repo maps to `CICD-IAM-AGENTSAM-20260322` and CICD row is `in_progress`). `runWriteD1MapInsert` invokes follow-ups when `table === 'cicd_runs'` and changes > 0 (uses `ctx.waitUntil` when provided). `handleInboundWebhook` accepts `executionCtx`; all webhook routes pass Workers `ctx` for background follow-ups.
 
 ### Files NOT changed (and why)
-- Step C `UPDATE cidi` statements: held per Sam.
+- Step C `UPDATE cicd` statements: held per Sam.
 - `SettingsPanel.jsx`: deferred until after worker deploy.
 
 ### Deploy status
@@ -6270,8 +6270,8 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - Remote D1: `SELECT id, worker_name, status, timestamp FROM deployments ORDER BY timestamp DESC LIMIT 3` returned recent rows (e.g. inneranimalmedia / MCP / dep-health rows). Authenticated GET `/api/agentsam/*` not run from this session.
 
 ### Known issues / next steps
-- After deploy: trigger or wait for a successful GitHub `cicd_runs` insert; confirm new `deployments` row (`triggered_by='github_push'`) and `cidi_activity_log` rows for sandbox repo.
-- Extend `GITHUB_REPO_CIDI_WORKFLOW` when more repos should log to specific CIDI workflows.
+- After deploy: trigger or wait for a successful GitHub `cicd_runs` insert; confirm new `deployments` row (`triggered_by='github_push'`) and `cicd_events` rows for sandbox repo.
+- Extend `GITHUB_REPO_CICD_WORKFLOW` when more repos should log to specific CICD workflows.
 
 ## 2026-03-23 Production deploy — inneranimalmedia (deploy approved)
 
@@ -6287,7 +6287,7 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - Command: `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml` then `CLOUDFLARE_VERSION_ID=... ./scripts/post-deploy-record.sh`
 
 ### What is live now
-- Production worker includes `/api/agentsam/*`, `agentsam_ai` SQL, boot `cssVars` when flag on, and CIDI follow-ups after `cicd_runs` webhook inserts.
+- Production worker includes `/api/agentsam/*`, `agentsam_ai` SQL, boot `cssVars` when flag on, and CICD follow-ups after `cicd_runs` webhook inserts.
 
 ## 2026-03-23 /api/agentsam routing fix (startsWith /api/agent shadowing)
 
@@ -6313,7 +6313,7 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - After panic about production: expand sandbox `wrangler.jsonc` without touching `wrangler.production.toml` or production deploy path.
 
 ### Files changed
-- `wrangler.jsonc` only: `name` = `inneranimal-dashboard`; `ASSETS` + `DASHBOARD` R2 = `agent-sam-sandbox-cidi`; `CAD_ASSETS`, `R2`, D1, KV, SESSION_CACHE, DO+migrations, hyperdrive, vectorize, browser, AI, WAE, crons, vars, observability, tail consumer — copied from `wrangler.production.toml` except **no `routes`** (no zone attach) and **no `queues`** (avoid moving MY_QUEUE consumer off production). Removed `ai_search`/`esbuild` keys that Wrangler 4 flagged as unexpected. Validated with `wrangler deploy --dry-run -c wrangler.jsonc`.
+- `wrangler.jsonc` only: `name` = `inneranimal-dashboard`; `ASSETS` + `DASHBOARD` R2 = `agent-sam-sandbox-cicd`; `CAD_ASSETS`, `R2`, D1, KV, SESSION_CACHE, DO+migrations, hyperdrive, vectorize, browser, AI, WAE, crons, vars, observability, tail consumer — copied from `wrangler.production.toml` except **no `routes`** (no zone attach) and **no `queues`** (avoid moving MY_QUEUE consumer off production). Removed `ai_search`/`esbuild` keys that Wrangler 4 flagged as unexpected. Validated with `wrangler deploy --dry-run -c wrangler.jsonc`.
 
 ### Files NOT changed (and why)
 - `wrangler.production.toml`: untouched (production inneranimalmedia).
@@ -6391,10 +6391,10 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 ## 2026-03-23 AGENT_SAM_UNIVERSAL_SYNC_LAW + D1 namespace audit doc
 
 ### What was asked
-- Audit D1 table families (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cidi*`, views) and propose bulletproof universal rules so dashboard, Cursor, and LLM providers stay in sync.
+- Audit D1 table families (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cicd*`, views) and propose bulletproof universal rules so dashboard, Cursor, and LLM providers stay in sync.
 
 ### Files changed
-- `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md`: new — repo-derived audit (migrations + worker.js), clarification `cidi_active_workflows` vs nonexistent `cidi_active_log`, `cidi_recent_completions` as VIEW, hot vs legacy `agent_*` tables, **10 Universal Sync Laws** + merge checklist.
+- `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md`: new — repo-derived audit (migrations + worker.js), clarification `cicd_active_workflows` vs nonexistent `cicd_active_log`, `cicd_recent_completions` as VIEW, hot vs legacy `agent_*` tables, **10 Universal Sync Laws** + merge checklist.
 - `README.md`: Key docs table row pointing to that doc.
 
 ### Files NOT changed (and why)
@@ -6412,7 +6412,7 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - Populate `agentsam_subagent_profile` and `agentsam_rules_document` for Agent Sam dashboard `/api/agentsam/*`.
 
 ### Files changed
-- `scripts/d1-seed-agentsam-profiles-rules.sql`: new — `user_id` = `sam_primeaux`, `workspace_id` = `''`; one rules doc `feedfacecafe0001` (IAM safety + sync law summary); five subagent profiles `explore`, `shell`, `code-reviewer`, `d1-audit`, `cidi-lane` with UPSERT on `(user_id, workspace_id, slug)`; rules UPSERT on `id` bumps `version`.
+- `scripts/d1-seed-agentsam-profiles-rules.sql`: new — `user_id` = `sam_primeaux`, `workspace_id` = `''`; one rules doc `feedfacecafe0001` (IAM safety + sync law summary); five subagent profiles `explore`, `shell`, `code-reviewer`, `d1-audit`, `cicd-lane` with UPSERT on `(user_id, workspace_id, slug)`; rules UPSERT on `id` bumps `version`.
 
 ### Deploy status
 - D1 remote `inneranimalmedia-business`: executed seed script; **6 statements**, **23 rows written** (wrangler output).
@@ -6429,7 +6429,7 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - Implement approved Phase 1 API list in `worker.js` first; no SettingsPanel UI until routes return real D1 data. Option A: worker routes before UI. Update `/api/themes` and `/api/themes/active` to `cms_themes` + `settings.appearance.theme`. Add `GET /api/workspaces` as alias for workspaces endpoint. MCP allowlist/credentials/audit/stats routes with auth.
 
 ### Files changed
-- `worker.js` (before `const worker`): new `handlePhase1PlatformD1Routes` — `GET /api/settings?category=`, `PATCH /api/settings/appearance`, `GET /api/ai/guardrails`, `GET /api/ai/models`, `PATCH /api/ai/models/:id`, `GET /api/ai/routing-rules`, `GET /api/ai/integrations`, `GET /api/agent/rules`, `GET /api/commands/custom`, `GET /api/hooks/subscriptions`, `GET /api/hooks/executions`, `GET /api/knowledge`, `POST /api/knowledge/crawl`, `GET /api/app-icons`, `GET /api/spend` (days/group), `GET /api/spend/summary`, `GET /api/billing`, `GET /api/cidi/current`, `POST /api/deploy/rollback`; all require session auth except none (all auth). Invocation after `/api/themes/active`.
+- `worker.js` (before `const worker`): new `handlePhase1PlatformD1Routes` — `GET /api/settings?category=`, `PATCH /api/settings/appearance`, `GET /api/ai/guardrails`, `GET /api/ai/models`, `PATCH /api/ai/models/:id`, `GET /api/ai/routing-rules`, `GET /api/ai/integrations`, `GET /api/agent/rules`, `GET /api/commands/custom`, `GET /api/hooks/subscriptions`, `GET /api/hooks/executions`, `GET /api/knowledge`, `POST /api/knowledge/crawl`, `GET /api/app-icons`, `GET /api/spend` (days/group), `GET /api/spend/summary`, `GET /api/billing`, `GET /api/cicd/current`, `POST /api/deploy/rollback`; all require session auth except none (all auth). Invocation after `/api/themes/active`.
 - `worker.js`: `GET /api/themes` — extended `SELECT` (`theme_family`, `sort_order`, `css_url`, `tenant_id`, `wcag_scores`, `contrast_flags`, `is_system`) and ordering.
 - `worker.js`: `GET /api/themes/active` — `settings` + `cms_themes` for `appearance.theme`; cookie `iam_theme` / header fallback to `cms_themes` by slug; removed legacy `themes` table read.
 - `worker.js`: `GET /api/workspaces` OR `GET /api/settings/workspaces` — same handler.
@@ -6474,7 +6474,7 @@ Approved four diffs: MCP `GET /health` + shared tool list for `tools/list`; main
 - Sandbox worker serves Phase 1 routes + updated themes; production **inneranimalmedia** unchanged.
 
 ### Known issues / next steps
-- Sam: export `TOKEN=<session id>` and re-run curls; confirm `.guardrails`, `.models`, `.icons`, `.subscriptions`, `.cidi` payloads.
+- Sam: export `TOKEN=<session id>` and re-run curls; confirm `.guardrails`, `.models`, `.icons`, `.subscriptions`, `.cicd` payloads.
 
 ## [2026-03-22] Sandbox sign-in: JSON /api/auth/login + SANDBOX_DASHBOARD_* gate
 
@@ -7690,7 +7690,7 @@ Unchanged until `dashboard/agent.html` is uploaded to R2 and/or worker deploy pe
 ## 2026-03-23 Deploy approved — asset-only agent.html v136 + AUTORAG_BUCKET binding
 
 ### What was asked
-`DEPLOY APPROVED, ASSET ONLY`: bump `?v=` 135 to 136; R2 upload `agent-sam/static/dashboard/agent.html` and mirror `agent-sam-sandbox-cidi/static/dashboard/agent.html`; D1 `deployments` via `post-deploy-record.sh`; `TRIGGERED_BY=cursor-shell-parity`; no worker deploy; no npm build. Add `AUTORAG_BUCKET` → bucket `autorag` in `wrangler.production.toml`. Git commit + push.
+`DEPLOY APPROVED, ASSET ONLY`: bump `?v=` 135 to 136; R2 upload `agent-sam/static/dashboard/agent.html` and mirror `agent-sam-sandbox-cicd/static/dashboard/agent.html`; D1 `deployments` via `post-deploy-record.sh`; `TRIGGERED_BY=cursor-shell-parity`; no worker deploy; no npm build. Add `AUTORAG_BUCKET` → bucket `autorag` in `wrangler.production.toml`. Git commit + push.
 
 ### Files changed
 - `wrangler.production.toml`: `[[r2_buckets]]` binding `AUTORAG_BUCKET` / `autorag` (Indexing uploads target; effective after next worker deploy).
@@ -7699,7 +7699,7 @@ Unchanged until `dashboard/agent.html` is uploaded to R2 and/or worker deploy pe
 
 ### Deploy status
 - Built: no (bundle unchanged)
-- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`, `agent-sam-sandbox-cidi/static/dashboard/agent.html`
+- R2 uploaded: yes — `agent-sam/static/dashboard/agent.html`, `agent-sam-sandbox-cicd/static/dashboard/agent.html`
 - Worker deployed: no
 - Deploy approved by Sam: yes (`DEPLOY APPROVED, ASSET ONLY`)
 
@@ -7774,7 +7774,7 @@ Ship OAuth globe exit + `auth-signin.html` to production after explicit deploy a
 
 ### Deploy status
 - Built: no (not applicable)
-- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cidi/static/auth-signin.html` (text/html, remote)
+- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cicd/static/auth-signin.html` (text/html, remote)
 - Worker deployed: yes — Version ID `590f7490-683a-4c38-9121-e861e649b512`; D1 `cloudflare_deployments` insert `last_row_id` **77**; `triggered_by=agent`, `DEPLOYMENT_NOTES='OAuth globe exit after Google/GitHub OAuth; auth-signin R2'`
 - Deploy approved by Sam: yes
 
@@ -7814,7 +7814,7 @@ Ship refined `auth-signin.html` (dark exit overlay, WebGL clear, rAF OAuth hando
 - **None** (upload only).
 
 ### Deploy status
-- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cidi/static/auth-signin.html` (text/html, remote)
+- R2 uploaded: yes — `dashboard/auth-signin.html` to `agent-sam/static/auth-signin.html` and `agent-sam-sandbox-cicd/static/auth-signin.html` (text/html, remote)
 - Worker deployed: no (not required for this static page)
 - Deploy approved by Sam: yes
 
@@ -8098,7 +8098,7 @@ Repo-only; production unchanged until the v137 deploy below.
 - Built: yes (`agent-dashboard/dist/agent-dashboard.js`, `agent-dashboard.css`)
 - R2 uploaded: yes
   - **agent-sam:** `static/dashboard/agent/agent-dashboard.js`, `static/dashboard/agent/agent-dashboard.css`, `static/dashboard/agent.html`
-  - **agent-sam-sandbox-cidi:** same keys
+  - **agent-sam-sandbox-cicd:** same keys
 - Worker deployed: yes
   - **Version ID:** `761a59c2-a802-4b81-9585-28bef1dfe6ed`
   - Deploy time: ~17s (wall clock for wrangler deploy step)
@@ -8174,7 +8174,7 @@ Add Workers AI chat model support (synthetic D1 fallback, non-stream `model_key`
 
 ### Deploy status
 - Built: yes (`agent-dashboard` Vite: `agent-dashboard.js`, `agent-dashboard.css`).
-- R2 uploaded: yes — **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`; **agent-sam-sandbox-cidi**: same keys (sandbox mirror).
+- R2 uploaded: yes — **agent-sam**: `static/dashboard/agent/agent-dashboard.js`, `agent-dashboard.css`, `static/dashboard/agent.html`; **agent-sam-sandbox-cicd**: same keys (sandbox mirror).
 - Worker deployed: yes — **production** `inneranimalmedia` version ID **`7602fd59-2c5a-4508-82af-d5a2920dd4f9`**; **sandbox** `inneranimal-dashboard` version ID **`d165ab75-8095-440c-a2bf-d8d9f3e5376c`** (mirror).
 - `post-deploy-record.sh`: yes — `deployments.id` **`7602fd59-2c5a-4508-82af-d5a2920dd4f9`**, `triggered_by=workers-ai-model-expansion`; D1 meta `last_row_id` **81**.
 - Deploy approved by Sam: yes (chat approval + deploy instructions).
@@ -9365,7 +9365,7 @@ Full deploy: build agent-dashboard, R2 upload `agent-dashboard.js`, `agent-dashb
 ### Known issues / next steps
 - Agent UI does not yet load GET `/api/agent/keyboard-shortcuts` to gate keydown or render General-tab toggles; API is ready for a follow-up.
 
-## 2026-03-24 CIDI + webhook + agentsam audit (no code deploy)
+## 2026-03-24 CICD + webhook + agentsam audit (no code deploy)
 
 ### What was asked
 After D1 seed of three new GitHub hook subscriptions: document why `hook_subscriptions.total_fired` stays 0 while `webhook_endpoints.total_processed` increments; map `event_filter` matching; status of `send_notification`; plan for `GET /api/agent/notifications` + Agent Sam bell polling; audit `agentsam_agent_run` / subagent dispatch vs `agentsam_hook` tables. Do not deploy until approved.

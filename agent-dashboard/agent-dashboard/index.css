@@ -42,6 +42,18 @@
   --terminal-surface:  #05080c;
   --terminal-tab-muted: var(--text-muted);
 
+  /* Chat / inline code / composer (overridable via cms_themes → applyCmsTheme) */
+  --bg-code-pre:             #030a0d;
+  --text-placeholder-strong: #2e5464;
+  --text-chrome-muted:       #2a4d58;
+  --bg-disabled:             #0a1c22;
+  --toggle-knob:             var(--solar-base1);
+
+  /* Monaco (read via getComputedStyle in MonacoEditorView) */
+  --editor-selection-bg:     color-mix(in srgb, var(--solar-cyan) 24%, transparent);
+  --monaco-scrollbar-thumb:  color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  --monaco-scrollbar-hover:  color-mix(in srgb, var(--solar-cyan) 25%, transparent);
+
   /* Interactive / Brand */
   --accent-primary:   var(--solar-blue);
   --accent-secondary: var(--solar-cyan);
@@ -58,7 +70,7 @@ body {
 }
 
 ::selection {
-    background: rgba(42, 161, 152, 0.2); /* Cyan tint */
+    background: color-mix(in srgb, var(--solar-cyan) 20%, transparent);
     color: var(--solar-cyan);
 }
 
@@ -95,7 +107,7 @@ body {
 
 /* Glassmorphism utility overlay */
 .glass-panel {
-    background: rgba(10, 45, 56, 0.7); /* match --solar-base02 with opacity */
+    background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
 }
@@ -114,7 +126,7 @@ body {
 }
 .glow-border:hover::after, .glow-border:active::after {
     box-shadow: 0 0 10px var(--solar-cyan);
-    background-color: rgba(45, 212, 191, 0.5); /* cyan with opacity */
+    background-color: color-mix(in srgb, var(--solar-cyan) 50%, transparent);
 }
 
 @keyframes slide-up {

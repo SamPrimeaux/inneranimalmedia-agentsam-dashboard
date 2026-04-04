@@ -353,8 +353,8 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                 }}
                 className={`px-2 py-0.5 rounded text-[0.625rem] font-bold uppercase tracking-widest transition-all ${
                   dbTarget === t
-                    ? 'text-white border border-[var(--border-subtle)] bg-[var(--bg-hover)]'
-                    : 'text-[var(--text-muted)] hover:text-white'
+                    ? 'text-[var(--text-heading)] border border-[var(--border-subtle)] bg-[var(--bg-hover)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-heading)]'
                 }`}
               >
                 {t === 'd1' ? 'D1' : 'Hyperdrive'}
@@ -499,7 +499,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                       void fetchTableData('sqlite_master');
                       if (view === 'query') setView('tables');
                     }}
-                    className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-white transition-colors"
+                    className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-[var(--text-heading)] transition-colors"
                   >
                     <Database size={12} />
                     <span className="font-mono">sqlite_master</span>
@@ -512,7 +512,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                       void fetchPgInformationSchemaBrowse();
                       if (view === 'query') setView('tables');
                     }}
-                    className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-white transition-colors"
+                    className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-[var(--text-heading)] transition-colors"
                   >
                     <Database size={12} />
                     <span className="font-mono">information_schema (public)</span>

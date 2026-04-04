@@ -1,13 +1,13 @@
-# Inner Animal Media — system architecture (2-zone CIDI + repos + D1)
+# Inner Animal Media — system architecture (2-zone CICD + repos + D1)
 
 **Purpose:** One visual + structured map so any agent (or human) knows **which Worker, bucket, repo, and DB tables** apply at each phase — reducing ambiguous edits and production accidents.
 
 **Related handoffs:**  
-`docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` · `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` · `docs/memory/D1_CANONICAL_AGENT_KEYS.md`
+`docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` · `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` · `docs/memory/D1_CANONICAL_AGENT_KEYS.md`
 
 ---
 
-## 1. ASCII wireframe — two zones (production vs CIDI sandbox)
+## 1. ASCII wireframe — two zones (production vs CICD sandbox)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -25,13 +25,13 @@
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                    ZONE B — CIDI SANDBOX (UI / safe iteration)                             │
+│                    ZONE B — CICD SANDBOX (UI / safe iteration)                             │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │  Browser ──► inneranimal-dashboard.meauxbility.workers.dev                                 │
 │       │                                                                                  │
 │       └──► Worker: inneranimal-dashboard  (separate CF project; same patterns)          │
 │                 │                                                                        │
-│                 ├── ASSETS + DASHBOARD (R2)  agent-sam-sandbox-cidi  (mirror keys)       │
+│                 ├── ASSETS + DASHBOARD (R2)  agent-sam-sandbox-cicd  (mirror keys)       │
 │                 ├── DB (often same D1) inneranimalmedia-business  ⚠ shared prod data     │
 │                 └── No custom domain required; workers.dev URL                           │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
@@ -48,7 +48,7 @@
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**CIDI (2-step) UI lane (conceptual):**
+**CICD (2-step) UI lane (conceptual):**
 
 ```
   [ Edit in repo ] ──► [ Build Vite if needed ] ──► [ Upload to ZONE B R2 ] ──► verify sandbox URL
@@ -61,7 +61,7 @@
 ```
 
 Scripts: `scripts/upload-repo-to-r2-sandbox.sh` → `scripts/promote-agent-dashboard-to-production.sh`  
-MCP workflow row: `mcp_workflows.id = wf_cidi_agent_ui_sandbox_to_prod`
+MCP workflow row: `mcp_workflows.id = wf_cicd_agent_ui_sandbox_to_prod`
 
 ---
 
@@ -80,9 +80,9 @@ flowchart TB
     D1[(D1 inneranimalmedia-business)]
   end
 
-  subgraph zoneB [Zone B - Sandbox CIDI]
+  subgraph zoneB [Zone B - Sandbox CICD]
     WB[Worker inneranimal-dashboard]
-    DB2[DASHBOARD R2 agent-sam-sandbox-cidi]
+    DB2[DASHBOARD R2 agent-sam-sandbox-cicd]
   end
 
   subgraph standalone [Standalone services]
@@ -123,7 +123,7 @@ flowchart LR
 
   subgraph deploy_sbx [Sandbox]
     CF2[inneranimal-dashboard Worker]
-    R2B[agent-sam-sandbox-cidi]
+    R2B[agent-sam-sandbox-cicd]
   end
 
   subgraph external_repos [Sibling repos]
@@ -198,7 +198,7 @@ flowchart TB
 | MCP health | https://mcp.inneranimalmedia.com/ | JSON `status: ok` ([service root](https://mcp.inneranimalmedia.com/)) |
 | Terminal (PTY) | https://terminal.inneranimalmedia.com | **iam-pty** + tunnel (separate from main Worker) |
 | Production dashboard R2 | — | **agent-sam** `static/dashboard/...` |
-| Sandbox dashboard R2 | — | **agent-sam-sandbox-cidi** same key layout |
+| Sandbox dashboard R2 | — | **agent-sam-sandbox-cicd** same key layout |
 
 ---
 
@@ -207,7 +207,7 @@ flowchart TB
 - **OAuth:** Do not change `handleGoogleOAuthCallback` / `handleGitHubOAuthCallback` in `worker.js` without explicit approval.
 - **Production deploy:** Only after Sam types **`deploy approved`** and correct `wrangler.production.toml` command.
 - **MCP deploy:** Only from `inneranimalmedia-mcp-server/` with `npx wrangler deploy -c wrangler.toml`, Worker name **inneranimalmedia-mcp-server** exactly.
-- **Dashboard HTML on R2:** Upload changed `dashboard/*.html` to **agent-sam** before relying on production; sandbox uses **agent-sam-sandbox-cidi** via `scripts/upload-repo-to-r2-sandbox.sh`.
+- **Dashboard HTML on R2:** Upload changed `dashboard/*.html` to **agent-sam** before relying on production; sandbox uses **agent-sam-sandbox-cicd** via `scripts/upload-repo-to-r2-sandbox.sh`.
 
 ---
 
@@ -217,10 +217,10 @@ flowchart TB
 |------|-----------------|
 | `wrangler.production.toml` | Zone A Worker bindings (locked — do not change casually) |
 | `worker.js` | Routing, APIs, webhooks → D1 tables |
-| `scripts/d1-cidi-bootstrap-20260322.sql` | `r2_buckets` sandbox row, `mcp_workflows` CIDI, `worker_registry` touch-up |
+| `scripts/d1-bootstrap-sandbox-workflow-20260322.sql` | `r2_buckets` sandbox row, `mcp_workflows` CICD, `worker_registry` touch-up |
 | `scripts/upload-repo-to-r2-sandbox.sh` | Zone B R2 sync |
 | `scripts/promote-agent-dashboard-to-production.sh` | Zone A agent bundle R2 promotion gate |
-| `docs/CURSOR_HANDOFF_D1_CIDI_ORCHESTRATION.md` | D1 write discipline + webhooks + locks |
+| `docs/CURSOR_HANDOFF_D1_CICD_ORCHESTRATION.md` | D1 write discipline + webhooks + locks |
 | `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` | UI lane sandbox → prod |
 
 ---

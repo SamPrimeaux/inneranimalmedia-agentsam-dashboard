@@ -1229,10 +1229,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           parts.push(
             <div
               key={`code-${match.index}`}
-              className="my-3 p-3 bg-[#060e14] border border-[#1e3e4a] rounded-xl group hover:border-[var(--solar-green)]/50 transition-all"
+              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl group hover:border-[var(--solar-green)]/50 transition-all"
             >
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 bg-[#0a2d38] border border-[#1e3e4a] rounded-lg flex items-center justify-center text-[var(--solar-green)]">
+                <div className="w-8 h-8 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-lg flex items-center justify-center text-[var(--solar-green)]">
                   <span className="text-[0.6875rem] font-bold font-mono">$_</span>
                 </div>
                 <div>
@@ -1242,7 +1242,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                   </span>
                 </div>
               </div>
-              <pre className="text-[0.6875rem] font-mono text-[var(--solar-green)] bg-[#030a0d] rounded-lg p-3 overflow-x-auto whitespace-pre border border-[#1e3e4a]">
+              <pre className="text-[0.6875rem] font-mono text-[var(--solar-green)] bg-[var(--bg-code-pre)] rounded-lg p-3 overflow-x-auto whitespace-pre border border-[var(--border-subtle)]">
                 {code}
               </pre>
               <div className="flex gap-2 mt-2">
@@ -1267,11 +1267,11 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           parts.push(
             <div
               key={`code-${match.index}`}
-              className="my-3 p-3 bg-[#060e14] border border-[#1e3e4a] rounded-xl flex items-center justify-between group hover:border-[var(--solar-cyan)] transition-all cursor-pointer shadow-inner"
+              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl flex items-center justify-between group hover:border-[var(--solar-cyan)] transition-all cursor-pointer shadow-inner"
               onClick={() => onFileSelect?.({ name: `agent_output_${msgIndex}_${codeCount}.${ext}`, content: code })}
             >
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 bg-[#0a2d38] border border-[#1e3e4a] rounded-lg flex items-center justify-center text-[var(--solar-cyan)]">
+                <div className="w-9 h-9 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-lg flex items-center justify-center text-[var(--solar-cyan)]">
                   {icon}
                 </div>
                 <div className="flex flex-col">
@@ -1294,7 +1294,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         parts.push(
           <pre
             key={`code-${match.index}`}
-            className="my-2 p-3 bg-[#060e14] rounded-lg border border-[#1e3e4a] overflow-x-auto text-[0.75rem] font-mono whitespace-pre text-[var(--solar-cyan)]"
+            className="my-2 p-3 bg-[var(--scene-bg)] rounded-lg border border-[var(--border-subtle)] overflow-x-auto text-[0.75rem] font-mono whitespace-pre text-[var(--solar-cyan)]"
           >
             <code>{code}</code>
           </pre>
@@ -1390,7 +1390,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 <div
                   className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${
                     msg.role === 'user'
-                      ? 'bg-[#1e3e4a]'
+                      ? 'bg-[var(--border-subtle)]'
                       : 'bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30'
                   }`}
                 >
@@ -1403,7 +1403,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 <div
                   className={`agent-content text-[0.8125rem] leading-relaxed ${
                     msg.role === 'user'
-                      ? 'bg-[#060e14] border border-[#1e3e4a] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
+                      ? 'bg-[var(--scene-bg)] border border-[var(--border-subtle)] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
                       : 'text-[var(--text-main)] w-full'
                   }`}
                 >
@@ -1415,12 +1415,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                             key={j}
                             src={ap.previewUrl}
                             alt=""
-                            className="max-h-40 max-w-full rounded-lg border border-[#1e3e4a] object-contain"
+                            className="max-h-40 max-w-full rounded-lg border border-[var(--border-subtle)] object-contain"
                           />
                         ) : (
                           <span
                             key={j}
-                            className="text-[0.6875rem] text-[var(--text-muted)] px-2 py-1 rounded border border-[#1e3e4a]/60"
+                            className="text-[0.6875rem] text-[var(--text-muted)] px-2 py-1 rounded border border-[var(--border-subtle)]/60"
                           >
                             {ap.name}
                           </span>
@@ -1440,7 +1440,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 <div className="flex-shrink-0 w-6 h-6 rounded-md bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30 flex items-center justify-center">
                   <Loader2 size={11} className="text-[var(--solar-cyan)] animate-spin" />
                 </div>
-                <div className="px-4 py-3 bg-[#060e14] border border-[#1e3e4a] rounded-2xl rounded-tl-sm">
+                <div className="px-4 py-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-2xl rounded-tl-sm">
                   <div className="flex gap-1.5">
                     <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce" />
                     <div className="w-1.5 h-1.5 bg-[var(--solar-cyan)] rounded-full animate-bounce [animation-delay:0.15s]" />
@@ -1457,7 +1457,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             <div
               role="region"
               aria-label="Tool approval"
-              className="rounded-lg border border-[var(--solar-cyan)]/35 bg-[#060e14] p-3 space-y-2"
+              className="rounded-lg border border-[var(--solar-cyan)]/35 bg-[var(--scene-bg)] p-3 space-y-2"
             >
               <div className="text-[0.6875rem] font-semibold text-[var(--text-heading)]">Tool approval required</div>
               <div className="text-[0.6875rem] font-mono text-[var(--solar-cyan)]">{pendingToolApproval.tool.name}</div>
@@ -1492,7 +1492,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 {attachments.map((a) => (
                   <div
                     key={a.id}
-                    className="relative flex-shrink-0 flex items-center gap-2 bg-[#060e14] border border-[#1e3e4a] rounded-lg pl-1 pr-7 py-1"
+                    className="relative flex-shrink-0 flex items-center gap-2 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-lg pl-1 pr-7 py-1"
                   >
                     {a.type === 'image' && a.previewUrl ? (
                       <img
@@ -1502,7 +1502,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                         style={{ width: 48, height: 48, borderRadius: 6 }}
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-md bg-[#0a2d38] flex items-center justify-center border border-[#1e3e4a]">
+                      <div className="w-12 h-12 rounded-md bg-[var(--bg-panel)] flex items-center justify-center border border-[var(--border-subtle)]">
                         <FileText size={18} className="text-[var(--text-muted)]" />
                       </div>
                     )}
@@ -1517,7 +1517,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                     <button
                       type="button"
                       aria-label="Remove attachment"
-                      className="absolute top-0.5 right-0.5 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] hover:bg-white/5"
+                      className="absolute top-0.5 right-0.5 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] hover:bg-[var(--bg-hover)]"
                       onClick={() => removeAttachment(a.id)}
                     >
                       <X size={12} />
@@ -1566,10 +1566,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           />
 
           <div
-            className={`flex flex-col bg-[#060e14] border rounded-xl transition-all shadow-inner overflow-visible ${
+            className={`flex flex-col bg-[var(--scene-bg)] border rounded-xl transition-all shadow-inner overflow-visible ${
               composerDragging
                 ? 'border-[var(--solar-cyan)]/70 ring-1 ring-[var(--solar-cyan)]/35'
-                : 'border-[#1e3e4a] focus-within:border-[var(--solar-cyan)]/60'
+                : 'border-[var(--border-subtle)] focus-within:border-[var(--solar-cyan)]/60'
             }`}
             onDragEnter={(e) => {
               e.preventDefault();
@@ -1600,7 +1600,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               <button
                 type="button"
                 ref={attachButtonRef}
-                className="flex-shrink-0 p-2 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-white/5 rounded-lg transition-all"
+                className="flex-shrink-0 p-2 text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] rounded-lg transition-all"
                 title={`Attach — model: ${selectedModelDisplayName}`}
                 onClick={() => {
                   setAttachMenuOpen((o) => !o);
@@ -1618,7 +1618,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 onClick={(ev) => syncPickers(ev.currentTarget.value, ev.currentTarget.selectionStart)}
                 placeholder="Message Agent Sam..."
                 rows={1}
-                className="flex-1 min-w-0 bg-transparent px-1 py-2 text-[0.8125rem] focus:outline-none text-[var(--text-main)] placeholder:text-[#2e5464] resize-none font-sans leading-relaxed rounded-lg"
+                className="flex-1 min-w-0 bg-transparent px-1 py-2 text-[0.8125rem] focus:outline-none text-[var(--text-main)] placeholder:text-[var(--text-placeholder-strong)] resize-none font-sans leading-relaxed rounded-lg"
                 style={{ minHeight: '44px', maxHeight: '200px' }}
               />
               <button
@@ -1628,7 +1628,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                   setIsModeOpen((o) => !o);
                   setAttachMenuOpen(false);
                 }}
-                className="flex-shrink-0 flex items-center gap-0.5 px-2 py-1.5 text-[0.6875rem] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase border border-[#1e3e4a] rounded-lg"
+                className="flex-shrink-0 flex items-center gap-0.5 px-2 py-1.5 text-[0.6875rem] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase border border-[var(--border-subtle)] rounded-lg"
               >
                 {modeLabel} <ChevronDown size={8} />
               </button>
@@ -1638,8 +1638,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 disabled={!canSend}
                 className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-[0.6875rem] font-bold transition-all ${
                   canSend
-                    ? 'bg-[var(--solar-cyan)] text-[#00212b] shadow-[0_0_16px_rgba(45,212,191,0.25)] hover:brightness-110'
-                    : 'text-[#2a4d58] bg-[#0a1c22] cursor-not-allowed'
+                    ? 'bg-[var(--solar-cyan)] text-[var(--solar-base03)] shadow-[0_0_16px_color-mix(in_srgb,var(--solar-cyan)_25%,transparent)] hover:brightness-110'
+                    : 'text-[var(--text-chrome-muted)] bg-[var(--bg-disabled)] cursor-not-allowed'
                 }`}
               >
                 {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
@@ -1654,13 +1654,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         attachMenuStyle &&
         createPortal(
           <div
-            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto py-1 min-w-[200px]"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto py-1 min-w-[200px]"
             style={attachMenuStyle}
             role="menu"
           >
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
               onClick={() => {
                 setAttachMenuOpen(false);
                 fileInputRef.current?.click();
@@ -1671,7 +1671,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
               onClick={() => {
                 setAttachMenuOpen(false);
                 imageInputRef.current?.click();
@@ -1682,7 +1682,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
               onClick={() => {
                 setAttachMenuOpen(false);
                 const el = textareaRef.current;
@@ -1703,7 +1703,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[#0a2d38] text-[var(--text-main)]"
+              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
               onClick={() => {
                 setAttachMenuOpen(false);
                 const el = textareaRef.current;
@@ -1722,7 +1722,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               <Slash size={14} className="text-[var(--text-muted)] shrink-0" />
               <span>Command</span>
             </button>
-            <div className="border-t border-[#1e3e4a] my-1 mx-2" role="separator" />
+            <div className="border-t border-[var(--border-subtle)] my-1 mx-2" role="separator" />
             <div className="px-3 py-1 text-[0.6875rem] uppercase tracking-wider text-[var(--text-muted)]">
               Models
             </div>
@@ -1738,9 +1738,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                     <button
                       key={m.id}
                       type="button"
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[#0a2d38] rounded-lg mx-1 ${
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 ${
                         selectedModelKey === m.model_key
-                          ? 'text-[var(--solar-cyan)] bg-[#0a2d38]/80'
+                          ? 'text-[var(--solar-cyan)] bg-[var(--bg-panel)]/80'
                           : 'text-[var(--text-main)]'
                       }`}
                       onClick={() => {
@@ -1763,15 +1763,15 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         modeMenuStyle &&
         createPortal(
           <div
-            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl p-1 flex flex-col text-[0.6875rem] overflow-y-auto"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl p-1 flex flex-col text-[0.6875rem] overflow-y-auto"
             style={modeMenuStyle}
           >
             {modes.map((m) => (
               <button
                 key={m.slug}
                 type="button"
-                className={`px-3 py-1.5 text-left hover:bg-[#0a2d38] cursor-pointer rounded-lg transition-colors ${
-                  mode === m.slug ? 'text-[var(--solar-cyan)] bg-[#0a2d38]' : 'text-[var(--text-muted)]'
+                className={`px-3 py-1.5 text-left hover:bg-[var(--bg-panel)] cursor-pointer rounded-lg transition-colors ${
+                  mode === m.slug ? 'text-[var(--solar-cyan)] bg-[var(--bg-panel)]' : 'text-[var(--text-muted)]'
                 }`}
                 onClick={() => {
                   setMode(m.slug);
@@ -1791,7 +1791,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         mentionItems.length > 0 &&
         createPortal(
           <div
-            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1"
             style={mentionStyle}
           >
             {mentionItems.map((it, i) => (
@@ -1799,7 +1799,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 key={it.id}
                 type="button"
                 className={`px-3 py-1.5 text-left rounded-lg truncate ${
-                  i === mentionIndex ? 'bg-[#0a2d38] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[#0a2d38]'
+                  i === mentionIndex ? 'bg-[var(--bg-panel)] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel)]'
                 }`}
                 onMouseEnter={() => setMentionIndex(i)}
                 onClick={() => applyMention(it)}
@@ -1818,7 +1818,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         slashItems.length > 0 &&
         createPortal(
           <div
-            className="bg-[#060e14] border border-[#1e3e4a] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1 max-w-[320px]"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1 max-w-[320px]"
             style={slashStyle}
           >
             {slashItems.map((c, i) => (
@@ -1826,7 +1826,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 key={c.slug}
                 type="button"
                 className={`px-3 py-1.5 text-left rounded-lg ${
-                  i === slashIndex ? 'bg-[#0a2d38] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[#0a2d38]'
+                  i === slashIndex ? 'bg-[var(--bg-panel)] text-[var(--solar-cyan)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-panel)]'
                 }`}
                 onMouseEnter={() => setSlashIndex(i)}
                 onClick={() => applySlash(c)}

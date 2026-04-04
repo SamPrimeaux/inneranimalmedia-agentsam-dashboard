@@ -64,7 +64,7 @@ If `INTERNAL_API_SECRET` was ever pasted into chat or logs, **rotate** it and up
 
 **What the first version did:** one Vite build, **one** file (`agent-dashboard.js`) to TOOLS, then the HTTP canary suite (most tiers are sub-second; only the chat canary is multi-second). That is intentionally **minutes of wall time**, not a 30-minute pipeline.
 
-**Zero-risk rule (your model):** E2E artifacts live only under bucket **`tools`**, prefix `code/e2e-nightly/<run_id>/`. **We do not** overwrite **`agent-sam`** or **`agent-sam-sandbox-cidi`**. Worst case you ignore the TOOLS prefix; “rollback” is **do nothing** — production and sandbox R2 stays as-is until you explicitly promote or change worker/R2 bindings.
+**Zero-risk rule (your model):** E2E artifacts live only under bucket **`tools`**, prefix `code/e2e-nightly/<run_id>/`. **We do not** overwrite **`agent-sam`** or **`agent-sam-sandbox-cicd`**. Worst case you ignore the TOOLS prefix; “rollback” is **do nothing** — production and sandbox R2 stays as-is until you explicitly promote or change worker/R2 bindings.
 
 **Full buildout mode (`E2E_TOOLS_MODE=full`, default in `e2e-overnight.sh`):** before `npm run build:vite-only`, export **`E2E_TOOLS_VITE_BASE=https://tools.inneranimalmedia.com/code/e2e-nightly/<run_id>/`** so the built `agent-dashboard.js` loads chunks from TOOLS (otherwise imports would still target `/static/dashboard/agent/`). After build, upload **every file under `agent-dashboard/dist/`** (JS, CSS, chunks, source maps if present) to `tools/code/e2e-nightly/<run_id>/…`, generate **`manifest.json`** (local + TOOLS), generate **`preview.html`** (local `reports/` + TOOLS), then verify the **entry** URL. Open **`https://tools.inneranimalmedia.com/code/e2e-nightly/<run_id>/preview.html`** for a **live shell + bundle** (banner explains that same-origin `/api/` on the tools host may fail; use sandbox for full stack).
 
@@ -72,4 +72,4 @@ If `INTERNAL_API_SECRET` was ever pasted into chat or logs, **rotate** it and up
 
 **Optional:** `E2E_COPY_DASHBOARD_HTML=1` also uploads `dashboard/agent.html` to the same run prefix as `shell/agent.html` so you can open a **frozen HTML shell** that points at the same run’s JS URL (manual script `src` edit still required for a real side-by-side test — document only unless we add a small templated shell later).
 
-**Not included (by design):** promoting to sandbox R2 (`agent-sam-sandbox-cidi`) or prod (`agent-sam`). That remains **`deploy-sandbox.sh` / `promote-to-prod.sh`** with Sam approval.
+**Not included (by design):** promoting to sandbox R2 (`agent-sam-sandbox-cicd`) or prod (`agent-sam`). That remains **`deploy-sandbox.sh` / `promote-to-prod.sh`** with Sam approval.

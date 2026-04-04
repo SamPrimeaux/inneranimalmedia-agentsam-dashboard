@@ -427,7 +427,7 @@
 ## recordGithubCicdFollowups
 - **Line:** 1442
 - **Project:** inneranimalmedia  
-- **Purpose:** After a successful cicd_runs row insert: mirror to deployments + optional cidi_activity_log. * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.
+- **Purpose:** After a successful cicd_runs row insert: mirror to deployments + optional cicd_events. * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.
 - **Params:** env, row, rawBody
 - **Calls:** githubActorFromWebhookPayload, githubCommitMessageFromWebhookPayload, run
 - **Tags:** d1
@@ -493,7 +493,7 @@
 - **Project:** inneranimalmedia  
 - **Purpose:** Worker helper or handler.
 - **Params:** request, env, ctx
-- **Calls:** _vaultAudit, _vaultDecrypt, _vaultEncrypt, chunkByTokenApprox, contentType, find, getAuthUser, getIntegrationToken, getSession, getVaultSecrets, handleAgentApi, handleAgentsamApi, handleBackupCodeLogin, handleBillingSummary, handleBrowserRequest, handleCidiApi, handleClients, handleColorsAll, handleDeploymentLog, handleDeploymentsRecent, handleDrawApi, handleEmailPasswordLogin, handleFederatedSearch, handleFinance, handleGitHubOAuthCallback, handleGitHubOAuthStart, handleGoogleOAuthCallback, handleGoogleOAuthStart, handleHooksHealth, handleHubRoadmap, handleHubStats, handleHubTaskCreate, handleHubTaskUpdate, handleHubTasks, handleHubTerminal, handleInboundWebhook, handleLogout, handleMcpApi, handleOvernightStart, handleOvernightValidate, handleOverviewActivityStrip, handleOverviewCheckpoints, handleOverviewDeployments, handleOverviewStats, handlePhase1PlatformD1Routes, handleProjects, handleR2Api, handleRecentActivity, handleReindexCodebase, handleTimeTrack, handleTimeTrackManual, handleVaultRequest, hashPassword, invalidateCompiledContextCache, isSamOnlyUser, jsonResponse, normalizeThemeSlug, notFound, pgMatchDocuments, push, randomCode, recordWorkerAnalyticsError, respondWithDashboardHtml, respondWithR2Object, run, sha256Hex, variablesFromCmsThemeConfig, vectorizeRagSearch, verifyPassword, writeAuditLog, writeKnowledgePostDeploy
+- **Calls:** _vaultAudit, _vaultDecrypt, _vaultEncrypt, chunkByTokenApprox, contentType, find, getAuthUser, getIntegrationToken, getSession, getVaultSecrets, handleAgentApi, handleAgentsamApi, handleBackupCodeLogin, handleBillingSummary, handleBrowserRequest, handleCicdApi, handleClients, handleColorsAll, handleDeploymentLog, handleDeploymentsRecent, handleDrawApi, handleEmailPasswordLogin, handleFederatedSearch, handleFinance, handleGitHubOAuthCallback, handleGitHubOAuthStart, handleGoogleOAuthCallback, handleGoogleOAuthStart, handleHooksHealth, handleHubRoadmap, handleHubStats, handleHubTaskCreate, handleHubTaskUpdate, handleHubTasks, handleHubTerminal, handleInboundWebhook, handleLogout, handleMcpApi, handleOvernightStart, handleOvernightValidate, handleOverviewActivityStrip, handleOverviewCheckpoints, handleOverviewDeployments, handleOverviewStats, handlePhase1PlatformD1Routes, handleProjects, handleR2Api, handleRecentActivity, handleReindexCodebase, handleTimeTrack, handleTimeTrackManual, handleVaultRequest, hashPassword, invalidateCompiledContextCache, isSamOnlyUser, jsonResponse, normalizeThemeSlug, notFound, pgMatchDocuments, push, randomCode, recordWorkerAnalyticsError, respondWithDashboardHtml, respondWithR2Object, run, sha256Hex, variablesFromCmsThemeConfig, vectorizeRagSearch, verifyPassword, writeAuditLog, writeKnowledgePostDeploy
 - **Tags:** auth, browser, d1, durable-objects, http-client, kv, mcp, r2, streaming, vectorize, workers-ai
 
 ## secret
@@ -1296,26 +1296,26 @@
 - **Calls:** emit, invokeMcpToolFromChat
 - **Tags:** auth, mcp
 
-## handleCidiApi
+## CI/CD D1 API handler
 - **Line:** 12258
 - **Project:** inneranimalmedia  
-- **Purpose:** Worker helper or handler.
+- **Purpose:** Worker helper or handler for the CI/CD REST surface (legacy path segment and function name in `worker.js` may predate the CICD rename; locate by route prefix or full-text search).
 - **Params:** request, url, env, ctx
 - **Calls:** getAuthUser, jsonResponse, push, run
 - **Tags:** auth, d1, mcp, streaming
 
-## cidiMcpStatus
+## cicdMcpStatus
 - **Line:** 12283
 - **Project:** inneranimalmedia  
-- **Purpose:** Production: call handleMcpApi in-process — HTTP fetch to this Worker returns 522 (recursive subrequest).
+- **Purpose:** Production: call handleMcpApi in-process — HTTP fetch to this Worker returns 522 (recursive subrequest). Identifier in `worker.js` may still use a legacy abbreviated prefix; use line number or search `McpStatus` inside the CI/CD API handler.
 - **Params:** none
 - **Calls:** handleMcpApi
 - **Tags:** mcp
 
-## cidiMcpInvoke
+## cicdMcpInvoke
 - **Line:** 12295
 - **Project:** inneranimalmedia  
-- **Purpose:** Worker helper or handler.
+- **Purpose:** Worker helper or handler. Identifier in `worker.js` may still use a legacy abbreviated prefix; use line number or search `McpInvoke` inside the CI/CD API handler.
 - **Params:** toolName, params
 - **Calls:** handleMcpApi
 - **Tags:** auth, mcp

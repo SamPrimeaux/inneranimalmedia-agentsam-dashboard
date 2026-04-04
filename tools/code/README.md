@@ -20,7 +20,7 @@ Short index for UI work and backend bolt-on. Each subfolder is one slice of **in
 
 **Multi-provider testing + batch:** see [integration/](integration/) (also on R2 at `code/integration/`).
 
-**Runbooks / incremental workflow:** [skills/](skills/) — WORKFLOW, R2-BUCKETS, DEPLOY-CIDI, D1, AI testing, agent-human sync. On R2: `code/skills/`. Cursor: `.cursor/skills/iam-platform-sync/SKILL.md`.
+**Runbooks / incremental workflow:** [skills/](skills/) — WORKFLOW, R2-BUCKETS, DEPLOY-CICD, D1, AI testing, agent-human sync. On R2: `code/skills/`. Cursor: `.cursor/skills/iam-platform-sync/SKILL.md`.
 
 **Autorag (RAG pointer):** `context/iam-rag-index.md` in **autorag** bucket links to TOOLS URLs above.
 

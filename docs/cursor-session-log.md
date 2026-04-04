@@ -392,7 +392,7 @@ Create a `ui-ux-design-agent` Cursor subagent (refine later; future `agentsam_su
 
 ### D1 check (remote `inneranimalmedia-business`, id `cf87b717-d4e2-4cf8-bab0-a81268e32d49`)
 - Binding matches repo `wrangler.production.toml` (`DB` / same `database_id`).
-- `agentsam_subagent_profile` exists and has active rows (`explore`, `shell`, `code-reviewer`, `d1-audit`, `cidi-lane`, `recall`, `toolbox`). **No `ui-ux-design` (or similar) slug yet** — not loaded for Agent Sam dashboard until an INSERT/UPSERT row is added (after approval).
+- `agentsam_subagent_profile` exists and has active rows (`explore`, `shell`, `code-reviewer`, `d1-audit`, `cicd-lane`, `recall`, `toolbox`). **No `ui-ux-design` (or similar) slug yet** — not loaded for Agent Sam dashboard until an INSERT/UPSERT row is added (after approval).
 
 ### What is live now
 - Cursor can use `.cursor/agents/ui-ux-design-agent.md` locally. Dashboard Agent Sam subagents unchanged until D1 seed/API adds a profile.
@@ -724,7 +724,7 @@ Add a standing **DEPLOY RULE** at the top of the session-start Cursor rule; log 
 - Deploy approved by Sam: n/a
 
 ### D1 / process
-- **cicd_runs:** inserted one manual row `run_id = manual_cursor_20260329_prod_skip_sandbox` (`workflow_name` `CIDI-IAM-AGENTSAM-20260322`, `status`/`conclusion` `success`, `trigger_event` `manual_cursor_deploy`, `commit_sha` current repo `b5adf5410cb99593f4ddb1da5d13f713e2ce9322`, `cloudflare_deployment_id` NULL to satisfy FK). Documents the earlier prod deploy that skipped the sandbox pipeline (process violation; outcome was fine by luck).
+- **cicd_runs:** inserted one manual row `run_id = manual_cursor_20260329_prod_skip_sandbox` (`workflow_name` `CICD-IAM-AGENTSAM-20260322`, `status`/`conclusion` `success`, `trigger_event` `manual_cursor_deploy`, `commit_sha` current repo `b5adf5410cb99593f4ddb1da5d13f713e2ce9322`, `cloudflare_deployment_id` NULL to satisfy FK). Documents the earlier prod deploy that skipped the sandbox pipeline (process violation; outcome was fine by luck).
 - **RAG ingest smoke:** Object `sprint-2026-03-29-README.md` is present in R2 (`autorag`, 8620 bytes). D1 `autorag` row exists with `index_status = pending` (not yet ingested). `POST /api/rag/ingest` without session returns **401** (expected). Complete smoke: from a logged-in dashboard session, `POST https://inneranimalmedia.com/api/rag/ingest` with JSON `{"object_key":"sprint-2026-03-29-README.md"}` (add `"force":true` if re-indexing after a prior success).
 
 ### What is live now
@@ -750,7 +750,7 @@ Fix `/api/rag/ingest` so `knowledge_id` on `ai_knowledge_chunks` references an e
 - Built: no
 - R2 uploaded: no
 - Worker deployed: no
-- Deploy approved by Sam: no (sandbox first per CIDI)
+- Deploy approved by Sam: no (sandbox first per CICD)
 
 ### What is live now
 - Code-only change in repo; production unchanged until sandbox deploy + promote.
@@ -761,7 +761,7 @@ Fix `/api/rag/ingest` so `knowledge_id` on `ai_knowledge_chunks` references an e
 ## 2026-03-29 Sandbox deploy + rag_ingest_log schema + promote
 
 ### What was asked
-Run CIDI: build, `deploy-sandbox.sh`, curl ingest test, D1 verify, `promote-to-prod.sh`.
+Run CICD: build, `deploy-sandbox.sh`, curl ingest test, D1 verify, `promote-to-prod.sh`.
 
 ### Files changed
 - `worker.js`: `rag_ingest_log` success `INSERT` aligned to live D1 columns (removed `autorag_id`, `embed_tokens_est` which do not exist on remote `rag_ingest_log`).
@@ -769,7 +769,7 @@ Run CIDI: build, `deploy-sandbox.sh`, curl ingest test, D1 verify, `promote-to-p
 
 ### Deploy status
 - Built: yes (vite-only, v bumped to 191 on sandbox during first full deploy)
-- R2: sandbox `agent-sam-sandbox-cidi` then prod `agent-sam` via promote
+- R2: sandbox `agent-sam-sandbox-cicd` then prod `agent-sam` via promote
 - Workers: sandbox `inneranimal-dashboard` 554289f0-0912-4567-ba83-e8e5114c7f08 (worker-only redeploy after log fix); prod `inneranimalmedia` 5a1539f5-516a-411b-a286-c0671ec40676
 - Promote: completed
 
@@ -1070,7 +1070,7 @@ Fix 404s on Vite code-split chunks under `/static/dashboard/agent/` by uploading
 ### DB changes today (all live, do not re-run)
 - test_suite_runs, eval_results, test_suite_comparisons created
 - ws_aitestsuite workspace seeded
-- cidi_pipeline_runs CHECK expanded (local|preview|staging allowed)
+- cicd_pipeline_runs CHECK expanded (local|preview|staging allowed)
 - cursor_costs_daily dropped, data migrated to ai_costs_daily
 - workspace_members, workspace_settings seeded for ws_inneranimalmedia
 
@@ -1221,7 +1221,7 @@ Add IAM TOOLS agent workspace into `agentsam_project_context`.
 Add needed skills as multiple rows in `agentsam_skill`.
 
 ### Files changed
-- `migrations/197_agentsam_skill_iam_pipeline.sql`: six `INSERT OR IGNORE` skills (TOOLS R2, CIDI, L1-L3 workflows, Playwright jobs, approval gate, project context) with slash_trigger iam-tools, iam-cidi, iam-workflow, iam-playwright, iam-approval, iam-context.
+- `migrations/197_agentsam_skill_iam_pipeline.sql`: six `INSERT OR IGNORE` skills (TOOLS R2, CICD, L1-L3 workflows, Playwright jobs, approval gate, project context) with slash_trigger iam-tools, iam-cicd, iam-workflow, iam-playwright, iam-approval, iam-context.
 
 ### Deploy status
 - Applied to remote D1.
@@ -1265,7 +1265,7 @@ Sync `docs/d1-agentic-schema.md` with D1 columns for `ai_generation_logs`; add w
 - `worker.js`: added `insertAiGenerationLog()`; wired non-fatal inserts on success for: draw tool `/api/tools/image/generate`, `/api/agent/workers-ai/image` (inline), `uploadImgxToDashboard` (OpenAI imgx paths), Workers AI imgx branch, `r2_write`, `cf_images_upload`, CloudConvert R2 export, Meshy GLB upload to `CAD_ASSETS`.
 
 ### Deploy status
-- Not deployed (Sam runs CIDI / promote when ready).
+- Not deployed (Sam runs CICD / promote when ready).
 
 ### What is live now
 - Schema doc matches migration 198; production worker behavior unchanged until next deploy.
@@ -1388,7 +1388,7 @@ Upload important/complex working components for multi-provider testing and batch
 Upload components to correct buckets; add README/skill files to align humans and agents; incremental testing; advice on dedicated GitHub repo.
 
 ### Files changed
-- `tools/code/skills/*.md`: WORKFLOW, R2-BUCKETS, DEPLOY-CIDI, D1-MIGRATIONS, AI-TESTING, AGENT-HUMAN-SYNC, README, SKILL.
+- `tools/code/skills/*.md`: WORKFLOW, R2-BUCKETS, DEPLOY-CICD, D1-MIGRATIONS, AI-TESTING, AGENT-HUMAN-SYNC, README, SKILL.
 - `tools/code/README.md`: links to skills, autorag pointer.
 - `.cursor/skills/iam-platform-sync/SKILL.md`: Cursor-discoverable skill (same rules as repo SKILL).
 - `docs/autorag/context/iam-rag-index.md`: autorag bucket mirror source (RAG index linking to TOOLS URLs).
@@ -1410,7 +1410,7 @@ Upload components to correct buckets; add README/skill files to align humans and
 Extend `deploy-sandbox.sh` to upload `iam-workspace-shell.html` and `shell.css` to sandbox R2 on every sandbox deploy.
 
 ### Files changed
-- `scripts/deploy-sandbox.sh` (after `agent.html` upload): `npx wrangler r2 object put` for `static/dashboard/iam-workspace-shell.html` from `dashboard/iam-workspace-shell.html` and `static/dashboard/shell.css` from `static/dashboard/shell.css` to `agent-sam-sandbox-cidi`.
+- `scripts/deploy-sandbox.sh` (after `agent.html` upload): `npx wrangler r2 object put` for `static/dashboard/iam-workspace-shell.html` from `dashboard/iam-workspace-shell.html` and `static/dashboard/shell.css` from `static/dashboard/shell.css` to `agent-sam-sandbox-cicd`.
 - `tools/code/skills/WORKFLOW.md`: note about shell uploads; re-uploaded to TOOLS R2 `code/skills/WORKFLOW.md`.
 
 ### Deploy status
@@ -1480,13 +1480,13 @@ Build on **main**; correct branch setup.
 ### What to do next
 - Keep committing and pushing from **`main`** (`git push origin main`). Optional: delete local **`agentsam-clean`** if you no longer need the extra name: `git branch -d agentsam-clean` (only after you are sure).
 
-## 2026-03-31 D1 — CIDI/CI log for git push 393a9c0
+## 2026-03-31 D1 — CICD/CI log for git push 393a9c0
 
 ### What was asked
-Log commit/push in `cidi_activity_log`, `cidi_pipeline_runs`, `cicd_runs`, `cidi_run_results`.
+Log commit/push in `cicd_events`, `cicd_pipeline_runs`, `cicd_runs`, `cicd_run_steps`.
 
 ### Files changed
-- `migrations/203_cidi_log_git_push_main_393a9c0.sql`: INSERT `cicd_runs` (`run_id` gh_manual_push_main_20260331_393a9c0); `cidi_activity_log` (`cidi_id` 4, workflow CIDI-IAM-AGENTSAM-20260322); `cidi_pipeline_runs` (`pip_cidi_20260331_393a9c0`, sandbox, pending); `cidi_run_results` (git pass, sandbox+benchmark skip).
+- Migration **203** (git push log for `393a9c0`; SQL under `migrations/`): INSERT `cicd_runs` (`run_id` gh_manual_push_main_20260331_393a9c0); `cicd_events` (`cicd_workflow_id` 4, workflow CICD-IAM-AGENTSAM-20260322); `cicd_pipeline_runs` (`pip_cicd_20260331_393a9c0`, sandbox, pending); `cicd_run_steps` (git pass, sandbox+benchmark skip).
 
 ### Deploy status
 - Applied to remote D1 (`inneranimalmedia-business`).
@@ -1494,28 +1494,28 @@ Log commit/push in `cidi_activity_log`, `cidi_pipeline_runs`, `cicd_runs`, `cidi
 ### What is live now
 - Push 393a9c0 recorded; pipeline row pending sandbox deploy + benchmark.
 
-## 2026-03-31 D1 — project_memory CIDI_THREE_STEP_SYSTEM + plan_steps
+## 2026-03-31 D1 — project_memory CICD_THREE_STEP_SYSTEM + plan_steps
 
 ### What was asked
-Store canonical 3-step CIDI in one queryable row; add plan_steps for completed + proposed work.
+Store canonical 3-step CICD in one queryable row; add plan_steps for completed + proposed work.
 
 ### Files changed
-- `migrations/204_project_memory_cidi_three_step_and_plan_steps.sql`: `INSERT OR REPLACE` `project_memory` id `pmem_cidi_three_step_v1`, key `CIDI_THREE_STEP_SYSTEM` (JSON: steps 1-3, D1 table refs, docs); `DELETE`+`INSERT` ten `plan_steps` for `project_id` `proj_iam_tools_agent_workspace` (1-6 complete, 7-10 not_started).
+- Migration **204** (`project_memory` + `plan_steps`; SQL under `migrations/`): `INSERT OR REPLACE` `project_memory` id `pmem_cicd_three_step_v1`, key `CICD_THREE_STEP_SYSTEM` (JSON: steps 1-3, D1 table refs, docs); `DELETE`+`INSERT` ten `plan_steps` for `project_id` `proj_iam_tools_agent_workspace` (1-6 complete, 7-10 not_started).
 
 ### Deploy status
 - Applied to remote D1.
 
 ### What is live now
-- Agents: `SELECT value FROM project_memory WHERE project_id='inneranimalmedia' AND key='CIDI_THREE_STEP_SYSTEM';`
+- Agents: `SELECT value FROM project_memory WHERE project_id='inneranimalmedia' AND key='CICD_THREE_STEP_SYSTEM';`
 - Plan board data: `SELECT * FROM plan_steps WHERE project_id='proj_iam_tools_agent_workspace' ORDER BY step_index;`
 
-## 2026-03-31 docs — CIDI shell master handoff README
+## 2026-03-31 docs — CICD shell master handoff README
 
 ### What was asked
-Single master README for another Claude chat: full gates for React/TS shell, no stubs/routing gaps, R2/zip artifacts, 3-step CIDI alignment.
+Single master README for another Claude chat: full gates for React/TS shell, no stubs/routing gaps, R2/zip artifacts, 3-step CICD alignment.
 
 ### Files changed
-- `docs/CIDI_SHELL_MASTER_README.md`: new document — gates (G1–G7), canonical facts, target architecture, API pointers, CIDI steps, R2/zip commands, anti-patterns, paste-ready master prompt block.
+- `docs/CICD_SHELL_MASTER_README.md`: new document — gates (G1–G7), canonical facts, target architecture, API pointers, CICD steps, R2/zip commands, anti-patterns, paste-ready master prompt block.
 
 ### Deploy status
 - Built: no
@@ -1535,7 +1535,7 @@ From `/Users/samprimeaux/Downloads/march1st-inneranimalmedia`:
 `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml`
 
 - `project_memory`: `id=pmem_tools_iam_editor_assets_v1`, `key=TOOLS_IAM_EDITOR_ASSETS_v1`, `project_id=inneranimalmedia`, `length(value)=828`.
-- `plan_steps`: `id=ps_meauxcad_tools_bundle_v1`, `step_index=11`, title MeauxCAD TOOLS bundle v1 + Monaco AMD on TOOLS, `status=complete`. Steps 7–10 still `not_started` (expected until CIDI run).
+- `plan_steps`: `id=ps_meauxcad_tools_bundle_v1`, `step_index=11`, title MeauxCAD TOOLS bundle v1 + Monaco AMD on TOOLS, `status=complete`. Steps 7–10 still `not_started` (expected until CICD run).
 
 ### Workspace notes for future sessions
 - **Wrangler / R2 / remote D1:** repo root `march1st-inneranimalmedia` (Downloads path above); use `with-cloudflare-env.sh` + `wrangler.production.toml`.
@@ -1551,7 +1551,7 @@ From `/Users/samprimeaux/Downloads/march1st-inneranimalmedia`:
 /init-style setup: instructions for Agent Sam using GitHub, Claude Code, Cursor, gcloud, wrangler, DB; what to reply to Claude Code MCP prompt.
 
 ### Files changed
-- `CLAUDE.md` (new): canonical paths, wrangler/D1 patterns, locked files, CIDI summary, TOOLS R2 prefixes, D1 keys, Monaco merge goal, session hygiene.
+- `CLAUDE.md` (new): canonical paths, wrangler/D1 patterns, locked files, CICD summary, TOOLS R2 prefixes, D1 keys, Monaco merge goal, session hygiene.
 
 ### Deploy status
 - Not applicable (docs only).
@@ -1581,32 +1581,32 @@ Continue Phase 1: connect TOOLS R2 `code/monaco/` workspace layer into `agent-da
 ### Deploy status
 - Built: yes (`npx vite build` in `agent-dashboard` after `npm ci` with dev deps).
 - R2 uploaded: no.
-- Worker deployed: no — Sam runs CIDI when ready.
+- Worker deployed: no — Sam runs CICD when ready.
 
 ### What is live now
 - Changes are repo-only until sandbox build + promote.
 
-## 2026-04-01 CIDI session 1 — code workspace shell + sandbox deploy
+## 2026-04-01 CICD session 1 — code workspace shell + sandbox deploy
 
 ### What was asked
-Fully wire sandbox Step 1 so the new Monaco workspace shell and refined bundle are visible on the sandbox worker (3-step CIDI workflow).
+Fully wire sandbox Step 1 so the new Monaco workspace shell and refined bundle are visible on the sandbox worker (3-step CICD workflow).
 
 ### Files changed
 - `agent-dashboard/src/workspace/IamWorkspaceShellHost.jsx` (new): local tab state + `IamEditorArea` + header Close.
 - `agent-dashboard/src/AgentDashboard.jsx`: import `IamWorkspaceShellHost`; `code_workspace` URL param + popstate + Escape; header button (code brackets); full-screen overlay; fixed stray `whimport` typo on `AgentBottomPanel` import.
-- `docs/CIDI_SHELL_MASTER_README.md`: Step 1 verify line documents `?code_workspace=1` and header control.
+- `docs/CICD_SHELL_MASTER_README.md`: Step 1 verify line documents `?code_workspace=1` and header control.
 - `dashboard/agent.html`: `v=` bumped to **213** by `deploy-sandbox.sh` (script edit).
 
 ### Deploy status
 - Built: yes (`deploy-sandbox.sh` ran `npm run build:vite-only`).
-- R2 uploaded: yes — `agent-sam-sandbox-cidi` (`static/dashboard/agent/*`, `agent.html`, iam-workspace-shell, shell.css, manifest).
+- R2 uploaded: yes — `agent-sam-sandbox-cicd` (`static/dashboard/agent/*`, `agent.html`, iam-workspace-shell, shell.css, manifest).
 - Worker deployed: yes — `inneranimal-dashboard` version `f7c250f3-f1da-4199-9ca2-704aa151a22a`.
 - D1: `dashboard_versions` + `deployments` rows updated by script (non-fatal warnings only if any).
 
 ### What is live now
 - Sandbox: `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` serves **v=213**. Open **Code workspace** via the new header control (after Settings) or `?code_workspace=1`. Bundled Monaco + IAM tab chrome.
 
-### Next (CIDI)
+### Next (CICD)
 - Step 2: `./scripts/benchmark-full.sh sandbox`.
 - Step 3: Sam runs `./scripts/promote-to-prod.sh` after benchmark gate.
 
@@ -1654,7 +1654,7 @@ Prod session URL with `?session=` — expect full metrics in morning summary; Ti
 - `docs/OVERNIGHT_EMAIL_AND_METRICS.md`: table + Tier C prod + implemented path via `WRITE_OVERNIGHT_TO_D1`.
 
 ### Deploy status
-- Worker change not deployed until Sam runs CIDI promote with `deploy approved`.
+- Worker change not deployed until Sam runs CICD promote with `deploy approved`.
 
 ### What is live now
 - Repo only; production morning email unchanged until worker deploy.
@@ -1667,24 +1667,24 @@ Where `INTERNAL_API_SECRET` is set (`.env`-wise) so handoff / Claude can finish 
 ### Files changed
 - `docs/CLAUDE_CODE_OVERNIGHT_HANDOFF.md` Step 0: Wrangler secret on prod worker + same value in `.env.cloudflare` for local scripts; `.env.cloudflare.example` is name-only.
 
-## 2026-04-01 Git main sync + CIDI D1 205 + documentation index
+## 2026-04-01 Git main sync + CICD D1 205 + documentation index
 
 ### What was asked
-Push main up to date; fill `cidi_*` audit tables from agent; improve documentation discipline.
+Push main up to date; fill `cicd_*` audit tables from agent; improve documentation discipline.
 
 ### Files changed
-- `migrations/205_cidi_cursor_sync_overnight_docs_20260401.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for 2026-04-01 repo sync (overnight suite, daily-plan metrics, handoff docs).
-- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: operator index for CIDI tables and migrations 175/203/204/205.
+- Migration **205** (cursor sync + overnight docs; SQL under `migrations/`): `cicd_runs`, `cicd_events`, `cicd_pipeline_runs`, `cicd_run_steps` for 2026-04-01 repo sync (overnight suite, daily-plan metrics, handoff docs).
+- `docs/CICD_TABLES_AND_MIGRATIONS.md`: operator index for CICD tables and migrations 175/203/204/205.
 - `.gitignore`: `reports/` (overnight JSON may reference sessions).
-- `CLAUDE.md`: pointer to `CIDI_TABLES_AND_MIGRATIONS.md`.
-- Staged commit: workspace shell, overnight script, overnight/CIDI docs, `worker.js` morning plan, `dashboard/agent.html`, `agent-dashboard` sources, `package.json` / lockfile — not `agent-dashboard/dist/` (restore or leave unstaged).
+- `CLAUDE.md`: pointer to `CICD_TABLES_AND_MIGRATIONS.md`.
+- Staged commit: workspace shell, overnight script, overnight/CICD docs, `worker.js` morning plan, `dashboard/agent.html`, `agent-dashboard` sources, `package.json` / lockfile — not `agent-dashboard/dist/` (restore or leave unstaged).
 
 ### Deploy status
 - D1 migration 205: applied to **remote** `inneranimalmedia-business` (2026-04-01).
 - Worker: not deployed until Sam promotes.
 
 ### What is live now
-- **Git:** `main` at `47e9410` (pushed). **D1:** migration `205_cidi_cursor_sync_overnight_docs_20260401.sql` executed (cicd_runs + cidi_activity_log + cidi_pipeline_runs + cidi_run_results).
+- **Git:** `main` at `47e9410` (pushed). **D1:** migration **205** executed (cicd_runs + cicd_events + cicd_pipeline_runs + cicd_run_steps).
 
 ## 2026-04-01 E2E overnight orchestrator + spec
 
@@ -1795,7 +1795,7 @@ Wire `aitesting.meauxbility.workers.dev`: worker routes (ls, file, save, SSE cha
 ## 2026-04-01 aitesting shell remaster v0.2.0 (UI/UX, Monaco theme, Excalidraw, registry, ai_api log)
 
 ### What was asked
-Remaster playground shell: full tabbed UI/UX (stubs polished), Monaco theme-aware from CSS vars, Excalidraw embedded (ESM + iframe fallback), live D1 registry for `mcp_registered_tools` / `agentsam_skill` / `agentsam_project_context`, AI runs table from `ai_api_test_runs`, redeploy worker + R2 shell; summarize three-lane CIDI flow.
+Remaster playground shell: full tabbed UI/UX (stubs polished), Monaco theme-aware from CSS vars, Excalidraw embedded (ESM + iframe fallback), live D1 registry for `mcp_registered_tools` / `agentsam_skill` / `agentsam_project_context`, AI runs table from `ai_api_test_runs`, redeploy worker + R2 shell; summarize three-lane CICD flow.
 
 ### Files changed
 - `/Users/samprimeaux/Downloads/aitesting-worker/iam-workspace-shell.html`: `setTab` drives all centers; `applyIamMonacoTheme` + `data-theme` observer; registry + `/api/ai-runs` loaders; Excalidraw dynamic import; chat shows `X-AI-Run-Id`; shell `v0.2.0`; CSS for registry rows and excalidraw inner wrapper.
@@ -1833,7 +1833,7 @@ Document how `https://aitestsuite.meauxbility.workers.dev/` integrates as Step 1
 Rewrite/expand README and push to https://github.com/SamPrimeaux/meauxcad to confirm AITestSuite setup.
 
 ### Files changed (SamPrimeaux/meauxcad on GitHub)
-- `README.md`: Expanded stack role (lab vs CIDI sandbox vs prod), live URL `aitestsuite.meauxbility.workers.dev`, features, tech table, build/deploy, layout, no emojis.
+- `README.md`: Expanded stack role (lab vs CICD sandbox vs prod), live URL `aitestsuite.meauxbility.workers.dev`, features, tech table, build/deploy, layout, no emojis.
 - `wrangler.jsonc`: `"name": "meauxcad"` to `"name": "aitestsuite"` to match Cloudflare Worker.
 
 ### Deploy status
@@ -1861,10 +1861,10 @@ Top-right terminal icon next to three layout icons; bottom drawer terminal with 
 ### What is live now
 - Pushed to `main`; Cloudflare Workers Builds should deploy `aitestsuite` when connected.
 
-## 2026-04-01 AITestSuite shell v1.2.0 + CIDI migration 207 + cache v=
+## 2026-04-01 AITestSuite shell v1.2.0 + CICD migration 207 + cache v=
 
 ### What was asked
-Every deployment bumps `v=`; document in `cidi_*` tables; status bar shows v1.2.0 (was v1.1.0).
+Every deployment bumps `v=`; document in `cicd_*` tables; status bar shows v1.2.0 (was v1.1.0).
 
 ### Files changed
 **SamPrimeaux/meauxcad (pushed `a5036fc`, code v1.2.0 `a8854e3`):**
@@ -1872,16 +1872,16 @@ Every deployment bumps `v=`; document in `cidi_*` tables; status bar shows v1.2.
 - `package.json`: version `1.2.0`.
 - `worker.ts`, `App.tsx`, `components/StatusBar.tsx`, `components/XTermShell.tsx`: import `SHELL_VERSION`.
 - `scripts/bump-cache.js`: `?v=<semver>-<unix_ms>` from `package.json` + timestamp.
-- `README.md`: Versioning / CIDI pointer.
+- `README.md`: Versioning / CICD pointer.
 - `index.html`: updated by bump-cache (committed after bump).
 
 **march1st-inneranimalmedia:**
-- `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql`: `cicd_runs`, `cidi_activity_log`, `cidi_pipeline_runs`, `cidi_run_results` for meauxcad `a8854e3` / shell v1.2.0.
-- `docs/CIDI_TABLES_AND_MIGRATIONS.md`: row for migration 207.
-- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`: shell version + CIDI table.
+- Migration **207** (AITestSuite shell v1.2.0; SQL under `migrations/`): `cicd_runs`, `cicd_events`, `cicd_pipeline_runs`, `cicd_run_steps` for meauxcad `a8854e3` / shell v1.2.0.
+- `docs/CICD_TABLES_AND_MIGRATIONS.md`: row for migration 207.
+- `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md`: shell version + CICD table.
 
 ### Deploy status
-- D1 migration 207: **not executed** — Sam runs `./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` when ready.
+- D1 migration 207: **not executed** — Sam runs `wrangler d1 execute` with the **207** AITestSuite shell SQL file from `migrations/` when ready (see `docs/CICD_TABLES_AND_MIGRATIONS.md`).
 
 ### What is live now
 - meauxcad `main` has single-source `SHELL_VERSION` and semver+timestamp cache bust; next Cloudflare build shows status **v1.2.0** after deploy.
@@ -1914,7 +1914,7 @@ There are **three separate Workers**, not one product skin:
 | Surface | Worker | URL | Source repo | What it is |
 |--------|--------|-----|-------------|------------|
 | **AITestSuite (lab)** | `aitestsuite` | `https://aitestsuite.meauxbility.workers.dev/` | `github.com/SamPrimeaux/meauxcad` | Standalone IDE: Explorer + Monaco + agent column + tabs. **No** IAM `agent.html` wrapper. |
-| **Sandbox (CIDI)** | `inneranimal-dashboard` | `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` | `march1st-inneranimalmedia` (this monorepo) + CI | Full IAM mirror. **`dashboard/agent.html` already injects IAM chrome**: global topbar, left sidenav (~240px), footer status bar. React mounts inside `.main-content`. |
+| **Sandbox (CICD)** | `inneranimal-dashboard` | `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent` | `march1st-inneranimalmedia` (this monorepo) + CI | Full IAM mirror. **`dashboard/agent.html` already injects IAM chrome**: global topbar, left sidenav (~240px), footer status bar. React mounts inside `.main-content`. |
 | **Production** | `inneranimalmedia` | `https://inneranimalmedia.com/dashboard/agent` | Same monorepo after promote | Same HTML shell pattern as sandbox (R2 `static/dashboard/agent.html`). |
 
 **Why AITestSuite “looks good” and sandbox “looks terrible”:** The lab is a **single** application layout. The sandbox is **IAM shell + React app**. Any attempt to paste **meauxcad-style** top bar / activity rail / “IAM Explorer” chrome **inside** React **without** removing the outer shell produces **double or triple navigation**, wrong proportions, and a cramped center. That is **not** a theme bug; it is **two apps worth of chrome**.
@@ -1929,11 +1929,11 @@ There are **three separate Workers**, not one product skin:
 
 Recent **monorepo** commits on `main` (newest first):
 
-1. **`cc2fcf1`** — D1 migration 210 (`r2_bucket_bindings`, `r2_bucket_list` CIDI buckets). **Not** agent UI.
-2. **`0fe82b0`** — D1 migration 209 (builds + `cidi_activity_log` / meauxcad chat log wiring docs). **Not** agent UI.
+1. **`cc2fcf1`** — D1 migration 210 (`r2_bucket_bindings`, `r2_bucket_list` CICD buckets). **Not** agent UI.
+2. **`0fe82b0`** — D1 migration 209 (builds + `cicd_events` / meauxcad chat log wiring docs). **Not** agent UI.
 3. **`329fd84`** — Migration 208 note (`ai_api_test_runs`). **Not** agent UI.
 4. **`5178cf8`** — Docs: AITestSuite status bar / session log (meauxcad `c475045`). **Docs only** in this repo.
-5. **`75984d2`** — D1 migration 207 (CIDI audit row for AITestSuite shell **v1.2.0**). **Not** sandbox React.
+5. **`75984d2`** — D1 migration 207 (CICD audit row for AITestSuite shell **v1.2.0**). **Not** sandbox React.
 6. **`10158cc`** — Session log / overnight suite docs.
 
 The **large IAM workspace / shell push** that affects dashboard assets was earlier: **`393a9c0` (2026-03-31)** — “IAM workspace shell, sandbox shell R2, monaco+cors, migrations (v=212)”, touching `agent.html`, R2 upload scripts, `tools/code`, many migrations, `worker.js`. That commit **increased** surface area (workspace shell narrative, Monaco on TOOLS) and is the backdrop for comparing lab vs sandbox.
@@ -1969,7 +1969,7 @@ Document the new R2 bucket `agent-sam-sandbox-cicd` (S3 + r2.dev URLs), explain 
 - `docs/agent-sam-sandbox-cicd/README.md` (new): bucket note, endpoint table, vocabulary for `dist`/`source`/MANIFEST, alignment with IAM `static/dashboard/` vs `tools` MeauxCAD tree, operational checklist.
 
 ### Files NOT changed (and why)
-- `wrangler.jsonc` / bindings: not touched; README states `cicd` is parallel to canonical `agent-sam-sandbox-cidi` until explicitly wired.
+- `wrangler.jsonc` / bindings: not touched; README states `cicd` is parallel to canonical `agent-sam-sandbox-cicd` until explicitly wired.
 
 ### Deploy status
 - Built: no
@@ -1981,7 +1981,7 @@ Document the new R2 bucket `agent-sam-sandbox-cicd` (S3 + r2.dev URLs), explain 
 Unchanged; documentation only.
 
 ### Known issues / next steps
-- Reconcile Cloudflare bucket naming (`cicd` vs `cidi`) and Worker binding when Sam promotes `cicd` to active sandbox.
+- Reconcile Cloudflare bucket naming (`cicd` vs `cicd`) and Worker binding when Sam promotes `cicd` to active sandbox.
 
 ## 2026-04-01 Sandbox login HTML key fallback (static_auth-signin)
 
@@ -2014,8 +2014,8 @@ Document `agent-sam-sandbox-cicd` as the canonical sandbox CI/CD registry (struc
 
 ### Files changed
 - `docs/agent-sam-sandbox-cicd/README.md`: Rewrote as registry doc (prefix table, IAM `static/dashboard/` keys, auth filenames, deploy/promote pointers, tools vs dashboard note).
-- `scripts/promote-to-prod.sh`: `SANDBOX_BUCKET` `agent-sam-sandbox-cidi` → `agent-sam-sandbox-cicd` to match `deploy-sandbox.sh` and `wrangler.jsonc`.
-- `wrangler.jsonc`: Comment typo fixed (`cidi` → `cicd` for ASSETS/DASHBOARD).
+- `scripts/promote-to-prod.sh`: `SANDBOX_BUCKET` `agent-sam-sandbox-cicd` → `agent-sam-sandbox-cicd` to match `deploy-sandbox.sh` and `wrangler.jsonc`.
+- `wrangler.jsonc`: Comment typo fixed (`cicd` → `cicd` for ASSETS/DASHBOARD).
 
 ### Files NOT changed (and why)
 - `wrangler.production.toml`: locked; README notes verifying prod `DASHBOARD` = `agent-sam` in Cloudflare if that is still the intent.
@@ -2027,10 +2027,10 @@ Document `agent-sam-sandbox-cicd` as the canonical sandbox CI/CD registry (struc
 - Deploy approved by Sam: n/a
 
 ### What is live now
-Promote script previously pulled from **`cidi`** while deploy wrote to **`cicd`**; after this change, promote pulls from the same bucket deploy uses (once you run promote).
+Promote script previously pulled from **`cicd`** while deploy wrote to **`cicd`**; after this change, promote pulls from the same bucket deploy uses (once you run promote).
 
 ### Known issues / next steps
-- Reconcile any remaining docs that still say **`agent-sam-sandbox-cidi`** for the active sandbox pipeline if those references are stale.
+- Reconcile any remaining docs that still say **`agent-sam-sandbox-cicd`** for the active sandbox pipeline if those references are stale.
 
 ## 2026-04-01 Sandbox dashboard R2 full upload + CURSOR_HANDOFF_SANDBOX
 
@@ -2054,7 +2054,7 @@ Upload remaining `/dashboard/*` pages to sandbox R2 so `/dashboard/overview` and
 `curl -sI https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/overview` returns **200** with HTML body from R2.
 
 ### Known issues / next steps
-- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` still mentions legacy **`cidi`** in places; prefer **`docs/CURSOR_HANDOFF_SANDBOX.md`** for current bucket name until that file is edited.
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` still mentions legacy **`cicd`** in places; prefer **`docs/CURSOR_HANDOFF_SANDBOX.md`** for current bucket name until that file is edited.
 
 ## 2026-04-02 Phase out CAD_ASSETS (splineicons); Meshy to AUTORAG_BUCKET
 
@@ -2088,10 +2088,10 @@ Unchanged until Sam deploys with approved promote/deploy.
 Align deployment scripts with `agent-sam-sandbox-cicd` and document corrected CI plan.
 
 ### Files changed
-- `scripts/deploy-sandbox.sh`: `SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"`; header comments (cidi deprecated, override documented).
+- `scripts/deploy-sandbox.sh`: `SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"`; header comments (cicd deprecated, override documented).
 - `scripts/promote-to-prod.sh`: same pattern and comments.
 - `scripts/r2-clone-agent-sam-to-sandbox.sh`: destination `agent-sam-sandbox-cicd`; `DST_BUCKET` env override; comments/rclone example updated.
-- `scripts/e2e-overnight.sh`: comment bucket name `cicd` not `cidi`.
+- `scripts/e2e-overnight.sh`: comment bucket name `cicd` not `cicd`.
 - `docs/IMPLEMENTATION_PLAN_SANDBOX_CI_CORRECTED.md`: new — canonical plan for Gemini/operators.
 
 ### Files NOT changed (and why)
@@ -2107,7 +2107,7 @@ Align deployment scripts with `agent-sam-sandbox-cicd` and document corrected CI
 Unchanged until deploy.
 
 ### Known issues / next steps
-- D1/SQL seeds under `scripts/` may still mention `cidi` historically; update in a separate migration if needed.
+- D1/SQL seeds under `scripts/` may still mention `cicd` historically; update in a separate migration if needed.
 
 ## 2026-04-02 Sandbox /dashboard/agent: CORS on shell.css + 404 on Vite chunks
 
@@ -2435,7 +2435,7 @@ Optimal first milestone: **document the target host(s), auth method (key per mac
 |---------|---------------------------------------------------------------------|-----|
 | Runbooks, tomorrow’s checklist, architecture decisions | Yes | Optional mirror via `project_memory` key if you want Agent Sam to retrieve it in RAG |
 | Secrets, SSH private keys, tokens | **Never** | **Never** in plaintext tables; use `VAULT_KEY` / Wrangler secrets |
-| Telemetry / provability | Session log narrative | `mcp_tool_calls`, `routing_decisions`, `cidi_*` / pipeline tables as applicable |
+| Telemetry / provability | Session log narrative | `mcp_tool_calls`, `routing_decisions`, `cicd_*` / pipeline tables as applicable |
 | Command catalog sync policy | Markdown in repo first | Seed or migration when policy is fixed |
 
 ### Exit criteria for the day

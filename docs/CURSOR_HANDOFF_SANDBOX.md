@@ -26,7 +26,7 @@ Use this when fixing **sandbox-only** UI, bindings, or R2 layout for
 | `DASHBOARD` | `agent-sam-sandbox-cicd`       |
 | `ASSETS`    | `agent-sam-sandbox-cicd`       |
 
-After `wrangler deploy -c wrangler.jsonc`, Cloudflare should show **both** on **`cicd`**. If **ASSETS** still points at **`agent-sam-sandbox-cidi`**, redeploy or align in the dashboard.
+After `wrangler deploy -c wrangler.jsonc`, Cloudflare should show **both** on **`cicd`**. If **ASSETS** still points at **`agent-sam-sandbox-cicd`**, redeploy or align in the dashboard.
 
 ---
 
@@ -88,7 +88,7 @@ npx wrangler deploy --dry-run -c wrangler.jsonc
 ## Related docs
 
 - `docs/agent-sam-sandbox-cicd/README.md` — registry / prefix vocabulary  
-- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` — deeper UI + promote notes (some lines still mention legacy `cidi`; prefer **this** file for current bucket name)  
+- `docs/CURSOR_HANDOFF_SANDBOX_UI_TO_PRODUCTION.md` — deeper UI + promote notes (some lines still mention legacy `cicd`; prefer **this** file for current bucket name)  
 - `docs/AITESTSUITE_IAM_STACK_INTEGRATION.md` — lab (`aitestsuite`) vs sandbox vs prod
 
 ---

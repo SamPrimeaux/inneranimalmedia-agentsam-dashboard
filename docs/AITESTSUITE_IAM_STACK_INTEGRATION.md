@@ -4,14 +4,14 @@
 
 **Last updated:** 2026-04-01
 
-### Shell version and CIDI audit (meauxcad repo)
+### Shell version and CICD audit (meauxcad repo)
 
 | Item | Source |
 |------|--------|
 | **Displayed shell version** (status bar `vX.Y.Z`) | `src/shellVersion.ts` (`SHELL_VERSION`) — keep in sync with `package.json` `version`. |
 | **Cache-bust `?v=` on `index.html` assets** | `npm run deploy` runs `scripts/bump-cache.js` which sets `?v=<semver>-<unix_ms>` so every deploy gets a unique query string. |
 | **Worker API version string** | `worker.ts` imports `SHELL_VERSION` from `src/shellVersion.ts`. |
-| **D1 CIDI audit after a deploy** | Apply migration `migrations/207_cidi_aitestsuite_shell_v1_2_0.sql` to `inneranimalmedia-business` (see `docs/CIDI_TABLES_AND_MIGRATIONS.md`). Update `207` or add `208+` when you bump past **v1.2.0**. |
+| **D1 CICD audit after a deploy** | Apply migration **207** (AITestSuite shell SQL in `migrations/`) to `inneranimalmedia-business` (see `docs/CICD_TABLES_AND_MIGRATIONS.md`). Update `207` or add `208+` when you bump past **v1.2.0**. |
 | **Status bar workspace** | meauxcad `src/ideWorkspace.ts` — pinned welcome workspace vs **Connect Native Folder** (local wins); branch from `localStorage` `meauxcad_git_branch` (default `main`); Monaco cursor when **Code** tab has a file. |
 
 ---
@@ -54,9 +54,9 @@ Inner Animal Media is not one Worker. Operationally you have **three** distinct 
 │      Dashboard: /dashboard/agent                                            │
 │      Role: Live product, OAuth, D1 prod, R2 agent-sam, full routes          │
 │                                                                             │
-│  [B] SANDBOX (CIDI)                inneranimal-dashboard                    │
+│  [B] SANDBOX (CICD)                inneranimal-dashboard                    │
 │      URL: https://inneranimal-dashboard.meauxbility.workers.dev             │
-│      Role: Mirror prod worker + sandbox R2 (agent-sam-sandbox-cidi);        │
+│      Role: Mirror prod worker + sandbox R2 (agent-sam-sandbox-cicd);        │
 │            benchmark gate before promote; same APIs at lower risk           │
 │                                                                             │
 │  [C] AITESTSUITE (LAB)             aitestsuite (meauxcad repo)              │
@@ -90,7 +90,7 @@ Inner Animal Media is not one Worker. Operationally you have **three** distinct 
                             │  "approved" UI / behavior
                             v
          ┌────────────────────────────────────────┐
-         │  STEP 2 — SANDBOX (CIDI)                │
+         │  STEP 2 — SANDBOX (CICD)                │
          │  inneranimal-dashboard.meauxbility...   │
          │  • agent-dashboard build + worker.js    │
          │  • ./scripts/deploy-sandbox.sh          │
@@ -177,7 +177,7 @@ Rotate and scope tokens per environment (lab vs prod) where Cloudflare and provi
 
 ## 9. One-line summary
 
-**AITTestSuite** is the **independent Step 1 lab** on `https://aitestsuite.meauxbility.workers.dev/`, backed by **`https://github.com/SamPrimeaux/meauxcad.git`**, for optimal UI and AI integration refinements; **approved** changes are then **ported** into the **inneranimal-dashboard** sandbox, **benchmarked**, and **promoted** to **inneranimalmedia** production using the existing CIDI pipeline.
+**AITTestSuite** is the **independent Step 1 lab** on `https://aitestsuite.meauxbility.workers.dev/`, backed by **`https://github.com/SamPrimeaux/meauxcad.git`**, for optimal UI and AI integration refinements; **approved** changes are then **ported** into the **inneranimal-dashboard** sandbox, **benchmarked**, and **promoted** to **inneranimalmedia** production using the existing CICD pipeline.
 
 ---
 

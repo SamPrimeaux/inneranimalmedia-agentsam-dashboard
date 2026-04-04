@@ -141,7 +141,7 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
     <div className="w-80 h-full bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] flex flex-col p-5 z-20 overflow-y-auto custom-scrollbar">
       <div className="mb-8 flex-shrink-0">
         <div className="flex items-center gap-3 mb-1 px-1">
-          <div className="w-10 h-10 bg-[#0B2129] border border-[var(--solar-cyan)]/20 rounded-xl flex items-center justify-center shadow-lg">
+          <div className="w-10 h-10 bg-[var(--bg-panel)] border border-[var(--solar-cyan)]/20 rounded-xl flex items-center justify-center shadow-lg">
             <Package className="text-[var(--solar-cyan)]" size={20} />
           </div>
           <div>
@@ -161,7 +161,7 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
                 onClick={() => onSwitchProject(p.id)}
                 className={`w-full group flex items-start gap-4 p-4 rounded-xl transition-all border text-left ${
                   activeProject === p.id 
-                  ? 'bg-[#0B2129] border-[var(--solar-cyan)]/30' 
+                  ? 'bg-[var(--bg-panel)] border-[var(--solar-cyan)]/30' 
                   : 'bg-transparent border-transparent hover:bg-white/5'
                 }`}
               >

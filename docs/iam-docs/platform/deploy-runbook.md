@@ -86,7 +86,7 @@ With env wrapper:
 ./scripts/with-cloudflare-env.sh npx wrangler deploy ./worker.js -c wrangler.jsonc
 ```
 
-Sandbox uses R2 bucket `agent-sam-sandbox-cidi` for ASSETS/DASHBOARD per `wrangler.jsonc` comments.
+Sandbox uses R2 bucket `agent-sam-sandbox-cicd` for ASSETS/DASHBOARD per `wrangler.jsonc` comments.
 
 ## Tail logs
 

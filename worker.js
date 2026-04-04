@@ -11198,6 +11198,68 @@ function sseResponseHeaders() {
   };
 }
 
+/** Bash-safe single-quoted string for `sh -c` / PTY run. */
+function shellSingleQuoteForPty(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * SSE: delegate chat to Claude Code on the iam-pty host (TERMINAL_WS_URL / POST /exec).
+ * User message must start with `/claude `; the rest is passed to `claude -p` in IAM_WORKSPACE_ROOT.
+ */
+async function handleAgentChatClaudeDelegate(env, request, ctx, opts) {
+  const { prompt, conversationId } = opts || {};
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        if (!env.TERMINAL_WS_URL) {
+          controller.enqueue(
+            enc.encode(`data: ${JSON.stringify({ type: 'error', error: 'Terminal not configured (TERMINAL_WS_URL)' })}\n\n`)
+          );
+          controller.close();
+          return;
+        }
+        const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+        const cmd = `cd ${shellSingleQuoteForPty(root)} && claude -p ${shellSingleQuoteForPty(prompt)}`;
+        console.log('[agent/chat-sse] /claude delegate', { promptLen: String(prompt || '').length, root });
+        controller.enqueue(
+          enc.encode(
+            `data: ${JSON.stringify({
+              type: 'text',
+              text: 'Running Claude Code on the PTY workspace (this may take a while)...\n\n',
+            })}\n\n`
+          )
+        );
+        const out = await runTerminalCommand(env, request, cmd, conversationId || null, ctx);
+        const bodyText = (out && out.output != null ? String(out.output) : '').trim() || '(no terminal output)';
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'text', text: bodyText + '\n' })}\n\n`));
+        controller.enqueue(
+          enc.encode(
+            `data: ${JSON.stringify({
+              type: 'done',
+              input_tokens: 0,
+              output_tokens: 0,
+              cost_usd: 0,
+              conversation_id: conversationId || null,
+              model_used: 'claude-code-pty',
+              model_display_name: 'Claude Code (PTY)',
+              delegate: 'claude',
+            })}\n\n`
+          )
+        );
+      } catch (e) {
+        const err = e?.message ?? String(e);
+        console.error('[agent/chat-sse] /claude delegate failed', err);
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'error', error: err })}\n\n`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, { headers: sseResponseHeaders() });
+}
+
 async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
@@ -11226,6 +11288,17 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     subagentProfileKey: subagentProfileKeySse = '',
   } = parsed;
   if (!message) return jsonResponse({ error: 'message required' }, 400);
+  const messageForSlash = String(message).trimStart();
+  if (messageForSlash.startsWith('/claude ')) {
+    const claudePrompt = messageForSlash.slice('/claude '.length).trim();
+    if (!claudePrompt) {
+      return jsonResponse(
+        { error: 'Usage: /claude <instruction> — runs Claude Code on the PTY host (iam-pty) in the Agent Sam repo workspace.' },
+        400
+      );
+    }
+    return handleAgentChatClaudeDelegate(env, request, ctx, { prompt: claudePrompt, conversationId: conversationId || null });
+  }
   const hasMedia = hasChatMedia(jsonImages, chatAttachments);
   if (!modelParam) return jsonResponse({ error: 'model required' }, 400);
   const mode = modeRaw || 'agent';
@@ -11362,6 +11435,15 @@ ${skillsBlock || '(none)'}
 
 ## Commands
 ${commandsBlock || '(none)'}
+
+## CLI Delegation
+You can delegate tasks directly to Claude Code running on the host machine by starting your message with /claude followed by a prompt. Example: /claude list all files in the repo root. This runs claude -p '<prompt>' in the IAM workspace via PTY and streams the output back.
+
+## Available slash commands
+/claude <prompt> — delegate to Claude Code on host PTY
+/runtests — quick 6-model smoke test
+/runfullaitest — full 31-model benchmark
+/smoke-test — provider smoke tests
 
 ## IDE State
 - Monaco / open file: user can type @file or @monaco in the message to attach editor content, cursor snapshot, and an **Agent tool targets** block with exact bucket/key/repo for that turn. Use those ids with r2_read / r2_write / github_file / terminal_execute when the user wants real persistence — not chat-only code.

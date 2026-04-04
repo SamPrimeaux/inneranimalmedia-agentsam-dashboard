@@ -59,7 +59,8 @@ autorag/
 └── context/
     ├── active-priorities.md
     ├── technical-debt.md
-    └── cost-tracking.md
+    ├── cost-tracking.md
+    └── cursor-session-log-recent.md   # rolling tail; full log stays in git docs/cursor-session-log.md
 ```
 
 ---

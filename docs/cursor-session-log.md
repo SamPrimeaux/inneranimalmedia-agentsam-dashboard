@@ -2388,3 +2388,59 @@ Chat endpoint accepts `Cookie: iam_session=<uuid>`; full benchmark requires a va
 - iam-welcome.sh startup UI refinement
 - Full end-to-end smoke test (step 16)
 
+
+---
+
+## 2026-04-04 (planned) — Agent stack verification, MCP, PTY, SSH
+
+### Goal
+Confirm Agent Sam can reliably use **tools**, **slash commands**, **MCP**, and **PTY** end-to-end, then fold **SSH** into the architecture without duplicating secrets or bypassing governance.
+
+### Morning workflow (order matters)
+
+1. **Health pass (read-only)**  
+   - Load prod dashboard (`/dashboard/agent`), confirm session cookie and no 5xx on `/api/agent/chat` preflight.  
+   - If sandbox is the test surface: build `build:vite-only` then `deploy-sandbox.sh` per project rules; verify version string.
+
+2. **Commands (`agent_commands` + `commands`)**  
+   - Smoke: one known slash command through `POST /api/agent/commands/execute` (or UI) and confirm D1 `usage_count` / logs if wired.  
+   - Remember: `commands` (large catalog) and `agent_commands` (executable registry) are not 1:1 by `id`; do not assume every row in `commands` is runnable until mapped.
+
+3. **MCP**  
+   - From Cursor: confirm `mcp.inneranimalmedia.com` reachable; token matches all three `mcp.json` locations.  
+   - Note `r2_write` remains degraded in DB; agent modes should not rely on it until repaired. Read paths (`r2_list`, etc.) for inventory only.
+
+4. **PTY / terminal**  
+   - Confirm `TERMINAL_WS_URL` / tunnel: `terminal.inneranimalmedia.com` → iam-pty on the Mac; if stuck, `pm2 restart iam-pty` locally.  
+   - Exercise `workspace_*` and `terminal_execute` (or equivalent) once per session after PTY is warm.  
+   - New `/claude <prompt>` path (when deployed): delegates to `claude -p` on the PTY host in `IAM_WORKSPACE_ROOT`; use for “run on host repo” tasks, not as a substitute for MCP tools.
+
+5. **Integration smoke**  
+   - One turn: user message that triggers a tool call + optional terminal line + optional MCP read. Log outcome in session log (repo), not in chat alone.
+
+### SSH — where and how (recommended shape)
+
+| Layer | Role | Notes |
+|-------|------|--------|
+| **Humans** | Cloudflare Access, SSH keys on bastion or Git provider | Keep out of worker code paths. |
+| **Agent / automation** | Prefer **bounded executor** on a host you control (same Mac as PTY, or a small VM) that runs `ssh` **client-side** after auth | Worker holds **no** long-lived SSH private keys. Pass **short-lived** tokens or signed job payloads (`INTERNAL_API_SECRET` pattern) from worker → executor. |
+| **Network** | Optional: WireGuard / tailscale / CF Tunnel to a single SSH target | Reduces public SSH surface; align DNS and firewall with org policy. |
+| **PTY vs SSH** | PTY = **local shell** on the iam-pty host. SSH = **remote** sessions elsewhere. Do not merge them in one opaque pipe without an explicit security review. |
+
+Optimal first milestone: **document the target host(s), auth method (key per machine in vault, not repo), and which operations are allowed** (e.g. deploy scripts vs arbitrary `ssh user@prod`). Implement SSH **after** PTY and MCP baselines are green.
+
+### Repo log vs D1 — what goes where
+
+| Content | Repo (`docs/cursor-session-log.md`, `docs/knowledge/workflows/`) | D1 |
+|---------|---------------------------------------------------------------------|-----|
+| Runbooks, tomorrow’s checklist, architecture decisions | Yes | Optional mirror via `project_memory` key if you want Agent Sam to retrieve it in RAG |
+| Secrets, SSH private keys, tokens | **Never** | **Never** in plaintext tables; use `VAULT_KEY` / Wrangler secrets |
+| Telemetry / provability | Session log narrative | `mcp_tool_calls`, `routing_decisions`, `cidi_*` / pipeline tables as applicable |
+| Command catalog sync policy | Markdown in repo first | Seed or migration when policy is fixed |
+
+### Exit criteria for the day
+- [ ] MCP read path verified; degraded tools documented for the session.  
+- [ ] PTY responsive; workspace tools or `/claude` smoke once (after deploy).  
+- [ ] SSH scope written down (repo runbook section or `project_memory` stub) before any code or keys.  
+- [ ] No new Cloudflare resources without explicit approval.
+

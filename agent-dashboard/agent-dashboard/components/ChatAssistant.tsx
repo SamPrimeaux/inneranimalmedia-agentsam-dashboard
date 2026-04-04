@@ -167,6 +167,12 @@ function groupSessionsByBucket(rows: AgentSessionRow[]): { label: string; items:
   return order.filter((l) => buckets[l].length > 0).map((label) => ({ label, items: buckets[label] }));
 }
 
+/** Matches App.tsx `buildAgentSamGreeting` — hide this bubble on the session list when no thread is selected. */
+function isAgentSamEmptyThreadGreeting(content: string): boolean {
+  const t = content.trim();
+  return t.startsWith("Hi! I'm Agent Sam.") || t.startsWith('Agent Sam: pick a workspace');
+}
+
 const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor'] as const;
 const MODEL_PLATFORM_LABEL: Record<string, string> = {
   anthropic_api: 'Anthropic',
@@ -943,11 +949,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     []
   );
 
+  const displayMessages = useMemo(() => {
+    if (!conversationId) {
+      return messages.filter((m) => !(m.role === 'assistant' && isAgentSamEmptyThreadGreeting(m.content)));
+    }
+    return messages;
+  }, [conversationId, messages]);
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [displayMessages]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -1504,7 +1517,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
   return (
     <>
-      <div className="flex flex-col h-full bg-[var(--bg-panel)] w-full overflow-hidden min-h-0">
+      <div className="flex flex-col h-[100dvh] overflow-hidden bg-[var(--bg-panel)] w-full">
         <style>{`
         .agent-content strong { color: var(--solar-cyan); font-weight: 700; }
         .agent-content h1, .agent-content h2, .agent-content h3 { color: var(--text-heading); font-weight: 700; margin-bottom: 0.75rem; }
@@ -1514,7 +1527,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         .chat-hide-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
-        <div className="shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38vh,280px)] min-h-0">
+        <div className="shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38dvh,280px)] min-h-0">
           <div className="flex justify-end px-3 pt-2 pb-1 shrink-0">
             <button
               type="button"
@@ -1567,10 +1580,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                       >
                         <div className="flex-1 min-w-0 pt-0.5">
                           <div className="text-[0.875rem] text-[var(--text-primary)] truncate">
-                            {(s.name && String(s.name).trim()) || 'Untitled'}
+                            {(s.name && String(s.name).replace(/\s+/g, ' ').trim()) || 'Untitled'}
                           </div>
                           <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                            <span className="text-[0.6875rem] text-[var(--text-muted)]">{mc} msgs</span>
+                            <span className="text-[0.6875rem] text-[var(--text-muted)]">
+                              {mc} msg{mc !== 1 ? 's' : ''}
+                            </span>
                             {s.has_artifacts ? (
                               <code className="text-[0.625rem] font-mono text-[var(--solar-cyan)] px-1 py-px rounded border border-[var(--border-subtle)]">
                                 artifacts
@@ -1592,10 +1607,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
         <div
           ref={scrollRef}
-          className="flex-1 min-h-0 overflow-y-auto px-4 pt-6 space-y-6 w-full chat-hide-scroll"
-          style={{ paddingBottom: '80px' }}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
         >
-          {messages.map((msg, i) => (
+          {displayMessages.map((msg, i) => (
             <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
                 <div
@@ -1663,7 +1677,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           )}
         </div>
 
-        <div className="shrink-0 w-full p-3 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2">
+        <div
+          className="flex-shrink-0 w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2"
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+        >
           {pendingToolApproval && (
             <div
               role="region"

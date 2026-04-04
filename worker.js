@@ -7129,13 +7129,66 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     neuronCostUsd = neuronsUsed * NEURON_RATE;
     if (!amountUsd || amountUsd === 0) amountUsd = neuronCostUsd;
   }
+  const msgId = crypto.randomUUID();
+  const role = 'assistant';
+  const fullContent = safeText;
+  const tokenCount = (safeInput + safeOutput) || 0;
+  const msgR2Key = `agent-sessions/${conversationId}/messages/${msgId}.json`;
+  if (env.R2) {
+    await env.R2.put(msgR2Key, JSON.stringify({
+      id: msgId,
+      conversation_id: conversationId,
+      role: role,
+      content: fullContent,
+      token_count: tokenCount || 0,
+      thinking_content: null,
+      created_at: Date.now(),
+    }), {
+      httpMetadata: { contentType: 'application/json' },
+    }).catch(() => {});
+  }
   try {
     await env.DB.prepare(
-      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-    ).bind(crypto.randomUUID(), conversationId, 'assistant', safeText.slice(0, 50000), safeProvider).run();
+      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,unixepoch())"
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, msgR2Key, 'iam-platform').run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
+  const ctxKey = `agent-sessions/${conversationId}/context.json`;
+  let _sessionCtx = { messages: [], message_count: 0 };
+  try {
+    let kv = null;
+    if (env.SESSION_CACHE) {
+      kv = await env.SESSION_CACHE.get(`sess_ctx:${conversationId}`, 'json');
+    }
+    if (kv) {
+      _sessionCtx = kv;
+    } else if (env.R2) {
+      const r2obj = await env.R2.get(ctxKey);
+      if (r2obj) _sessionCtx = await r2obj.json();
+    }
+  } catch (_) {}
+  if (!Array.isArray(_sessionCtx.messages)) _sessionCtx.messages = [];
+  _sessionCtx.messages.push({
+    id: msgId,
+    role,
+    r2_key: msgR2Key,
+    token_count: tokenCount || 0,
+    created_at: Date.now(),
+    preview: (fullContent || '').slice(0, 120),
+  });
+  _sessionCtx.message_count = _sessionCtx.messages.length;
+  _sessionCtx.last_active = Date.now();
+  const ctxStr = JSON.stringify(_sessionCtx);
+  await Promise.all([
+    env.R2 ? env.R2.put(ctxKey, ctxStr, {
+      httpMetadata: { contentType: 'application/json' },
+    }).catch(() => {}) : Promise.resolve(),
+    env.SESSION_CACHE ? env.SESSION_CACHE.put(
+      `sess_ctx:${conversationId}`, ctxStr,
+      { expirationTtl: 86400 },
+    ).catch(() => {}) : Promise.resolve(),
+  ]);
   const spendTenantId = resolveTelemetryTenantId(env, routingOpts?.tenantId);
   const modelRates = (routingOpts && routingOpts.modelRates) ? { ...routingOpts.modelRates } : {};
   if (!modelRates[safeModelKey] && rowForTelemetry) {
@@ -15045,9 +15098,62 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (method === 'POST') {
         const body = await request.json();
         const id = crypto.randomUUID();
+        const role = body.role;
+        const fullContent = typeof body.content === 'string' ? body.content : '';
+        const tokenCount = typeof body.token_count === 'number' ? body.token_count : 0;
+        const thinkingContent = body.thinking_content != null ? body.thinking_content : null;
+        const msgR2Key = `agent-sessions/${convId}/messages/${id}.json`;
+        if (env.R2) {
+          await env.R2.put(msgR2Key, JSON.stringify({
+            id: id,
+            conversation_id: convId,
+            role: role,
+            content: fullContent,
+            token_count: tokenCount || 0,
+            thinking_content: thinkingContent,
+            created_at: Date.now(),
+          }), {
+            httpMetadata: { contentType: 'application/json' },
+          }).catch(() => {});
+        }
         await env.DB.prepare(
-          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, created_at) VALUES (?,?,?,?,?,unixepoch())"
-        ).bind(id, convId, body.role, body.content, body.provider || null).run();
+          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,unixepoch())"
+        ).bind(id, convId, role, body.content, body.provider || null, msgR2Key, 'iam-platform').run();
+        const ctxKey = `agent-sessions/${convId}/context.json`;
+        let ctx = { messages: [], message_count: 0 };
+        try {
+          let kv = null;
+          if (env.SESSION_CACHE) {
+            kv = await env.SESSION_CACHE.get(`sess_ctx:${convId}`, 'json');
+          }
+          if (kv) {
+            ctx = kv;
+          } else if (env.R2) {
+            const r2obj = await env.R2.get(ctxKey);
+            if (r2obj) ctx = await r2obj.json();
+          }
+        } catch (_) {}
+        if (!Array.isArray(ctx.messages)) ctx.messages = [];
+        ctx.messages.push({
+          id: id,
+          role,
+          r2_key: msgR2Key,
+          token_count: tokenCount || 0,
+          created_at: Date.now(),
+          preview: (fullContent || '').slice(0, 120),
+        });
+        ctx.message_count = ctx.messages.length;
+        ctx.last_active = Date.now();
+        const ctxStr = JSON.stringify(ctx);
+        await Promise.all([
+          env.R2 ? env.R2.put(ctxKey, ctxStr, {
+            httpMetadata: { contentType: 'application/json' },
+          }).catch(() => {}) : Promise.resolve(),
+          env.SESSION_CACHE ? env.SESSION_CACHE.put(
+            `sess_ctx:${convId}`, ctxStr,
+            { expirationTtl: 86400 },
+          ).catch(() => {}) : Promise.resolve(),
+        ]);
         return jsonResponse({ id });
       }
       const { results } = await env.DB.prepare(
@@ -15200,56 +15306,45 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const body = await request.json().catch(() => ({}));
         const id = crypto.randomUUID();
         const now = Math.floor(Date.now() / 1000);
+        const sessionName = (typeof body.name === 'string' && body.name.trim())
+          ? body.name.trim()
+          : 'New Conversation';
+        const sessionR2Key = `agent-sessions/${id}/context.json`;
+        const sessionCtx = JSON.stringify({
+          session_id: id,
+          name: sessionName || 'New Conversation',
+          created_at: Date.now(),
+          last_active: Date.now(),
+          message_count: 0,
+          messages: [],
+        });
+        if (env.R2) {
+          await env.R2.put(sessionR2Key, sessionCtx, {
+            httpMetadata: { contentType: 'application/json' },
+          }).catch(() => {});
+        }
+        if (env.SESSION_CACHE) {
+          await env.SESSION_CACHE.put(`sess_ctx:${id}`, sessionCtx, { expirationTtl: 86400 }).catch(() => {});
+        }
         await env.DB.prepare(
-          "INSERT INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?)"
-        ).bind(id, env.TENANT_ID || 'system', body.session_type || 'chat', 'active', '{}', now, now, PROJECT_ID).run();
+          "INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?,?,?)"
+        ).bind(id, env.TENANT_ID || 'system', sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
         if (env.SESSION_CACHE) await env.SESSION_CACHE.put(`session:${id}`, JSON.stringify({ id, status: 'active' }), { expirationTtl: 86400 });
         return jsonResponse({ id, status: 'active' });
       }
+      const tenantId = env.TENANT_ID || 'system';
       const { results } = await env.DB.prepare(
-        "SELECT id, session_type, status, state_json, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"
-      ).all();
-      // Enrich with message_count and has_artifacts (code blocks or attached files)
-      const ids = (results || []).map((r) => r.id);
-      let messageCounts = {};
-      let artifactFlags = {};
-      if (ids.length > 0) {
-        const placeholders = ids.map(() => '?').join(',');
-        const counts = await env.DB.prepare(
-          `SELECT conversation_id, COUNT(*) as cnt FROM agent_messages WHERE conversation_id IN (${placeholders}) GROUP BY conversation_id`
-        ).bind(...ids).all();
-        (counts.results || []).forEach((row) => { messageCounts[row.conversation_id] = row.cnt; });
-        const codeOrFile = "content LIKE '%' || char(96) || char(96) || char(96) || '%' OR content LIKE '%[Attached file%'";
-        const artifacts = await env.DB.prepare(
-          `SELECT conversation_id, MAX(CASE WHEN (${codeOrFile}) THEN 1 ELSE 0 END) as has_artifacts FROM agent_messages WHERE conversation_id IN (${placeholders}) GROUP BY conversation_id`
-        ).bind(...ids).all();
-        (artifacts.results || []).forEach((row) => { artifactFlags[row.conversation_id] = row.has_artifacts === 1; });
-      }
-      let namesById = {};
-      if (ids.length > 0) {
-        try {
-          const placeholders = ids.map(() => '?').join(',');
-          const namesResult = await env.DB.prepare(
-            `SELECT id, name, title FROM agent_conversations WHERE id IN (${placeholders})`
-          ).bind(...ids).all();
-          (namesResult.results || []).forEach((row) => { namesById[row.id] = row.name ?? row.title ?? 'New Conversation'; });
-        } catch (_) {
-          try {
-            const placeholders = ids.map(() => '?').join(',');
-            const namesResult = await env.DB.prepare(
-              `SELECT id, name, title FROM agent_conversations WHERE id IN (${placeholders})`
-            ).bind(...ids).all();
-            (namesResult.results || []).forEach((row) => { namesById[row.id] = row.name ?? row.title ?? 'New Conversation'; });
-          } catch (__) {}
-        }
-      }
-      const enriched = (results || []).map((s) => ({
-        ...s,
-        message_count: messageCounts[s.id] ?? 0,
-        has_artifacts: !!artifactFlags[s.id],
-        name: namesById[s.id] ?? 'New Conversation',
-      }));
-      return new Response(JSON.stringify(enriched), {
+        `SELECT s.id, s.session_type, s.status, s.state_json, s.started_at, s.r2_key,
+         COALESCE(s.name, ac.name, ac.title, 'New Conversation') as name,
+         (SELECT COUNT(*) FROM agent_messages am WHERE am.conversation_id = s.id) as message_count,
+         (SELECT COUNT(*) FROM agent_messages am WHERE am.conversation_id = s.id AND am.r2_key IS NOT NULL) as has_artifacts
+         FROM agent_sessions s
+         LEFT JOIN agent_conversations ac ON ac.id = s.id
+         WHERE s.tenant_id = ?
+         ORDER BY s.updated_at DESC
+         LIMIT 50`
+      ).bind(tenantId).all();
+      return new Response(JSON.stringify(results || []), {
         status: 200,
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       });

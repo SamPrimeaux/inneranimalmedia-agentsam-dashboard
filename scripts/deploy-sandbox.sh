@@ -284,7 +284,8 @@ if [ "$WORKER_ONLY" -eq 0 ] && [ -f "${MANIFEST_PATH:-}" ]; then
   R2_BYTE_EST=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}' || echo 0)
   R2_FILES_UPDATED=$((R2_LINE_COUNT + 4))
   if [ -f "${R2_CICD_LOG:-}" ]; then
-    r2_parsed=$(grep -oE '[0-9]+ files' "$R2_CICD_LOG" 2>/dev/null | head -1 | awk '{print $1}')
+    # grep returns 1 when no match; with pipefail that would abort the whole script after a successful deploy.
+    r2_parsed=$(grep -oE '[0-9]+ files' "$R2_CICD_LOG" 2>/dev/null | head -1 | awk '{print $1}' || true)
     if [[ "$r2_parsed" =~ ^[0-9]+$ ]] && [ "$r2_parsed" -gt 0 ]; then
       R2_FILES_UPDATED="$r2_parsed"
     fi
@@ -311,3 +312,23 @@ CICD_V="${CURRENT_V:-$(cat "$VER_FILE" 2>/dev/null || echo 0)}"
 cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_FILES_UPDATED" "$R2_BYTE_EST" \
   "$CICD_MS_BUILD" "$CICD_MS_R2" "$CICD_MS_WORKER" "0" "${SANDBOX_HC:-200}" \
   "${SANDBOX_HEALTH_URL}"
+
+# Post-deploy knowledge sync (non-fatal; after CICD logging)
+echo ""
+echo "  Syncing Agent Sam knowledge base..."
+SYNC_RESP=$(curl -s -X POST \
+  "https://inneranimal-dashboard.meauxbility.workers.dev/api/internal/post-deploy" \
+  -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" \
+  -H "Content-Type: application/json" \
+  --max-time 30 \
+  2>/dev/null || true)
+if echo "$SYNC_RESP" | grep -q '"keys_written"'; then
+  echo "  OK Knowledge sync complete"
+  echo "$SYNC_RESP" | grep -o '"keys_written":[0-9]*' | head -1 || true
+else
+  echo "  WARN: Knowledge sync skipped or failed (non-fatal)"
+  echo "$SYNC_RESP" | head -c 120
+fi
+echo ""
+
+exit 0

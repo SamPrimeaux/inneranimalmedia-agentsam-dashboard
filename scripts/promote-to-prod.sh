@@ -435,4 +435,24 @@ _parse_dashboard_v_from_html
 _send_resend_notification "success"
 echo ""
 echo "  Verify: curl -s https://inneranimalmedia.com/dashboard/agent | grep -o 'dashboard-v:[0-9]*'"
+
+# Post-deploy knowledge sync (non-fatal)
+echo ""
+echo "  Syncing Agent Sam knowledge base..."
+SYNC_RESP=$(curl -s -X POST \
+  "https://inneranimalmedia.com/api/internal/post-deploy" \
+  -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" \
+  -H "Content-Type: application/json" \
+  --max-time 30 \
+  2>/dev/null || true)
+if echo "$SYNC_RESP" | grep -q '"keys_written"'; then
+  echo "  OK Knowledge sync complete"
+  echo "$SYNC_RESP" | grep -o '"keys_written":[0-9]*' | head -1 || true
+else
+  echo "  WARN: Knowledge sync skipped or failed (non-fatal)"
+  echo "$SYNC_RESP" | head -c 120
+fi
+echo ""
+
 echo "[promote-to-prod] done"
+exit 0

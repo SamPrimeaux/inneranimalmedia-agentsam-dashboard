@@ -13361,7 +13361,10 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     const bucket = url.searchParams.get('bucket') || IAM_EXPLORER_DEFAULT_R2_BUCKET;
     const key = url.searchParams.get('key');
     if (!key) return jsonResponse({ error: 'key required' }, 400);
-    const binding = iamExplorerAssetsBinding(env, bucket);
+    let binding = null;
+    const allowListed = resolveR2BindingAllowlist(env, bucket);
+    if (allowListed?.binding?.get) binding = allowListed.binding;
+    else binding = iamExplorerAssetsBinding(env, bucket);
     if (!binding || !binding.get) return jsonResponse({ error: 'Bucket not available' }, 400);
     try {
       const obj = await binding.get(key);
@@ -13388,12 +13391,36 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     try {
       const obj = await resolved.binding.get(key);
       if (!obj) return jsonResponse({ error: 'Not found' }, 404);
-      let contentType = obj.httpMetadata?.contentType || null;
-      if (!contentType || contentType === 'application/octet-stream') {
-        contentType = getContentTypeFromKey(key) || contentType || 'application/octet-stream';
+      let contentType2 = obj.httpMetadata?.contentType || null;
+      if (!contentType2 || contentType2 === 'application/octet-stream') {
+        contentType2 = getContentTypeFromKey(key) || contentType2 || 'application/octet-stream';
+      }
+      const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.avif'];
+      const BINARY_EXTS = ['.pdf', '.zip', '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.mp3', '.wav'];
+      const keyLower = key.toLowerCase();
+      const isImageFile = IMAGE_EXTS.some((e) => keyLower.endsWith(e)) || String(contentType2).toLowerCase().startsWith('image/');
+      const isBinaryFile = BINARY_EXTS.some((e) => keyLower.endsWith(e));
+      if (isImageFile) {
+        return jsonResponse({
+          key,
+          contentType: contentType2,
+          isImage: true,
+          isBinary: true,
+          previewUrl: `/api/r2/get?bucket=${encodeURIComponent(bucketParam)}&key=${encodeURIComponent(key)}`,
+          size: obj.size ?? null,
+        });
+      }
+      if (isBinaryFile) {
+        return jsonResponse({
+          key,
+          contentType: contentType2,
+          isBinary: true,
+          size: obj.size ?? null,
+          message: 'Binary file — cannot display as text',
+        });
       }
       const content = await obj.text();
-      return jsonResponse({ key, content, contentType });
+      return jsonResponse({ key, content, contentType: contentType2 });
     } catch (e) {
       return jsonResponse({ error: String(e?.message || e) }, 500);
     }

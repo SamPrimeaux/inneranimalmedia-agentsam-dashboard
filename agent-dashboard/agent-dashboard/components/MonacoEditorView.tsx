@@ -14,6 +14,10 @@ import type { ActiveFile } from '../types';
 
 type FileData = ActiveFile;
 
+const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'];
+const isImageKey = (key: string) => IMAGE_EXTS.some((e) => key.toLowerCase().endsWith(e));
+const isImageMime = (ct: string) => ct.trim().toLowerCase().startsWith('image/');
+
 export type EditorModelMeta = {
   tabSize: number;
   insertSpaces: boolean;
@@ -329,6 +333,15 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
 
   const hasDiffData = fileData?.originalContent !== undefined && fileData.originalContent !== fileData.content;
 
+  const r2KeyForPreview = fileData?.r2Key ?? '';
+  const r2BucketForPreview = fileData?.r2Bucket ?? '';
+  const imgSrc =
+    fileData?.previewUrl ||
+    (r2KeyForPreview && r2BucketForPreview
+      ? `/api/r2/get?bucket=${encodeURIComponent(r2BucketForPreview)}&key=${encodeURIComponent(r2KeyForPreview)}`
+      : '');
+  const canPreviewR2Image = !!(fileData?.previewUrl || (r2KeyForPreview && r2BucketForPreview));
+
   if (!fileData) {
     return (
       <div className="flex-1 bg-[var(--scene-bg)] flex items-center justify-center select-none h-full">
@@ -345,6 +358,61 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
 
   const ext = fileData.name.split('.').pop()?.toLowerCase() || 'txt';
   const language = LANG_MAP[ext] || 'plaintext';
+
+  if (
+    fileData.isImage === true ||
+    (canPreviewR2Image && (isImageKey(fileData.name) || isImageMime(fileData.contentType ?? '')))
+  ) {
+    return (
+      <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
+        <div className="h-9 flex items-center justify-between px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0 gap-2">
+          <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
+            <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />
+            <span className="text-[var(--text-main)] truncate">{fileData.name}</span>
+            <span className="text-[var(--text-muted)] text-[10px] uppercase tracking-wider shrink-0">image</span>
+          </div>
+        </div>
+        <div className="flex flex-1 items-center justify-center w-full min-h-0 bg-[var(--scene-bg)] p-4 box-border">
+          {imgSrc ? (
+            <img
+              src={imgSrc}
+              alt={fileData.name}
+              className="max-w-full max-h-full object-contain rounded border border-[var(--border-subtle)] shadow-2xl"
+              onError={(e) => {
+                (e.target as HTMLImageElement).alt = 'Failed to load image';
+              }}
+            />
+          ) : (
+            <p className="text-[var(--text-muted)] text-[13px]">No preview URL for this image.</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (fileData.isBinary === true) {
+    return (
+      <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
+        <div className="h-9 flex items-center px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0">
+          <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
+            <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />
+            <span className="text-[var(--text-main)] truncate">{fileData.name}</span>
+            <span className="text-[var(--text-muted)] text-[10px] uppercase tracking-wider shrink-0">binary</span>
+          </div>
+        </div>
+        <div className="p-6 text-[var(--text-muted)] font-mono text-[13px]">
+          <p>{fileData.binaryMessage ?? 'Binary file — cannot display as text'}</p>
+          {fileData.contentType != null && fileData.contentType !== '' && (
+            <p className="mt-2 opacity-90">{fileData.contentType}</p>
+          )}
+          {fileData.size != null && fileData.size > 0 && (
+            <p className="mt-2">{(fileData.size / 1024).toFixed(1)} KB</p>
+          )}
+          <p className="mt-4 text-[11px] opacity-60">Cannot display binary content as text.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">

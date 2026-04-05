@@ -431,8 +431,38 @@ export const LocalExplorer: React.FC<{
             const qs = new URLSearchParams({ bucket: binding, key });
             const res = await fetch(`/api/r2/file?${qs}`, { credentials: 'same-origin' });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok || typeof data.content !== 'string') return;
+            if (!res.ok) return;
             const base = key.split('/').pop() || key;
+            if (data.isImage === true) {
+                onOpenInEditor({
+                    name: base,
+                    content: '',
+                    originalContent: '',
+                    r2Key: key,
+                    r2Bucket: binding,
+                    isImage: true,
+                    isBinary: true,
+                    previewUrl: typeof data.previewUrl === 'string' ? data.previewUrl : undefined,
+                    contentType: typeof data.contentType === 'string' ? data.contentType : undefined,
+                    size: typeof data.size === 'number' ? data.size : undefined,
+                });
+                return;
+            }
+            if (data.isBinary === true) {
+                onOpenInEditor({
+                    name: base,
+                    content: '',
+                    originalContent: '',
+                    r2Key: key,
+                    r2Bucket: binding,
+                    isBinary: true,
+                    contentType: typeof data.contentType === 'string' ? data.contentType : undefined,
+                    size: typeof data.size === 'number' ? data.size : undefined,
+                    binaryMessage: typeof data.message === 'string' ? data.message : undefined,
+                });
+                return;
+            }
+            if (typeof data.content !== 'string') return;
             onOpenInEditor({
                 name: base,
                 content: data.content,

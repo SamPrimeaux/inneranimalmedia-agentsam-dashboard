@@ -15553,14 +15553,15 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const session_id = body?.session_id ?? null;
         if (!command) return jsonResponse({ error: 'No command' }, 400);
         const { output, command: runCommand } = await runTerminalCommand(env, request, command, session_id, ctx);
+        const execId = crypto.randomUUID();
         try {
           await env.DB.prepare(
             `INSERT INTO agent_command_executions 
    (id, tenant_id, session_id, command_name, command_text, output_text, status, started_at, completed_at)
    VALUES (?, 'system', ?, 'terminal_run', ?, ?, 'completed', unixepoch(), unixepoch())`
-          ).bind(crypto.randomUUID(), session_id || null, runCommand, output).run();
+          ).bind(execId, session_id || null, runCommand, output).run();
         } catch (_) {}
-        return jsonResponse({ output, command: runCommand });
+        return jsonResponse({ output, command: runCommand, execution_id: execId });
       } catch (err) {
         console.error('[terminal/run]', err.message);
         return jsonResponse({ error: err.message }, 500);

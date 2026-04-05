@@ -1211,14 +1211,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       }
     }
 
-    let messageForApi = await buildMentionContext(userMessage, {
-      activeFileName,
-      activeFileContent: activeFileContent ?? null,
-      activeFile: activeFile ?? null,
-      editorCursorLine,
-      editorCursorColumn,
-      attachContextFiles: attachContextFiles.length ? attachContextFiles : undefined,
-    });
+    const skipMentionContext =
+      userMessage.startsWith('/run ') || userMessage.startsWith('/claude ');
+    let messageForApi = skipMentionContext
+      ? userMessage
+      : await buildMentionContext(userMessage, {
+          activeFileName,
+          activeFileContent: activeFileContent ?? null,
+          activeFile: activeFile ?? null,
+          editorCursorLine,
+          editorCursorColumn,
+          attachContextFiles: attachContextFiles.length ? attachContextFiles : undefined,
+        });
     const ghCtx = githubRepoContext?.trim();
     if (ghCtx) {
       messageForApi += `${MENTION_CONTEXT_HEADER}### Selected GitHub repository\nThe user chose **${ghCtx}** as the active repo in the dashboard. Prefer \`github_file\` with repo="${ghCtx}" when reading files, and direct them to the Deploy/GitHub panel to browse or open files.`;

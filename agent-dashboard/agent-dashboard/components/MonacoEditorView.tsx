@@ -39,6 +39,8 @@ const LANG_MAP: Record<string, string> = {
   sql: 'sql',
   graphql: 'graphql', gql: 'graphql',
   env: 'plaintext',
+  txt: 'plaintext',
+  text: 'plaintext',
   tf: 'hcl',
   xml: 'xml',
   wrangler: 'toml',

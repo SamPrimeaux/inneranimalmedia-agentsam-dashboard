@@ -333,6 +333,44 @@ const App: React.FC = () => {
     setOpenTabs((prev) => (prev.includes('welcome') ? prev : [...prev, 'welcome']));
   }, [narrowBackToCenter]);
 
+  /**
+   * Mobile: agent chat is `fixed inset-0` above the main workspace. Opening Monaco only
+   * switched `activeTab` while the overlay stayed on top — Context / Open in Monaco looked broken.
+   */
+  const revealMainWorkspaceIfNarrow = useCallback(() => {
+    if (isNarrowViewport) narrowBackToCenter();
+  }, [isNarrowViewport, narrowBackToCenter]);
+
+  const openInMonacoFromChat = useCallback(
+    (file: Pick<ActiveFile, 'name' | 'content'> & Partial<ActiveFile>) => {
+      setActiveFile({
+        name: file.name,
+        content: file.content,
+        originalContent: file.originalContent !== undefined ? file.originalContent : file.content ?? '',
+        githubPath: file.githubPath,
+        githubSha: file.githubSha,
+        r2Key: file.r2Key,
+        r2Bucket: file.r2Bucket,
+      });
+      revealMainWorkspaceIfNarrow();
+      setOpenTabs((prev) => (prev.includes('code') ? prev : [...prev, 'code']));
+      setActiveTab('code');
+      if (isNarrowViewport) {
+        setToastMsg('Opened in code editor. Tap Chat (bottom) to return to Agent Sam.');
+      }
+    },
+    [revealMainWorkspaceIfNarrow, isNarrowViewport],
+  );
+
+  const focusCodeEditorFromChat = useCallback(() => {
+    revealMainWorkspaceIfNarrow();
+    setOpenTabs((prev) => (prev.includes('code') ? prev : [...prev, 'code']));
+    setActiveTab('code');
+    if (isNarrowViewport) {
+      setToastMsg('Code editor opened. Tap Chat to return to Agent Sam.');
+    }
+  }, [revealMainWorkspaceIfNarrow, isNarrowViewport]);
+
   const consumeGithubExpandRepo = useCallback(() => setGithubExpandRepo(null), []);
 
   const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright') => {
@@ -403,23 +441,31 @@ const App: React.FC = () => {
           r2Key: event.key,
           r2Bucket: event.bucket,
         });
+        revealMainWorkspaceIfNarrow();
         setOpenTabs((prev) => (prev.includes('code') ? prev : [...prev, 'code']));
         setActiveTab('code');
+        if (isNarrowViewport) {
+          setToastMsg('Opened R2 file in editor. Tap Chat to return.');
+        }
       } catch (e) {
         console.error(e);
       }
     },
-    [],
+    [isNarrowViewport, revealMainWorkspaceIfNarrow],
   );
 
   const handleBrowserNavigateFromAgent = useCallback(
     (event: { type: 'browser_navigate'; url: string }) => {
       if (event.type !== 'browser_navigate' || !event.url?.trim()) return;
+      revealMainWorkspaceIfNarrow();
       setBrowserUrl(event.url.trim());
       setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
       setActiveTab('browser');
+      if (isNarrowViewport) {
+        setToastMsg('Browser tab opened. Tap Chat to return to Agent Sam.');
+      }
     },
-    [],
+    [revealMainWorkspaceIfNarrow, isNarrowViewport],
   );
 
   const htmlPreviewBlobRef = useRef<string | null>(null);
@@ -948,10 +994,7 @@ const App: React.FC = () => {
                         editorCursorColumn={cursorPos.col}
                         messages={chatMessages} 
                         setMessages={setChatMessages} 
-                        onFileSelect={(file) => {
-                            setActiveFile({ ...file, originalContent: '' });
-                            openTab('code');
-                        }}
+                        onFileSelect={openInMonacoFromChat}
                         onGlbFileSelect={(file) => {
                           const glbUrl = URL.createObjectURL(file);
                           setGlbViewerUrl((prev) => {
@@ -977,7 +1020,7 @@ const App: React.FC = () => {
                         onBrowserNavigate={handleBrowserNavigateFromAgent}
                         onOpenGitHubIntegration={openGitHubFromChat}
                         onMobileOpenDashboard={openDashboardFromChat}
-                        onOpenCodeTab={() => openTab('code')}
+                        onOpenCodeTab={focusCodeEditorFromChat}
                     />
                     </div>
                 </div>
@@ -1275,10 +1318,7 @@ const App: React.FC = () => {
                             editorCursorColumn={cursorPos.col}
                             messages={chatMessages} 
                             setMessages={setChatMessages} 
-                            onFileSelect={(file) => {
-                                setActiveFile({ ...file, originalContent: file.content });
-                                openTab('code');
-                            }}
+                            onFileSelect={openInMonacoFromChat}
                             onGlbFileSelect={(file) => {
                               const glbUrl = URL.createObjectURL(file);
                               setGlbViewerUrl((prev) => {
@@ -1304,7 +1344,7 @@ const App: React.FC = () => {
                             onBrowserNavigate={handleBrowserNavigateFromAgent}
                             onOpenGitHubIntegration={openGitHubFromChat}
                             onMobileOpenDashboard={openDashboardFromChat}
-                            onOpenCodeTab={() => openTab('code')}
+                            onOpenCodeTab={focusCodeEditorFromChat}
                          />
                     </div>
                 </div>

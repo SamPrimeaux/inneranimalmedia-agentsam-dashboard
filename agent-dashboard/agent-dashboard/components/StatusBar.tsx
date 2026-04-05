@@ -59,8 +59,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             <div className="h-6 flex items-center justify-between text-[11px] font-mono text-[var(--text-main)]/90 w-full">
             {/* Left Box */}
             <div className="flex items-center gap-1 sm:gap-3 h-full px-1 min-w-0">
-                <div className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full bg-[var(--solar-cyan)]/15">
-                    <span className="font-bold -mt-[1px] tracking-wide">IAM</span>
+                <div className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full bg-[var(--solar-cyan)]/15 max-w-[min(9rem,32vw)]" title="Inner Animal Media">
+                    <span className="font-bold -mt-[1px] tracking-wide truncate">Inner Animal</span>
                 </div>
                 <div className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0" title="Git branch (set in Settings when wired)">
                     <GitBranch size={12} className="opacity-70" />

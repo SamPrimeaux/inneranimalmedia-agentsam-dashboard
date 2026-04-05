@@ -159,10 +159,6 @@ function AIPanel({ visible, onClose, onRunCommand, terminalBuffer }: AIPanelProp
         body: JSON.stringify({
           message: q,
           mode: 'ask',
-          system_context: `You are an expert terminal assistant embedded in the InnerAnimal Media developer dashboard.
-The user is working in a macOS/zsh PTY terminal. Help them understand errors, suggest fixes, and write shell commands.
-When suggesting a command, wrap it in a code block like: \`\`\`bash\ncommand here\n\`\`\`
-Keep responses concise and practical. Recent terminal output for context:\n\n${context}`,
         }),
       });
 

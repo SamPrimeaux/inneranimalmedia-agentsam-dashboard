@@ -972,7 +972,7 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
       console.warn('[Auto Mode] Model not found in DB:', autoModel, '- falling back to Haiku');
       model = await env.DB.prepare(
         'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
-      ).bind('claude-haiku-4-5-20251001').first();
+      ).bind('gpt-4.1-nano').first();
     }
 
     if (returnIntent) return { model, intent, taskType };
@@ -982,7 +982,7 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
     console.error('[Auto Mode] Selection failed:', error);
     return await env.DB.prepare(
       'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
-    ).bind('claude-haiku-4-5-20251001').first();
+    ).bind('gpt-4.1-nano').first();
   }
 }
 
@@ -3463,7 +3463,7 @@ const worker = {
               r.http_method, r.http_status, r.http_url,
               r.d1_query, r.d1_rows_read, r.d1_rows_written,
               r.r2_operation, r.r2_bucket, r.r2_key,
-              r.do_class, r.do_method, r.batch_id, 'ws_samprimeaux'
+              r.do_class, r.do_method, r.batch_id, 'ws_inneranimalmedia'
             )
           );
           await env.DB.batch(stmts);
@@ -4998,10 +4998,10 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { object_key, force: _ingForce = false, workspace_id: _ingWs = 'ws_samprimeaux' } = _ingBody || {};
+          const { object_key, force: _ingForce = false, workspace_id: _ingWs = 'ws_inneranimalmedia' } = _ingBody || {};
           _ingObjKey = object_key != null ? String(object_key) : null;
           if (!_ingObjKey) return jsonResponse({ error: 'object_key required' }, 400);
-          const _ingWid = String(_ingWs || 'ws_samprimeaux').slice(0, 200);
+          const _ingWid = String(_ingWs || 'ws_inneranimalmedia').slice(0, 200);
 
           const _out = await runRagIngestSingle(env, {
             object_key: _ingObjKey,
@@ -5030,8 +5030,8 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = 'ws_samprimeaux' } = _ingBody || {};
-          const _ingWid = String(_ingWsBatch || 'ws_samprimeaux').slice(0, 200);
+          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = 'ws_inneranimalmedia' } = _ingBody || {};
+          const _ingWid = String(_ingWsBatch || 'ws_inneranimalmedia').slice(0, 200);
           const keyList = Array.isArray(_rawKeys) ? _rawKeys.map((k) => String(k || '').trim()).filter(Boolean) : [];
           if (keyList.length === 0) return jsonResponse({ error: 'keys array required' }, 400);
           const results = [];
@@ -5154,7 +5154,7 @@ const worker = {
           if (_fbUse === 0) {
             await env.DB.prepare(
               `UPDATE agentsam_code_index_job SET status = 'queued' WHERE workspace_id = ? AND status != 'running'`
-            ).bind('ws_samprimeaux').run().catch(() => {});
+            ).bind('ws_inneranimalmedia').run().catch(() => {});
           }
           return jsonResponse({ ok: true });
         } catch (e) {
@@ -5601,9 +5601,9 @@ const worker = {
         return jsonResponse({ error: 'Method not allowed' }, 405);
       }
 
-      const CORE_WORKSPACE_IDS = ['ws_samprimeaux', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
+      const CORE_WORKSPACE_IDS = ['ws_inneranimalmedia', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
       const CORE_WORKSPACES_DATA = [
-        { id: 'ws_samprimeaux', name: 'Sam Primeaux', category: 'entity' },
+        { id: 'ws_inneranimalmedia', name: 'Inner Animal Media', category: 'entity' },
         { id: 'ws_inneranimal', name: 'InnerAnimal', category: 'entity' },
         { id: 'ws_meauxbility', name: 'Meauxbility', category: 'entity' },
         { id: 'ws_innerautodidact', name: 'InnerAutodidact', category: 'entity' },
@@ -5613,7 +5613,7 @@ const worker = {
         if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         if (method === 'GET') {
           if (!env.DB) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {} });
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {} });
           }
           try {
             const [wsRows, rows, us] = await Promise.all([
@@ -5665,10 +5665,10 @@ const worker = {
               };
               if (r.theme != null && r.theme.trim()) workspaceThemes[r.workspace_id] = r.theme.trim();
             }
-            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : 'ws_samprimeaux';
+            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : 'ws_inneranimalmedia';
             return jsonResponse({ data: wsRows.results || CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
           } catch (e) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_samprimeaux', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
           }
         }
         if (method === 'PATCH' || method === 'PUT') {
@@ -9346,7 +9346,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = `Terminal error: ${e.message}`;
         }
         const runLoopUserId = request?.user?.id || request?.user_id || null;
-        const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+        const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
         console.log('[cmd_audit] runToolLoop terminal_execute identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
         insertAgentCommandAuditLog(env, {
           userId: runLoopUserId ?? 'unknown',
@@ -9382,7 +9382,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         if (blocked.test(sql)) {
           resultText = 'Blocked: DROP TABLE and TRUNCATE require manual approval';
           const runLoopUserId = request?.user?.id || request?.user_id || null;
-          const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+          const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
           console.log('[cmd_audit] runToolLoop d1_write blocked identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
           insertAgentCommandAuditLog(env, {
             userId: runLoopUserId ?? 'unknown',
@@ -9402,7 +9402,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             resultText = JSON.stringify({ changes, success: true });
             void writeAuditLog(env, { event_type: 'd1_write', message: 'D1 write executed', metadata: { changes } }).catch(() => {});
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
             console.log('[cmd_audit] runToolLoop d1_write success identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -9428,7 +9428,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           } catch (e) {
             resultText = `D1 error: ${e.message}`;
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_samprimeaux';
+            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
             console.log('[cmd_audit] runToolLoop d1_write error identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -9575,7 +9575,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
                 } else {
                   const repo = params.repo; const path = params.path;
                   if (!repo || !path) { resultText = JSON.stringify({ error: 'repo and path required' }); } else {
-                    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+                    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
                     const data = await res.json();
                     if (!res.ok) resultText = JSON.stringify({ error: data.message || 'Not found' });
                     else if (data.content) resultText = atob((data.content || '').replace(/\n/g, ''));
@@ -16835,7 +16835,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const filePath = url.searchParams.get('path') || '';
       const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
-      const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+      const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
       const data = await res.json();
       return jsonResponse(data);
     }
@@ -16849,7 +16849,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const filePath = url.searchParams.get('path');
       const tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'github', githubAccount);
       if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
-      const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+      const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
       const data = await res.json();
       if (!res.ok) return jsonResponse({ error: data.message || 'Not found' }, res.status);
       const content = data.content ? atob(data.content.replace(/\n/g, '')) : '';
@@ -19400,7 +19400,7 @@ async function runGithubPatBuiltinTool(env, toolName, params) {
     const path = p.path;
     if (!repo || !path) return { error: 'repo and path required' };
     const res = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`,
+      `https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`,
       { headers }
     );
     const data = await res.json().catch(() => ({}));
@@ -19651,7 +19651,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     await recordMcpToolCall(env, { ...o, tenantId: tid });
   };
   const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'sam_primeaux');
-  const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_samprimeaux');
+  const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_inneranimalmedia');
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
   if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && (!needsScreenshotBucket || env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
@@ -25782,7 +25782,7 @@ async function handleAgentDbSnippetsPost(request, env) {
 
 async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, source, payload) {
   if (!env?.DB || !userId) return;
-  const wsId = workspaceId || 'ws_samprimeaux';
+  const wsId = workspaceId || 'ws_inneranimalmedia';
   const nowIso = new Date().toISOString();
   const sessionId = `wsess_${userId}_${wsId}`;
   const signalId = crypto.randomUUID();
@@ -28807,7 +28807,7 @@ async function handleTimeTrack(request, url, env) {
         await env.DB.prepare(
           `UPDATE project_time_entries SET duration_seconds = (julianday('now') - julianday(start_time)) * 86400 WHERE id = ?`
         ).bind(active.id).run();
-          await ensureWorkSessionAndSignal(env, userId, 'ws_samprimeaux', 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
+          await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
         return jsonResponse({ success: true, entry_id: active.id, duration_updated: true });
       }
       const id = crypto.randomUUID();
@@ -28815,7 +28815,7 @@ async function handleTimeTrack(request, url, env) {
         `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'))`
       ).bind(id, userId, PROJECT_ID, session.id, now, null, 'dashboard_heartbeat').run();
-      await ensureWorkSessionAndSignal(env, userId, 'ws_samprimeaux', 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
+      await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
       return jsonResponse({ success: true, entry_id: id, started_at: now });
     }
 

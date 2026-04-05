@@ -13,7 +13,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import type { IdeWorkspaceSnapshot, RecentFileEntry } from '../src/ideWorkspace';
-import { diffLineStats, clearRecentFiles } from '../src/ideWorkspace';
+import { diffLineStats } from '../src/ideWorkspace';
 
 function timeAgo(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -46,6 +46,7 @@ export const WorkspaceExplorerPanel: React.FC<{
   workspaceTitle: string;
   recentFiles: RecentFileEntry[];
   onRefreshRecent: () => void;
+  onClearRecentFiles: () => void;
   onOpenRecent: (entry: RecentFileEntry) => void | Promise<void>;
   onOpenLocalFolder: () => void;
   onOpenFilesActivity: () => void;
@@ -55,6 +56,7 @@ export const WorkspaceExplorerPanel: React.FC<{
   workspaceTitle,
   recentFiles,
   onRefreshRecent,
+  onClearRecentFiles,
   onOpenRecent,
   onOpenLocalFolder,
   onOpenFilesActivity,
@@ -118,8 +120,7 @@ export const WorkspaceExplorerPanel: React.FC<{
             type="button"
             className="text-[10px] text-[var(--text-muted)] hover:text-[var(--solar-orange)] px-1.5 py-0.5 rounded flex items-center gap-1"
             onClick={() => {
-              clearRecentFiles();
-              onRefreshRecent();
+              onClearRecentFiles();
             }}
             title="Clear list"
           >
@@ -152,11 +153,18 @@ export const WorkspaceExplorerPanel: React.FC<{
                       type="button"
                       className="p-0.5 mt-0.5 text-[var(--text-muted)] hover:text-[var(--text-main)] shrink-0"
                       aria-expanded={open}
-                      onClick={() => setExpandedId(open ? null : entry.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedId(open ? null : entry.id);
+                      }}
                     >
                       {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
-                    <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left rounded-md focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--solar-cyan)]/50 px-0.5 -mx-0.5"
+                      onClick={() => void onOpenRecent(entry)}
+                    >
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {sourceIcon(entry.source)}
                         <span className="text-[12px] font-semibold truncate">{entry.name}</span>
@@ -181,7 +189,7 @@ export const WorkspaceExplorerPanel: React.FC<{
                           </span>
                         )}
                       </div>
-                    </div>
+                    </button>
                   </div>
                   {open && (
                     <div className="px-2 pb-2 pt-0 border-t border-[var(--border-subtle)]/30 space-y-2">

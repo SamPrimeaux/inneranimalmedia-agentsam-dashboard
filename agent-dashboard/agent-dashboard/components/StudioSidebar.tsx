@@ -24,20 +24,22 @@ interface SidebarProps {
   customAssets: CustomAsset[];
   onAddCustomAsset: (name: string, url: string) => void;
   onRemoveCustomAsset: (id: string) => void;
+  /** When true, sidebar is embedded in the IDE activity column (layout hint; optional). */
+  isEmbedded?: boolean;
 }
 
-export const StudioSidebar: React.FC<SidebarProps> = ({ 
-  activeProject, 
-  onSwitchProject, 
-  onExport, 
-  genConfig, 
+export const StudioSidebar: React.FC<SidebarProps> = ({
+  activeProject,
+  onSwitchProject,
+  onExport,
+  genConfig,
   onUpdateGenConfig,
   sceneConfig,
   onUpdateSceneConfig,
   onSpawnModel,
   customAssets,
   onAddCustomAsset,
-  onRemoveCustomAsset
+  onRemoveCustomAsset,
 }) => {
   const [newAssetName, setNewAssetName] = useState('');
   const [newAssetUrl, setNewAssetUrl] = useState('');
@@ -166,7 +168,7 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
                 }`}
               >
                 <div className={`mt-1 p-2 rounded-lg transition-colors ${activeProject === p.id ? 'bg-[var(--solar-cyan)] text-black shadow-[0_0_10px_rgba(0,255,255,0.2)]' : 'bg-white/5 text-[var(--text-muted)] group-hover:text-white'}`}>
-                  {React.cloneElement(p.icon as React.ReactElement, { size: 16 })}
+                  {React.cloneElement(p.icon as React.ReactElement<{ size?: number }>, { size: 16 })}
                 </div>
                 <div className="flex-1">
                   <div className={`text-[12px] font-bold tracking-tight transition-colors ${activeProject === p.id ? 'text-[var(--solar-cyan)]' : 'text-white/80'}`}>{p.name}</div>

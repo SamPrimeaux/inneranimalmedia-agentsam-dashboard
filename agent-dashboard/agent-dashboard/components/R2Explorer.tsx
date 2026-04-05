@@ -1,5 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Database, File, Loader2, RefreshCw, ChevronRight, HardDrive, Trash2, Link2, Upload, ArrowRightLeft, FileCode2 } from 'lucide-react';
+import {
+  Database,
+  File,
+  Folder,
+  Loader2,
+  RefreshCw,
+  ChevronRight,
+  ChevronDown,
+  HardDrive,
+  Trash2,
+  Link2,
+  Upload,
+  ArrowRightLeft,
+  FileCode2,
+} from 'lucide-react';
 import type { ActiveFile } from '../types';
 
 /** Map bucket list label (from /api/r2/buckets) to /api/r2/file binding allowlist name */
@@ -26,6 +40,42 @@ function dedupeR2BucketLabels(names: string[]): string[] {
     return out;
 }
 
+function parentR2Prefix(prefix: string): string {
+    if (!prefix) return '';
+    const trimmed = prefix.replace(/\/+$/, '');
+    if (!trimmed) return '';
+    const i = trimmed.lastIndexOf('/');
+    return i < 0 ? '' : `${trimmed.slice(0, i + 1)}`;
+}
+
+/** Folders at current prefix plus file rows (handles flat keys when API omits delimiter prefixes). */
+function partitionR2Listing(
+    objects: R2ObjectRow[],
+    apiPrefixes: string[],
+    currentPrefix: string,
+): { folders: string[]; files: R2ObjectRow[] } {
+    const p = currentPrefix.replace(/\/$/, '');
+    const pfx = p ? `${p}/` : '';
+    const folderSet = new Set<string>();
+    for (const pr of apiPrefixes) {
+        if (typeof pr === 'string' && pr.startsWith(pfx)) folderSet.add(pr);
+    }
+    const files: R2ObjectRow[] = [];
+    for (const obj of objects) {
+        const k = obj.key;
+        if (!k.startsWith(pfx)) continue;
+        const rest = k.slice(pfx.length);
+        const slash = rest.indexOf('/');
+        if (slash < 0) {
+            files.push(obj);
+        } else {
+            folderSet.add(pfx + rest.slice(0, slash + 1));
+        }
+    }
+    const folders = [...folderSet].sort((a, b) => a.localeCompare(b));
+    return { folders, files };
+}
+
 type R2ObjectRow = {
     key: string;
     size?: number;
@@ -41,6 +91,7 @@ export const R2Explorer: React.FC<{
     const [prefix, setPrefix] = useState('');
     const [searchQ, setSearchQ] = useState('');
     const [objects, setObjects] = useState<R2ObjectRow[]>([]);
+    const [listPrefixes, setListPrefixes] = useState<string[]>([]);
     const [searchObjects, setSearchObjects] = useState<R2ObjectRow[]>([]);
     const [stats, setStats] = useState<{ object_count: number; total_bytes: number } | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -49,6 +100,7 @@ export const R2Explorer: React.FC<{
     const [syncPrefix, setSyncPrefix] = useState('');
     const [syncMsg, setSyncMsg] = useState<string | null>(null);
     const [searchActive, setSearchActive] = useState(false);
+    const [objectPanelOpen, setObjectPanelOpen] = useState(true);
 
     const displayBuckets = useMemo(() => dedupeR2BucketLabels(buckets), [buckets]);
 
@@ -73,9 +125,11 @@ export const R2Explorer: React.FC<{
             const res = await fetch(`/api/r2/list?${qs}`, { credentials: 'same-origin' });
             const data = await res.json();
             setObjects(Array.isArray(data.objects) ? data.objects : []);
+            setListPrefixes(Array.isArray(data.prefixes) ? data.prefixes : []);
         } catch (err) {
             console.error('R2 list failed:', err);
             setObjects([]);
+            setListPrefixes([]);
         } finally {
             setIsLoading(false);
         }
@@ -253,7 +307,15 @@ export const R2Explorer: React.FC<{
         }
     };
 
-    const displayRows = searchActive ? searchObjects : objects;
+    const { folders: r2Folders, files: r2Files } = useMemo(
+        () => partitionR2Listing(objects, listPrefixes, prefix),
+        [objects, listPrefixes, prefix],
+    );
+
+    const shortKey = useCallback(
+        (full: string) => (prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full),
+        [prefix],
+    );
 
     const openInEditor = async (key: string) => {
         if (!onOpenInEditor || !bucket) return;
@@ -279,8 +341,74 @@ export const R2Explorer: React.FC<{
         }
     };
 
+    const browseEmpty = !searchActive && r2Folders.length === 0 && r2Files.length === 0;
+    const searchEmpty = searchActive && searchObjects.length === 0;
+
+    const renderObjectRow = (obj: R2ObjectRow, label: string) => (
+        <div
+            key={obj.key}
+            role={onOpenInEditor ? 'button' : undefined}
+            tabIndex={onOpenInEditor ? 0 : undefined}
+            onClick={() => {
+                if (onOpenInEditor) void openInEditor(obj.key);
+            }}
+            onKeyDown={(e) => {
+                if (!onOpenInEditor) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    void openInEditor(obj.key);
+                }
+            }}
+            className={`flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] rounded transition-all group ${
+                onOpenInEditor ? 'cursor-pointer' : ''
+            }`}
+        >
+            <File size={13} className="text-[var(--text-muted)] group-hover:text-[var(--solar-orange)] shrink-0" />
+            <div className="flex flex-col min-w-0 flex-1">
+                <span className="text-[11px] font-medium truncate font-mono">{label}</span>
+                <span className="text-[8px] text-[var(--text-muted)]">{formatBytes(Number(obj.size) || 0)}</span>
+            </div>
+            <button
+                type="button"
+                title="Copy URL"
+                className="p-1 opacity-60 hover:opacity-100"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    copyObjectUrl(obj.key);
+                }}
+            >
+                <Link2 size={12} />
+            </button>
+            {onOpenInEditor && (
+                <button
+                    type="button"
+                    title="Open in editor"
+                    className="p-1 opacity-70 hover:opacity-100 text-[var(--solar-cyan)]"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        void openInEditor(obj.key);
+                    }}
+                >
+                    <FileCode2 size={12} />
+                </button>
+            )}
+            <button
+                type="button"
+                title="Delete"
+                className="p-1 opacity-60 hover:opacity-100 text-[var(--text-muted)]"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    deleteObject(obj.key);
+                }}
+            >
+                <Trash2 size={12} />
+            </button>
+            <ChevronRight size={10} className="opacity-0 group-hover:opacity-40 shrink-0" />
+        </div>
+    );
+
     return (
-        <div className="w-full h-full bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden">
+        <div className="w-full h-full min-h-0 bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden">
             <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex flex-col gap-2 shrink-0">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -301,142 +429,129 @@ export const R2Explorer: React.FC<{
                         <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
                     </button>
                 </div>
-                <div className="flex flex-wrap gap-2 items-center text-[10px]">
-                    <label className="flex items-center gap-1">
-                        <span className="text-[var(--text-muted)] uppercase">Bucket</span>
-                        <select
-                            value={bucket}
-                            onChange={(e) => setBucket(e.target.value)}
-                            className="bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 max-w-[180px]"
-                        >
-                            {displayBuckets.length === 0 && <option value="">—</option>}
-                            {displayBuckets.map((b) => (
-                                <option key={b} value={b}>
-                                    {b}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <label className="flex items-center gap-1 flex-1 min-w-[120px]">
-                        <span className="text-[var(--text-muted)] uppercase">Prefix</span>
-                        <input
-                            value={prefix}
-                            onChange={(e) => setPrefix(e.target.value)}
-                            placeholder="path/"
-                            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
-                        />
-                    </label>
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Buckets</div>
+                <div className="flex flex-col gap-0.5 max-h-[min(30vh,200px)] overflow-y-auto">
+                    {displayBuckets.length === 0 && <span className="text-[10px] text-[var(--text-muted)] italic">No buckets.</span>}
+                    {displayBuckets.map((b) => {
+                        const selected = bucket === b;
+                        const expanded = selected && objectPanelOpen;
+                        return (
+                            <button
+                                key={b}
+                                type="button"
+                                onClick={() => {
+                                    if (selected) {
+                                        setObjectPanelOpen((v) => !v);
+                                    } else {
+                                        setBucket(b);
+                                        setPrefix('');
+                                        setSearchActive(false);
+                                        setObjectPanelOpen(true);
+                                    }
+                                }}
+                                className={`flex items-center gap-2 px-2 py-1.5 rounded text-left text-[10px] font-mono border border-[var(--border-subtle)]/60 hover:bg-[var(--bg-hover)] ${
+                                    selected ? 'bg-[var(--bg-hover)] border-[var(--solar-orange)]/35' : 'bg-[var(--bg-app)]/50'
+                                }`}
+                            >
+                                {expanded ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
+                                <HardDrive size={12} className="shrink-0 text-[var(--text-muted)]" />
+                                <span className="truncate">{b}</span>
+                            </button>
+                        );
+                    })}
                 </div>
-                <div className="flex flex-wrap gap-2 items-center text-[10px]">
-                    <label className="flex items-center gap-1 flex-1 min-w-[140px]">
-                        <span className="text-[var(--text-muted)] uppercase">Search</span>
-                        <input
-                            value={searchQ}
-                            onChange={(e) => setSearchQ(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && runSearch()}
-                            placeholder="min 2 chars (key substring)"
-                            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
-                        />
-                    </label>
-                    <button
-                        type="button"
-                        onClick={runSearch}
-                        disabled={isLoading || !bucket}
-                        className="px-2 py-0.5 rounded bg-[var(--bg-hover)] border border-[var(--border-subtle)] uppercase"
-                    >
-                        Find
-                    </button>
-                    <label className="flex items-center gap-1 cursor-pointer px-2 py-0.5 rounded bg-[var(--bg-hover)] border border-[var(--border-subtle)] uppercase">
-                        <Upload size={10} />
-                        Upload
-                        <input type="file" className="hidden" onChange={onUpload} disabled={!bucket || isLoading} />
-                    </label>
-                </div>
-                {stats && (
-                    <div className="text-[9px] font-mono text-[var(--text-muted)]">
-                        Objects: {stats.object_count} · Size: {formatBytes(stats.total_bytes)}
-                    </div>
+                {bucket && objectPanelOpen && (
+                    <>
+                        <div className="flex flex-wrap gap-2 items-center text-[10px] pt-1 border-t border-[var(--border-subtle)]/40">
+                            <span className="text-[var(--text-muted)] uppercase shrink-0">Prefix</span>
+                            <input
+                                value={prefix}
+                                onChange={(e) => setPrefix(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && fetchObjects()}
+                                placeholder="path/"
+                                className="flex-1 min-w-[100px] bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
+                            />
+                            {prefix ? (
+                                <button
+                                    type="button"
+                                    className="text-[var(--solar-cyan)] hover:underline shrink-0"
+                                    onClick={() => {
+                                        setPrefix(parentR2Prefix(prefix));
+                                    }}
+                                >
+                                    Up
+                                </button>
+                            ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-2 items-center text-[10px]">
+                            <label className="flex items-center gap-1 flex-1 min-w-[140px]">
+                                <span className="text-[var(--text-muted)] uppercase">Search</span>
+                                <input
+                                    value={searchQ}
+                                    onChange={(e) => setSearchQ(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                                    placeholder="min 2 chars (key substring)"
+                                    className="flex-1 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
+                                />
+                            </label>
+                            <button
+                                type="button"
+                                onClick={runSearch}
+                                disabled={isLoading || !bucket}
+                                className="px-2 py-0.5 rounded bg-[var(--bg-hover)] border border-[var(--border-subtle)] uppercase"
+                            >
+                                Find
+                            </button>
+                            <label className="flex items-center gap-1 cursor-pointer px-2 py-0.5 rounded bg-[var(--bg-hover)] border border-[var(--border-subtle)] uppercase">
+                                <Upload size={10} />
+                                Upload
+                                <input type="file" className="hidden" onChange={onUpload} disabled={!bucket || isLoading} />
+                            </label>
+                        </div>
+                        {stats && (
+                            <div className="text-[9px] font-mono text-[var(--text-muted)]">
+                                Objects: {stats.object_count} · Size: {formatBytes(stats.total_bytes)}
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2">
+            <div className="flex-1 min-h-0 overflow-y-auto p-2">
                 {isLoading && (
                     <div className="flex flex-col items-center justify-center p-8 opacity-50">
                         <Loader2 size={24} className="animate-spin mb-2" />
                         <span className="text-[10px] font-mono">Loading R2…</span>
                     </div>
                 )}
-                {!isLoading && displayRows.length === 0 && (
+                {!isLoading && bucket && objectPanelOpen && (browseEmpty || searchEmpty) && (
                     <div className="p-4 text-center">
                         <p className="text-[10px] text-[var(--text-muted)] italic">No objects in this view.</p>
                     </div>
                 )}
                 <div className="flex flex-col gap-0.5">
                     {!isLoading &&
-                        displayRows.map((obj) => (
-                            <div
-                                key={obj.key}
-                                role={onOpenInEditor ? 'button' : undefined}
-                                tabIndex={onOpenInEditor ? 0 : undefined}
-                                onClick={() => {
-                                    if (onOpenInEditor) void openInEditor(obj.key);
-                                }}
-                                onKeyDown={(e) => {
-                                    if (!onOpenInEditor) return;
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        void openInEditor(obj.key);
-                                    }
-                                }}
-                                className={`flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] rounded transition-all group ${
-                                    onOpenInEditor ? 'cursor-pointer' : ''
-                                }`}
+                        bucket &&
+                        objectPanelOpen &&
+                        !searchActive &&
+                        r2Folders.map((fp) => (
+                            <button
+                                key={fp}
+                                type="button"
+                                onClick={() => setPrefix(fp)}
+                                className="flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] rounded text-left w-full border-none bg-transparent font-inherit text-[var(--text-main)]"
                             >
-                                <File size={13} className="text-[var(--text-muted)] group-hover:text-[var(--solar-orange)] shrink-0" />
-                                <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-[11px] font-medium truncate font-mono">{obj.key}</span>
-                                    <span className="text-[8px] text-[var(--text-muted)]">
-                                        {formatBytes(Number(obj.size) || 0)}
-                                    </span>
-                                </div>
-                                <button
-                                    type="button"
-                                    title="Copy URL"
-                                    className="p-1 opacity-60 hover:opacity-100"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        copyObjectUrl(obj.key);
-                                    }}
-                                >
-                                    <Link2 size={12} />
-                                </button>
-                                {onOpenInEditor && (
-                                    <button
-                                        type="button"
-                                        title="Open in editor"
-                                        className="p-1 opacity-70 hover:opacity-100 text-[var(--solar-cyan)]"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            void openInEditor(obj.key);
-                                        }}
-                                    >
-                                        <FileCode2 size={12} />
-                                    </button>
-                                )}
-                                <button
-                                    type="button"
-                                    title="Delete"
-                                    className="p-1 opacity-60 hover:opacity-100 text-[var(--text-muted)]"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteObject(obj.key);
-                                    }}
-                                >
-                                    <Trash2 size={12} />
-                                </button>
-                                <ChevronRight size={10} className="opacity-0 group-hover:opacity-40 shrink-0" />
-                            </div>
+                                <Folder size={13} className="text-[var(--solar-blue)] shrink-0" />
+                                <span className="text-[11px] font-mono truncate">{shortKey(fp).replace(/\/$/, '') || fp}</span>
+                                <ChevronRight size={10} className="opacity-40 ml-auto shrink-0" />
+                            </button>
                         ))}
+                    {!isLoading &&
+                        bucket &&
+                        objectPanelOpen &&
+                        (searchActive ? searchObjects : r2Files).map((obj) =>
+                            renderObjectRow(obj, searchActive ? obj.key : shortKey(obj.key)),
+                        )}
                 </div>
             </div>
 

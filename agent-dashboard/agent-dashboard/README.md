@@ -7,7 +7,7 @@
 
 ---
 
-## 🚀 Overview
+## Overview
 
 MeauxCAD Studio is a high-performance, desktop-class IDE built entirely on the Cloudflare ecosystem (Workers, D1, R2). This repository serves as a **Multi-Model AI Testbed** to refine the "Synchronous Pair Programming" pattern between Human Developers and AI Agents (Gemini, Vertex, Cursor, OpenAI, Anthropic).
 

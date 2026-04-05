@@ -1,6 +1,17 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GitBranch, XCircle, AlertTriangle, Bell, Check } from 'lucide-react';
 import { SHELL_VERSION } from '../src/shellVersion';
+
+/** Cloudflare Worker name for this dashboard host (sandbox vs prod). */
+export function resolveWorkerDisplayName(): string {
+  if (typeof window === 'undefined') return 'inneranimalmedia';
+  const h = window.location.hostname.toLowerCase();
+  if (h.includes('inneranimal-dashboard')) return 'inneranimal-dashboard';
+  if (h === 'inneranimalmedia.com' || h === 'www.inneranimalmedia.com') return 'inneranimalmedia';
+  if (h.endsWith('.inneranimalmedia.com')) return 'inneranimalmedia';
+  if (h.endsWith('.workers.dev') && h.includes('inneranimalmedia')) return 'inneranimalmedia';
+  return 'inneranimalmedia';
+}
 
 /** Strip emoji / variation selectors for status-line display (project rule: no emoji in product UI). */
 function stripEmojiFromNotificationText(s: string | null | undefined): string {
@@ -127,7 +138,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     };
   }, [notifOpen]);
 
+  const workerDisplayName = useMemo(() => resolveWorkerDisplayName(), []);
+
   const brandTitle = [
+    workerDisplayName,
     healthOk === true ? 'Worker healthy' : healthOk === false ? 'Worker health check failed' : 'Health unknown',
     lastDeployLine || undefined,
     tunnelLabel || undefined,
@@ -204,17 +218,19 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <div className="flex items-center gap-1 sm:gap-3 h-full px-1 min-w-0">
           <button
             type="button"
-            className={`flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full max-w-[min(9rem,32vw)] border-0 bg-transparent ${
+            className={`flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full max-w-[min(14rem,42vw)] border-0 bg-transparent ${
               healthOk === true
                 ? 'bg-[var(--solar-green)]/10'
                 : healthOk === false
                   ? 'bg-[var(--solar-red)]/15'
                   : 'bg-[var(--solar-cyan)]/15'
             }`}
-            title={brandTitle || 'Inner Animal Media'}
+            title={brandTitle || workerDisplayName}
             onClick={() => onBrandClick?.()}
           >
-            <span className="font-bold -mt-[1px] tracking-wide truncate">Inner Animal</span>
+            <span className="font-bold -mt-[1px] tracking-wide truncate font-mono text-[10px] sm:text-[11px]">
+              {workerDisplayName}
+            </span>
           </button>
           <button
             type="button"

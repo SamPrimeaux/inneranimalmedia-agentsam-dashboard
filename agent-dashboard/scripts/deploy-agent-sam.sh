@@ -8,7 +8,7 @@ R2_BASE_PATH="static/dashboard/agent"
 D1_DB="inneranimalmedia-business"
 BUILD_PIPELINE="gemini"
 
-echo "🚀 Starting MeauxCAD Mandatory CICD Deployment..."
+echo "Starting MeauxCAD Mandatory CICD Deployment..."
 
 # 1. Build
 echo "Building MeauxCAD..."

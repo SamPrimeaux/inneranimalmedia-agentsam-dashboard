@@ -13,8 +13,11 @@ cd "$REPO_ROOT"
 
 # ── Load env ──────────────────────────────────────────────────────────────────
 if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
-  # shellcheck disable=SC2046
-  export $(grep -v '^#' "${REPO_ROOT}/.env.cloudflare" | xargs) 2>/dev/null || true
+  _iam_cf_kv=$(grep -v '^#' "${REPO_ROOT}/.env.cloudflare" | xargs)
+  if [ -n "${_iam_cf_kv}" ]; then
+    # shellcheck disable=SC2086
+    export ${_iam_cf_kv}
+  fi
 fi
 RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
 RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"

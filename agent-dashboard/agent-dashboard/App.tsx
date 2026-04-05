@@ -8,7 +8,8 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
-import { ChatAssistant, IAM_AGENT_CHAT_CONVERSATION_CHANGE } from './components/ChatAssistant';
+import { ChatAssistant } from './components/ChatAssistant';
+import { IAM_AGENT_CHAT_CONVERSATION_CHANGE, LS_AGENT_CHAT_CONVERSATION_ID } from './agentChatConstants';
 import { WelcomeLauncher } from './components/WelcomeLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
@@ -19,10 +20,12 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ToolLauncherBar } from './components/ToolLauncherBar';
 import { StatusBar, type AgentNotificationRow } from './components/StatusBar';
 import { ExcalidrawView } from './components/ExcalidrawView';
-import { DatabaseBrowser } from './components/DatabaseBrowser';
+import { DatabaseBrowser, type DatabaseExplorerJump } from './components/DatabaseBrowser';
+import { UnifiedSearchBar, type UnifiedSearchNavigate } from './components/UnifiedSearchBar';
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
 import { GitHubExplorer } from './components/GitHubExplorer';
 import { KnowledgeSearchPanel } from './components/KnowledgeSearchPanel';
+import { ProblemsDebugPanel } from './components/ProblemsDebugPanel';
 import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
@@ -36,16 +39,15 @@ import {
   migrateLegacyThemeLocalStorage,
 } from './src/applyCmsTheme';
 import {
-  loadWorkspace,
-  saveWorkspace,
-  loadGitBranch,
+  hydrateIdeFromApi,
+  persistIdeToApi,
   formatWorkspaceStatusLine,
-  loadRecentFiles,
-  pushRecentFromActiveFile,
+  mergeRecentFromActiveFile,
+  IDE_PERSIST_VERSION,
   type IdeWorkspaceSnapshot,
   type RecentFileEntry,
 } from './src/ideWorkspace';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft } from 'lucide-react';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2 } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -69,7 +71,21 @@ function previewButtonTitle(name: string): string {
   return 'Preview in Browser tab';
 }
 
+/** Shown in the Browser tab address bar instead of a blob: URL when previewing from the editor. */
+function previewAddressBarLabel(file: ActiveFile): string {
+  const k = file.r2Key?.trim();
+  const b = file.r2Bucket?.trim();
+  if (k && b) return `r2://${b}/${k}`;
+  const gh = file.githubRepo?.trim();
+  const gp = file.githubPath?.trim();
+  if (gh && gp) return `github://${gh}/${gp}`;
+  const wp = file.workspacePath?.trim();
+  if (wp) return `local://${wp}`;
+  return `preview:${(file.name || 'buffer').trim() || 'buffer'}`;
+}
+
 const PRODUCT_NAME = 'Agent Sam';
+
 
 function buildAgentSamGreeting(workspaceDisplayLine: string): string {
   const w = workspaceDisplayLine.trim();
@@ -95,8 +111,8 @@ const App: React.FC = () => {
   const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
 
   // IDE State
-  type TabId = 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
+  type TabId = 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
+  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
   const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
@@ -108,11 +124,13 @@ const App: React.FC = () => {
   /** Mirrored from Lab shell for Output tab (build / r2 / help). */
   const [shellOutputLines, setShellOutputLines] = useState<string[]>([]);
 
-  const [ideWorkspace, setIdeWorkspace] = useState<IdeWorkspaceSnapshot>(() => loadWorkspace());
-  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>(() =>
-    typeof window !== 'undefined' ? loadRecentFiles() : [],
+  const [ideWorkspace, setIdeWorkspace] = useState<IdeWorkspaceSnapshot>(() => ({ source: 'none' }));
+  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
+  const [gitBranch, setGitBranch] = useState(() => 'main');
+  const [agentChatConversationId, setAgentChatConversationId] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem(LS_AGENT_CHAT_CONVERSATION_ID)?.trim() || '' : '',
   );
-  const [gitBranch, setGitBranch] = useState(() => loadGitBranch());
+  const [dbExplorerJump, setDbExplorerJump] = useState<DatabaseExplorerJump | null>(null);
   const [errorCount, setErrorCount] = useState(0);
   const [warningCount, setWarningCount] = useState(0);
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
@@ -181,19 +199,93 @@ const App: React.FC = () => {
     document.title = `${workspaceDisplayName} — ${PRODUCT_NAME}`;
   }, [workspaceDisplayName]);
 
+  const idePersistRef = useRef({
+    ideWorkspace: { source: 'none' } as IdeWorkspaceSnapshot,
+    gitBranch: 'main',
+    recentFiles: [] as RecentFileEntry[],
+  });
   useEffect(() => {
-    saveWorkspace(ideWorkspace);
-  }, [ideWorkspace]);
+    idePersistRef.current = { ideWorkspace, gitBranch, recentFiles };
+  }, [ideWorkspace, gitBranch, recentFiles]);
+
+  const hydrateGenRef = useRef(0);
+  const prevAgentConvRef = useRef<string>('');
+  useEffect(() => {
+    const id = agentChatConversationId?.trim() || '';
+    const prev = prevAgentConvRef.current;
+    prevAgentConvRef.current = id;
+
+    if (prev && prev !== id) {
+      const s = idePersistRef.current;
+      void persistIdeToApi(prev, {
+        v: IDE_PERSIST_VERSION,
+        ideWorkspace: s.ideWorkspace,
+        gitBranch: s.gitBranch,
+        recentFiles: s.recentFiles,
+      });
+    }
+
+    if (!id) return;
+    const gen = ++hydrateGenRef.current;
+    let cancelled = false;
+    void hydrateIdeFromApi(id).then((b) => {
+      if (cancelled || hydrateGenRef.current !== gen) return;
+      setIdeWorkspace(b.ideWorkspace);
+      setGitBranch(b.gitBranch);
+      setRecentFiles(b.recentFiles);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentChatConversationId]);
+
+  useEffect(() => {
+    const id = agentChatConversationId?.trim();
+    if (!id) return;
+    const t = window.setTimeout(() => {
+      void persistIdeToApi(id, {
+        v: IDE_PERSIST_VERSION,
+        ideWorkspace,
+        gitBranch,
+        recentFiles,
+      });
+    }, 650);
+    return () => clearTimeout(t);
+  }, [agentChatConversationId, ideWorkspace, gitBranch, recentFiles]);
+
   // Tabs: only 'welcome' is open by default. Others open on demand and can be closed.
   const [openTabs, setOpenTabs] = useState<TabId[]>(['welcome']);
   const [activeTab, setActiveTab] = useState<TabId>('welcome');
   const [activeFile, setActiveFile] = useState<ActiveFile | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');
+  /** When set with a blob browser URL, Browser tab shows this label (e.g. r2://binding/key) instead of blob:. */
+  const [browserAddressDisplay, setBrowserAddressDisplay] = useState<string | null>(null);
+  const [browserTabTitle, setBrowserTabTitle] = useState<string | null>(null);
   const [glbViewerUrl, setGlbViewerUrl] = useState<string>(
     'https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/6454d6fa-d4f1-43ec-33fd-628d0e7cdb00/public'
   );
   const [glbViewerFilename, setGlbViewerFilename] = useState('Meshy_AI_Jet.glb');
+
+  const lastPersistedTabRef = useRef<TabId | null>(null);
+  useEffect(() => {
+    lastPersistedTabRef.current = null;
+  }, [agentChatConversationId]);
+
+  useEffect(() => {
+    const id = agentChatConversationId?.trim();
+    if (!id) return;
+    const prev = lastPersistedTabRef.current;
+    lastPersistedTabRef.current = activeTab;
+    if (prev === null) return;
+    if (prev === activeTab) return;
+    void persistIdeToApi(id, {
+      v: IDE_PERSIST_VERSION,
+      ideWorkspace,
+      gitBranch,
+      recentFiles,
+    });
+  }, [activeTab, agentChatConversationId, ideWorkspace, gitBranch, recentFiles]);
 
   useEffect(() => {
     return () => {
@@ -214,6 +306,10 @@ const App: React.FC = () => {
 
   const closeTab = (tab: TabId, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (tab === 'browser') {
+      setBrowserAddressDisplay(null);
+      setBrowserTabTitle(null);
+    }
     const next = openTabs.filter(t => t !== tab);
     setOpenTabs(next);
     if (activeTab === tab) {
@@ -248,7 +344,7 @@ const App: React.FC = () => {
     window.addEventListener('pointerup', onUp);
   };
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>(() => [
-    { role: 'assistant', content: buildAgentSamGreeting(formatWorkspaceStatusLine(loadWorkspace())) },
+    { role: 'assistant', content: buildAgentSamGreeting(formatWorkspaceStatusLine({ source: 'none' })) },
   ]);
 
   useEffect(() => {
@@ -262,7 +358,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const onConv = (e: Event) => {
-      const id = (e as CustomEvent<{ id?: string | null }>).detail?.id?.trim() ?? '';
+      const raw = (e as CustomEvent<{ id?: string | null }>).detail?.id;
+      const id = typeof raw === 'string' ? raw.trim() : '';
+      setAgentChatConversationId(id);
       if (!id) {
         setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
         return;
@@ -363,8 +461,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!activeFile) return;
     const t = window.setTimeout(() => {
-      pushRecentFromActiveFile(activeFile);
-      setRecentFiles(loadRecentFiles());
+      setRecentFiles((prev) => mergeRecentFromActiveFile(prev, activeFile));
     }, 450);
     return () => window.clearTimeout(t);
   }, [activeFile]);
@@ -460,12 +557,69 @@ const App: React.FC = () => {
     [revealMainWorkspaceIfNarrow],
   );
 
-  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright') => {
+  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright') => {
     setActiveActivity((prev) => {
       if (prev === activity) return null;
       return activity;
     });
   };
+
+  const openAgentThreadFromProblems = useCallback((sessionId: string) => {
+    const id = sessionId.trim();
+    if (!id) return;
+    try {
+      localStorage.setItem(LS_AGENT_CHAT_CONVERSATION_ID, id);
+    } catch {
+      /* ignore */
+    }
+    window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id } }));
+    setAgentPosition((p) => (p === 'off' ? 'right' : p));
+    setActiveActivity(null);
+  }, []);
+
+  const handleUnifiedNavigate = useCallback(
+    (nav: UnifiedSearchNavigate) => {
+      if (nav.kind === 'table') {
+        setOpenTabs((prev) => (prev.includes('database') ? prev : [...prev, 'database']));
+        setActiveTab('database');
+        setDbExplorerJump({ token: Date.now(), table: nav.name, dbTarget: 'd1' });
+        return;
+      }
+      if (nav.kind === 'conversation') {
+        try {
+          localStorage.setItem(LS_AGENT_CHAT_CONVERSATION_ID, nav.id);
+        } catch {
+          /* ignore */
+        }
+        window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id: nav.id } }));
+        setAgentPosition((p) => (p === 'off' ? 'right' : p));
+        return;
+      }
+      if (nav.kind === 'knowledge') {
+        if (nav.url && /^https?:\/\//i.test(nav.url)) {
+          window.open(nav.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        setActiveActivity('search');
+        return;
+      }
+      if (nav.kind === 'sql' || nav.kind === 'column') {
+        const sql = nav.sql?.trim();
+        if (!sql) return;
+        setOpenTabs((prev) => (prev.includes('database') ? prev : [...prev, 'database']));
+        setActiveTab('database');
+        setDbExplorerJump({ token: Date.now(), querySql: sql, dbTarget: 'd1' });
+        return;
+      }
+      if (nav.kind === 'deployment') {
+        const t = nav.summary?.trim();
+        if (t) {
+          void navigator.clipboard?.writeText(t).catch(() => {});
+        }
+      }
+    },
+    [],
+  );
 
   const fetchLiveStatus = useCallback(async () => {
     const cred = { credentials: 'same-origin' as const };
@@ -661,6 +815,8 @@ const App: React.FC = () => {
     (event: { type: 'browser_navigate'; url: string }) => {
       if (event.type !== 'browser_navigate' || !event.url?.trim()) return;
       revealMainWorkspaceIfNarrow();
+      setBrowserAddressDisplay(null);
+      setBrowserTabTitle(null);
       setBrowserUrl(event.url.trim());
       setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
       setActiveTab('browser');
@@ -719,6 +875,8 @@ const App: React.FC = () => {
 
     const u = URL.createObjectURL(blob);
     htmlPreviewBlobRef.current = u;
+    setBrowserAddressDisplay(previewAddressBarLabel(activeFile));
+    setBrowserTabTitle(activeFile.name?.trim() ? `Preview · ${activeFile.name.trim()}` : 'Preview');
     setBrowserUrl(u);
     setOpenTabs((prev) => (prev.includes('browser') ? prev : [...prev, 'browser']));
     setActiveTab('browser');
@@ -1131,8 +1289,12 @@ const App: React.FC = () => {
               />
           </div>
 
-          {/* Knowledge search: opens left rail panel (RAG / indexed chunks) */}
-          <div className="flex-1 flex justify-center items-center min-w-0 px-2">
+          {/* Unified search (Cmd+K) + Knowledge panel (RAG / chats list) */}
+          <div className="flex-1 flex justify-center items-center min-w-0 px-2 gap-2">
+              <UnifiedSearchBar
+                workspaceLabel={workspaceDisplayName}
+                onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
+              />
               <button
                   type="button"
                   title="Knowledge search (RAG)"
@@ -1214,7 +1376,15 @@ const App: React.FC = () => {
               <ActivityIcon icon={Network} title="Remote Explorers" active={activeActivity === 'remote'} onClick={() => toggleActivity('remote')} />
               <ActivityIcon icon={Layers} title="Tools & MCP" active={activeActivity === 'mcps'} onClick={() => toggleActivity('mcps')} />
               <ActivityIcon icon={Github} title="GitHub Actions" active={activeActivity === 'actions'} onClick={() => toggleActivity('actions')} />
-              <ActivityIcon icon={Database} title="D1 Explorer" active={activeActivity === 'sql'} onClick={() => toggleActivity('sql')} />
+              <ActivityIcon
+                  icon={Database}
+                  title="D1 Explorer"
+                  active={openTabs.includes('database')}
+                  onClick={() => {
+                    openTab('database');
+                    setActiveActivity(null);
+                  }}
+              />
               <ActivityIcon icon={Cloud} title="Cloud Sync" active={activeActivity === 'drive'} onClick={() => toggleActivity('drive')} />
               <ActivityIcon icon={Monitor} title="Playwright Jobs" active={activeActivity === 'playwright'} onClick={() => toggleActivity('playwright')} />
               
@@ -1249,6 +1419,7 @@ const App: React.FC = () => {
                         editorCursorColumn={cursorPos.col}
                         messages={chatMessages} 
                         setMessages={setChatMessages} 
+                        onOpenChatHistory={() => setActiveActivity('search')}
                         onFileSelect={openInMonacoFromChat}
                         onGlbFileSelect={(file) => {
                           const glbUrl = URL.createObjectURL(file);
@@ -1289,7 +1460,7 @@ const App: React.FC = () => {
 
           <div 
               className={`transition-all duration-75 shrink-0 bg-[var(--bg-panel)] flex flex-col z-40 overflow-hidden shadow-2xl md:shadow-none hover:border-[var(--solar-cyan)] relative group
-              ${activeActivity ? 'absolute inset-y-0 left-0 md:relative md:left-0 max-md:!w-full max-md:z-[46] max-md:inset-0 border-r border-[var(--border-subtle)] opacity-100' : 'border-none opacity-0'} glass-panel`}
+              ${activeActivity ? 'absolute inset-y-0 left-0 md:relative md:left-0 max-md:!w-full max-md:z-[46] max-md:inset-0 border-r border-[var(--border-subtle)] opacity-100 pointer-events-auto' : 'border-none opacity-0 pointer-events-none'} glass-panel`}
               style={{ width: activeActivity ? sidebarW : 0 }}
               {...(narrowNeedsBack && !!activeActivity ? mobileEdgeSwipeHandlers : {})}
           >
@@ -1310,7 +1481,10 @@ const App: React.FC = () => {
                           isEmbedded={true}
                       />
                   ) : activeActivity === 'search' ? (
-                      <KnowledgeSearchPanel onClose={() => setActiveActivity(null)} />
+                      <KnowledgeSearchPanel
+                        onClose={() => setActiveActivity(null)}
+                        activeConversationId={agentChatConversationId}
+                      />
                   ) : activeActivity === 'files' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
@@ -1340,8 +1514,6 @@ const App: React.FC = () => {
                               revealMainWorkspaceIfNarrow();
                           }}
                       />
-                  ) : activeActivity === 'sql' ? (
-                      <DatabaseBrowser onClose={() => setActiveActivity(null)} />
                   ) : activeActivity === 'actions' ? (
                       <GitHubExplorer
                           expandRepoFullName={githubExpandRepo}
@@ -1370,12 +1542,34 @@ const App: React.FC = () => {
                       />
                   ) : activeActivity === 'playwright' ? (
                       <PlaywrightConsole />
+                  ) : activeActivity === 'debug' ? (
+                      <ProblemsDebugPanel
+                        onClose={() => setActiveActivity(null)}
+                        onNavigateToAgentThread={openAgentThreadFromProblems}
+                        onOpenMcpPanel={() => setActiveActivity('mcps')}
+                      />
                   ) : activeActivity === 'projects' ? (
                       <WorkspaceExplorerPanel
                         ideWorkspace={ideWorkspace}
                         workspaceTitle={workspaceDisplayName}
                         recentFiles={recentFiles}
-                        onRefreshRecent={() => setRecentFiles(loadRecentFiles())}
+                        onRefreshRecent={() => {
+                          const sid = agentChatConversationId?.trim();
+                          if (!sid) return;
+                          void hydrateIdeFromApi(sid).then((b) => setRecentFiles(b.recentFiles));
+                        }}
+                        onClearRecentFiles={() => {
+                          setRecentFiles([]);
+                          const sid = agentChatConversationId?.trim();
+                          if (sid) {
+                            void persistIdeToApi(sid, {
+                              v: IDE_PERSIST_VERSION,
+                              ideWorkspace,
+                              gitBranch,
+                              recentFiles: [],
+                            });
+                          }
+                        }}
                         onOpenRecent={(e) => void openRecentEntry(e)}
                         onOpenLocalFolder={() => {
                           setActiveActivity('files');
@@ -1435,10 +1629,26 @@ const App: React.FC = () => {
                                   openEditorPreview();
                               }}
                               title={previewButtonTitle(activeFile.name)}
-                              className="shrink-0 h-8 px-2.5 flex items-center gap-1.5 text-[11px] font-medium rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)] hover:border-[var(--solar-cyan)]"
+                              className="shrink-0 h-8 w-8 p-0 inline-flex items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)] hover:border-[var(--solar-cyan)]"
                           >
-                              <Eye size={13} className="text-[var(--solar-cyan)]" />
-                              Preview
+                              <Eye size={15} className="text-[var(--solar-cyan)]" strokeWidth={1.75} aria-hidden />
+                              <span className="sr-only">Preview in Browser tab</span>
+                          </button>
+                      )}
+                      {activeFile?.r2Key?.trim() && activeFile?.r2Bucket?.trim() && (
+                          <button
+                              type="button"
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  const path = `${activeFile.r2Bucket!.trim()}/${activeFile.r2Key!.trim()}`;
+                                  void navigator.clipboard.writeText(path);
+                                  setToastMsg('R2 path copied');
+                              }}
+                              title={`Copy R2 path: ${activeFile.r2Bucket!.trim()}/${activeFile.r2Key!.trim()}`}
+                              className="shrink-0 h-8 w-8 p-0 inline-flex items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-hover)] text-[var(--text-main)] hover:bg-[var(--bg-panel)] hover:border-[var(--solar-cyan)]"
+                          >
+                              <Link2 size={14} className="text-[var(--text-muted)]" strokeWidth={1.75} aria-hidden />
+                              <span className="sr-only">Copy R2 path</span>
                           </button>
                       )}
                       </>
@@ -1454,7 +1664,7 @@ const App: React.FC = () => {
                   )}
                   {openTabs.includes('browser') && (
                       <Tab
-                          title="Browser"
+                          title={browserTabTitle ?? 'Browser'}
                           icon={<Globe size={13} className="text-[var(--solar-blue)]"/>}
                           active={activeTab === 'browser'}
                           onClick={() => setActiveTab('browser')}
@@ -1470,12 +1680,22 @@ const App: React.FC = () => {
                           onClose={(e) => closeTab('excalidraw', e)}
                       />
                   )}
+                  {openTabs.includes('database') && (
+                      <Tab
+                          title="Database"
+                          icon={<Database size={13} className="text-[var(--solar-blue)]"/>}
+                          active={activeTab === 'database'}
+                          onClick={() => setActiveTab('database')}
+                          onClose={(e) => closeTab('database', e)}
+                      />
+                  )}
 
                   {/* Quick-open buttons for closed panels */}
                   <div className="ml-auto flex items-center gap-0.5 pr-2 shrink-0">
                       {!openTabs.includes('engine') && <QuickOpen label="Voxel" onClick={() => openTab('engine')} />}
                       {!openTabs.includes('browser') && <QuickOpen label="Browser" onClick={() => openTab('browser')} />}
                       {!openTabs.includes('excalidraw') && <QuickOpen label="Draw" onClick={() => openTab('excalidraw')} />}
+                      {!openTabs.includes('database') && <QuickOpen label="Database" onClick={() => openTab('database')} />}
                   </div>
 
                   {/* Decorative line below tabs */}
@@ -1509,6 +1729,8 @@ const App: React.FC = () => {
                   {activeTab === 'engine' && (
                       <div className="relative z-10 w-full h-full pointer-events-none flex flex-col justify-end pb-8">
                           <ToolLauncherBar onNavigate={(url) => {
+                              setBrowserAddressDisplay(null);
+                              setBrowserTabTitle(null);
                               setBrowserUrl(url);
                               openTab('browser');
                           }} />
@@ -1537,13 +1759,28 @@ const App: React.FC = () => {
                   )}
                   {activeTab === 'browser' && (
                       <div className="absolute inset-0 z-10 overflow-hidden">
-                          <BrowserView url={browserUrl} />
+                          <BrowserView url={browserUrl} addressDisplay={browserAddressDisplay} />
                       </div>
                   )}
 
                   {activeTab === 'excalidraw' && (
                       <div className="absolute inset-0 z-10 flex flex-col">
                           <ExcalidrawView />
+                      </div>
+                  )}
+                  {activeTab === 'database' && (
+                      <div className="absolute inset-0 z-10 flex flex-col min-h-0 overflow-hidden bg-[var(--bg-app)]">
+                          <DatabaseBrowser
+                              explorerJump={dbExplorerJump}
+                              onExplorerJumpConsumed={() => setDbExplorerJump(null)}
+                              onClose={() => {
+                                const next = openTabs.filter((t) => t !== 'database');
+                                setOpenTabs(next);
+                                if (activeTab === 'database') {
+                                  setActiveTab(next.length > 0 ? next[next.length - 1] : 'welcome');
+                                }
+                              }}
+                          />
                       </div>
                   )}
                   </div>
@@ -1596,6 +1833,7 @@ const App: React.FC = () => {
                             editorCursorColumn={cursorPos.col}
                             messages={chatMessages} 
                             setMessages={setChatMessages} 
+                            onOpenChatHistory={() => setActiveActivity('search')}
                             onFileSelect={openInMonacoFromChat}
                             onGlbFileSelect={(file) => {
                               const glbUrl = URL.createObjectURL(file);
@@ -1656,8 +1894,11 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'sql' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => toggleActivity('sql')}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${openTabs.includes('database') ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => {
+            openTab('database');
+            setActiveActivity(null);
+          }}
         >
           <Database size={24} strokeWidth={1.5} aria-hidden />
           <span>Database</span>

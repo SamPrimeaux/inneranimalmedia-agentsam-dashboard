@@ -196,6 +196,20 @@ interface FileNode {
     isOpen?: boolean;
 }
 
+/** Immutable path update so React always sees a new root after expand/collapse. */
+function mapFileNodeInTree(node: FileNode, target: FileNode, fn: (n: FileNode) => FileNode): FileNode {
+    if (node === target) return fn({ ...node });
+    if (!node.children?.length) return node;
+    let changed = false;
+    const nextChildren = node.children.map((ch) => {
+        const nc = mapFileNodeInTree(ch, target, fn);
+        if (nc !== ch) changed = true;
+        return nc;
+    });
+    if (!changed) return node;
+    return { ...node, children: nextChildren };
+}
+
 export const LocalExplorer: React.FC<{
     onFileSelect: (fileData: { name: string; content: string; handle: any; workspacePath?: string }) => void;
     /** Fires when user connects a native folder — drives status bar + persisted workspace. */
@@ -605,16 +619,15 @@ export const LocalExplorer: React.FC<{
             return;
         }
 
-        // Toggle directory open/close
-        const clonedRoot = { ...rootDir! };
-        const target = findNode(clonedRoot, node);
-        if (target) {
-            target.isOpen = !target.isOpen;
-            if (target.isOpen && !target.children) {
-                target.children = await getEntries(target.handle);
-            }
-            setRootDir(clonedRoot);
+        if (!rootDir) return;
+        const cur = findNode(rootDir, node);
+        if (!cur) return;
+        if (cur.isOpen) {
+            setRootDir((prev) => (prev ? mapFileNodeInTree(prev, node, (n) => ({ ...n, isOpen: false })) : prev));
+            return;
         }
+        const children = await getEntries(node.handle);
+        setRootDir((prev) => (prev ? mapFileNodeInTree(prev, node, (n) => ({ ...n, isOpen: true, children })) : prev));
     };
 
     const findNode = (current: FileNode, target: FileNode): FileNode | null => {
@@ -632,10 +645,11 @@ export const LocalExplorer: React.FC<{
         const nodePath = pathPrefix ? `${pathPrefix}/${node.name}` : node.name;
         return (
             <div key={nodePath} className="flex flex-col">
-                <div 
-                    onClick={() => toggleDir(node, pathPrefix)}
+                <button
+                    type="button"
+                    onClick={() => void toggleDir(node, pathPrefix)}
                     style={{ paddingLeft: `${depth * 10}px` }}
-                    className="flex items-center gap-1.5 px-2 py-1 hover:bg-[var(--bg-hover)] cursor-pointer text-[13px] text-[var(--text-main)] group whitespace-nowrap overflow-hidden text-ellipsis"
+                    className="flex items-center gap-1.5 px-2 py-1 w-full text-left hover:bg-[var(--bg-hover)] cursor-pointer text-[13px] text-[var(--text-main)] group whitespace-nowrap overflow-hidden text-ellipsis border-none bg-transparent font-inherit"
                 >
                     {node.kind === 'directory' ? (
                         <>
@@ -649,7 +663,7 @@ export const LocalExplorer: React.FC<{
                         </>
                     )}
                     <span className="truncate">{node.name}</span>
-                </div>
+                </button>
                 {node.isOpen && node.children && (
                     <div className="flex flex-col border-l border-[var(--border-subtle)] ml-3">
                         {node.children.map(child => renderTree(child, depth + 1, nodePath))}

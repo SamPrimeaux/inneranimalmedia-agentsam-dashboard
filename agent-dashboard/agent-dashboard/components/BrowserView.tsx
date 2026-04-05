@@ -12,7 +12,10 @@ function normalizeNavigate(raw: string): string {
 }
 
 /** Embedded browser: URL bar + iframe (minimal chrome). */
-export const BrowserView: React.FC<{ url?: string }> = ({ url: urlFromParent }) => {
+export const BrowserView: React.FC<{ url?: string; addressDisplay?: string | null }> = ({
+    url: urlFromParent,
+    addressDisplay = null,
+}) => {
     const [iframeUrl, setIframeUrl] = useState(() => normalizeNavigate(urlFromParent || DEFAULT_URL));
     const [inputUrl, setInputUrl] = useState(() => normalizeNavigate(urlFromParent || DEFAULT_URL));
 
@@ -20,12 +23,17 @@ export const BrowserView: React.FC<{ url?: string }> = ({ url: urlFromParent }) 
         if (urlFromParent && urlFromParent.trim()) {
             const n = normalizeNavigate(urlFromParent);
             setIframeUrl(n);
-            setInputUrl(n);
+            const label = addressDisplay != null && String(addressDisplay).trim() !== '' ? String(addressDisplay).trim() : '';
+            const showLabel = label && /^(blob:|data:)/i.test(n);
+            setInputUrl(showLabel ? label : n);
         }
-    }, [urlFromParent]);
+    }, [urlFromParent, addressDisplay]);
 
     const go = useCallback(() => {
-        const n = normalizeNavigate(inputUrl);
+        const raw = inputUrl.trim();
+        if (!raw) return;
+        if (/^(r2:|github:|local:|preview:)/i.test(raw)) return;
+        const n = normalizeNavigate(raw);
         setIframeUrl(n);
         setInputUrl(n);
     }, [inputUrl]);

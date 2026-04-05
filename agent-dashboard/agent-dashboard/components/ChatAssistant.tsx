@@ -30,6 +30,10 @@ import {
 } from 'lucide-react';
 import { ProjectType } from '../types';
 import type { ActiveFile } from '../types';
+import { IAM_AGENT_CHAT_CONVERSATION_CHANGE, LS_AGENT_CHAT_CONVERSATION_ID } from '../agentChatConstants';
+import type { AgentSessionRow } from '../agentSessionsCatalog';
+
+export { IAM_AGENT_CHAT_CONVERSATION_CHANGE } from '../agentChatConstants';
 
 type MessageAttachmentPreview = {
   previewUrl: string | null;
@@ -69,6 +73,8 @@ interface ChatAssistantProps {
   onMobileOpenDashboard?: () => void;
   /** Open the code editor tab from chat (e.g. mobile Context tab). */
   onOpenCodeTab?: () => void;
+  /** Open the Search sidebar (knowledge + chat history). */
+  onOpenChatHistory?: () => void;
 }
 
 type StagedAttachment = {
@@ -96,106 +102,7 @@ type ChatModelRow = {
   api_platform: string;
 };
 
-const LS_CONV = 'iam-agent-chat-conversation-id';
-
-/** Dispatched when the persisted conversation id changes (new chat, row select, or hydrate). App loads message history. */
-export const IAM_AGENT_CHAT_CONVERSATION_CHANGE = 'iam-agent-chat-conversation-change';
-
-type AgentSessionRow = {
-  id: string;
-  session_type?: string;
-  status?: string;
-  started_at?: number | string;
-  message_count?: number;
-  has_artifacts?: boolean;
-  name?: string | null;
-};
-
-function sessionStartedAtMs(s: AgentSessionRow): number {
-  const st = s.started_at;
-  if (typeof st === 'number') return st < 1e12 ? st * 1000 : st;
-  if (typeof st === 'string') {
-    const n = Number(st);
-    if (!Number.isNaN(n) && n > 0) return n < 1e12 ? n * 1000 : n;
-    const p = Date.parse(st);
-    if (!Number.isNaN(p)) return p;
-  }
-  return 0;
-}
-
-function relativeSessionTime(s: AgentSessionRow): string {
-  const t = sessionStartedAtMs(s);
-  if (!t) return '';
-  const diffMs = Math.max(0, Date.now() - t);
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m`;
-  const h = Math.floor(min / 60);
-  if (h < 48) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo`;
-  const y = Math.floor(d / 365);
-  return `${y}y`;
-}
-
-function startOfTodayLocal(): number {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function startOfWeekMondayLocal(): number {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function startOfMonthLocal(): number {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function sessionGroupLabel(ts: number): 'Today' | 'This Week' | 'This Month' | 'Older' {
-  if (!ts) return 'Older';
-  const startToday = startOfTodayLocal();
-  if (ts >= startToday) return 'Today';
-  const startWeek = startOfWeekMondayLocal();
-  if (ts >= startWeek) return 'This Week';
-  const startMonth = startOfMonthLocal();
-  if (ts >= startMonth) return 'This Month';
-  return 'Older';
-}
-
-function groupSessionsByBucket(rows: AgentSessionRow[]): { label: string; items: AgentSessionRow[] }[] {
-  const withTs = rows.map((r) => ({ row: r, ts: sessionStartedAtMs(r) }));
-  withTs.sort((a, b) => b.ts - a.ts);
-  const buckets: Record<'Today' | 'This Week' | 'This Month' | 'Older', AgentSessionRow[]> = {
-    Today: [],
-    'This Week': [],
-    'This Month': [],
-    Older: [],
-  };
-  for (const { row, ts } of withTs) {
-    buckets[sessionGroupLabel(ts)].push(row);
-  }
-  const order: ('Today' | 'This Week' | 'This Month' | 'Older')[] = [
-    'Today',
-    'This Week',
-    'This Month',
-    'Older',
-  ];
-  return order.filter((l) => buckets[l].length > 0).map((label) => ({ label, items: buckets[label] }));
-}
-
-/** Matches App.tsx `buildAgentSamGreeting` — hide this bubble on the session list when no thread is selected. */
+/** Matches App.tsx `buildAgentSamGreeting` — hide this bubble when no real thread content yet. */
 function isAgentSamEmptyThreadGreeting(content: string): boolean {
   const t = content.trim();
   return t.startsWith("Hi! I'm Agent Sam.") || t.startsWith('Agent Sam: pick a workspace');
@@ -726,6 +633,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onOpenGitHubIntegration,
   onMobileOpenDashboard,
   onOpenCodeTab,
+  onOpenChatHistory,
 }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -752,12 +660,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [composerDragging, setComposerDragging] = useState(false);
   const composerDragDepthRef = useRef(0);
   const [conversationId, setConversationId] = useState<string>(() =>
-    typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
-  );
-  const [viewMode, setViewMode] = useState<'list' | 'thread'>(() =>
-    typeof window !== 'undefined' && localStorage.getItem('iam-agent-chat-conversation-id')
-      ? 'thread'
-      : 'list'
+    typeof localStorage !== 'undefined' ? localStorage.getItem(LS_AGENT_CHAT_CONVERSATION_ID) || '' : ''
   );
   const [threadTitle, setThreadTitle] = useState<string>('');
 
@@ -822,20 +725,15 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, [repoDrawerOpen, loadGhRepos]);
 
   const [sessions, setSessions] = useState<AgentSessionRow[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const sessionListRef = useRef<HTMLDivElement>(null);
   const hydratedFromLsRef = useRef(false);
 
   const loadSessions = useCallback(async () => {
-    setSessionsLoading(true);
     try {
       const r = await fetch('/api/agent/sessions', { credentials: 'same-origin' });
       const data = r.ok ? await r.json() : [];
       setSessions(Array.isArray(data) ? (data as AgentSessionRow[]) : []);
     } catch {
       setSessions([]);
-    } finally {
-      setSessionsLoading(false);
     }
   }, []);
 
@@ -846,7 +744,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   useEffect(() => {
     if (typeof window === 'undefined' || hydratedFromLsRef.current) return;
     hydratedFromLsRef.current = true;
-    const id = localStorage.getItem(LS_CONV)?.trim();
+    const id = localStorage.getItem(LS_AGENT_CHAT_CONVERSATION_ID)?.trim();
     if (id) {
       queueMicrotask(() => {
         window.dispatchEvent(
@@ -857,26 +755,37 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, []);
 
   const handleNewChat = useCallback(() => {
-    setViewMode('thread');
     setMobileThreadTab('chat');
     setThreadTitle('New Chat');
-    if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_CONV);
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_AGENT_CHAT_CONVERSATION_ID);
     setConversationId('');
-    sessionListRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id: null } }));
   }, []);
 
-  const handleSelectSession = useCallback((id: string) => {
-    setViewMode('thread');
-    setMobileThreadTab('chat');
-    setThreadTitle(sessions.find((s) => s.id === id)?.name || 'Conversation');
-    if (!id) return;
-    localStorage.setItem(LS_CONV, id);
-    setConversationId(id);
-    window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id } }));
-  }, [sessions]);
-
-  const sessionGroups = useMemo(() => groupSessionsByBucket(sessions), [sessions]);
+  useEffect(() => {
+    const onExternal = (e: Event) => {
+      const raw = (e as CustomEvent<{ id?: string | null }>).detail?.id;
+      if (raw === null || raw === undefined) {
+        setMobileThreadTab('chat');
+        setThreadTitle('New Chat');
+        if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_AGENT_CHAT_CONVERSATION_ID);
+        setConversationId('');
+        return;
+      }
+      if (typeof raw === 'string' && raw.trim()) {
+        const id = raw.trim();
+        setMobileThreadTab('chat');
+        try {
+          localStorage.setItem(LS_AGENT_CHAT_CONVERSATION_ID, id);
+        } catch {
+          /* ignore */
+        }
+        setConversationId(id);
+      }
+    };
+    window.addEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onExternal);
+    return () => window.removeEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onExternal);
+  }, []);
 
   const [pendingToolApproval, setPendingToolApproval] = useState<{
     tool: ToolApprovalPayload;
@@ -1083,27 +992,21 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     []
   );
 
-  const displayMessages = useMemo(() => {
-    if (viewMode === 'list') {
-      return messages.filter((m) => !(m.role === 'assistant' && isAgentSamEmptyThreadGreeting(m.content)));
-    }
-    return messages;
-  }, [viewMode, messages]);
+  const displayMessages = useMemo(() => messages, [messages]);
 
   const showEmptyThreadPlaceholder = useMemo(() => {
-    if (viewMode !== 'thread') return false;
     if (displayMessages.length === 0) return true;
     return displayMessages.every(
       (m) => m.role === 'assistant' && isAgentSamEmptyThreadGreeting(m.content)
     );
-  }, [viewMode, displayMessages]);
+  }, [displayMessages]);
 
   useEffect(() => {
-    if (viewMode !== 'thread' || !conversationId.trim()) return;
+    if (!conversationId.trim()) return;
     const row = sessions.find((s) => s.id === conversationId);
     const n = row?.name && String(row.name).replace(/\s+/g, ' ').trim();
     if (n) setThreadTitle(n);
-  }, [viewMode, conversationId, sessions]);
+  }, [conversationId, sessions]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -1261,14 +1164,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     if ((!text && attachments.length === 0) || isLoading || !selectedModelKey) return;
 
     if (totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES) return;
-
-    if (isNarrow && viewMode === 'list' && mobileHubTab === 'agents') {
-      setViewMode('thread');
-      setMobileThreadTab('chat');
-      if (!threadTitle.trim() || threadTitle === 'New Chat') {
-        setThreadTitle('Chat');
-      }
-    }
 
     const userMessage = text || '(attachment)';
     setPendingToolApproval(null);
@@ -1430,7 +1325,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               const cid = (data as { conversation_id?: string }).conversation_id;
               if (typeof cid === 'string' && cid) {
                 setConversationId(cid);
-                localStorage.setItem(LS_CONV, cid);
+                localStorage.setItem(LS_AGENT_CHAT_CONVERSATION_ID, cid);
                 void loadSessions();
               }
             }
@@ -1700,20 +1595,15 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     }
   };
 
-  const mobileAgentsHome = isNarrow && mobileHubTab === 'agents' && viewMode === 'list';
-  const mobileAgentsThread = isNarrow && mobileHubTab === 'agents' && viewMode === 'thread';
+  const mobileAgentsThread = isNarrow && mobileHubTab === 'agents';
   const hubBodyVisible = isNarrow && mobileHubTab !== 'agents';
-  const sessionBlockVisible = !isNarrow || (mobileHubTab === 'agents' && viewMode === 'list');
   const messagesVisible =
-    !isNarrow || (mobileHubTab === 'agents' && viewMode === 'thread' && mobileThreadTab === 'chat');
+    !isNarrow || (mobileHubTab === 'agents' && mobileThreadTab === 'chat');
   const contextTabVisible =
-    isNarrow && mobileHubTab === 'agents' && viewMode === 'thread' && mobileThreadTab === 'context';
+    isNarrow && mobileHubTab === 'agents' && mobileThreadTab === 'context';
   const composerVisible =
-    !isNarrow ||
-    (mobileHubTab === 'agents' &&
-      (viewMode === 'list' || (viewMode === 'thread' && mobileThreadTab === 'chat')));
-  const composerFlexOrder = mobileAgentsHome ? 'order-2' : 'order-5';
-  const sessionFlexOrder = mobileAgentsHome ? 'order-3' : 'order-2';
+    !isNarrow || (mobileHubTab === 'agents' && mobileThreadTab === 'chat');
+  const composerFlexOrder = 'order-5';
 
   const filteredGhRepos = useMemo(() => {
     const q = repoSearch.trim().toLowerCase();
@@ -1770,15 +1660,22 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setViewMode('list');
+                  onOpenChatHistory?.();
                   setMobileThreadTab('chat');
                 }}
                 className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)]"
-                aria-label="Back to conversations"
+                aria-label="Open chat history"
               >
                 <ChevronLeft size={20} />
               </button>
               <span className="flex-1 text-[14px] font-semibold text-[var(--text-main)] truncate">{threadTitle}</span>
+              <button
+                type="button"
+                onClick={handleNewChat}
+                className="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--solar-cyan)] px-2 py-1 rounded-md hover:bg-[var(--bg-hover)]"
+              >
+                New
+              </button>
               <button
                 type="button"
                 className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
@@ -1814,33 +1711,39 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           </div>
         )}
 
-        {!isNarrow &&
-          (viewMode === 'list' ? (
-            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
-                Agent Sam
-              </span>
-            </div>
-          ) : (
-            <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[var(--border-subtle)]">
+        {!isNarrow && (
+          <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[var(--border-subtle)]">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] shrink-0">
+              Agent Sam
+            </span>
+            <span className="flex-1 text-[13px] font-semibold text-[var(--text-main)] truncate min-w-0">
+              {threadTitle || 'Chat'}
+            </span>
+            {onOpenChatHistory && (
               <button
                 type="button"
-                onClick={() => setViewMode('list')}
-                className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-main)]"
-                aria-label="Back to conversations"
+                onClick={() => onOpenChatHistory()}
+                className="shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--text-muted)] hover:text-[var(--solar-cyan)] px-2 py-1.5 rounded-md hover:bg-[var(--bg-hover)] transition-colors"
               >
-                <ChevronLeft size={18} />
+                Chats
               </button>
-              <span className="flex-1 text-[13px] font-semibold text-[var(--text-main)] truncate">{threadTitle}</span>
-              <button
-                type="button"
-                className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-muted)]"
-                aria-label="More options"
-              >
-                <MoreHorizontal size={15} />
-              </button>
-            </div>
-          ))}
+            )}
+            <button
+              type="button"
+              onClick={handleNewChat}
+              className="shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--solar-cyan)] hover:brightness-110 px-2 py-1.5 rounded-md hover:bg-[var(--bg-hover)] transition-colors"
+            >
+              New chat
+            </button>
+            <button
+              type="button"
+              className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-muted)]"
+              aria-label="More options"
+            >
+              <MoreHorizontal size={15} />
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {hubBodyVisible && (
@@ -1887,92 +1790,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               </>
             )}
           </div>
-        )}
-
-        {sessionBlockVisible && (
-        <div
-          className={`shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38dvh,280px)] min-h-0 ${sessionFlexOrder} ${
-            viewMode === 'thread' ? 'max-md:hidden' : 'max-md:flex-1 max-md:max-h-none'
-          }`}
-        >
-          <div className="flex justify-end px-3 pt-2 pb-1 shrink-0">
-            <button
-              type="button"
-              onClick={handleNewChat}
-              className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--solar-cyan)] hover:brightness-110 px-2 py-1.5 rounded-md hover:bg-[var(--bg-hover)] transition-colors"
-            >
-              New Chat
-            </button>
-          </div>
-          <div
-            ref={sessionListRef}
-            className={`flex-1 min-h-[72px] overflow-y-auto chat-hide-scroll ${
-              viewMode === 'thread' ? 'max-md:hidden' : ''
-            }`}
-            aria-label="Chat sessions"
-          >
-            {sessionsLoading ? (
-              <>
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="min-h-[56px] px-4 border-b border-[var(--border-subtle)] flex items-center gap-3 animate-pulse"
-                  >
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <div className="h-3.5 rounded-md bg-[var(--bg-elevated)] w-[72%] max-w-full" />
-                      <div className="h-3 rounded-md bg-[var(--bg-elevated)] w-[36%] max-w-full" />
-                    </div>
-                  </div>
-                ))}
-              </>
-            ) : sessions.length === 0 ? (
-              <div className="flex min-h-[120px] items-center justify-center px-4 text-[0.8125rem] text-[var(--text-muted)]">
-                No chats yet
-              </div>
-            ) : (
-              sessionGroups.map((g) => (
-                <div key={g.label}>
-                  <div className="text-[0.6875rem] uppercase tracking-widest text-[var(--text-muted)] px-4 py-2">
-                    {g.label}
-                  </div>
-                  {g.items.map((s) => {
-                    const active = s.id === conversationId;
-                    const mc = typeof s.message_count === 'number' ? s.message_count : 0;
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => handleSelectSession(s.id)}
-                        className={`w-full text-left min-h-[56px] px-4 border-b border-[var(--border-subtle)] flex items-start gap-3 py-2 transition-colors hover:bg-[var(--bg-hover)] ${
-                          active ? 'bg-[var(--bg-elevated)] border-l-2 border-l-[var(--solar-cyan)] pl-[calc(1rem-2px)]' : ''
-                        }`}
-                      >
-                        <div className="flex-1 min-w-0 pt-0.5">
-                          <div className="text-[0.875rem] text-[var(--text-primary)] truncate">
-                            {(s.name && String(s.name).replace(/\s+/g, ' ').trim()) || 'Untitled'}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                            <span className="text-[0.6875rem] text-[var(--text-muted)]">
-                              {mc} msg{mc !== 1 ? 's' : ''}
-                            </span>
-                            {s.has_artifacts ? (
-                              <code className="text-[0.625rem] font-mono text-[var(--solar-cyan)] px-1 py-px rounded border border-[var(--border-subtle)]">
-                                artifacts
-                              </code>
-                            ) : null}
-                          </div>
-                        </div>
-                        <span className="text-[0.6875rem] text-[var(--text-muted)] shrink-0 tabular-nums pt-1">
-                          {relativeSessionTime(s)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
         )}
 
         {messagesVisible && (
@@ -2109,9 +1926,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
         {composerVisible && (
         <div
-          className={`${composerFlexOrder} flex-shrink-0 w-full min-w-0 max-w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2 ${
-            mobileAgentsHome ? 'border-b border-[var(--border-subtle)] md:border-b-0' : ''
-          }`}
+          className={`${composerFlexOrder} flex-shrink-0 w-full min-w-0 max-w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2`}
           style={{
             paddingBottom: isNarrow ? MOBILE_CHAT_COMPOSER_BOTTOM_PAD : 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
           }}
@@ -2314,7 +2129,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               </button>
             </div>
           </div>
-          {mobileAgentsHome && (
+          {mobileAgentsThread && mobileThreadTab === 'chat' && (
             <button
               type="button"
               onClick={() => setRepoDrawerOpen(true)}

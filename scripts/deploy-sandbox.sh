@@ -30,9 +30,13 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
 fi
 
 # Resend + internal API secret — merge from .env when token was already in shell (skips full source above)
+# Never run bare `export` (empty $(...) ): bash then prints the whole environment as declare -x lines.
 if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
-  # shellcheck disable=SC2046
-  export $(grep -E '^(RESEND_API_KEY|RESEND_FROM|RESEND_TO|INTERNAL_API_SECRET)=' "${REPO_ROOT}/.env.cloudflare" | grep -v '^#' | xargs) 2>/dev/null || true
+  _iam_resend_kv=$(grep -E '^(RESEND_API_KEY|RESEND_FROM|RESEND_TO|INTERNAL_API_SECRET)=' "${REPO_ROOT}/.env.cloudflare" | grep -v '^#' | xargs || true)
+  if [ -n "${_iam_resend_kv}" ]; then
+    # shellcheck disable=SC2086
+    export ${_iam_resend_kv}
+  fi
 fi
 RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
 RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
@@ -200,11 +204,17 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   perl -i -pe "s|</html>|<!-- dashboard-v:${NEXT_V} --></html>|" "${DIST_DIR}/index.html"
   CURRENT_V=$NEXT_V
 
-  # Manifest: all files under dist/ except the manifest itself (paths use /)
+  # Manifest: all files under dist/ except the manifest itself (paths use /).
+  # Exclude macOS metadata so AppleDouble / Finder junk never lands in R2.
   : > "$MANIFEST_PATH"
   (
     cd "$DIST_DIR"
-    find . -type f ! -name "$MANIFEST_NAME" -print | sed 's|^\./||' | sort
+    find . -type f \
+      ! -name "$MANIFEST_NAME" \
+      ! -name '.DS_Store' \
+      ! -name '._*' \
+      ! -path '*/__MACOSX/*' \
+      -print | sed 's|^\./||' | sort
   ) > "$MANIFEST_PATH"
 
   ctype_for() {
@@ -293,7 +303,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
       D1_VALUES="${D1_VALUES}, ${row}"
     fi
   done <<EOF
-$( (cd "$DIST_DIR" && find . -type f ! -name "$MANIFEST_NAME" -print | sed 's|^\./||' | sort) )
+$( (cd "$DIST_DIR" && find . -type f ! -name "$MANIFEST_NAME" ! -name '.DS_Store' ! -name '._*' ! -path '*/__MACOSX/*' -print | sed 's|^\./||' | sort) )
 EOF
 
   HTML_HASH=$(md5 -q "$HTML_PATH" 2>/dev/null || md5sum "$HTML_PATH" | cut -d' ' -f1)
@@ -313,8 +323,11 @@ EOF
     if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
       export CICD_R2_BUNDLE_BYTES
     else
-      CICD_R2_BUNDLE_BYTES=$(($(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1}') * 1024))
+      # Avoid $(($(du...) * 1024)) — nested $(/( parses as subshell + junk and can yield "2_BUNDLE_BYTES: command not found".
+      _du_k=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{s+=$1} END {print s+0}')
+      CICD_R2_BUNDLE_BYTES=$(( (_du_k) * 1024 ))
       export CICD_R2_BUNDLE_BYTES
+      unset _du_k
     fi
   fi
 fi

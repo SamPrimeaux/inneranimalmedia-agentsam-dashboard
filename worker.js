@@ -202,6 +202,9 @@ function resolveTelemetryTenantId(env, explicitTenantId) {
   return tenantIdFromEnv(env) || null;
 }
 
+/** Default D1 workspace_id for prod telemetry rows (resolve per-user later). */
+const IAM_DEFAULT_WORKSPACE_ID = 'ws_inneranimalmedia';
+
 /** Parse `cms_themes.config` JSON for theme API responses. */
 function parseCmsThemeConfig(raw) {
   if (raw == null) return {};
@@ -3625,6 +3628,116 @@ const worker = {
         }
       }
 
+      if (pathLower === '/api/admin/cleanup/stuck-runs' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!(await isSamOnlyUser(env, authUser))) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const result = await env.DB.prepare(`
+    UPDATE agentsam_agent_run
+    SET status = 'failed',
+        error_message = 'auto_closed: stuck in_progress > 1h at cleanup',
+        completed_at = datetime('now')
+    WHERE status IN ('in_progress', 'running')
+      AND created_at < datetime('now', '-1 hours')
+  `).run();
+          return jsonResponse({
+            ok: true,
+            rows_affected: result.meta?.changes ?? 0,
+          });
+        } catch (e) {
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
+      if (pathLower === '/api/admin/db-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!(await isSamOnlyUser(env, authUser))) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const ts = Math.floor(Date.now() / 1000);
+          const [
+            arTotal,
+            arCompleted,
+            arStuck,
+            arFailed,
+            amTotal,
+            amWithTok,
+            amMissingTok,
+            mcpTcTotal,
+            mcpTc7d,
+            mcpFail7d,
+            mcpUsageTotal,
+            termActive,
+            ptyHealth24h,
+            skillInv7d,
+            connectivityRows,
+          ] = await Promise.all([
+            env.DB.prepare('SELECT COUNT(*) AS c FROM agentsam_agent_run').first(),
+            env.DB.prepare("SELECT COUNT(*) AS c FROM agentsam_agent_run WHERE status = 'completed'").first(),
+            env.DB.prepare(
+              "SELECT COUNT(*) AS c FROM agentsam_agent_run WHERE status IN ('in_progress','running') AND created_at < datetime('now', '-1 hours')"
+            ).first(),
+            env.DB.prepare("SELECT COUNT(*) AS c FROM agentsam_agent_run WHERE status = 'failed'").first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM agent_messages').first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM agent_messages WHERE token_count > 0').first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM agent_messages WHERE token_count = 0 OR token_count IS NULL').first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM mcp_tool_calls').first(),
+            env.DB.prepare("SELECT COUNT(*) AS c FROM mcp_tool_calls WHERE datetime(created_at) >= datetime('now', '-7 days')").first(),
+            env.DB.prepare(
+              "SELECT COUNT(*) AS c FROM mcp_tool_calls WHERE status = 'failed' AND datetime(created_at) >= datetime('now', '-7 days')"
+            ).first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM mcp_usage_log').first(),
+            env.DB.prepare("SELECT COUNT(*) AS c FROM terminal_sessions WHERE status = 'active'").first(),
+            env.DB.prepare('SELECT COUNT(*) AS c FROM pty_health_events WHERE created_at >= unixepoch() - 86400').first(),
+            env.DB.prepare(
+              "SELECT COUNT(*) AS c FROM agentsam_skill_invocation WHERE datetime(invoked_at) >= datetime('now', '-7 days')"
+            ).first(),
+            env.DB.prepare(
+              'SELECT service, status, last_checked_at, last_healthy_at FROM workspace_connectivity_status WHERE workspace_id = ?'
+            )
+              .bind(IAM_DEFAULT_WORKSPACE_ID)
+              .all(),
+          ]);
+          const connectivity = (connectivityRows?.results || []).map((r) => ({
+            service: r.service,
+            status: r.status,
+            last_checked_at: r.last_checked_at,
+            last_healthy_at: r.last_healthy_at,
+          }));
+          return jsonResponse({
+            timestamp: ts,
+            agent_runs: {
+              total: Number(arTotal?.c) || 0,
+              completed: Number(arCompleted?.c) || 0,
+              stuck: Number(arStuck?.c) || 0,
+              failed: Number(arFailed?.c) || 0,
+            },
+            agent_messages: {
+              total: Number(amTotal?.c) || 0,
+              with_token_count: Number(amWithTok?.c) || 0,
+              missing_token_count: Number(amMissingTok?.c) || 0,
+            },
+            mcp: {
+              tool_calls_total: Number(mcpTcTotal?.c) || 0,
+              tool_calls_7d: Number(mcpTc7d?.c) || 0,
+              failed_7d: Number(mcpFail7d?.c) || 0,
+              usage_log_total: Number(mcpUsageTotal?.c) || 0,
+            },
+            terminal: {
+              active_sessions: Number(termActive?.c) || 0,
+              pty_health_events_24h: Number(ptyHealth24h?.c) || 0,
+            },
+            connectivity,
+            skill_invocations_7d: Number(skillInv7d?.c) || 0,
+          });
+        } catch (e) {
+          return jsonResponse({ error: String(e?.message || e) }, 500);
+        }
+      }
+
       // POST /api/admin/vectorize-kb — index ai_knowledge_base (is_indexed=0) into Vectorize; optional ai_knowledge_chunks audit.
       if (pathLower === '/api/admin/vectorize-kb' && (request.method || 'GET').toUpperCase() === 'POST') {
         const session = await getSession(env, request);
@@ -4212,12 +4325,14 @@ const worker = {
           const connCount = Array.isArray(conns) ? conns.length : (typeof conns === 'number' ? conns : 0);
           const st = result.status != null ? String(result.status) : '';
           const healthy = st === 'healthy' || (Array.isArray(conns) && conns.length > 0);
-          return jsonResponse({
+          const tunnelStatusResp = jsonResponse({
             status: st || null,
             healthy,
             connections: connCount,
             created_at: result.created_at != null ? result.created_at : null,
           });
+          fireForgetWorkspaceConnectivityTunnel(env, ctx, healthy, connCount);
+          return tunnelStatusResp;
         } catch (e) {
           return jsonResponse({ error: e?.message || String(e) }, 500);
         }
@@ -7454,8 +7569,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   try {
     await env.DB.prepare(
-      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,unixepoch())"
-    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, msgR2Key, 'iam-platform').run();
+      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, token_count, created_at) VALUES (?,?,?,?,?,?,?,?,unixepoch())"
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, msgR2Key, 'iam-platform', tokenCount).run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
@@ -10028,11 +10143,42 @@ async function runTerminalCommand(env, request, command, sessionId = null, execu
   return out;
 }
 
-/** Canonical Agent Sam repo root on the PTY host (iam-pty). */
-const IAM_WORKSPACE_ROOT = '/Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard';
+/** Canonical Agent Sam repo root on the PTY host (iam-pty) if DB has no workspace_root. */
+const IAM_WORKSPACE_ROOT_FALLBACK =
+  '/Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard';
 
-function normalizeWorkspaceAbsolutePath(raw) {
-  const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+let iamWorkspaceRootCache = null;
+let iamWorkspaceRootLoadPromise = null;
+
+async function resolveIamWorkspaceRoot(env) {
+  if (iamWorkspaceRootCache != null) return iamWorkspaceRootCache;
+  if (!iamWorkspaceRootLoadPromise) {
+    iamWorkspaceRootLoadPromise = (async () => {
+      let root = IAM_WORKSPACE_ROOT_FALLBACK;
+      if (env?.DB) {
+        try {
+          const row = await env.DB.prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?')
+            .bind('ws_inneranimalmedia')
+            .first();
+          if (row?.settings_json) {
+            const j = JSON.parse(String(row.settings_json));
+            if (typeof j.workspace_root === 'string' && j.workspace_root.trim()) {
+              root = j.workspace_root.trim();
+            }
+          }
+        } catch (_) {}
+      }
+      return root;
+    })().then((r) => {
+      iamWorkspaceRootCache = r;
+      return r;
+    });
+  }
+  return iamWorkspaceRootLoadPromise;
+}
+
+function normalizeWorkspaceAbsolutePath(rootBase, raw) {
+  const root = String(rootBase).replace(/\/+$/, '');
   let s = String(raw ?? '').trim();
   if (!s) return { ok: true, path: root };
   if (!s.startsWith('/')) {
@@ -10103,11 +10249,11 @@ async function runWorkspaceDiskTool(env, request, toolName, params, conversation
   if (!env.TERMINAL_WS_URL) {
     return await finish({ error: 'terminal_not_configured', message: 'TERMINAL_WS_URL not set' }, 'terminal_not_configured');
   }
-  const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+  const root = (await resolveIamWorkspaceRoot(env)).replace(/\/+$/, '');
 
   if (toolName === 'workspace_read_file') {
     const pathRaw = p.path ?? p.file ?? '';
-    const norm = normalizeWorkspaceAbsolutePath(pathRaw);
+    const norm = normalizeWorkspaceAbsolutePath(root, pathRaw);
     if (!norm.ok) return await finish({ error: 'invalid_path', message: norm.error }, norm.error);
     const fp = norm.path;
     const q = JSON.stringify(fp);
@@ -10150,7 +10296,7 @@ async function runWorkspaceDiskTool(env, request, toolName, params, conversation
   }
 
   if (toolName === 'workspace_list_files') {
-    const dirNorm = normalizeWorkspaceAbsolutePath(p.dir ?? '');
+    const dirNorm = normalizeWorkspaceAbsolutePath(root, p.dir ?? '');
     if (!dirNorm.ok) return await finish({ error: 'invalid_path', message: dirNorm.error }, dirNorm.error);
     const dirPath = dirNorm.path;
     const pat = workspaceSafeGlobPattern(p.pattern);
@@ -10182,7 +10328,7 @@ async function runWorkspaceDiskTool(env, request, toolName, params, conversation
     if (!query) {
       return await finish({ error: 'invalid_query', message: 'query required (non-empty, no newlines)' }, 'invalid_query');
     }
-    const dirNorm = normalizeWorkspaceAbsolutePath(p.dir ?? '');
+    const dirNorm = normalizeWorkspaceAbsolutePath(root, p.dir ?? '');
     if (!dirNorm.ok) return await finish({ error: 'invalid_path', message: dirNorm.error }, dirNorm.error);
     const dirPath = dirNorm.path;
     const fpat = workspaceSafeGlobPattern(p.file_pattern ?? '*');
@@ -11632,7 +11778,7 @@ function shellSingleQuoteForPty(s) {
 
 /**
  * SSE: delegate chat to Claude Code on the iam-pty host (TERMINAL_WS_URL / POST /exec).
- * User message must start with `/claude `; the rest is passed to `claude -p` in IAM_WORKSPACE_ROOT.
+ * User message must start with `/claude `; the rest is passed to `claude -p` in the IAM workspace root.
  */
 async function handleAgentChatClaudeDelegate(env, request, ctx, opts) {
   const { prompt, conversationId } = opts || {};
@@ -11647,7 +11793,7 @@ async function handleAgentChatClaudeDelegate(env, request, ctx, opts) {
           controller.close();
           return;
         }
-        const root = IAM_WORKSPACE_ROOT.replace(/\/+$/, '');
+        const root = (await resolveIamWorkspaceRoot(env)).replace(/\/+$/, '');
         const cmd = `cd ${shellSingleQuoteForPty(root)} && claude -p ${shellSingleQuoteForPty(prompt)}`;
         console.log('[agent/chat-sse] /claude delegate', { promptLen: String(prompt || '').length, root });
         controller.enqueue(
@@ -15377,14 +15523,16 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }
       try {
         await env.DB.prepare(
-          `INSERT INTO terminal_sessions (id, tenant_id, user_id, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, '', unixepoch(), unixepoch())
-           ON CONFLICT(id) DO UPDATE SET tunnel_url=excluded.tunnel_url, status='active', updated_at=unixepoch()`
-        ).bind(session_id, regTid, regUid, tunnel_url, shell, cwd, cols, rows).run();
+          `INSERT INTO terminal_sessions (id, tenant_id, workspace_id, user_id, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, '', unixepoch(), unixepoch())
+           ON CONFLICT(id) DO UPDATE SET tunnel_url=excluded.tunnel_url, status='active', workspace_id=excluded.workspace_id, updated_at=unixepoch()`
+        ).bind(session_id, regTid, IAM_DEFAULT_WORKSPACE_ID, regUid, tunnel_url, shell, cwd, cols, rows).run();
       } catch (e) {
         console.error('[terminal/session/register]', e.message);
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
       }
+      fireForgetWorkspaceConnectivityPtyHealthy(env, ctx);
+      fireForgetPtyHealthEvent(env, ctx, 'connected', session_id);
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
@@ -15514,6 +15662,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         if (!terminalCloseLogged) {
           terminalCloseLogged = true;
           console.log('[terminal/ws] closed:', source);
+          fireForgetPtyHealthEvent(env, ctx, 'disconnected', null);
         }
       };
       let terminalBridgeCleaned = false;
@@ -15557,9 +15706,9 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         try {
           await env.DB.prepare(
             `INSERT INTO agent_command_executions 
-   (id, tenant_id, session_id, command_name, command_text, output_text, status, started_at, completed_at)
-   VALUES (?, 'system', ?, 'terminal_run', ?, ?, 'completed', unixepoch(), unixepoch())`
-          ).bind(execId, session_id || null, runCommand, output).run();
+   (id, tenant_id, workspace_id, session_id, command_name, command_text, output_text, status, started_at, completed_at)
+   VALUES (?, 'system', ?, ?, 'terminal_run', ?, ?, 'completed', unixepoch(), unixepoch())`
+          ).bind(execId, IAM_DEFAULT_WORKSPACE_ID, session_id || null, runCommand, output).run();
         } catch (_) {}
         return jsonResponse({ output, command: runCommand, execution_id: execId });
       } catch (err) {
@@ -15578,13 +15727,14 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const cloudflareDeploymentId = body?.cloudflare_deployment_id ?? null;
       const deployStatus = body?.deploy_status ?? null; // 'success' | 'failed'
       const deployNotes = body?.deployment_notes ?? body?.output_log ?? null;
+      const terminalSessionIdComplete = body?.terminal_session_id ?? null;
       const now = Math.floor(Date.now() / 1000);
 
       if (executionId && (status === 'completed' || status === 'failed')) {
         try {
           await env.DB.prepare(
-            "UPDATE agent_command_executions SET status = ?, output_text = ?, exit_code = ?, duration_ms = ?, completed_at = ? WHERE id = ?"
-          ).bind(status, outputText, exitCode, durationMs, now, executionId).run();
+            "UPDATE agent_command_executions SET status = ?, output_text = ?, exit_code = ?, duration_ms = ?, completed_at = ?, terminal_session_id = ? WHERE id = ?"
+          ).bind(status, outputText, exitCode, durationMs, now, terminalSessionIdComplete, executionId).run();
         } catch (_) {}
       }
 
@@ -15800,8 +15950,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           }).catch(() => {});
         }
         await env.DB.prepare(
-          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,unixepoch())"
-        ).bind(id, convId, role, body.content, body.provider || null, msgR2Key, 'iam-platform').run();
+          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, token_count, created_at) VALUES (?,?,?,?,?,?,?,?,unixepoch())"
+        ).bind(id, convId, role, body.content, body.provider || null, msgR2Key, 'iam-platform', tokenCount || 0).run();
         const ctxKey = `agent-sessions/${convId}/context.json`;
         let ctx = { messages: [], message_count: 0 };
         try {
@@ -17151,6 +17301,32 @@ async function handleAgentsamApi(request, url, env) {
   };
 
   try {
+    if (pathLower === '/api/agentsam/config' && method === 'GET') {
+      try {
+        const row = await env.DB.prepare(
+          'SELECT settings_json FROM workspace_settings WHERE workspace_id = ?'
+        )
+          .bind('ws_inneranimalmedia')
+          .first();
+        let workspace_cd_command = null;
+        let iam_origin = null;
+        if (row?.settings_json) {
+          try {
+            const j = JSON.parse(String(row.settings_json));
+            if (j.workspace_cd_command != null && String(j.workspace_cd_command).trim()) {
+              workspace_cd_command = String(j.workspace_cd_command).trim();
+            }
+            if (j.iam_origin != null && String(j.iam_origin).trim()) {
+              iam_origin = String(j.iam_origin).trim();
+            }
+          } catch (_) {}
+        }
+        return jsonResponse({ workspace_cd_command, iam_origin });
+      } catch (_) {
+        return jsonResponse({ workspace_cd_command: null, iam_origin: null });
+      }
+    }
+
     if (pathLower === '/api/agentsam/user-policy' && method === 'GET') {
       const row = await env.DB.prepare(
         `SELECT * FROM agentsam_user_policy
@@ -18968,6 +19144,97 @@ async function handleCidiApi(request, url, env, ctx) {
   return jsonResponse({ error: 'not found' }, 404);
 }
 
+/** Fire-and-forget agent_tool_chain row (D1 telemetry). */
+function fireForgetAgentToolChainRow(env, {
+  toolName,
+  agentSessionId,
+  error,
+  costUsd,
+  mcpToolCallId,
+  durationMs,
+  terminalSessionId,
+}) {
+  if (!env.DB) return;
+  const completedAt = Math.floor(Date.now() / 1000);
+  const durSec = Math.max(0, Math.ceil((Number(durationMs) || 0) / 1000));
+  const startedAt = Math.max(0, completedAt - durSec);
+  const outcome = error ? 'failed' : 'success';
+  const chainId = crypto.randomUUID();
+  void env.DB.prepare(
+    `INSERT INTO agent_tool_chain (id, workspace_id, agent_session_id, tool_name, outcome, started_at, completed_at, cost_usd, mcp_tool_call_id, terminal_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      chainId,
+      IAM_DEFAULT_WORKSPACE_ID,
+      agentSessionId != null && String(agentSessionId).trim() !== '' ? String(agentSessionId) : null,
+      toolName,
+      outcome,
+      startedAt,
+      completedAt,
+      costUsd != null && Number.isFinite(Number(costUsd)) ? Number(costUsd) : 0,
+      mcpToolCallId || null,
+      terminalSessionId != null && String(terminalSessionId).trim() !== '' ? String(terminalSessionId) : null
+    )
+    .run()
+    .catch((e) => console.warn('[agent_tool_chain]', e?.message ?? e));
+}
+
+function fireForgetWorkspaceConnectivityTunnel(env, ctx, healthy, connections) {
+  if (!env.DB) return;
+  const statusStr = healthy ? 'healthy' : 'down';
+  const lastHealthyAt = healthy ? Math.floor(Date.now() / 1000) : null;
+  const detailJson = JSON.stringify({ connections });
+  const p = env.DB.prepare(
+    `INSERT INTO workspace_connectivity_status (workspace_id, service, status, last_checked_at, last_healthy_at, latency_ms, detail_json)
+     VALUES (?, 'tunnel', ?, unixepoch(), ?, NULL, ?)
+     ON CONFLICT(workspace_id, service) DO UPDATE SET
+       status = excluded.status,
+       last_checked_at = excluded.last_checked_at,
+       last_healthy_at = CASE WHEN excluded.status = 'healthy' THEN excluded.last_healthy_at ELSE workspace_connectivity_status.last_healthy_at END,
+       latency_ms = excluded.latency_ms,
+       detail_json = excluded.detail_json`
+  )
+    .bind(IAM_DEFAULT_WORKSPACE_ID, statusStr, lastHealthyAt, detailJson)
+    .run()
+    .catch((e) => console.warn('[workspace_connectivity_status tunnel]', e?.message ?? e));
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+  else void p;
+}
+
+function fireForgetWorkspaceConnectivityPtyHealthy(env, ctx) {
+  if (!env.DB) return;
+  const detailJson = JSON.stringify({ source: 'session_register' });
+  const p = env.DB.prepare(
+    `INSERT INTO workspace_connectivity_status (workspace_id, service, status, last_checked_at, last_healthy_at, latency_ms, detail_json)
+     VALUES (?, 'pty', 'healthy', unixepoch(), unixepoch(), NULL, ?)
+     ON CONFLICT(workspace_id, service) DO UPDATE SET
+       status = excluded.status,
+       last_checked_at = excluded.last_checked_at,
+       last_healthy_at = excluded.last_healthy_at,
+       latency_ms = excluded.latency_ms,
+       detail_json = excluded.detail_json`
+  )
+    .bind(IAM_DEFAULT_WORKSPACE_ID, detailJson)
+    .run()
+    .catch((e) => console.warn('[workspace_connectivity_status pty]', e?.message ?? e));
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+  else void p;
+}
+
+function fireForgetPtyHealthEvent(env, ctx, eventType, terminalSessionId) {
+  if (!env.DB) return;
+  const p = env.DB.prepare(
+    `INSERT INTO pty_health_events (id, event_type, workspace_id, terminal_session_id, created_at)
+     VALUES (?, ?, ?, ?, unixepoch())`
+  )
+    .bind(crypto.randomUUID(), eventType, IAM_DEFAULT_WORKSPACE_ID, terminalSessionId || null)
+    .run()
+    .catch((e) => console.warn('[pty_health_events]', e?.message ?? e));
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+  else void p;
+}
+
 /** Record MCP tool call to mcp_tool_calls, mcp_usage_log, and mcp_services. All DB writes in try/catch so missing tables/columns do not break flow. */
 async function recordMcpToolCall(env, opts) {
   const {
@@ -18976,6 +19243,7 @@ async function recordMcpToolCall(env, opts) {
     inputTokens: optInTok = 0,
     outputTokens: optOutTok = 0,
     tenantId: optTenantId,
+    terminalSessionId: optTerminalSessionId,
   } = opts;
   if (!env.DB) return;
   const tenant =
@@ -19026,6 +19294,15 @@ async function recordMcpToolCall(env, opts) {
       inTok,
       outTok
     ).run();
+    fireForgetAgentToolChainRow(env, {
+      toolName,
+      agentSessionId: sessionId,
+      error,
+      costUsd: toolCostUsd,
+      mcpToolCallId: id,
+      durationMs,
+      terminalSessionId: optTerminalSessionId,
+    });
     appendMcpAuditLogAndStats(env, {
       conversationId: sessionId,
       toolName,
@@ -21717,6 +21994,15 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
           stepNow,
           errorMsg ? String(errorMsg).slice(0, 8000) : null
         ).run();
+        fireForgetAgentToolChainRow(env, {
+          toolName: tool_name,
+          agentSessionId: session_id ?? null,
+          error: stepStatus === 'completed' ? null : errorMsg,
+          costUsd: 0,
+          mcpToolCallId: tcId,
+          durationMs: 0,
+          terminalSessionId: null,
+        });
       } catch (dbErr) {
         console.warn('[executeWorkflowSteps] mcp_tool_calls insert', dbErr?.message ?? dbErr);
       }

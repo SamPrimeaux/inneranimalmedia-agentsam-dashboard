@@ -135,16 +135,25 @@ HTML_PATH="${REPO_ROOT}/dashboard/agent.html"
 MANIFEST_NAME=".deploy-manifest"
 MANIFEST_KEY="static/dashboard/agent/${MANIFEST_NAME}"
 R2_AGENT_PREFIX="static/dashboard/agent"
+# set -u: must always be set; deploy-sandbox injects <!-- dashboard-v:N --> into dist/index.html
+# and uploads that file to R2 as static/dashboard/agent.html — parse both after pull.
+CURRENT_V=0
 
-# Parse dashboard bundle version from local agent shell (overwrites stale env e.g. CURRENT_V=15).
+# Parse dashboard bundle version from pulled shell HTML (R2 agent.html == sandbox dist/index.html).
 _parse_dashboard_v_from_html() {
-  [ ! -f "$HTML_PATH" ] && return 0
-  local v
-  v=$(grep -oE 'dashboard-v:[0-9]+' "$HTML_PATH" 2>/dev/null | head -1 | cut -d: -f2 || true)
-  if [ -z "$v" ]; then
-    v=$(grep -oE '\?v=[0-9]+' "$HTML_PATH" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)
+  local v f
+  v=""
+  for f in "$HTML_PATH" "${DIST_DIR}/index.html"; do
+    [ ! -f "$f" ] && continue
+    v=$(grep -oE 'dashboard-v:[0-9]+' "$f" 2>/dev/null | head -1 | cut -d: -f2 || true)
+    if [ -n "$v" ]; then break; fi
+    v=$(grep -oE '\?v=[0-9]+' "$f" 2>/dev/null | head -1 | grep -oE '[0-9]+' || true)
+    if [ -n "$v" ]; then break; fi
+  done
+  if [ -n "$v" ]; then
+    CURRENT_V="$v"
   fi
-  [ -n "$v" ] && CURRENT_V="$v"
+  return 0
 }
 
 # ── Step 1: Pull current build from sandbox R2 into local dist ────────────────
@@ -168,7 +177,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     mkdir -p "$(dirname "$target")"
     "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/${R2_AGENT_PREFIX}/${line}" \
       --file "$target" --remote -c "$PROD_CFG"
-  done < "$MANIFEST_LOCAL"
+  done < "$MANIFEST_LOCAL" || true
 
   "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
     --file "$HTML_PATH" --remote -c "$PROD_CFG"
@@ -182,10 +191,14 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
 
   _parse_dashboard_v_from_html
   echo "  Pulled v=${CURRENT_V:-0} from sandbox."
+  if [ "${CURRENT_V:-0}" = "0" ]; then
+    echo "  WARN: Could not read <!-- dashboard-v:N --> from pulled agent.html or dist/index.html."
+    echo "        If sandbox is newer, run ./scripts/deploy-sandbox.sh first, then promote again."
+  fi
   echo ""
 
   # ── Step 2: Push to production R2 ──────────────────────────────────────────
-  echo "Promoting v=${CURRENT_V} to production bucket (${PROD_BUCKET})..."
+  echo "Promoting v=${CURRENT_V:-0} to production bucket (${PROD_BUCKET})..."
   CICD_T_PUSH_START=$(date +%s)
 
   ctype_for() {
@@ -213,7 +226,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
       --file "$filepath" \
       --content-type "$ct" \
       --config "$PROD_CFG" --remote
-  done < "$MANIFEST_LOCAL"
+  done < "$MANIFEST_LOCAL" || true
 
   echo "  Uploading ${R2_AGENT_PREFIX}/${MANIFEST_NAME}..."
   "${WRANGLER[@]}" r2 object put "${PROD_BUCKET}/${R2_AGENT_PREFIX}/${MANIFEST_NAME}" \
@@ -252,23 +265,23 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     fs=$(wc -c < "$filepath" | tr -d ' ')
     pn=$(page_name_for "$rel")
     pn_esc=$(sql_escape "$pn")
-    row_id=$(printf 'prod-%s-v%s-%s' "$pn" "$CURRENT_V" "$DEPLOY_TS")
+    row_id=$(printf 'prod-%s-v%s-%s' "$pn" "${CURRENT_V:-0}" "$DEPLOY_TS")
     id_esc=$(sql_escape "$row_id")
     r2_esc=$(sql_escape "${R2_AGENT_PREFIX}/${rel}")
-    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from sandbox', 1, 1, unixepoch())"
+    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V:-0}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from sandbox', 1, 1, unixepoch())"
     if [ "$first" -eq 1 ]; then
       D1_VALUES="$row"
       first=0
     else
       D1_VALUES="${D1_VALUES}, ${row}"
     fi
-  done <<EOF
+  done <<EOF || true
 $( (cd "$DIST_DIR" && find . -type f ! -name "$MANIFEST_NAME" -print 2>/dev/null | sed 's|^\./||' | sort) )
 EOF
 
   HTML_HASH=$(md5 -q "$HTML_PATH" 2>/dev/null || md5sum "$HTML_PATH" | cut -d' ' -f1)
   HTML_SIZE=$(wc -c < "$HTML_PATH" | tr -d ' ')
-  html_row="('prod-agent-html-v${CURRENT_V}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from sandbox', 1, 1, unixepoch())"
+  html_row="('prod-agent-html-v${CURRENT_V:-0}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V:-0}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from sandbox', 1, 1, unixepoch())"
   if [ -n "$D1_VALUES" ]; then
     D1_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ${D1_VALUES}, ${html_row}"
   else
@@ -334,7 +347,7 @@ echo "  URL:     https://inneranimalmedia.com/dashboard/agent"
 echo "  Bucket:  ${PROD_BUCKET}"
 echo "  Version: v=${CURRENT_V:-n/a}"
 
-NEXT_VERSION="${NEXT_VERSION:-$CURRENT_V}"
+NEXT_VERSION="${NEXT_VERSION:-${CURRENT_V:-0}}"
 DEPLOY_DESC="${DEPLOY_DESC:-prod promote $(date +%Y-%m-%d)}"
 DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \

@@ -4,13 +4,20 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ProjectType, ArtStyle, GenerationConfig, SceneConfig, CustomAsset } from '../types';
 import { 
   Gamepad2, Layers, Box, Download, Settings, Package, Sparkles, Zap, Mountain, Trees, LayoutGrid, Dumbbell, 
   Sun, Moon, Ghost, Plane, Activity, Shield, Palette,
-  Plus, Trash2, Link, ZapOff, UploadCloud, BoxSelect, Eye, Sword, UserCircle, Globe
+  Plus, Trash2, Link, ZapOff, UploadCloud, BoxSelect, Eye, Sword, UserCircle, Globe,
+  ClipboardList, AlertTriangle, GitBranch, Bell, Loader2,
 } from 'lucide-react';
+import {
+  loadStudioIamFeeds,
+  firstLinesOfMarkdown,
+  problemTotal,
+  type StudioIamBundle,
+} from '../src/iamDashboardFeeds';
 
 interface SidebarProps {
   activeProject: ProjectType;
@@ -45,17 +52,21 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
   const [newAssetUrl, setNewAssetUrl] = useState('');
   const [directUrl, setDirectUrl] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [iamFeeds, setIamFeeds] = useState<StudioIamBundle | null>(null);
+  const [iamLoading, setIamLoading] = useState(true);
 
-  React.useEffect(() => {
-    // IAM Sidebar & Agent Stubs
-    const stubs = [
-      '/api/agent/today-todo',
-      '/api/agent/problems',
-      '/api/agent/git/status',
-      '/api/agent/rules',
-      '/api/notifications'
-    ];
-    stubs.forEach(url => console.log('TODO: wire', url));
+  useEffect(() => {
+    let cancelled = false;
+    setIamLoading(true);
+    void loadStudioIamFeeds().then((data) => {
+      if (!cancelled) {
+        setIamFeeds(data);
+        setIamLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
 
@@ -151,6 +162,80 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
             <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Studio Engine</p>
           </div>
         </div>
+      </div>
+
+      <div className="mb-6 flex-shrink-0 rounded-xl border border-white/10 bg-black/30 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[9px] font-black text-white/35 uppercase tracking-[0.2em]">Agent Sam</p>
+          {iamLoading && <Loader2 size={12} className="animate-spin text-white/30" aria-hidden />}
+        </div>
+        {iamLoading ? (
+          <p className="text-[10px] text-white/30">Loading IAM feeds…</p>
+        ) : (
+          <div className="space-y-2 text-[10px] text-white/70">
+            <div className="flex gap-2 items-start">
+              <ClipboardList size={12} className="text-cyan-400/80 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <span className="text-white/40 uppercase tracking-tighter text-[8px]">Today</span>
+                <p className="leading-snug">
+                  {iamFeeds?.todayTodo?.body?.markdown
+                    ? firstLinesOfMarkdown(iamFeeds.todayTodo.body.markdown, 3, 140)
+                    : iamFeeds?.todayTodo?.ok === false
+                      ? 'No todo data.'
+                      : 'No today list yet.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 items-center flex-wrap">
+              <AlertTriangle size={12} className="text-amber-400/90 shrink-0" />
+              {iamFeeds?.problems?.status === 401 ? (
+                <span className="text-white/40">Problems: sign in</span>
+              ) : (
+                <span>
+                  Problems:{' '}
+                  <span className="text-white font-semibold">{problemTotal(iamFeeds?.problems?.body ?? null)}</span>
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2 items-center">
+              <GitBranch size={12} className="text-emerald-400/80 shrink-0" />
+              {iamFeeds?.gitStatus?.status === 401 ? (
+                <span className="text-white/40">Git: sign in</span>
+              ) : (
+                <span className="truncate">
+                  {iamFeeds?.gitStatus?.body?.branch ?? 'main'} ·{' '}
+                  {(iamFeeds?.gitStatus?.body?.git_hash || '').slice(0, 7) || '—'}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2 items-center">
+              <Shield size={12} className="text-violet-300/80 shrink-0" />
+              <span>
+                Rules:{' '}
+                {Array.isArray(iamFeeds?.rules?.body?.rules)
+                  ? iamFeeds.rules.body.rules.length
+                  : iamFeeds?.rules?.ok === false
+                    ? '—'
+                    : 0}
+              </span>
+            </div>
+            <div className="flex gap-2 items-center">
+              <Bell size={12} className="text-sky-300/80 shrink-0" />
+              {iamFeeds?.notifications?.status === 401 ? (
+                <span className="text-white/40">Inbox: sign in</span>
+              ) : (
+                <span>
+                  Unread:{' '}
+                  <span className="text-white font-semibold">
+                    {Array.isArray(iamFeeds?.notifications?.body?.notifications)
+                      ? iamFeeds.notifications.body.notifications.length
+                      : 0}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="space-y-8 flex-1 pb-10">

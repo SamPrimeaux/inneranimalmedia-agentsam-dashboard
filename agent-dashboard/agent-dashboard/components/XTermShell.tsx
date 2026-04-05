@@ -368,8 +368,8 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       onClose,
       problems = [],
       outputLines = [],
-      iamOrigin = DEFAULT_IAM_ORIGIN,
-      workspaceCdCommand = 'cd ~/Downloads/march1st-inneranimalmedia',
+      iamOrigin,
+      workspaceCdCommand,
       agentDashboardUrl: agentDashboardUrlProp,
       showIamWelcomeBar = true,
       workspaceLabel = '',
@@ -378,8 +378,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     },
     ref,
   ) => {
+    const [resolvedOrigin, setResolvedOrigin] = useState(iamOrigin ?? window.location.origin);
+    const [resolvedCdCmd, setResolvedCdCmd] = useState(workspaceCdCommand);
+
     const agentDashboardUrl =
-      agentDashboardUrlProp ?? `${iamOrigin.replace(/\/$/, '')}/dashboard/agent`;
+      agentDashboardUrlProp ?? `${resolvedOrigin.replace(/\/$/, '')}/dashboard/agent`;
 
     const terminalRef    = useRef<HTMLDivElement>(null);
     const xtermRef       = useRef<Terminal | null>(null);
@@ -398,6 +401,20 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const [tunnelHealth, setTunnelHealth] = useState<{ healthy: boolean; connections: number } | null>(null);
     const [sessionId, setSessionId]   = useState<string | null>(null);
     const [uptime, setUptime]         = useState(0);
+
+    useEffect(() => {
+      void fetch('/api/agentsam/config', { credentials: 'same-origin' })
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .then((data: { workspace_cd_command?: string; iam_origin?: string }) => {
+          if (workspaceCdCommand === undefined && data.workspace_cd_command) {
+            setResolvedCdCmd(data.workspace_cd_command);
+          }
+          if (iamOrigin === undefined && data.iam_origin) {
+            setResolvedOrigin(data.iam_origin);
+          }
+        })
+        .catch(() => {});
+    }, []);
 
     // ── Uptime counter (game-HUD feel) ──────────────────────────────────────
     useEffect(() => {
@@ -461,11 +478,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const welcomeWorkspace = useCallback(() => {
       setIsCollapsed(false); setActiveTab('terminal');
       if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(`${workspaceCdCommand}\r`);
+        socketRef.current.send(`${resolvedCdCmd}\r`);
       } else {
         xtermRef.current?.writeln('\r\n\x1b[1;31m  Terminal offline — cannot run workspace cd.\x1b[0m\r\n');
       }
-    }, [workspaceCdCommand]);
+    }, [resolvedCdCmd]);
 
     const welcomeOpenAgent = useCallback(() => {
       window.open(agentDashboardUrl, '_blank', 'noopener,noreferrer');

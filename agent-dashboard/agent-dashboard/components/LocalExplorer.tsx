@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
     FolderOpen,
     File as FileIcon,
@@ -24,17 +24,94 @@ import { GoogleDriveExplorer } from './GoogleDriveExplorer';
 const NATIVE_WS_DB_NAME = 'iam-agent-native-workspace-v1';
 const NATIVE_WS_STORE = 'handles';
 const NATIVE_WS_KEY = 'directory';
+/** Tier-2 hint: last D1 workspace id (handles stay in `handles`; browser may revoke permission across sessions). */
+const NATIVE_WS_HINT_STORE = 'workspace_hint';
+const NATIVE_WS_HINT_KEY = 'last';
+/** vscode.dev-style: display name only (no path); survives when D1/IDB hints are missing (e.g. logged out). */
+const LS_LAST_LOCAL_FOLDER_NAME = 'iam_last_local_folder_name';
+
+type LocalWorkspaceIdCache = { lastWorkspaceId: string; lastOpenedAt: number };
+
+function persistLastLocalFolderNameOnly(name: string): void {
+    try {
+        const n = name?.trim();
+        if (n) localStorage.setItem(LS_LAST_LOCAL_FOLDER_NAME, n);
+    } catch {
+        /* quota / private mode */
+    }
+}
+
+function loadLastLocalFolderNameOnly(): string | null {
+    try {
+        const n = localStorage.getItem(LS_LAST_LOCAL_FOLDER_NAME)?.trim();
+        return n || null;
+    } catch {
+        return null;
+    }
+}
+
+function clearLastLocalFolderNameOnly(): void {
+    try {
+        localStorage.removeItem(LS_LAST_LOCAL_FOLDER_NAME);
+    } catch {
+        /* ignore */
+    }
+}
 
 function openNativeWsDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(NATIVE_WS_DB_NAME, 1);
-    req.onerror = () => reject(req.error);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(NATIVE_WS_STORE)) db.createObjectStore(NATIVE_WS_STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
-  });
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(NATIVE_WS_DB_NAME, 2);
+        req.onerror = () => reject(req.error);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(NATIVE_WS_STORE)) db.createObjectStore(NATIVE_WS_STORE);
+            if (!db.objectStoreNames.contains(NATIVE_WS_HINT_STORE)) db.createObjectStore(NATIVE_WS_HINT_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+    });
+}
+
+async function persistWorkspaceIdHint(workspaceId: string): Promise<void> {
+    const db = await openNativeWsDb();
+    const entry: LocalWorkspaceIdCache = { lastWorkspaceId: workspaceId, lastOpenedAt: Date.now() };
+    await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(NATIVE_WS_HINT_STORE, 'readwrite');
+        tx.objectStore(NATIVE_WS_HINT_STORE).put(entry, NATIVE_WS_HINT_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+}
+
+async function loadWorkspaceIdHint(): Promise<LocalWorkspaceIdCache | null> {
+    try {
+        const db = await openNativeWsDb();
+        const row = await new Promise<LocalWorkspaceIdCache | null>((resolve, reject) => {
+            const tx = db.transaction(NATIVE_WS_HINT_STORE, 'readonly');
+            const r = tx.objectStore(NATIVE_WS_HINT_STORE).get(NATIVE_WS_HINT_KEY);
+            r.onsuccess = () => resolve((r.result as LocalWorkspaceIdCache) || null);
+            r.onerror = () => reject(r.error);
+        });
+        db.close();
+        return row;
+    } catch {
+        return null;
+    }
+}
+
+async function clearWorkspaceIdHint(): Promise<void> {
+    try {
+        const db = await openNativeWsDb();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(NATIVE_WS_HINT_STORE, 'readwrite');
+            tx.objectStore(NATIVE_WS_HINT_STORE).delete(NATIVE_WS_HINT_KEY);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+    } catch {
+        /* ignore */
+    }
 }
 
 async function persistNativeDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
@@ -79,6 +156,7 @@ async function loadPersistedNativeDirectoryHandle(): Promise<FileSystemDirectory
   }
 }
 
+/** Map API bucket name (GET /api/r2/buckets) to allowlisted binding for /api/r2/file (worker resolveR2BindingAllowlist). */
 function bucketLabelToBinding(label: string): string {
     const b = label.trim().toLowerCase();
     if (b === 'agent-sam' || b === 'tools') return 'DASHBOARD';
@@ -128,6 +206,14 @@ export const LocalExplorer: React.FC<{
     nativeFolderOpenSignal?: number;
 }> = ({ onFileSelect, onWorkspaceRootChange, onOpenInEditor, nativeFolderOpenSignal = 0 }) => {
     const [rootDir, setRootDir] = useState<FileNode | null>(null);
+    /**
+     * When the directory handle cannot be revalidated, show vscode.dev-style resume copy.
+     * `workspaceId` null = name came from localStorage only (no server row).
+     */
+    const [localResumeHint, setLocalResumeHint] = useState<{
+        workspaceId: string | null;
+        folderName: string;
+    } | null>(null);
     const [expandedSections, setExpandedSections] = useState({
         local: true,
         r2: true,
@@ -136,7 +222,7 @@ export const LocalExplorer: React.FC<{
     });
 
     const [r2Buckets, setR2Buckets] = useState<string[]>([]);
-    const [r2ExpandedBucket, setR2ExpandedBucket] = useState<string | null>(null);
+    const [selectedR2Bucket, setSelectedR2Bucket] = useState<string>('');
     const [r2PrefixByBucket, setR2PrefixByBucket] = useState<Record<string, string>>({});
     const [r2PrefixesByBucket, setR2PrefixesByBucket] = useState<Record<string, string[]>>({});
     const [r2ObjectsByBucket, setR2ObjectsByBucket] = useState<Record<string, { key: string; size?: number }[]>>({});
@@ -158,9 +244,19 @@ export const LocalExplorer: React.FC<{
         }
     }, []);
 
+    const displayR2Buckets = useMemo(() => dedupeR2BucketLabels(r2Buckets), [r2Buckets]);
+
     useEffect(() => {
         loadR2Buckets();
     }, [loadR2Buckets]);
+
+    useEffect(() => {
+        if (displayR2Buckets.length === 0) {
+            setSelectedR2Bucket('');
+            return;
+        }
+        setSelectedR2Bucket((prev) => (prev && displayR2Buckets.includes(prev) ? prev : displayR2Buckets[0]));
+    }, [displayR2Buckets]);
 
     const loadR2List = useCallback(async (bucket: string, prefixOverride?: string) => {
         setR2Loading(true);
@@ -189,17 +285,15 @@ export const LocalExplorer: React.FC<{
         }
     }, [r2PrefixByBucket]);
 
+    useEffect(() => {
+        if (!selectedR2Bucket) return;
+        void loadR2List(selectedR2Bucket);
+    }, [selectedR2Bucket]);
+
     const setR2Prefix = (bucket: string, prefix: string) => {
         setR2PrefixByBucket((prev) => ({ ...prev, [bucket]: prefix }));
         setR2SearchMode((m) => ({ ...m, [bucket]: false }));
         void loadR2List(bucket, prefix);
-    };
-
-    const openR2Bucket = (bucket: string) => {
-        setR2ExpandedBucket(bucket);
-        setR2PrefixByBucket((prev) => ({ ...prev, [bucket]: '' }));
-        setR2SearchMode((m) => ({ ...m, [bucket]: false }));
-        void loadR2List(bucket, '');
     };
 
     const runR2Search = async (bucket: string) => {
@@ -363,14 +457,55 @@ export const LocalExplorer: React.FC<{
     useEffect(() => {
         if (typeof indexedDB === 'undefined') return;
         void (async () => {
+            const tryResumeHints = async () => {
+                const hint = await loadWorkspaceIdHint();
+                if (hint?.lastWorkspaceId) {
+                    try {
+                        const res = await fetch(`/api/workspace/${encodeURIComponent(hint.lastWorkspaceId)}`, {
+                            credentials: 'same-origin',
+                        });
+                        if (res.ok) {
+                            const rec = (await res.json()) as { type?: string; folderName?: string };
+                            if (
+                                rec?.type === 'local' &&
+                                typeof rec.folderName === 'string' &&
+                                rec.folderName.trim()
+                            ) {
+                                const fn = rec.folderName.trim();
+                                persistLastLocalFolderNameOnly(fn);
+                                setLocalResumeHint({
+                                    workspaceId: hint.lastWorkspaceId,
+                                    folderName: fn,
+                                });
+                                return;
+                            }
+                        }
+                    } catch {
+                        /* offline */
+                    }
+                }
+                const nameOnly = loadLastLocalFolderNameOnly();
+                if (nameOnly) {
+                    setLocalResumeHint({ workspaceId: null, folderName: nameOnly });
+                }
+            };
+
             try {
                 const h = await loadPersistedNativeDirectoryHandle();
-                if (!h || typeof (h as any).queryPermission !== 'function') return;
+                if (!h || typeof (h as any).queryPermission !== 'function') {
+                    await tryResumeHints();
+                    return;
+                }
                 let perm = await (h as any).queryPermission({ mode: 'readwrite' });
                 if (perm === 'prompt' && typeof (h as any).requestPermission === 'function') {
                     perm = await (h as any).requestPermission({ mode: 'readwrite' });
                 }
-                if (perm !== 'granted') return;
+                if (perm !== 'granted') {
+                    await tryResumeHints();
+                    return;
+                }
+                setLocalResumeHint(null);
+                persistLastLocalFolderNameOnly(h.name);
                 const root: FileNode = {
                     name: h.name,
                     kind: 'directory',
@@ -382,6 +517,7 @@ export const LocalExplorer: React.FC<{
                 onWorkspaceRootChange?.({ folderName: root.name });
             } catch (e) {
                 console.warn('[LocalExplorer] native workspace restore skipped', e);
+                await tryResumeHints();
             }
         })();
     }, [getEntries, onWorkspaceRootChange]);
@@ -401,15 +537,57 @@ export const LocalExplorer: React.FC<{
             setRootDir(root);
             onWorkspaceRootChange?.({ folderName: root.name });
             await persistNativeDirectoryHandle(dirHandle);
+            persistLastLocalFolderNameOnly(dirHandle.name);
+
+            if (localResumeHint && dirHandle.name !== localResumeHint.folderName) {
+                console.warn(
+                    '[LocalExplorer] selected folder name differs from last saved workspace hint',
+                    dirHandle.name,
+                    localResumeHint.folderName,
+                );
+            }
+
+            const hintRow = await loadWorkspaceIdHint();
+            let synced = false;
+            if (hintRow?.lastWorkspaceId) {
+                const pr = await fetch(`/api/workspace/${encodeURIComponent(hintRow.lastWorkspaceId)}`, {
+                    method: 'PATCH',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lastOpenedAt: Date.now(), folderName: dirHandle.name }),
+                });
+                synced = pr.ok;
+            }
+            if (!synced) {
+                const res = await fetch('/api/workspace/create', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type: 'local',
+                        folderName: dirHandle.name,
+                        lastKnownPath: 'unknown',
+                        lastOpenedAt: Date.now(),
+                    }),
+                });
+                if (res.ok) {
+                    const j = (await res.json()) as { workspaceId?: string };
+                    if (j?.workspaceId) await persistWorkspaceIdHint(String(j.workspaceId));
+                }
+            }
+            setLocalResumeHint(null);
         } catch (err) {
             console.error('Failed to open directory:', err);
         }
-    }, [getEntries, onWorkspaceRootChange]);
+    }, [getEntries, onWorkspaceRootChange, localResumeHint]);
 
     const disconnectNativeFolder = useCallback(async () => {
         setRootDir(null);
+        setLocalResumeHint(null);
         onWorkspaceRootChange?.({ folderName: '' });
         await clearPersistedNativeDirectoryHandle();
+        await clearWorkspaceIdHint();
+        clearLastLocalFolderNameOnly();
     }, [onWorkspaceRootChange]);
 
     useEffect(() => {
@@ -501,6 +679,22 @@ export const LocalExplorer: React.FC<{
                     <div className="px-2 pb-2">
                         {!rootDir ? (
                             <div className="py-2 flex flex-col items-center justify-center gap-2">
+                                {localResumeHint ? (
+                                    <div className="w-full max-w-[220px] rounded border border-[var(--border-subtle)] bg-[var(--bg-app)]/80 p-2 mb-1">
+                                        <p className="text-[9px] text-[var(--text-main)] leading-snug text-center">
+                                            You last had{' '}
+                                            <span className="font-semibold text-[var(--solar-cyan)]">{localResumeHint.folderName}</span>{' '}
+                                            open. Use the folder picker again to grant access (web standard; display name only is remembered).
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleOpenFolder()}
+                                            className="mt-2 w-full text-[10px] font-semibold py-1.5 rounded border border-[var(--solar-cyan)]/40 text-[var(--solar-cyan)] hover:bg-[var(--solar-cyan)]/10"
+                                        >
+                                            Open folder
+                                        </button>
+                                    </div>
+                                ) : null}
                                 <button
                                     type="button"
                                     onClick={() => void handleOpenFolder()}
@@ -509,7 +703,7 @@ export const LocalExplorer: React.FC<{
                                     Connect Native Folder
                                 </button>
                                 <p className="text-[9px] text-[var(--text-muted)] text-center max-w-[200px] leading-relaxed">
-                                    Chromium: grants read/write for this site. The folder is remembered across visits when the browser allows.
+                                    Chromium: read/write for this site. The folder display name may be stored locally (and on the server when signed in) so we can prompt you to re-pick after a refresh—never the full disk path.
                                 </p>
                             </div>
                         ) : (
@@ -557,165 +751,179 @@ export const LocalExplorer: React.FC<{
                         {r2Err && (
                             <p className="text-[10px] text-[var(--solar-orange)] break-words">{r2Err}</p>
                         )}
-                        {r2Buckets.length === 0 && !r2Loading && (
+                        {displayR2Buckets.length === 0 && !r2Loading && (
                             <span className="text-[10px] italic">No buckets listed.</span>
                         )}
-                        {dedupeR2BucketLabels(r2Buckets).map((b) => {
-                            const open = r2ExpandedBucket === b;
-                            const objs = r2ObjectsByBucket[b] || [];
-                            const prefs = r2PrefixesByBucket[b] || [];
-                            const prefix = r2PrefixByBucket[b] ?? '';
-                            const searchOn = r2SearchMode[b];
-                            const shortName = (full: string) => (prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full);
-                            return (
-                                <div key={b} className="border border-[var(--border-subtle)]/40 rounded overflow-hidden">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            if (open) {
-                                                setR2ExpandedBucket(null);
-                                            } else {
-                                                openR2Bucket(b);
-                                            }
-                                        }}
-                                        className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] text-left text-[12px]"
-                                    >
-                                        {open ? <ChevronDown size={14} className="shrink-0 opacity-60" /> : <ChevronRight size={14} className="shrink-0 opacity-60" />}
-                                        <Box size={13} className="text-[var(--solar-blue)] shrink-0" />
-                                        <span className="truncate">{b}</span>
-                                    </button>
-                                    {open && (
-                                        <div className="px-2 pb-2 flex flex-col gap-1">
-                                            <div className="flex flex-wrap items-center gap-1 text-[9px] text-[var(--text-muted)] border-b border-[var(--border-subtle)]/30 pb-1">
-                                                <span className="truncate max-w-full">/{prefix || ''}</span>
-                                                {prefix ? (
-                                                    <button
-                                                        type="button"
-                                                        className="text-[var(--solar-cyan)] hover:underline shrink-0"
-                                                        onClick={() => setR2Prefix(b, parentR2Prefix(prefix))}
-                                                    >
-                                                        Up
-                                                    </button>
-                                                ) : null}
-                                                <button
-                                                    type="button"
-                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
-                                                    title="Refresh"
-                                                    onClick={() => void loadR2List(b)}
-                                                >
-                                                    <RefreshCw size={11} className={r2Loading && r2ExpandedBucket === b ? 'animate-spin' : ''} />
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
-                                                    title="Upload into this prefix"
-                                                    onClick={() => {
-                                                        setR2UploadTargetBucket(b);
-                                                        r2UploadRef.current?.click();
-                                                    }}
-                                                >
-                                                    <Upload size={11} />
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
-                                                    title="New folder prefix"
-                                                    onClick={() => void createR2Folder(b)}
-                                                >
-                                                    <FolderPlus size={11} />
-                                                </button>
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                <Search size={10} className="text-[var(--text-muted)] shrink-0" />
-                                                <input
-                                                    type="search"
-                                                    value={r2SearchQ[b] || ''}
-                                                    onChange={(e) => setR2SearchQ((prev) => ({ ...prev, [b]: e.target.value }))}
-                                                    onKeyDown={(e) => e.key === 'Enter' && void runR2Search(b)}
-                                                    placeholder="Filter keys (search)"
-                                                    className="flex-1 min-w-0 bg-[var(--bg-app)] border border-[var(--border-subtle)]/50 rounded px-1 py-0.5 text-[10px] outline-none"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    className="text-[9px] px-1 py-0.5 rounded bg-[var(--bg-hover)]"
-                                                    onClick={() => void runR2Search(b)}
-                                                >
-                                                    Go
-                                                </button>
-                                                {searchOn && (
-                                                    <button type="button" className="text-[9px] text-[var(--solar-cyan)] shrink-0" onClick={() => clearR2Search(b)}>
-                                                        List
-                                                    </button>
-                                                )}
-                                            </div>
-                                            {r2Loading && r2ExpandedBucket === b && (
-                                                <div className="flex items-center gap-1 py-1 text-[10px]">
-                                                    <Loader2 size={10} className="animate-spin" /> Loading…
-                                                </div>
-                                            )}
-                                            {!searchOn &&
-                                                prefs.map((p) => (
-                                                    <button
-                                                        key={p}
-                                                        type="button"
-                                                        onClick={() => setR2Prefix(b, p)}
-                                                        className="flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded text-left w-full"
-                                                    >
-                                                        <Folder size={12} className="text-[var(--solar-blue)] shrink-0" />
-                                                        <span className="truncate text-[10px]">{shortName(p)}</span>
-                                                    </button>
-                                                ))}
-                                            {objs.map((o) => (
-                                                <div
-                                                    key={o.key}
-                                                    className="flex items-center gap-0.5 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group"
-                                                >
-                                                    <div
-                                                        role={onOpenInEditor ? 'button' : undefined}
-                                                        tabIndex={onOpenInEditor ? 0 : undefined}
-                                                        onClick={() => {
-                                                            if (onOpenInEditor) void openR2Key(b, o.key);
-                                                        }}
-                                                        onKeyDown={(e) => {
-                                                            if (!onOpenInEditor) return;
-                                                            if (e.key === 'Enter' || e.key === ' ') {
-                                                                e.preventDefault();
-                                                                void openR2Key(b, o.key);
-                                                            }
-                                                        }}
-                                                        className={`flex flex-1 min-w-0 items-center gap-1 ${onOpenInEditor ? 'cursor-pointer' : ''}`}
-                                                    >
-                                                        <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
-                                                        <span className="truncate text-[10px]">{searchOn ? o.key : shortName(o.key)}</span>
-                                                    </div>
-                                                    {onOpenInEditor && (
-                                                        <button
-                                                            type="button"
-                                                            title="Open in editor"
-                                                            className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] shrink-0"
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                void openR2Key(b, o.key);
-                                                            }}
-                                                        >
-                                                            <FileCode2 size={11} />
-                                                        </button>
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        title="Delete object"
-                                                        className="p-0.5 opacity-50 hover:opacity-100 text-[var(--text-muted)] hover:text-[var(--solar-orange)] shrink-0"
-                                                        onClick={() => void deleteR2Key(b, o.key)}
-                                                    >
-                                                        <Trash2 size={11} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
+                        {displayR2Buckets.length > 0 && (
+                            <label className="flex flex-wrap items-center gap-2 text-[10px] text-[var(--text-muted)]">
+                                <span className="uppercase shrink-0">Bucket</span>
+                                <select
+                                    value={selectedR2Bucket}
+                                    onChange={(e) => {
+                                        const b = e.target.value;
+                                        setSelectedR2Bucket(b);
+                                        setR2SearchMode((m) => ({ ...m, [b]: false }));
+                                    }}
+                                    className="flex-1 min-w-0 max-w-[220px] bg-[var(--bg-app)] border border-[var(--border-subtle)]/50 rounded px-1 py-0.5 text-[10px] text-[var(--text-main)]"
+                                >
+                                    {displayR2Buckets.map((name) => (
+                                        <option key={name} value={name}>
+                                            {name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
+                        {selectedR2Bucket
+                            ? (() => {
+                                  const b = selectedR2Bucket;
+                                  const objs = r2ObjectsByBucket[b] || [];
+                                  const prefs = r2PrefixesByBucket[b] || [];
+                                  const prefix = r2PrefixByBucket[b] ?? '';
+                                  const searchOn = r2SearchMode[b];
+                                  const shortName = (full: string) =>
+                                      prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full;
+                                  return (
+                                      <div className="border border-[var(--border-subtle)]/40 rounded overflow-hidden">
+                                          <div className="px-2 py-1.5 flex items-center gap-2 text-[12px] border-b border-[var(--border-subtle)]/30">
+                                              <Box size={13} className="text-[var(--solar-blue)] shrink-0" />
+                                              <span className="truncate font-medium">{b}</span>
+                                          </div>
+                                          <div className="px-2 pb-2 flex flex-col gap-1">
+                                              <div className="flex flex-wrap items-center gap-1 text-[9px] text-[var(--text-muted)] border-b border-[var(--border-subtle)]/30 pb-1">
+                                                  <span className="truncate max-w-full">/{prefix || ''}</span>
+                                                  {prefix ? (
+                                                      <button
+                                                          type="button"
+                                                          className="text-[var(--solar-cyan)] hover:underline shrink-0"
+                                                          onClick={() => setR2Prefix(b, parentR2Prefix(prefix))}
+                                                      >
+                                                          Up
+                                                      </button>
+                                                  ) : null}
+                                                  <button
+                                                      type="button"
+                                                      className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                      title="Refresh"
+                                                      onClick={() => void loadR2List(b)}
+                                                  >
+                                                      <RefreshCw size={11} className={r2Loading ? 'animate-spin' : ''} />
+                                                  </button>
+                                                  <button
+                                                      type="button"
+                                                      className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                      title="Upload into this prefix"
+                                                      onClick={() => {
+                                                          setR2UploadTargetBucket(b);
+                                                          r2UploadRef.current?.click();
+                                                      }}
+                                                  >
+                                                      <Upload size={11} />
+                                                  </button>
+                                                  <button
+                                                      type="button"
+                                                      className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                      title="New folder prefix"
+                                                      onClick={() => void createR2Folder(b)}
+                                                  >
+                                                      <FolderPlus size={11} />
+                                                  </button>
+                                              </div>
+                                              <div className="flex items-center gap-1">
+                                                  <Search size={10} className="text-[var(--text-muted)] shrink-0" />
+                                                  <input
+                                                      type="search"
+                                                      value={r2SearchQ[b] || ''}
+                                                      onChange={(e) => setR2SearchQ((prev) => ({ ...prev, [b]: e.target.value }))}
+                                                      onKeyDown={(e) => e.key === 'Enter' && void runR2Search(b)}
+                                                      placeholder="Filter keys (search)"
+                                                      className="flex-1 min-w-0 bg-[var(--bg-app)] border border-[var(--border-subtle)]/50 rounded px-1 py-0.5 text-[10px] outline-none"
+                                                  />
+                                                  <button
+                                                      type="button"
+                                                      className="text-[9px] px-1 py-0.5 rounded bg-[var(--bg-hover)]"
+                                                      onClick={() => void runR2Search(b)}
+                                                  >
+                                                      Go
+                                                  </button>
+                                                  {searchOn && (
+                                                      <button
+                                                          type="button"
+                                                          className="text-[9px] text-[var(--solar-cyan)] shrink-0"
+                                                          onClick={() => clearR2Search(b)}
+                                                      >
+                                                          List
+                                                      </button>
+                                                  )}
+                                              </div>
+                                              {r2Loading && (
+                                                  <div className="flex items-center gap-1 py-1 text-[10px]">
+                                                      <Loader2 size={10} className="animate-spin" /> Loading…
+                                                  </div>
+                                              )}
+                                              {!searchOn &&
+                                                  prefs.map((p) => (
+                                                      <button
+                                                          key={p}
+                                                          type="button"
+                                                          onClick={() => setR2Prefix(b, p)}
+                                                          className="flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded text-left w-full"
+                                                      >
+                                                          <Folder size={12} className="text-[var(--solar-blue)] shrink-0" />
+                                                          <span className="truncate text-[10px]">{shortName(p)}</span>
+                                                      </button>
+                                                  ))}
+                                              {objs.map((o) => (
+                                                  <div
+                                                      key={o.key}
+                                                      className="flex items-center gap-0.5 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group"
+                                                  >
+                                                      <div
+                                                          role={onOpenInEditor ? 'button' : undefined}
+                                                          tabIndex={onOpenInEditor ? 0 : undefined}
+                                                          onClick={() => {
+                                                              if (onOpenInEditor) void openR2Key(b, o.key);
+                                                          }}
+                                                          onKeyDown={(e) => {
+                                                              if (!onOpenInEditor) return;
+                                                              if (e.key === 'Enter' || e.key === ' ') {
+                                                                  e.preventDefault();
+                                                                  void openR2Key(b, o.key);
+                                                              }
+                                                          }}
+                                                          className={`flex flex-1 min-w-0 items-center gap-1 ${onOpenInEditor ? 'cursor-pointer' : ''}`}
+                                                      >
+                                                          <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
+                                                          <span className="truncate text-[10px]">{searchOn ? o.key : shortName(o.key)}</span>
+                                                      </div>
+                                                      {onOpenInEditor && (
+                                                          <button
+                                                              type="button"
+                                                              title="Open in editor"
+                                                              className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] shrink-0"
+                                                              onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  void openR2Key(b, o.key);
+                                                              }}
+                                                          >
+                                                              <FileCode2 size={11} />
+                                                          </button>
+                                                      )}
+                                                      <button
+                                                          type="button"
+                                                          title="Delete object"
+                                                          className="p-0.5 opacity-50 hover:opacity-100 text-[var(--text-muted)] hover:text-[var(--solar-orange)] shrink-0"
+                                                          onClick={() => void deleteR2Key(b, o.key)}
+                                                      >
+                                                          <Trash2 size={11} />
+                                                      </button>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  );
+                              })()
+                            : null}
                     </div>
                 )}
             </div>

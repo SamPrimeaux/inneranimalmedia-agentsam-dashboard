@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Database, File, Loader2, RefreshCw, ChevronRight, HardDrive, Trash2, Link2, Upload, ArrowRightLeft, FileCode2 } from 'lucide-react';
 import type { ActiveFile } from '../types';
 
@@ -11,6 +11,19 @@ function bucketLabelToBinding(label: string): string {
     if (b === 'iam-docs') return 'DOCS_BUCKET';
     if (b === 'autorag') return 'AUTORAG_BUCKET';
     return 'DASHBOARD';
+}
+
+/** agent-sam and tools share env.DASHBOARD — one row per binding for dropdowns */
+function dedupeR2BucketLabels(names: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const n of names) {
+        const sig = bucketLabelToBinding(n);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(n);
+    }
+    return out;
 }
 
 type R2ObjectRow = {
@@ -36,6 +49,8 @@ export const R2Explorer: React.FC<{
     const [syncPrefix, setSyncPrefix] = useState('');
     const [syncMsg, setSyncMsg] = useState<string | null>(null);
     const [searchActive, setSearchActive] = useState(false);
+
+    const displayBuckets = useMemo(() => dedupeR2BucketLabels(buckets), [buckets]);
 
     const loadBuckets = useCallback(async () => {
         try {
@@ -119,8 +134,22 @@ export const R2Explorer: React.FC<{
     }, [loadBuckets]);
 
     useEffect(() => {
-        if (buckets.length && !bucket) setBucket(buckets[0]);
-    }, [buckets, bucket]);
+        if (displayBuckets.length === 0) {
+            setBucket('');
+            return;
+        }
+        setBucket((prev) => (prev && displayBuckets.includes(prev) ? prev : displayBuckets[0]));
+    }, [displayBuckets]);
+
+    useEffect(() => {
+        if (displayBuckets.length === 0) {
+            setSyncSource('');
+            setSyncDest('');
+            return;
+        }
+        setSyncSource((s) => (s && displayBuckets.includes(s) ? s : displayBuckets[0]));
+        setSyncDest((d) => (d && displayBuckets.includes(d) ? d : displayBuckets[1] ?? displayBuckets[0]));
+    }, [displayBuckets]);
 
     useEffect(() => {
         if (bucket) {
@@ -280,8 +309,8 @@ export const R2Explorer: React.FC<{
                             onChange={(e) => setBucket(e.target.value)}
                             className="bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-1 py-0.5 max-w-[180px]"
                         >
-                            {buckets.length === 0 && <option value="">—</option>}
-                            {buckets.map((b) => (
+                            {displayBuckets.length === 0 && <option value="">—</option>}
+                            {displayBuckets.map((b) => (
                                 <option key={b} value={b}>
                                     {b}
                                 </option>
@@ -417,19 +446,39 @@ export const R2Explorer: React.FC<{
                     Cross-bucket sync
                 </div>
                 <div className="flex flex-wrap gap-2 text-[10px] items-center">
-                    <input
+                    <select
                         value={syncSource}
                         onChange={(e) => setSyncSource(e.target.value)}
-                        placeholder="source bucket"
-                        className="flex-1 min-w-[100px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
-                    />
+                        disabled={displayBuckets.length === 0}
+                        className="flex-1 min-w-[100px] max-w-[160px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono disabled:opacity-50"
+                    >
+                        {displayBuckets.length === 0 ? (
+                            <option value="">—</option>
+                        ) : (
+                            displayBuckets.map((b) => (
+                                <option key={`src-${b}`} value={b}>
+                                    {b}
+                                </option>
+                            ))
+                        )}
+                    </select>
                     <span className="text-[var(--text-muted)]">to</span>
-                    <input
+                    <select
                         value={syncDest}
                         onChange={(e) => setSyncDest(e.target.value)}
-                        placeholder="dest bucket"
-                        className="flex-1 min-w-[100px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono"
-                    />
+                        disabled={displayBuckets.length === 0}
+                        className="flex-1 min-w-[100px] max-w-[160px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded px-1 py-0.5 font-mono disabled:opacity-50"
+                    >
+                        {displayBuckets.length === 0 ? (
+                            <option value="">—</option>
+                        ) : (
+                            displayBuckets.map((b) => (
+                                <option key={`dst-${b}`} value={b}>
+                                    {b}
+                                </option>
+                            ))
+                        )}
+                    </select>
                     <input
                         value={syncPrefix}
                         onChange={(e) => setSyncPrefix(e.target.value)}

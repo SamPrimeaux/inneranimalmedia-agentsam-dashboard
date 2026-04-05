@@ -28,7 +28,11 @@ import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { MCPPanel } from './components/MCPPanel';
 import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
-import { fetchAndApplyActiveCmsTheme, applyCachedCmsThemeFallback } from './src/applyCmsTheme';
+import {
+  fetchAndApplyActiveCmsTheme,
+  applyCachedCmsThemeFallback,
+  migrateLegacyThemeLocalStorage,
+} from './src/applyCmsTheme';
 import {
   loadWorkspace,
   saveWorkspace,
@@ -560,6 +564,7 @@ const App: React.FC = () => {
 
   // Themes: cms_themes + settings.appearance.theme via GET /api/themes/active (workspace_id scopes rows)
   useEffect(() => {
+    migrateLegacyThemeLocalStorage();
     fetchAndApplyActiveCmsTheme(authWorkspaceId)
       .then((payload) => {
         const hasVars =

@@ -231,13 +231,23 @@ function measureAboveAnchor(
   const gap = 8;
   const hPad = 16;
   const mw = menuWidthForClamp ?? minW;
-  const left = Math.max(hPad, Math.min(r.left, window.innerWidth - mw - hPad));
+  const maxMenuW = Math.max(160, window.innerWidth - 2 * hPad);
+  const effClampW = Math.min(mw, maxMenuW);
+  const effMinW = Math.min(minW, maxMenuW);
+  const left = Math.max(hPad, Math.min(r.left, window.innerWidth - effClampW - hPad));
 
   const spaceAbove = Math.max(0, r.top - gap - 8);
   const spaceBelow = Math.max(0, window.innerHeight - r.bottom - gap - 8);
   const minMenu = 100;
   const placeAbove =
     spaceAbove >= minMenu ? true : spaceBelow > spaceAbove ? false : true;
+
+  const sizeStyle: React.CSSProperties = {
+    minWidth: effMinW,
+    maxWidth: maxMenuW,
+    boxSizing: 'border-box',
+    overflowX: 'hidden',
+  };
 
   if (placeAbove) {
     return {
@@ -248,7 +258,7 @@ function measureAboveAnchor(
       top: 'auto',
       zIndex: 9999,
       maxHeight: Math.min(maxHeightCap, Math.max(64, spaceAbove)),
-      minWidth: minW,
+      ...sizeStyle,
     };
   }
 
@@ -260,7 +270,7 @@ function measureAboveAnchor(
     bottom: 'auto',
     zIndex: 9999,
     maxHeight: Math.min(maxHeightCap, Math.max(64, spaceBelow)),
-    minWidth: minW,
+    ...sizeStyle,
   };
 }
 
@@ -416,6 +426,25 @@ const MENTION_R2_LIST_MAX_ROWS = 250;
 /** Worker request body cap (inform UI); combined files rejected above CHAT_ATTACH_MAX_TOTAL_BYTES in worker.js */
 const CHAT_REQUEST_MAX_BYTES = 100 * 1024 * 1024;
 const CHAT_ATTACH_MAX_TOTAL_BYTES = 90 * 1024 * 1024;
+
+/**
+ * App.tsx mobile shell: fixed tab bar z-[90] with `bottom: 1.5rem + safe-area` (~52px row) + status strip.
+ * Chat panel is max-md:fixed z-[45], so the composer must pad above that stack or it sits underneath.
+ */
+const MOBILE_CHAT_COMPOSER_BOTTOM_PAD =
+  'calc(56px + 1.5rem + env(safe-area-inset-bottom, 0px) + 24px)';
+
+/** Mobile: keep composer short so flex-1 message list does not jump on every keystroke; scroll inside textarea instead. */
+const COMPOSER_TEXTAREA_MAX_PX_NARROW = 104;
+const COMPOSER_TEXTAREA_MAX_PX_WIDE = 200;
+
+function syncComposerTextareaHeight(el: HTMLTextAreaElement | null, maxPx: number) {
+  if (!el) return;
+  el.style.height = 'auto';
+  const sh = el.scrollHeight;
+  el.style.height = `${Math.min(sh, maxPx)}px`;
+  el.style.overflowY = sh > maxPx ? 'auto' : 'hidden';
+}
 
 function hasWordMention(text: string, tag: string): boolean {
   return new RegExp(`@${tag}\\b`).test(text);
@@ -760,6 +789,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     return () => mq.removeEventListener('change', u);
   }, []);
 
+  useEffect(() => {
+    syncComposerTextareaHeight(
+      textareaRef.current,
+      isNarrow ? COMPOSER_TEXTAREA_MAX_PX_NARROW : COMPOSER_TEXTAREA_MAX_PX_WIDE,
+    );
+  }, [isNarrow]);
+
   const loadGhRepos = useCallback(async () => {
     setGhReposLoading(true);
     try {
@@ -1079,8 +1115,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     const v = e.target.value;
     setInput(v);
     const el = e.target;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    const maxPx = isNarrow ? COMPOSER_TEXTAREA_MAX_PX_NARROW : COMPOSER_TEXTAREA_MAX_PX_WIDE;
+    syncComposerTextareaHeight(el, maxPx);
     syncPickers(v, el.selectionStart);
   };
 
@@ -1117,6 +1153,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       if (el) {
         el.focus();
         el.setSelectionRange(selStart, selEnd);
+        syncComposerTextareaHeight(
+          el,
+          isNarrow ? COMPOSER_TEXTAREA_MAX_PX_NARROW : COMPOSER_TEXTAREA_MAX_PX_WIDE,
+        );
       }
     });
   };
@@ -1233,7 +1273,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     const userMessage = text || '(attachment)';
     setPendingToolApproval(null);
     setInput('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    requestAnimationFrame(() => {
+      syncComposerTextareaHeight(
+        textareaRef.current,
+        isNarrow ? COMPOSER_TEXTAREA_MAX_PX_NARROW : COMPOSER_TEXTAREA_MAX_PX_WIDE,
+      );
+    });
     const attachmentPreviews: MessageAttachmentPreview[] = attachments.map((a) => ({
       previewUrl: a.previewUrl,
       type: a.type,
@@ -1487,7 +1532,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     while ((match = codeBlockRegex.exec(display)) !== null) {
       if (match.index > lastIndex) {
         const text = display.substring(lastIndex, match.index);
-        parts.push(<span key={`text-${lastIndex}`} className="whitespace-pre-wrap">{text}</span>);
+        parts.push(
+          <span
+            key={`text-${lastIndex}`}
+            className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-w-full"
+          >
+            {text}
+          </span>,
+        );
       }
 
       const lang = match[1] || 'text';
@@ -1501,7 +1553,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           parts.push(
             <div
               key={`code-${match.index}`}
-              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl group hover:border-[var(--solar-green)]/50 transition-all"
+              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl group hover:border-[var(--solar-green)]/50 transition-all max-w-full min-w-0"
             >
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-8 h-8 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-lg flex items-center justify-center text-[var(--solar-green)]">
@@ -1514,7 +1566,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                   </span>
                 </div>
               </div>
-              <pre className="text-[0.6875rem] font-mono text-[var(--solar-green)] bg-[var(--bg-code-pre)] rounded-lg p-3 overflow-x-auto whitespace-pre border border-[var(--border-subtle)]">
+              <pre className="text-[0.6875rem] font-mono text-[var(--solar-green)] bg-[var(--bg-code-pre)] rounded-lg p-3 overflow-x-auto overflow-y-hidden whitespace-pre border border-[var(--border-subtle)] max-w-full min-w-0">
                 {code}
               </pre>
               <div className="flex gap-2 mt-2">
@@ -1539,7 +1591,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           parts.push(
             <div
               key={`code-${match.index}`}
-              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl flex items-center justify-between group hover:border-[var(--solar-cyan)] transition-all cursor-pointer shadow-inner"
+              className="my-3 p-3 bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl flex items-center justify-between group hover:border-[var(--solar-cyan)] transition-all cursor-pointer shadow-inner max-w-full min-w-0"
               onClick={() => onFileSelect?.({ name: `agent_output_${msgIndex}_${codeCount}.${ext}`, content: code })}
             >
               <div className="flex items-center gap-3">
@@ -1566,7 +1618,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         parts.push(
           <pre
             key={`code-${match.index}`}
-            className="my-2 p-3 bg-[var(--scene-bg)] rounded-lg border border-[var(--border-subtle)] overflow-x-auto text-[0.75rem] font-mono whitespace-pre text-[var(--solar-cyan)]"
+            className="my-2 p-3 bg-[var(--scene-bg)] rounded-lg border border-[var(--border-subtle)] overflow-x-auto max-w-full min-w-0 text-[0.75rem] font-mono whitespace-pre text-[var(--solar-cyan)]"
           >
             <code>{code}</code>
           </pre>
@@ -1577,10 +1629,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     }
 
     if (lastIndex < display.length) {
-      parts.push(<span key="text-end" className="whitespace-pre-wrap">{display.substring(lastIndex)}</span>);
+      parts.push(
+        <span key="text-end" className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-w-full">
+          {display.substring(lastIndex)}
+        </span>,
+      );
     }
 
-    return parts.length > 0 ? <>{parts}</> : <span className="whitespace-pre-wrap">{display}</span>;
+    return parts.length > 0 ? (
+      <>{parts}</>
+    ) : (
+      <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-w-full">{display}</span>
+    );
   };
 
   const canSend =
@@ -1663,13 +1723,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
   return (
     <>
-      <div className="flex flex-col h-[100dvh] overflow-hidden bg-[var(--bg-panel)] w-full">
+      <div className="flex flex-col h-full min-h-0 max-w-[100vw] overflow-x-hidden overflow-y-hidden bg-[var(--bg-panel)] w-full min-w-0">
         <style>{`
         .agent-content strong { color: var(--solar-cyan); font-weight: 700; }
         .agent-content h1, .agent-content h2, .agent-content h3 { color: var(--text-heading); font-weight: 700; margin-bottom: 0.75rem; }
         .agent-content ul, .agent-content ol { padding-left: 1.5rem; margin-bottom: 1rem; }
         .agent-content li { margin-bottom: 0.4rem; }
         .agent-content p + p { margin-top: 0.75rem; }
+        .agent-content pre, .agent-content code { max-width: 100%; }
         .chat-hide-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
@@ -1680,7 +1741,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               alt=""
               className="w-6 h-6 rounded object-cover shrink-0"
             />
-            <nav className="flex items-center justify-center gap-3 min-w-0 overflow-x-auto chat-hide-scroll">
+            <nav className="flex items-center justify-center gap-2 sm:gap-3 min-w-0 max-w-full overflow-x-auto chat-hide-scroll [scrollbar-width:none]">
               {(['agents', 'automations', 'dashboard'] as const).map((tab) => (
                 <button
                   key={tab}
@@ -1812,8 +1873,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               <>
                 <h2 className="text-[16px] font-semibold text-[var(--text-heading)]">Workspace</h2>
                 <p className="text-[12px] text-[var(--text-muted)] leading-relaxed">
-                  Return to the main editor, welcome screen, and tabs. Themes from Settings still apply everywhere via your
-                  workspace <code className="text-[var(--solar-cyan)]">cms_themes</code> selection.
+                  Return to the main editor, welcome screen, and tabs. Inner Animal Media themes from Settings still apply
+                  everywhere via your workspace <code className="text-[var(--solar-cyan)]">cms_themes</code> row.
                 </p>
                 <button
                   type="button"
@@ -1917,7 +1978,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         {messagesVisible && (
         <div
           ref={scrollRef}
-          className="order-4 flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
+          className="order-4 flex flex-col flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain px-3 sm:px-4 pt-6 pb-4 space-y-6 w-full max-w-full chat-hide-scroll"
         >
           {showEmptyThreadPlaceholder ? (
             <div className="flex flex-col items-center justify-center flex-1 gap-3 px-6">
@@ -1931,8 +1992,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </div>
           ) : (
             displayMessages.map((msg, i) => (
-              <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
+              <div key={i} className={`flex w-full min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`flex gap-2.5 min-w-0 ${
+                    msg.role === 'user' ? 'flex-row-reverse max-w-[min(85%,100%)]' : 'max-w-full w-full'
+                  }`}
+                >
                   <div
                     className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${
                       msg.role === 'user'
@@ -1947,7 +2012,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                     )}
                   </div>
                   <div
-                    className={`agent-content text-[0.8125rem] leading-relaxed ${
+                    className={`agent-content text-[0.8125rem] leading-relaxed min-w-0 break-words [overflow-wrap:anywhere] ${
                       msg.role === 'user'
                         ? 'bg-[var(--scene-bg)] border border-[var(--border-subtle)] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
                         : 'text-[var(--text-main)] w-full'
@@ -2044,10 +2109,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
         {composerVisible && (
         <div
-          className={`${composerFlexOrder} flex-shrink-0 w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2 ${
+          className={`${composerFlexOrder} flex-shrink-0 w-full min-w-0 max-w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2 ${
             mobileAgentsHome ? 'border-b border-[var(--border-subtle)] md:border-b-0' : ''
           }`}
-          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+          style={{
+            paddingBottom: isNarrow ? MOBILE_CHAT_COMPOSER_BOTTOM_PAD : 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+          }}
         >
           {pendingToolApproval && (
             <div
@@ -2214,8 +2281,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 onClick={(ev) => syncPickers(ev.currentTarget.value, ev.currentTarget.selectionStart)}
                 placeholder="Message Agent Sam..."
                 rows={1}
-                className="flex-1 min-w-0 bg-transparent px-1 py-2 text-[0.8125rem] focus:outline-none text-[var(--text-main)] placeholder:text-[var(--text-placeholder-strong)] resize-none font-sans leading-relaxed rounded-lg"
-                style={{ minHeight: '44px', maxHeight: '200px' }}
+                className={`flex-1 min-w-0 bg-transparent px-1 py-2 focus:outline-none text-[var(--text-main)] placeholder:text-[var(--text-placeholder-strong)] resize-none font-sans leading-relaxed rounded-lg ${
+                  isNarrow ? 'text-base' : 'text-[0.8125rem]'
+                }`}
+                style={{
+                  minHeight: '44px',
+                  maxHeight: isNarrow ? COMPOSER_TEXTAREA_MAX_PX_NARROW : COMPOSER_TEXTAREA_MAX_PX_WIDE,
+                }}
               />
               <button
                 type="button"
@@ -2366,7 +2438,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         attachMenuStyle &&
         createPortal(
           <div
-            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto py-1 min-w-[200px]"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto overflow-x-hidden py-1 min-w-0"
             style={attachMenuStyle}
             role="menu"
           >
@@ -2450,7 +2522,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                     <button
                       key={m.id}
                       type="button"
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 ${
+                      className={`w-full min-w-0 flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 ${
                         selectedModelKey === m.model_key
                           ? 'text-[var(--solar-cyan)] bg-[var(--bg-panel)]/80'
                           : 'text-[var(--text-main)]'
@@ -2460,7 +2532,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                         setAttachMenuOpen(false);
                       }}
                     >
-                      <span className="truncate text-[0.6875rem]">{m.name}</span>
+                      <span className="min-w-0 flex-1 text-left truncate text-[0.6875rem]">{m.name}</span>
                     </button>
                   ))}
                 </div>
@@ -2475,7 +2547,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         modeMenuStyle &&
         createPortal(
           <div
-            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl p-1 flex flex-col text-[0.6875rem] overflow-y-auto"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl p-1 flex flex-col text-[0.6875rem] overflow-y-auto overflow-x-hidden min-w-0"
             style={modeMenuStyle}
           >
             {modes.map((m) => (
@@ -2503,7 +2575,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         mentionItems.length > 0 &&
         createPortal(
           <div
-            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto overflow-x-hidden p-1 min-w-0"
             style={mentionStyle}
           >
             {mentionItems.map((it, i) => (
@@ -2530,7 +2602,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         slashItems.length > 0 &&
         createPortal(
           <div
-            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto p-1 max-w-[320px]"
+            className="bg-[var(--scene-bg)] border border-[var(--border-subtle)] rounded-xl shadow-2xl flex flex-col text-[0.6875rem] overflow-y-auto overflow-x-hidden p-1 max-w-[min(320px,calc(100vw-2rem))] min-w-0"
             style={slashStyle}
           >
             {slashItems.map((c, i) => (

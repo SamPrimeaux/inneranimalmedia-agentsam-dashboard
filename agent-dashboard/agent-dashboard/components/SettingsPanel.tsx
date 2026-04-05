@@ -464,7 +464,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
           {activeSection === 'Themes' && (
             <div className="flex flex-col gap-4">
               <h2 className="text-[13px] font-bold text-[var(--text-heading)] uppercase tracking-widest">Workspace Themes</h2>
-              <p className="text-[12px] text-[var(--text-muted)]">Select a theme to instantly update the workspace aesthetics. Themes are stored in the <code className="font-mono text-[var(--solar-cyan)]">cms_themes</code> table.</p>
+              <p className="text-[12px] text-[var(--text-muted)]">Select a theme to instantly update the Inner Animal Media dashboard. Theme variables are stored in <code className="font-mono text-[var(--solar-cyan)]">cms_themes</code> and applied live.</p>
               <ThemeSwitcher workspaceId={workspaceId} />
             </div>
           )}

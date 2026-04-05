@@ -51,7 +51,7 @@ function hexWithAlpha(hex: string, alphaHex2: string, fallback: string): string 
   return fallback;
 }
 
-/** Resolve :root CSS custom properties (cms_themes / index.css) for Monaco. */
+/** Resolve :root CSS custom properties (cms_themes / inneranimalmedia.css) for Monaco. */
 function monacoColorsFromDocument(): Record<string, string> {
   if (typeof window === 'undefined') {
     return {};
@@ -146,7 +146,7 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [gitActionHint, setGitActionHint] = useState<string | null>(null);
 
-  // Custom theme from :root CSS vars (cms_themes / index.css)
+  // Custom theme from :root CSS vars (cms_themes / inneranimalmedia.css)
   useEffect(() => {
     if (monaco && !isThemeReady.current) {
       monaco.editor.defineTheme('meauxcad-dark', {

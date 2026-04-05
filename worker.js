@@ -8059,7 +8059,7 @@ function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileC
 function filterToolsByMode(mode, toolDefinitions) {
   if (!Array.isArray(toolDefinitions)) return [];
   if (mode === 'plan') {
-    const planToolNames = new Set(['d1_query', 'knowledge_search', 'human_context_list', 'context_search', 'platform_info', 'imgx_generate_image', 'r2_write', 'r2_read', 'github_repos', 'github_file', 'generate_execution_plan']);
+    const planToolNames = new Set(['think', 'workspace_write_file', 'workspace_edit_file', 'd1_query', 'knowledge_search', 'human_context_list', 'context_search', 'platform_info', 'imgx_generate_image', 'r2_write', 'r2_read', 'github_repos', 'github_file', 'generate_execution_plan']);
     return toolDefinitions.filter((t) => t && planToolNames.has(t.name));
   }
   if (mode === 'debug') {
@@ -8067,11 +8067,11 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
   }
   if (mode === 'ask') {
-    const askToolNames = new Set(['d1_query', 'r2_read', 'r2_list', 'knowledge_search', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
+    const askToolNames = new Set(['think', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
     return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
   }
   if (mode === 'agent') {
-    const agentToolNames = new Set(['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'agentsam_run_agent', 'agentsam_get_agent', 'agentsam_list_agents', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
+    const agentToolNames = new Set(['think', 'terminal_execute', 'workspace_write_file', 'workspace_edit_file', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'd1_query', 'd1_write', 'r2_read', 'r2_write', 'r2_list', 'r2_search', 'playwright_screenshot', 'a11y_audit_webpage', 'a11y_get_summary', 'knowledge_search', 'human_context_add', 'human_context_list', 'resend_send_email', 'worker_deploy', 'list_workers', 'list_clients', 'platform_info', 'generate_execution_plan', 'context_optimize', 'telemetry_log', 'telemetry_query', 'imgx_generate_image', 'github_repos', 'github_file', 'gdrive_list', 'gdrive_fetch', 'agentsam_run_agent', 'agentsam_get_agent', 'agentsam_list_agents', 'context_search', 'r2_bucket_summary', 'excalidraw_open', 'excalidraw_add_elements', 'excalidraw_load_library', 'excalidraw_export', 'excalidraw_clear', 'preview_in_browser', 'get_r2_url']);
     return toolDefinitions.filter((t) => t && agentToolNames.has(t.name));
   }
   return toolDefinitions.slice(0, 20);
@@ -9335,6 +9335,40 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
       let resultText = `Tool ${toolName} not implemented`;
       const toolTenantId = tenantIdFromEnv(env);
 
+      if (toolName === 'think') {
+        return await finish({ ok: true, result: 'Thinking complete!' }, null);
+      }
+      if (toolName === 'workspace_write_file') {
+        const pathRaw = params.path || '';
+        const fileContent = params.content || '';
+        const norm = normalizeWorkspaceAbsolutePath(root, pathRaw);
+        if (!norm.ok) return await finish({ error: 'invalid_path', message: norm.error }, norm.error);
+        const fp = norm.path;
+        const q = JSON.stringify(fp);
+        const bk = '/tmp/iam_bk_' + require('crypto').createHash('md5').update(fp).digest('hex');
+        await runTerminalCommand(env, request, 'cp ' + q + ' ' + bk + ' 2>/dev/null || true', conversationId, executionCtx);
+        await runTerminalCommand(env, request, 'printf ' + JSON.stringify('%s') + ' ' + JSON.stringify(fileContent) + ' > ' + q, conversationId, executionCtx);
+        return await finish({ ok: true, path: fp, bytes: fileContent.length }, null);
+      }
+      if (toolName === 'workspace_edit_file') {
+        const pathRaw = params.path || '';
+        const oldStr = params.old_str || '';
+        const newStr = params.new_str != null ? params.new_str : '';
+        const norm = normalizeWorkspaceAbsolutePath(root, pathRaw);
+        if (!norm.ok) return await finish({ error: 'invalid_path', message: norm.error }, norm.error);
+        const fp = norm.path;
+        const q = JSON.stringify(fp);
+        const readR = await runTerminalCommand(env, request, 'cat ' + q, conversationId, executionCtx);
+        const cur = readR.output || '';
+        const hits = cur.split(oldStr).length - 1;
+        if (hits === 0) return await finish({ error: 'not_found', message: 'old_str not found — read file first' }, 'not_found');
+        if (hits > 1) return await finish({ error: 'ambiguous', message: 'old_str found ' + hits + ' times — be more specific' }, 'ambiguous');
+        const bk = '/tmp/iam_bk_' + require('crypto').createHash('md5').update(fp).digest('hex');
+        await runTerminalCommand(env, request, 'cp ' + q + ' ' + bk + ' 2>/dev/null || true', conversationId, executionCtx);
+        const newContent = cur.replace(oldStr, newStr);
+        await runTerminalCommand(env, request, 'printf ' + JSON.stringify('%s') + ' ' + JSON.stringify(newContent) + ' > ' + q, conversationId, executionCtx);
+        return await finish({ ok: true, path: fp }, null);
+      }
       if (toolName === 'terminal_execute') {
         const cmdRaw = params.command;
         const command = typeof cmdRaw === 'string' ? cmdRaw : (cmdRaw == null ? '' : String(cmdRaw));

@@ -14,6 +14,13 @@ import type { ActiveFile } from '../types';
 
 type FileData = ActiveFile;
 
+export type EditorModelMeta = {
+  tabSize: number;
+  insertSpaces: boolean;
+  eol: 'LF' | 'CRLF';
+  encoding: string;
+};
+
 interface MonacoEditorViewProps {
   fileData: FileData | null;
   onChange?: (val?: string) => void;
@@ -21,6 +28,8 @@ interface MonacoEditorViewProps {
   isDirty?: boolean;
   /** Live cursor for status bar (IDE parity). */
   onCursorPositionChange?: (line: number, column: number) => void;
+  /** Indent / EOL / encoding for status bar (from the live Monaco model). */
+  onEditorModelMeta?: (meta: EditorModelMeta) => void;
 }
 
 const LANG_MAP: Record<string, string> = {
@@ -139,7 +148,7 @@ const EDITOR_OPTIONS = {
 };
 
 export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
-  fileData, onChange, onSave, isDirty, onCursorPositionChange
+  fileData, onChange, onSave, isDirty, onCursorPositionChange, onEditorModelMeta
 }) => {
   const monaco = useMonaco();
   const editorRef = useRef<any>(null);
@@ -160,6 +169,33 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
     }
   }, [monaco]);
 
+  const pushModelMeta = useCallback(
+    (editor: { getModel: () => { getOptions: () => { tabSize: number; insertSpaces: boolean }; getEOL: () => string } | null }) => {
+      if (!onEditorModelMeta) return;
+      const m = editor.getModel();
+      if (!m) return;
+      const o = m.getOptions();
+      const raw = m.getEOL();
+      onEditorModelMeta({
+        tabSize: o.tabSize,
+        insertSpaces: o.insertSpaces,
+        eol: raw === '\r\n' ? 'CRLF' : 'LF',
+        encoding: 'UTF-8',
+      });
+    },
+    [onEditorModelMeta],
+  );
+
+  useEffect(() => {
+    const onFormat = () => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      void ed.getAction('editor.action.formatDocument')?.run();
+    };
+    window.addEventListener('iam-format-document', onFormat);
+    return () => window.removeEventListener('iam-format-document', onFormat);
+  }, []);
+
   // Cmd+S / Ctrl+S handler on the window level
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -178,6 +214,11 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   useEffect(() => {
     setShowDiff(false);
   }, [fileData?.name]);
+
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (ed && fileData) pushModelMeta(ed);
+  }, [fileData?.name, pushModelMeta]);
 
   // Monaco: AI inline completion via worker /api/monaco/complete
   useEffect(() => {
@@ -425,6 +466,14 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
               };
               push();
               editor.onDidChangeCursorPosition(() => push());
+              pushModelMeta(editor);
+              editor.onDidChangeModel(() => {
+                pushModelMeta(editor);
+                const m = editor.getModel();
+                m?.onDidChangeOptions(() => pushModelMeta(editor));
+              });
+              const m0 = editor.getModel();
+              m0?.onDidChangeOptions(() => pushModelMeta(editor));
             }}
             options={EDITOR_OPTIONS}
           />

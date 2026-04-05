@@ -12,12 +12,12 @@ import { ChatAssistant, IAM_AGENT_CHAT_CONVERSATION_CHANGE } from './components/
 import { WelcomeLauncher } from './components/WelcomeLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
-import { MonacoEditorView } from './components/MonacoEditorView';
+import { MonacoEditorView, type EditorModelMeta } from './components/MonacoEditorView';
 import { LocalExplorer } from './components/LocalExplorer';
 import { BrowserView } from './components/BrowserView';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ToolLauncherBar } from './components/ToolLauncherBar';
-import { StatusBar } from './components/StatusBar';
+import { StatusBar, type AgentNotificationRow } from './components/StatusBar';
 import { ExcalidrawView } from './components/ExcalidrawView';
 import { DatabaseBrowser } from './components/DatabaseBrowser';
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
@@ -106,7 +106,20 @@ const App: React.FC = () => {
   const [ideWorkspace, setIdeWorkspace] = useState<IdeWorkspaceSnapshot>(() => loadWorkspace());
   const [gitBranch, setGitBranch] = useState(() => loadGitBranch());
   const [errorCount, setErrorCount] = useState(0);
+  const [warningCount, setWarningCount] = useState(0);
   const [spendCount, setSpendCount] = useState('$0.00');
+  const [healthOk, setHealthOk] = useState<boolean | null>(null);
+  const [tunnelHealthy, setTunnelHealthy] = useState<boolean | null>(null);
+  const [tunnelLabel, setTunnelLabel] = useState<string | null>(null);
+  const [terminalOk, setTerminalOk] = useState<boolean | null>(null);
+  const [lastDeployLine, setLastDeployLine] = useState<string | null>(null);
+  const [editorMeta, setEditorMeta] = useState<EditorModelMeta>({
+    tabSize: 2,
+    insertSpaces: true,
+    eol: 'LF',
+    encoding: 'UTF-8',
+  });
+  const [agentNotifications, setAgentNotifications] = useState<AgentNotificationRow[]>([]);
   const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
   /** Increment to trigger File System Access picker from Welcome "Open Folder" after files panel mounts. */
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
@@ -160,39 +173,6 @@ const App: React.FC = () => {
   useEffect(() => {
     document.title = `${workspaceDisplayName} — ${PRODUCT_NAME}`;
   }, [workspaceDisplayName]);
-
-  const fetchLiveStatus = useCallback(async () => {
-    try {
-      // Git Status
-      const gitRes = await fetch('/api/agent/git/status');
-      const gitData = await gitRes.json();
-      if (gitData.branch) setGitBranch(gitData.branch);
-
-      // Problems/Errors
-      const probRes = await fetch('/api/agent/problems');
-      const probData = await probRes.json();
-      if (typeof probData.count === 'number') setErrorCount(probData.count);
-
-      // Spend Summary Stub
-      const spendRes = await fetch('/api/spend/summary');
-      const spendData = await spendRes.json();
-      if (spendData.formatted) setSpendCount(spendData.formatted);
-
-      // IAM Status Stubs
-      ['/api/tunnel/status', '/api/agent/terminal/config-status'].forEach(url => console.log('TODO: wire', url));
-      
-      fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
-    } catch (err) {
-      console.error("Status polling failed:", err);
-    }
-  }, []);
-
-
-  useEffect(() => {
-    fetchLiveStatus();
-    const interval = setInterval(fetchLiveStatus, 30000);
-    return () => clearInterval(interval);
-  }, [fetchLiveStatus]);
 
   useEffect(() => {
     saveWorkspace(ideWorkspace);
@@ -379,6 +359,130 @@ const App: React.FC = () => {
       return activity;
     });
   };
+
+  const fetchLiveStatus = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+
+    try {
+      const hr = await fetch('/api/health');
+      const hj = await hr.json().catch(() => ({}));
+      if (hr.ok) setHealthOk(!!hj.ok);
+      else setHealthOk(false);
+    } catch {
+      setHealthOk(false);
+    }
+
+    try {
+      const gitRes = await fetch('/api/agent/git/status', cred);
+      const gitData = await gitRes.json().catch(() => ({}));
+      if (gitRes.ok && gitData.branch) setGitBranch(String(gitData.branch));
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const probRes = await fetch('/api/agent/problems', cred);
+      const probData = await probRes.json().catch(() => ({}));
+      if (probRes.ok && probData && typeof probData === 'object') {
+        const mcp = Array.isArray(probData.mcp_tool_errors) ? probData.mcp_tool_errors.length : 0;
+        const audits = Array.isArray(probData.audit_failures) ? probData.audit_failures : [];
+        const wx = Array.isArray(probData.worker_errors) ? probData.worker_errors.length : 0;
+        const warnAudits = audits.filter((a: { event_type?: string }) =>
+          String(a?.event_type || '').toLowerCase().includes('warn'),
+        );
+        const errAudits = audits.length - warnAudits.length;
+        setErrorCount(mcp + wx + errAudits);
+        setWarningCount(warnAudits.length);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const spendRes = await fetch('/api/spend/summary', cred);
+      const spendData = await spendRes.json().catch(() => ({}));
+      if (spendRes.ok && spendData.formatted) setSpendCount(String(spendData.formatted));
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const tr = await fetch('/api/tunnel/status', cred);
+      const tj = await tr.json().catch(() => ({}));
+      if (tr.ok && typeof tj.healthy === 'boolean') {
+        setTunnelHealthy(tj.healthy);
+        const st = tj.status != null ? String(tj.status) : '';
+        const n = typeof tj.connections === 'number' ? tj.connections : 0;
+        setTunnelLabel(st ? `${st} · ${n} conn` : `${n} conn`);
+      } else if (tr.status === 401) {
+        setTunnelHealthy(null);
+        setTunnelLabel(null);
+      } else {
+        setTunnelHealthy(false);
+        const err = tj && typeof tj === 'object' && 'error' in tj ? String((tj as { error?: string }).error || '') : '';
+        setTunnelLabel(err ? err.slice(0, 72) : `tunnel ${tr.status}`);
+      }
+    } catch {
+      setTunnelHealthy(null);
+      setTunnelLabel(null);
+    }
+
+    try {
+      const ter = await fetch('/api/agent/terminal/config-status', cred);
+      const tej = await ter.json().catch(() => ({}));
+      if (ter.ok) setTerminalOk(!!tej.terminal_configured);
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const dr = await fetch('/api/overview/deployments', cred);
+      const dj = await dr.json().catch(() => ({}));
+      if (dr.ok && Array.isArray(dj.deployments) && dj.deployments[0]) {
+        const d = dj.deployments[0] as {
+          worker_name?: string;
+          environment?: string;
+          status?: string;
+        };
+        const bits = [d.worker_name, d.environment, d.status].filter(Boolean).map(String);
+        setLastDeployLine(bits.join(' · ') || null);
+      } else {
+        setLastDeployLine(null);
+      }
+    } catch {
+      setLastDeployLine(null);
+    }
+
+    try {
+      const nr = await fetch('/api/agent/notifications', cred);
+      const nj = await nr.json().catch(() => ({}));
+      if (nr.ok && Array.isArray(nj.notifications)) {
+        setAgentNotifications(nj.notifications as AgentNotificationRow[]);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    void fetchLiveStatus();
+    const interval = window.setInterval(() => void fetchLiveStatus(), 20000);
+    return () => clearInterval(interval);
+  }, [fetchLiveStatus]);
+
+  const markNotificationRead = useCallback(async (id: string) => {
+    try {
+      const r = await fetch(`/api/agent/notifications/${encodeURIComponent(id)}/read`, {
+        method: 'PATCH',
+        credentials: 'same-origin',
+      });
+      if (r.ok) setAgentNotifications((prev) => prev.filter((n) => n.id !== id));
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     if (!isNarrowViewport || activeActivity == null) return;
@@ -856,6 +960,11 @@ const App: React.FC = () => {
   const narrowBlocksCenter = isNarrowViewport && (!!activeActivity || agentPosition !== 'off');
   const narrowNeedsBack = narrowBlocksCenter;
 
+  const statusIndentLabel = useMemo(
+    () => `${editorMeta.insertSpaces ? 'Spaces' : 'Tabs'}: ${editorMeta.tabSize}`,
+    [editorMeta.insertSpaces, editorMeta.tabSize],
+  );
+
   return (
     <div className="w-full h-[100dvh] bg-[var(--bg-app)] overflow-hidden text-[var(--text-main)] font-sans flex flex-col">
       {/* 1. TOP WINDOW BAR */}
@@ -1245,6 +1354,7 @@ const App: React.FC = () => {
                               isDirty={isDirty}
                               onSave={handleSaveFile}
                               onCursorPositionChange={(line, col) => setCursorPos({ line, col })}
+                              onEditorModelMeta={setEditorMeta}
                               onChange={(val) => {
                                   if (activeFile && val !== undefined) {
                                       setActiveFile(prev => prev ? {
@@ -1463,6 +1573,7 @@ const App: React.FC = () => {
         branch={gitBranch}
         workspace={authWorkspaceId || formatWorkspaceStatusLine(ideWorkspace)}
         errorCount={errorCount}
+        warningCount={warningCount}
         showCursor={activeTab === 'code'}
         line={cursorPos.line}
         col={cursorPos.col}
@@ -1475,6 +1586,38 @@ const App: React.FC = () => {
         }
         spendCount={spendCount}
         version={SHELL_VERSION}
+        healthOk={healthOk}
+        tunnelHealthy={tunnelHealthy}
+        tunnelLabel={tunnelLabel}
+        terminalOk={terminalOk}
+        lastDeployLine={lastDeployLine}
+        indentLabel={statusIndentLabel}
+        encodingLabel={editorMeta.encoding}
+        eolLabel={editorMeta.eol}
+        notifications={agentNotifications}
+        notifUnreadCount={agentNotifications.length}
+        onMarkNotificationRead={markNotificationRead}
+        canFormatDocument={activeTab === 'code' && !!activeFile}
+        onBrandClick={() => {
+          window.open('https://inneranimalmedia.com', '_blank', 'noopener,noreferrer');
+        }}
+        onGitBranchClick={() => toggleActivity('git')}
+        onWorkspaceClick={() => toggleActivity('projects')}
+        onErrorsClick={() => toggleActivity('debug')}
+        onWarningsClick={() => toggleActivity('mcps')}
+        onCursorClick={() => {
+          if (isNarrowViewport) narrowBackToCenter();
+          openTab('code');
+        }}
+        onSpendClick={() => toggleActivity('settings')}
+        onVersionClick={() => {}}
+        onFormatClick={() => {
+          window.dispatchEvent(new CustomEvent('iam-format-document'));
+        }}
+        onActiveTabLabelClick={() => {
+          if (isNarrowViewport) narrowBackToCenter();
+          openTab(activeTab);
+        }}
       />
     </div>
   );

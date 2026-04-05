@@ -1,7 +1,7 @@
 // Sandbox Worker only: inneranimal-dashboard (Workers Builds / wrangler.jsonc).
 // Workers Builds deploy command: npm run deploy:sandbox (see docs/SANDBOX_WORKERS_BUILDS.md).
 // Production Worker (inneranimalmedia): ALWAYS deploy with -c wrangler.production.toml — never replace that file from here.
-// R2: ASSETS + DASHBOARD use agent-sam-sandbox-cicd; TOOLS + others mirror production bucket names for compatibility.
+// R2: ASSETS + DASHBOARD → agent-sam-sandbox-cicd. AUTORAG/DOCS/R2/TOOLS use same bucket names as prod (TOOLS = Monaco/code).
 // Queues omitted: same queue consumer cannot bind to two Workers; production inneranimalmedia keeps MY_QUEUE consumer.
 //
 // Optional secrets (wrangler secret put -c wrangler.jsonc) for *.workers.dev email/password form:
@@ -61,6 +61,10 @@
     {
       "binding": "R2",
       "bucket_name": "iam-platform"
+    },
+    {
+      "binding": "TOOLS",
+      "bucket_name": "tools"
     }
   ],
   "hyperdrive": [

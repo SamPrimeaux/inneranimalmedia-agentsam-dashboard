@@ -34,6 +34,7 @@ Legacy migrations and older worker code may still mention superseded table names
 | **207** | AITestSuite (`SamPrimeaux/meauxcad`, Worker `aitestsuite`) shell **v1.2.0** — `cicd_runs` + related audit rows; commit `a8854e3`. |
 | **209** | `builds` + `cicd_events` narrative rows (meauxcad chat log wiring). |
 | **215** | `project_memory`: `AGENT_DASHBOARD_UI_CONTEXT` + sandbox bucket string fix in `CICD_THREE_STEP_SYSTEM` JSON; `roadmap_steps` updates. |
+| **226** | IAM binding/UX sprint: `sprint_snapshots` `snap_iam_binding_ux_20260405`; `project_memory` key `SPRINT_PLAN_IAM_BINDING_UX`; `project_issues` / `project_goals` (`iss_iam_bindux_*`, `goal_iam_bindux_*`). See `docs/SPRINT_PLAN_IAM_BINDING_UX.md`. |
 
 ---
 

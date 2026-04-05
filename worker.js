@@ -325,44 +325,173 @@ function getR2S3Host(env) {
   return id ? `${id}.r2.cloudflarestorage.com` : null;
 }
 
-const SUPERADMIN_EMAILS = ['info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com'];
+/** Cached superadmin identifiers: auth_users.id, users.id (OAuth), emails (TTL 5m). */
+let SUPERADMIN_IDS_CACHE = null;
+let SUPERADMIN_IDS_CACHE_TIME = 0;
 
-function getSamContext(email) {
+function invalidateSuperadminIdentifiersCache() {
+  SUPERADMIN_IDS_CACHE = null;
+  SUPERADMIN_IDS_CACHE_TIME = 0;
+}
+
+async function getSuperadminAuthIds(env) {
+  if (!env?.DB) {
+    return { authIds: new Set(), userIds: new Set(), emails: new Set() };
+  }
+  const now = Date.now();
+  if (SUPERADMIN_IDS_CACHE && now - SUPERADMIN_IDS_CACHE_TIME < 300000) {
+    return SUPERADMIN_IDS_CACHE;
+  }
+  try {
+    const result = await env.DB.prepare(
+      `SELECT au.id AS auth_id, au.email, u.id AS user_id
+       FROM auth_users au
+       LEFT JOIN users u ON u.auth_id = au.id
+       WHERE COALESCE(au.is_superadmin, 0) = 1`
+    ).all();
+    const cache = { authIds: new Set(), userIds: new Set(), emails: new Set() };
+    for (const row of result.results || []) {
+      if (row.auth_id) cache.authIds.add(row.auth_id);
+      if (row.user_id) cache.userIds.add(row.user_id);
+      if (row.email) cache.emails.add(String(row.email).toLowerCase().trim());
+    }
+    SUPERADMIN_IDS_CACHE = cache;
+    SUPERADMIN_IDS_CACHE_TIME = now;
+    return cache;
+  } catch (e) {
+    console.warn('[getSuperadminAuthIds]', e?.message ?? e);
+    return { authIds: new Set(), userIds: new Set(), emails: new Set() };
+  }
+}
+
+async function isSuperadminEmail(env, email) {
+  const em = String(email || '').trim().toLowerCase();
+  if (!em || !env?.DB) return false;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT 1 FROM auth_users WHERE LOWER(email) = ? AND COALESCE(is_superadmin, 0) = 1 LIMIT 1`
+    ).bind(em).first();
+    return !!row;
+  } catch (e) {
+    console.warn('[isSuperadminEmail]', e?.message ?? e);
+    return false;
+  }
+}
+
+/** True if auth_sessions / KV user_id is a superadmin (email, auth_users.id, or users.id from OAuth). */
+async function isSuperadminSessionUserKey(env, userKey) {
+  const k = String(userKey || '').trim();
+  if (!k || !env?.DB) return false;
+  try {
+    const cache = await getSuperadminAuthIds(env);
+    if (k.includes('@')) return cache.emails.has(k.toLowerCase());
+    return cache.authIds.has(k) || cache.userIds.has(k);
+  } catch (e) {
+    console.warn('[isSuperadminSessionUserKey]', e?.message ?? e);
+    return false;
+  }
+}
+
+/**
+ * Superadmin dashboard session: id is always the cookie session UUID (same shape as non-superadmin sessions).
+ * Profile fields come from auth_users + users.user_key = superadmin_group_id.
+ */
+async function buildSuperadminContext(env, sessionId, sessionUserKey) {
+  const key = String(sessionUserKey || '').trim();
+  if (!key) throw new Error('empty session user key');
+  let authRow = null;
+  if (key.includes('@')) {
+    authRow = await env.DB.prepare(
+      `SELECT id, email, name, superadmin_group_id FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`
+    ).bind(key).first();
+  } else {
+    authRow = await env.DB.prepare(
+      `SELECT id, email, name, superadmin_group_id FROM auth_users WHERE id = ? LIMIT 1`
+    ).bind(key).first();
+    if (!authRow) {
+      try {
+        authRow = await env.DB.prepare(
+          `SELECT au.id, au.email, au.name, au.superadmin_group_id
+           FROM users u
+           INNER JOIN auth_users au ON u.auth_id = au.id
+           WHERE u.id = ? LIMIT 1`
+        ).bind(key).first();
+      } catch (e) {
+        console.warn('[buildSuperadminContext] users join', e?.message ?? e);
+      }
+    }
+  }
+  if (!authRow?.superadmin_group_id) {
+    throw new Error('Superadmin session user missing superadmin_group_id');
+  }
+  let userProfile = null;
+  try {
+    userProfile = await env.DB.prepare(
+      `SELECT display_name, role, default_workspace_id FROM users WHERE user_key = ? LIMIT 1`
+    ).bind(authRow.superadmin_group_id).first();
+  } catch (e) {
+    console.warn('[buildSuperadminContext] users profile', e?.message ?? e);
+  }
+  const loginEmail = String(authRow.email || key).toLowerCase();
+  const displayName =
+    (userProfile && userProfile.display_name) || authRow.name || 'User';
+  const role = (userProfile && userProfile.role) || 'superadmin';
+  const workspaceId =
+    (userProfile && userProfile.default_workspace_id) || 'ws_default';
   return {
-    id: email === 'sam@inneranimalmedia.com' ? 32 : 24,
-    email,
-    user_id: 'sam_primeaux',
-    _session_user_id: email,
-    name: 'Sam Primeaux',
-    role: 'superadmin',
+    id: sessionId,
+    email: loginEmail,
+    user_id: authRow.superadmin_group_id,
+    _session_user_id: loginEmail,
+    name: displayName,
+    role,
     permissions: ['*'],
     tenant_id: null,
-    workspace_id: 'ws_samprimeaux',
+    workspace_id: workspaceId,
     is_active: 1,
+    is_superadmin: 1,
   };
 }
 
-/** auth_users.id for Sam accounts; agentsam_* rows use user_id = 'sam_primeaux'. */
-const AGENTSAM_SUPERADMIN_IDS = new Set([
-  'au_c2bfb387e6fac69b',
-  'au_e3b3457d8243e46e',
-  'au_c4bf765aff63b31f',
-]);
-
-function resolveAgentsamUserKey(authUser) {
+async function resolveAgentsamUserKey(env, authUser) {
   if (!authUser?.id) return null;
-  if (authUser.id === 'sam_primeaux' || AGENTSAM_SUPERADMIN_IDS.has(authUser.id)) return 'sam_primeaux';
+  if (authUser.id === 'sam_primeaux') return 'sam_primeaux';
+  if (!env?.DB) return authUser.id;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT superadmin_group_id FROM auth_users WHERE id = ? AND COALESCE(is_superadmin, 0) = 1 LIMIT 1`
+    ).bind(authUser.id).first();
+    if (row?.superadmin_group_id) return row.superadmin_group_id;
+  } catch (_) {}
+  const em = String(authUser.email || '').trim();
+  if (em) {
+    try {
+      const byEmail = await env.DB.prepare(
+        `SELECT superadmin_group_id FROM auth_users WHERE LOWER(email) = LOWER(?) AND COALESCE(is_superadmin, 0) = 1 LIMIT 1`
+      ).bind(em).first();
+      if (byEmail?.superadmin_group_id) return byEmail.superadmin_group_id;
+    } catch (_) {}
+  }
   return authUser.id;
 }
 
-/** Zero Trust / mac tunnel — only Sam may restart connections (POST /api/tunnel/restart). */
-function isSamOnlyUser(authUser) {
+/** Zero Trust / mac tunnel — only superadmin-group users may restart connections (POST /api/tunnel/restart). */
+async function isSamOnlyUser(env, authUser) {
   if (!authUser) return false;
-  const email = String(authUser.email || '').toLowerCase();
-  if (email === 'sam@inneranimalmedia.com') return true;
   if (authUser.id === 'sam_primeaux') return true;
-  if (authUser.id && AGENTSAM_SUPERADMIN_IDS.has(authUser.id)) return true;
+  if (!env?.DB) return false;
+  const email = String(authUser.email || '').toLowerCase();
+  if (email && (await isSuperadminEmail(env, email))) return true;
+  const uid = String(authUser.id || '').trim();
+  if (uid) {
+    const ids = await getSuperadminAuthIds(env);
+    if (ids.authIds.has(uid) || ids.userIds.has(uid)) return true;
+  }
   return false;
+}
+
+function sessionIsPlatformSuperadmin(session) {
+  return !!(session && (session.is_superadmin === 1 || session.is_superadmin === true));
 }
 
 const CF_TUNNEL_ID = 'aa79ecd4-d8c6-4c40-bc17-09f9ae230508';
@@ -2091,10 +2220,32 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
       return { ok: false, error: String(e?.message || e) };
     }
     const dashNotifId = crypto.randomUUID();
+    const authUser = ctx.authUser;
+    let recipientId =
+      authUser?.id != null && String(authUser.id).trim() !== '' ? String(authUser.id).trim() : '';
+    if (!recipientId && cfg.recipient_id != null && String(cfg.recipient_id).trim() !== '') {
+      recipientId = String(cfg.recipient_id).trim();
+    }
+    if (!recipientId) {
+      try {
+        const em = String(recipient || '').trim();
+        if (em) {
+          const row = await env.DB.prepare(
+            `SELECT id FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`
+          )
+            .bind(em)
+            .first();
+          if (row?.id != null) recipientId = String(row.id).trim();
+        }
+      } catch (e) {
+        console.warn('[hooks] send_notification recipient lookup', e?.message ?? e);
+      }
+    }
+    if (!recipientId) recipientId = '24';
     try {
       await env.DB.prepare(
-        `INSERT INTO notifications (id, recipient_id, recipient_type, channel, subject, message, status) VALUES (?, '24', 'user', 'dashboard', ?, ?, 'pending')`
-      ).bind(dashNotifId, subject, message).run();
+        `INSERT INTO notifications (id, recipient_id, recipient_type, channel, subject, message, status) VALUES (?, ?, 'user', 'dashboard', ?, ?, 'pending')`
+      ).bind(dashNotifId, recipientId, subject, message).run();
     } catch (e) {
       console.warn('[hooks] send_notification notifications INSERT', e?.message ?? e);
     }
@@ -2592,7 +2743,7 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
       return jsonResponse({ commands: results || [] });
     }
     if (pathLower === '/api/hooks/subscriptions' && method === 'GET') {
-      const userKey = resolveAgentsamUserKey(authUser);
+      const userKey = await resolveAgentsamUserKey(env, authUser);
       if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
       const ws = url.searchParams.get('workspace_id') != null ? String(url.searchParams.get('workspace_id')) : '';
       let results = [];
@@ -2631,7 +2782,7 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
       return jsonResponse(results);
     }
     if (pathLower === '/api/hooks/subscriptions' && method === 'POST') {
-      const userKey = resolveAgentsamUserKey(authUser);
+      const userKey = await resolveAgentsamUserKey(env, authUser);
       if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
       const body = await request.json().catch(() => ({}));
       const trigger = body.trigger != null ? String(body.trigger).trim() : '';
@@ -2696,7 +2847,7 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
         return jsonResponse(row || { ok: true });
       }
       if (hm && method === 'DELETE') {
-        const userKey = resolveAgentsamUserKey(authUser);
+        const userKey = await resolveAgentsamUserKey(env, authUser);
         if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
         const r = await env.DB.prepare('DELETE FROM agentsam_hook WHERE id = ? AND user_id = ?').bind(hm[1], userKey).run();
         if (!r.meta?.changes) return jsonResponse({ error: 'Not found' }, 404);
@@ -3434,8 +3585,7 @@ const worker = {
       if ((pathLower === '/api/admin/overnight/validate' || pathLower === '/api/admin/overnight/start') && (request.method || 'GET').toUpperCase() === 'POST') {
         const session = await getSession(env, request);
         if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const email = (session.email || session.user_id || '').toLowerCase();
-        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!sessionIsPlatformSuperadmin(session)) return jsonResponse({ error: 'Forbidden' }, 403);
         const baseUrl = url.origin || 'https://inneranimalmedia.com';
         if (pathLower === '/api/admin/overnight/validate') {
           ctx.waitUntil(handleOvernightValidate(env, baseUrl));
@@ -3450,8 +3600,7 @@ const worker = {
       if (pathLower === '/api/admin/retention' && (request.method || 'GET').toUpperCase() === 'GET') {
         const session = await getSession(env, request);
         if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const email = (session.email || session.user_id || '').toLowerCase();
-        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!sessionIsPlatformSuperadmin(session)) return jsonResponse({ error: 'Forbidden' }, 403);
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
           const { results } = await env.DB.prepare(
@@ -3467,8 +3616,7 @@ const worker = {
       if (pathLower === '/api/admin/archive-conversations' && (request.method || 'GET').toUpperCase() === 'POST') {
         const session = await getSession(env, request);
         if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const email = (session.email || session.user_id || '').toLowerCase();
-        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!sessionIsPlatformSuperadmin(session)) return jsonResponse({ error: 'Forbidden' }, 403);
         try {
           const result = await archiveOldConversations(env);
           return jsonResponse(result);
@@ -3481,8 +3629,7 @@ const worker = {
       if (pathLower === '/api/admin/vectorize-kb' && (request.method || 'GET').toUpperCase() === 'POST') {
         const session = await getSession(env, request);
         if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const email = (session.email || session.user_id || '').toLowerCase();
-        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!sessionIsPlatformSuperadmin(session)) return jsonResponse({ error: 'Forbidden' }, 403);
         try {
           if (!env.DB || !env.VECTORIZE || !env.AI) return jsonResponse({ error: 'DB, VECTORIZE, or AI missing' }, 503);
           const rows = await env.DB.prepare(
@@ -3545,7 +3692,8 @@ const worker = {
         const internalSecret = request.headers.get('X-Internal-Secret') || request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
         const session = await getSession(env, request);
         const expectedInternal = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
-        const allowed = (expectedInternal && internalSecret === expectedInternal) || (session && SUPERADMIN_EMAILS.includes((session.email || session.user_id || '').toLowerCase()));
+        const allowed =
+          (expectedInternal && internalSecret === expectedInternal) || sessionIsPlatformSuperadmin(session);
         if (!allowed) return jsonResponse({ error: 'Unauthorized' }, 401);
         if (!env.DB) return jsonResponse({ error: 'DB not available' }, 503);
         try {
@@ -4078,7 +4226,7 @@ const worker = {
       if (pathLower === '/api/tunnel/restart' && (request.method || 'GET').toUpperCase() === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        if (!isSamOnlyUser(authUser)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!(await isSamOnlyUser(env, authUser))) return jsonResponse({ error: 'Forbidden' }, 403);
         if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
           return jsonResponse({ error: 'Tunnel API not configured' }, 503);
         }
@@ -4682,8 +4830,7 @@ const worker = {
       if (url.pathname === '/api/search/docs/index' && request.method === 'POST') {
         const session = await getSession(env, request);
         if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const email = (session.email || session.user_id || '').toLowerCase();
-        if (!SUPERADMIN_EMAILS.includes(email)) return jsonResponse({ error: 'Forbidden' }, 403);
+        if (!sessionIsPlatformSuperadmin(session)) return jsonResponse({ error: 'Forbidden' }, 403);
         if (!env.VECTORIZE_DOCS) return jsonResponse({ error: 'docs index not configured' }, 503);
         if (!env.AI || !env.DOCS_BUCKET) return jsonResponse({ error: 'AI or DOCS_BUCKET not configured' }, 503);
         ctx.waitUntil(
@@ -5217,6 +5364,97 @@ const worker = {
         const emails = loginEmail ? [{ id: 'primary', email: loginEmail, verified: true, is_primary: true }] : [];
         return jsonResponse({ emails });
       }
+
+      // ----- User IDE workspace metadata (agent_workspace_state, id uws:tenant:user:uuid) — web-IDE style local/cloud hints -----
+      if (pathLower === '/api/workspace/create' && (request.method || '').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const t = body?.type;
+        const type = t === 'github' || t === 'r2' ? t : 'local';
+        const wsUuid = crypto.randomUUID();
+        const rowId = `uws:${String(authUser.tenant_id ?? '').trim()}:${String(authUser.id ?? '').trim()}:${wsUuid}`;
+        const now = Date.now();
+        const record = {
+          schema: 'user_workspace_v1',
+          id: wsUuid,
+          userId: String(authUser.id ?? '').trim(),
+          tenantId: String(authUser.tenant_id ?? '').trim(),
+          type,
+          folderName: typeof body.folderName === 'string' ? body.folderName : undefined,
+          lastKnownPath: typeof body.lastKnownPath === 'string' ? body.lastKnownPath : 'unknown',
+          githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : undefined,
+          r2Bucket: typeof body.r2Bucket === 'string' ? body.r2Bucket : undefined,
+          lastOpenedAt: typeof body.lastOpenedAt === 'number' ? body.lastOpenedAt : now,
+          recentFiles: Array.isArray(body.recentFiles) ? body.recentFiles.slice(0, 24) : [],
+        };
+        const stateJson = JSON.stringify(record);
+        await env.DB.prepare(
+          `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+           ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
+        )
+          .bind(rowId, stateJson)
+          .run();
+        if (env.DASHBOARD) {
+          await env.DASHBOARD.put(`sessions/${rowId}/state.json`, stateJson, {
+            httpMetadata: { contentType: 'application/json' },
+          }).catch(() => {});
+        }
+        return jsonResponse({ workspaceId: wsUuid });
+      }
+
+      const userWsPathMatch = pathLower.match(/^\/api\/workspace\/([^/]+)$/);
+      if (userWsPathMatch && userWsPathMatch[1] !== 'create') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const wsUuid = userWsPathMatch[1];
+        if (!/^[0-9a-f-]{36}$/i.test(wsUuid)) return jsonResponse({ error: 'Invalid workspace id' }, 400);
+        const rowId = `uws:${String(authUser.tenant_id ?? '').trim()}:${String(authUser.id ?? '').trim()}:${wsUuid}`;
+        const method = (request.method || 'GET').toUpperCase();
+
+        if (method === 'GET') {
+          const row = await env.DB.prepare('SELECT state_json FROM agent_workspace_state WHERE id = ?').bind(rowId).first();
+          if (!row) return jsonResponse({ error: 'Not found' }, 404);
+          let rec = null;
+          try {
+            rec = JSON.parse(row.state_json || '{}');
+          } catch (_) {}
+          if (!rec || rec.schema !== 'user_workspace_v1') return jsonResponse({ error: 'Not found' }, 404);
+          return jsonResponse(rec);
+        }
+
+        if (method === 'PATCH') {
+          const row = await env.DB.prepare('SELECT state_json FROM agent_workspace_state WHERE id = ?').bind(rowId).first();
+          if (!row) return jsonResponse({ error: 'Not found' }, 404);
+          let rec = {};
+          try {
+            rec = JSON.parse(row.state_json || '{}');
+          } catch (_) {}
+          if (!rec || rec.schema !== 'user_workspace_v1') return jsonResponse({ error: 'Not found' }, 404);
+          const body = await request.json().catch(() => ({}));
+          if (typeof body.lastOpenedAt === 'number') rec.lastOpenedAt = body.lastOpenedAt;
+          if (typeof body.folderName === 'string') rec.folderName = body.folderName;
+          if (typeof body.lastKnownPath === 'string') rec.lastKnownPath = body.lastKnownPath;
+          if (typeof body.githubRepo === 'string') rec.githubRepo = body.githubRepo;
+          if (typeof body.r2Bucket === 'string') rec.r2Bucket = body.r2Bucket;
+          if (Array.isArray(body.recentFiles)) rec.recentFiles = body.recentFiles.slice(0, 24);
+          const stateJson = JSON.stringify(rec);
+          await env.DB.prepare('UPDATE agent_workspace_state SET state_json = ?, updated_at = unixepoch() WHERE id = ?')
+            .bind(stateJson, rowId)
+            .run();
+          if (env.DASHBOARD) {
+            await env.DASHBOARD.put(`sessions/${rowId}/state.json`, stateJson, {
+              httpMetadata: { contentType: 'application/json' },
+            }).catch(() => {});
+          }
+          return jsonResponse({ ok: true, record: rec });
+        }
+
+        return jsonResponse({ error: 'Method not allowed' }, 405);
+      }
+
       const CORE_WORKSPACE_IDS = ['ws_samprimeaux', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
       const CORE_WORKSPACES_DATA = [
         { id: 'ws_samprimeaux', name: 'Sam Primeaux', category: 'entity' },
@@ -15648,19 +15886,39 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
 
     const workspaceMatch = pathLower.match(/^\/api\/agent\/workspace\/([^/]+)$/);
     if (workspaceMatch) {
-      const wsId = workspaceMatch[1];
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+
+      let conversationId = workspaceMatch[1];
+      try {
+        conversationId = decodeURIComponent(conversationId);
+      } catch (_) {}
+      const allowed = await userCanAccessAgentWorkspaceConversation(env, conversationId, authUser);
+      if (!allowed) return jsonResponse({ error: 'Forbidden' }, 403);
+
+      const rowId = agentIdeWorkspaceStorageId(authUser, conversationId);
+
       if (method === 'PUT') {
-        const body = await request.json();
-        const stateJson = JSON.stringify(body.state ?? body);
-        try {
-          await env.DB.prepare('UPDATE agent_workspace_state SET state_json=?, updated_at=unixepoch() WHERE id=?').bind(stateJson, wsId).run();
-        } catch (_) {
-          await env.DB.prepare('INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?,?,unixepoch())').bind(wsId, stateJson).run();
+        const body = await request.json().catch(() => ({}));
+        const payload = body && typeof body === 'object' && body.state !== undefined ? body.state : body;
+        const stateJson = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
+        await env.DB.prepare(
+          `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+           ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
+        )
+          .bind(rowId, stateJson)
+          .run();
+        if (env.DASHBOARD) {
+          await env.DASHBOARD.put(`sessions/${rowId}/state.json`, stateJson, {
+            httpMetadata: { contentType: 'application/json' },
+          }).catch(() => {});
         }
-        if (env.DASHBOARD) await env.DASHBOARD.put(`sessions/${wsId}/state.json`, stateJson, { httpMetadata: { contentType: 'application/json' } });
         return jsonResponse({ ok: true });
       }
-      const ws = await env.DB.prepare('SELECT * FROM agent_workspace_state WHERE id=?').bind(wsId).first();
+      if (method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+
+      const ws = await env.DB.prepare('SELECT * FROM agent_workspace_state WHERE id=?').bind(rowId).first();
       return ws ? jsonResponse(ws) : jsonResponse({ error: 'Not found' }, 404);
     }
 
@@ -16802,7 +17060,7 @@ async function handleAgentsamApi(request, url, env) {
 
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-  const userKey = resolveAgentsamUserKey(authUser);
+  const userKey = await resolveAgentsamUserKey(env, authUser);
   if (!userKey) return jsonResponse({ error: 'Unauthorized' }, 401);
 
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -24486,12 +24744,16 @@ async function resolveTenantAtLogin(env, userId) {
   return resolveTenantIdForWorker(null, env);
 }
 
-function finalizeSessionShape(sessionId, userKey, expiresAtIso, tenantResolved) {
-  const userEmail = (userKey || '').toLowerCase();
-  if (SUPERADMIN_EMAILS.includes(userEmail)) {
-    const ctx = getSamContext(userEmail);
-    ctx.tenant_id = tenantResolved;
-    return ctx;
+async function finalizeSessionShape(env, sessionId, userKey, expiresAtIso, tenantResolved) {
+  if (env?.DB && (await isSuperadminSessionUserKey(env, userKey))) {
+    try {
+      const ctx = await buildSuperadminContext(env, sessionId, userKey);
+      ctx.tenant_id = tenantResolved;
+      ctx.expires_at = expiresAtIso;
+      return ctx;
+    } catch (e) {
+      console.warn('[finalizeSessionShape] superadmin context failed, using plain session', e?.message ?? e);
+    }
   }
   return { id: sessionId, user_id: userKey, expires_at: expiresAtIso, tenant_id: tenantResolved };
 }
@@ -24500,14 +24762,18 @@ async function getSession(env, request) {
   if (!env.DB) return null;
   const cookie = request.headers.get('Cookie') || '';
   const m = cookie.match(/session=([^\s;]+)/);
-  const sessionId = m?.[1];
+  let sessionId = m?.[1];
+  if (!sessionId) {
+    const xh = (request.headers.get('x-session-id') || request.headers.get('X-Session-Id') || '').trim();
+    if (xh) sessionId = xh;
+  }
   if (!sessionId) return null;
 
   const kv = await readIamSessionFromKv(env, sessionId);
   if (kv) {
     const tenantKv =
       (kv.tenant_id != null && String(kv.tenant_id).trim()) || resolveTenantIdForWorker(null, env);
-    return finalizeSessionShape(sessionId, kv.user_id, kv.expires_at, tenantKv);
+    return await finalizeSessionShape(env, sessionId, kv.user_id, kv.expires_at, tenantKv);
   }
 
   const row = await env.DB.prepare(
@@ -24517,7 +24783,7 @@ async function getSession(env, request) {
   const tenantFromUser = await fetchAuthUserTenantId(env, row.user_id);
   const tenantResolved = tenantFromUser || resolveTenantIdForWorker(null, env);
   void writeIamSessionToKv(env, sessionId, row.user_id, tenantResolved, row.expires_at);
-  return finalizeSessionShape(sessionId, row.user_id, row.expires_at, tenantResolved);
+  return await finalizeSessionShape(env, sessionId, row.user_id, row.expires_at, tenantResolved);
 }
 
 /** Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
@@ -24527,6 +24793,34 @@ async function getAuthUser(request, env) {
   const sessionUserId = session._session_user_id || session.user_id;
   const tenantId = resolveTenantIdForWorker(session, env);
   return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
+}
+
+/** IDE workspace API: conversation must belong to this user (agent_conversations.user_id) or tenant (agent_sessions). */
+async function userCanAccessAgentWorkspaceConversation(env, conversationId, authUser) {
+  if (!env?.DB || conversationId == null || authUser == null) return false;
+  const cid = String(conversationId).trim();
+  if (!cid) return false;
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  const tenant = authUser.tenant_id != null ? String(authUser.tenant_id).trim() : '';
+
+  const ac = await env.DB.prepare(`SELECT user_id FROM agent_conversations WHERE id = ?`).bind(cid).first();
+  if (ac && ac.user_id != null && String(ac.user_id).trim() !== '') {
+    return String(ac.user_id).trim() === uid;
+  }
+
+  const s = await env.DB.prepare(`SELECT tenant_id FROM agent_sessions WHERE id = ?`).bind(cid).first();
+  if (s && s.tenant_id != null) {
+    return String(s.tenant_id).trim() === tenant;
+  }
+
+  return false;
+}
+
+function agentIdeWorkspaceStorageId(authUser, conversationId) {
+  const t = authUser?.tenant_id != null ? String(authUser.tenant_id).trim() : '_';
+  const u = authUser?.id != null ? String(authUser.id).trim() : '_';
+  const c = String(conversationId).trim();
+  return `ide_ws:${t}:${u}:${c}`;
 }
 
 /** Tenant for theme APIs: session user (KV/auth_sessions) then wrangler TENANT_ID. */

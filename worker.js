@@ -8059,7 +8059,7 @@ function buildModeContext(mode, sections, compiledContextBlob, ragContext, fileC
 function filterToolsByMode(mode, toolDefinitions) {
   if (!Array.isArray(toolDefinitions)) return [];
   if (mode === 'plan') {
-    const planToolNames = new Set(['think', 'workspace_write_file', 'workspace_edit_file', 'd1_query', 'knowledge_search', 'human_context_list', 'context_search', 'platform_info', 'imgx_generate_image', 'r2_write', 'r2_read', 'github_repos', 'github_file', 'generate_execution_plan']);
+    const planToolNames = new Set(['think', 'workspace_write_file', 'workspace_edit_file', 'think', 'workspace_write_file', 'workspace_edit_file', 'd1_query', 'knowledge_search', 'human_context_list', 'context_search', 'platform_info', 'imgx_generate_image', 'r2_write', 'r2_read', 'github_repos', 'github_file', 'generate_execution_plan']);
     return toolDefinitions.filter((t) => t && planToolNames.has(t.name));
   }
   if (mode === 'debug') {
@@ -8067,7 +8067,7 @@ function filterToolsByMode(mode, toolDefinitions) {
     return toolDefinitions.filter((t) => t && debugToolNames.has(t.name));
   }
   if (mode === 'ask') {
-    const askToolNames = new Set(['think', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
+    const askToolNames = new Set(['think', 'think', 'd1_query', 'r2_read', 'r2_list', 'knowledge_search', 'workspace_read_file', 'workspace_list_files', 'workspace_search', 'human_context_list', 'platform_info', 'list_clients', 'list_workers', 'telemetry_query', 'context_search']);
     return toolDefinitions.filter((t) => t && askToolNames.has(t.name));
   }
   if (mode === 'agent') {
@@ -9367,6 +9367,40 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         await runTerminalCommand(env, request, 'cp ' + q + ' ' + bk + ' 2>/dev/null || true', conversationId, executionCtx);
         const newContent = cur.replace(oldStr, newStr);
         await runTerminalCommand(env, request, 'printf ' + JSON.stringify('%s') + ' ' + JSON.stringify(newContent) + ' > ' + q, conversationId, executionCtx);
+        return await finish({ ok: true, path: fp }, null);
+      }
+      if (toolName === 'think') {
+        return await finish({ ok: true, result: 'Thinking complete!' }, null);
+      }
+      if (toolName === 'workspace_write_file') {
+        const pathRaw = params.path || '';
+        const fileContent = params.content || '';
+        const norm = normalizeWorkspaceAbsolutePath(root, pathRaw);
+        if (!norm.ok) return await finish({ error: 'invalid_path', message: norm.error }, norm.error);
+        const fp = norm.path;
+        const bk = '/tmp/iam_bk_' + fp.split('').reduce((a,c)=>a+c.charCodeAt(0),0);
+        await runTerminalCommand(env, request, 'cp ' + JSON.stringify(fp) + ' ' + bk + ' 2>/dev/null; true', conversationId, executionCtx);
+        await runTerminalCommand(env, request, 'cat > ' + JSON.stringify(fp) + ' << ' + "'IAM_WRITE_EOF'" + String.fromCharCode(10) + fileContent + String.fromCharCode(10) + 'IAM_WRITE_EOF', conversationId, executionCtx);
+        return await finish({ ok: true, path: fp, bytes: fileContent.length }, null);
+      }
+      if (toolName === 'workspace_edit_file') {
+        const pathRaw = params.path || '';
+        const oldStr = params.old_str || '';
+        const newStr = params.new_str != null ? params.new_str : '';
+        const norm = normalizeWorkspaceAbsolutePath(root, pathRaw);
+        if (!norm.ok) return await finish({ error: 'invalid_path', message: norm.error }, norm.error);
+        const fp = norm.path;
+        const readR = await runTerminalCommand(env, request, 'cat ' + JSON.stringify(fp), conversationId, executionCtx);
+        const cur = readR.output || '';
+        const hits = cur.split(oldStr).length - 1;
+        if (hits === 0) return await finish({ error: 'not_found', message: 'old_str not found in file. Read the file first to get exact text.' }, 'not_found');
+        if (hits > 1) return await finish({ error: 'ambiguous', message: 'old_str found ' + hits + ' times. Be more specific.' }, 'ambiguous');
+        const bk = '/tmp/iam_bk_' + fp.split('').reduce((a,c)=>a+c.charCodeAt(0),0);
+        await runTerminalCommand(env, request, 'cp ' + JSON.stringify(fp) + ' ' + bk + ' 2>/dev/null; true', conversationId, executionCtx);
+        const newContent = cur.replace(oldStr, newStr);
+        const tmpFile = '/tmp/iam_edit_' + Date.now();
+        await runTerminalCommand(env, request, 'cat > ' + tmpFile + ' << ' + "'IAM_EDIT_EOF'" + String.fromCharCode(10) + newContent + String.fromCharCode(10) + 'IAM_EDIT_EOF', conversationId, executionCtx);
+        await runTerminalCommand(env, request, 'mv ' + tmpFile + ' ' + JSON.stringify(fp), conversationId, executionCtx);
         return await finish({ ok: true, path: fp }, null);
       }
       if (toolName === 'terminal_execute') {

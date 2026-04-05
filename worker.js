@@ -4638,11 +4638,15 @@ const worker = {
           upper.startsWith('WITH') ||
           upper.startsWith('EXPLAIN');
         if (isRead) {
+          const _t0 = Date.now();
           const { results, success, meta } = await env.DB.prepare(sql).all();
-          return jsonResponse({ results: results || [], success, meta });
+          const executionMs = Date.now() - _t0;
+          return jsonResponse({ results: results || [], success, meta, executionMs });
         }
+        const _t1 = Date.now();
         const run = await env.DB.prepare(sql).run();
-        return jsonResponse({ results: [], success: true, meta: run.meta });
+        const executionMs = Date.now() - _t1;
+        return jsonResponse({ results: [], success: true, meta: run.meta, executionMs });
       } catch (e) {
         return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
       }
@@ -4709,11 +4713,14 @@ const worker = {
         const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
         await client.connect();
         try {
+          const _t0 = Date.now();
           const res = await client.query(sql);
+          const executionMs = Date.now() - _t0;
           return jsonResponse({
             results: res.rows || [],
             success: true,
             meta: { rows_read: res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
+            executionMs,
           });
         } finally {
           await client.end().catch(() => {});
@@ -4723,9 +4730,33 @@ const worker = {
       }
     }
 
+    // POST /api/database/execute — stricter safety than /api/d1/query; logs ai_query_history (migration 225). Body: workspace_id, database_type, query (aliases: sql, sql_text).
+    if (pathLower === '/api/database/execute' && (request.method || 'GET').toUpperCase() === 'POST') {
+      return handleDatabaseExecute(request, env);
+    }
+    // GET /api/database/query-history — template-style; requires workspace_id (reserved); filters optional database_type -> db_target.
+    if (pathLower === '/api/database/query-history' && (request.method || 'GET').toUpperCase() === 'GET') {
+      return handleDatabaseQueryHistoryCompat(request, env);
+    }
+    // POST /api/database/snippets — template body name/query_text/database_type -> ai_query_snippets (title, sql_text, db_target).
+    if (pathLower === '/api/database/snippets' && (request.method || 'GET').toUpperCase() === 'POST') {
+      return handleDatabaseSnippetsCompat(request, env);
+    }
+
       // ----- API: Federated search (unified D1 + autorag + r2_objects) -----
       if (pathLower === '/api/search/federated' && methodUpper === 'POST') {
         return handleFederatedSearch(request, env);
+      }
+
+      // ----- API: Dashboard Cmd+K unified search (tables + chats + RAG) -----
+      if (pathLower === '/api/unified-search' && methodUpper === 'POST') {
+        return handleUnifiedSearchDashboard(request, env);
+      }
+      if (pathLower === '/api/unified-search/recent' && methodUpper === 'GET') {
+        return handleUnifiedSearchRecent(request, env);
+      }
+      if (pathLower === '/api/unified-search/track' && methodUpper === 'POST') {
+        return handleUnifiedSearchTrack(request, env);
       }
 
       // ----- API: Search debug — sample documents rows via Hyperdrive (auth) -----
@@ -15084,6 +15115,20 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }
     }
 
+    /** SQL console: persisted history per auth user (migration 225). */
+    if (pathLower === '/api/agent/db/query-history' && method === 'GET') {
+      return handleAgentDbQueryHistoryGet(request, env);
+    }
+    if (pathLower === '/api/agent/db/query-history' && method === 'POST') {
+      return handleAgentDbQueryHistoryPost(request, env);
+    }
+    if (pathLower === '/api/agent/db/snippets' && method === 'GET') {
+      return handleAgentDbSnippetsGet(request, env);
+    }
+    if (pathLower === '/api/agent/db/snippets' && method === 'POST') {
+      return handleAgentDbSnippetsPost(request, env);
+    }
+
     if (pathLower === '/api/agent/memory/sync' && method === 'POST') {
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       try {
@@ -24656,6 +24701,768 @@ async function handleFederatedSearch(request, env) {
     });
   } catch (e) {
     return jsonResponse({ error: e?.message || String(e) }, 500);
+  }
+}
+
+/** Subsequence fuzzy bonus (template-style). */
+function iamUnifiedSearchFuzzySubsequence(hay, needle) {
+  if (!needle) return 0;
+  const h = String(hay).toLowerCase();
+  const n = String(needle).toLowerCase();
+  let qi = 0;
+  let score = 0;
+  for (let i = 0; i < h.length && qi < n.length; i++) {
+    if (h[i] === n[qi]) {
+      score += 1;
+      qi += 1;
+    }
+  }
+  return qi === n.length ? score : 0;
+}
+
+/** Exact / prefix / word / substring scoring (aligned with pasted spec, escaped for regex). */
+function iamUnifiedSearchTextScore(text, query, base) {
+  const lowerText = String(text || '').toLowerCase();
+  const q = String(query || '').toLowerCase().trim();
+  if (!q) return base;
+  if (lowerText === q) return base + 50;
+  if (lowerText.startsWith(q)) return base + 30;
+  try {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escaped}\\b`).test(lowerText)) return base + 20;
+  } catch (_) {}
+  if (lowerText.includes(q)) return base + 10;
+  return base + iamUnifiedSearchFuzzySubsequence(lowerText, q);
+}
+
+function iamD1QuoteIdent(ident) {
+  return `"${String(ident).replace(/"/g, '""')}"`;
+}
+
+function iamUnifiedSearchDedupeKey(r) {
+  const t = r.type;
+  const id = r.id != null ? String(r.id) : '';
+  if (t === 'conversation') return `conversation:${id}`;
+  if (t === 'table') return `table:${id}`;
+  if (t === 'snippet') return `snippet:${id}`;
+  if (t === 'query') return `query:${id}`;
+  if (t === 'deployment') return `deployment:${id}`;
+  if (t === 'knowledge') return `knowledge:${id}`;
+  if (t === 'column') return `column:${id}`;
+  return `${t}:${id || r.title || ''}`;
+}
+
+/**
+ * Cmd+K palette: parallel-style gather + ranked `results`.
+ * Does not use project_files / KV recent / Supabase AutoRAG placeholders (schema differs; KV is MCP-bound).
+ */
+async function handleUnifiedSearchDashboard(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const query = (body?.query || '').toString().trim();
+  if (!query) return jsonResponse({ error: 'query required' }, 400);
+  const limit = Math.max(1, Math.min(30, Number(body?.limit) || 20));
+  void (body?.workspace_id || '').toString().trim();
+
+  const qlow = query.toLowerCase();
+  const like = `%${qlow}%`;
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+
+  let allTableNames = [];
+  const tables = [];
+  try {
+    const tq = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+    ).all();
+    allTableNames = (tq.results || []).map((r) => String(r.name || '').trim()).filter(Boolean);
+    for (const name of allTableNames) {
+      if (name.toLowerCase().includes(qlow)) {
+        tables.push({ type: 'table', id: name, title: name, subtitle: 'D1 table' });
+        if (tables.length >= limit) break;
+      }
+    }
+  } catch (e) {
+    console.warn('[unified-search] tables', e?.message ?? e);
+  }
+
+  const columns = [];
+  try {
+    const colCap = Math.min(14, limit);
+    const maxPragma = Math.min(28, allTableNames.length);
+    for (let ti = 0; ti < maxPragma && columns.length < colCap; ti++) {
+      const tname = allTableNames[ti];
+      const qtbl = iamD1QuoteIdent(tname);
+      const pi = await env.DB.prepare(`PRAGMA table_info(${qtbl})`).all();
+      for (const col of pi.results || []) {
+        const cn = col.name != null ? String(col.name) : '';
+        if (!cn || !cn.toLowerCase().includes(qlow)) continue;
+        const qtCol = iamD1QuoteIdent(cn);
+        const sql_text = `SELECT ${qtCol} FROM ${qtbl} LIMIT 100;`;
+        columns.push({
+          type: 'column',
+          id: `${tname}.${cn}`,
+          title: cn,
+          subtitle: `${tname} (${col.type != null ? String(col.type) : ''})`,
+          sql_text,
+        });
+        if (columns.length >= colCap) break;
+      }
+    }
+  } catch (e) {
+    console.warn('[unified-search] columns', e?.message ?? e);
+  }
+
+  const conversations = [];
+  try {
+    const tenantId = env.TENANT_ID || 'system';
+    const sq = await env.DB.prepare(
+      `SELECT s.id,
+              COALESCE(s.name, ac.name, ac.title, 'Chat') AS name
+       FROM agent_sessions s
+       LEFT JOIN agent_conversations ac ON ac.id = s.id
+       WHERE s.tenant_id = ?
+         AND (
+           LOWER(COALESCE(s.name, '')) LIKE ?
+           OR LOWER(COALESCE(ac.name, '')) LIKE ?
+           OR LOWER(COALESCE(ac.title, '')) LIKE ?
+         )
+       ORDER BY s.updated_at DESC
+       LIMIT ?`
+    )
+      .bind(tenantId, like, like, like, limit)
+      .all();
+    for (const r of sq.results || []) {
+      const id = r.id != null ? String(r.id) : '';
+      const title = r.name != null ? String(r.name) : 'Chat';
+      if (id) conversations.push({ type: 'conversation', id, title, subtitle: 'Agent Sam chat' });
+    }
+  } catch (e) {
+    console.warn('[unified-search] conversations', e?.message ?? e);
+  }
+
+  const convoMessages = [];
+  try {
+    const tenantId = env.TENANT_ID || 'system';
+    const mq = await env.DB.prepare(
+      `SELECT am.conversation_id AS id, am.content, am.created_at
+       FROM agent_messages am
+       JOIN agent_sessions s ON s.id = am.conversation_id
+       WHERE s.tenant_id = ?
+         AND LOWER(COALESCE(am.content, '')) LIKE ?
+       ORDER BY am.created_at DESC
+       LIMIT ?`
+    )
+      .bind(tenantId, like, Math.min(36, limit * 3))
+      .all();
+    const seen = new Set();
+    for (const r of mq.results || []) {
+      const id = r.id != null ? String(r.id) : '';
+      const content = r.content != null ? String(r.content) : '';
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const preview = content.replace(/\s+/g, ' ').trim().slice(0, 100);
+      convoMessages.push({
+        type: 'conversation',
+        id,
+        title: preview || 'Message match',
+        subtitle: 'Message match',
+      });
+      if (convoMessages.length >= Math.min(12, limit)) break;
+    }
+  } catch (e) {
+    console.warn('[unified-search] message body', e?.message ?? e);
+  }
+
+  let knowledge = [];
+  try {
+    const out = await unifiedRagSearch(env, query, { topK: Math.min(10, limit), federated: true });
+    knowledge = (out.results || []).map((r, i) => ({
+      type: 'knowledge',
+      id: `rag:${i}:${(r.text || '').slice(0, 48)}`,
+      title: (r.doc_type || r.source_type || r.source || 'chunk').toString().slice(0, 120),
+      subtitle: (r.text || '').toString().replace(/\s+/g, ' ').trim().slice(0, 160),
+      score: typeof r.score === 'number' ? r.score : null,
+      url: r.url != null && r.url !== '' ? String(r.url) : null,
+    }));
+  } catch (e) {
+    console.warn('[unified-search] rag', e?.message ?? e);
+  }
+
+  const snippets = [];
+  try {
+    if (uid) {
+      const lim = Math.min(limit, 12);
+      const sn = await env.DB.prepare(
+        `SELECT id, title, sql_text FROM ai_query_snippets
+         WHERE user_id = ? AND (LOWER(title) LIKE ? OR LOWER(sql_text) LIKE ?)
+         ORDER BY updated_at DESC LIMIT ?`
+      )
+        .bind(uid, like, like, lim)
+        .all();
+      for (const r of sn.results || []) {
+        const st = r.sql_text != null ? String(r.sql_text) : '';
+        snippets.push({
+          type: 'snippet',
+          id: r.id != null ? String(r.id) : '',
+          title: r.title != null ? String(r.title) : 'Snippet',
+          subtitle: st.replace(/\s+/g, ' ').trim().slice(0, 140),
+          sql_text: st,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[unified-search] snippets', e?.message ?? e);
+  }
+
+  const past_queries = [];
+  try {
+    if (uid) {
+      const lim = Math.min(limit, 12);
+      const pq = await env.DB.prepare(
+        `SELECT id, sql_text FROM ai_query_history
+         WHERE user_id = ? AND LOWER(sql_text) LIKE ?
+         ORDER BY created_at DESC LIMIT ?`
+      )
+        .bind(uid, like, lim)
+        .all();
+      for (const r of pq.results || []) {
+        const st = r.sql_text != null ? String(r.sql_text) : '';
+        past_queries.push({
+          type: 'query',
+          id: r.id != null ? String(r.id) : '',
+          title: st.replace(/\s+/g, ' ').trim().slice(0, 100),
+          subtitle: 'SQL history',
+          sql_text: st,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[unified-search] query history', e?.message ?? e);
+  }
+
+  const deployments = [];
+  try {
+    const lim = Math.min(limit, 12);
+    const dq = await env.DB.prepare(
+      `SELECT id, worker_name, environment, status, version, timestamp, notes
+       FROM deployments
+       WHERE LOWER(COALESCE(worker_name, '')) LIKE ?
+          OR LOWER(COALESCE(environment, '')) LIKE ?
+          OR LOWER(COALESCE(CAST(version AS TEXT), '')) LIKE ?
+          OR LOWER(COALESCE(notes, '')) LIKE ?
+       ORDER BY timestamp DESC LIMIT ?`
+    )
+      .bind(like, like, like, like, lim)
+      .all();
+    for (const r of dq.results || []) {
+      const wn = r.worker_name != null ? String(r.worker_name) : '';
+      const envn = r.environment != null ? String(r.environment) : '';
+      const ver = r.version != null ? String(r.version) : '';
+      const st = r.status != null ? String(r.status) : '';
+      const ts = r.timestamp != null ? String(r.timestamp) : '';
+      deployments.push({
+        type: 'deployment',
+        id: r.id != null ? String(r.id) : '',
+        title: wn || 'deployment',
+        subtitle: [envn, st, ver, ts].filter(Boolean).join(' · ').slice(0, 200),
+        summary: [wn, envn, ver, st, ts].filter(Boolean).join(' | '),
+      });
+    }
+  } catch (e) {
+    console.warn('[unified-search] deployments', e?.message ?? e);
+  }
+
+  const scored = [];
+  const pushScored = (row, textForScore, base) => {
+    scored.push({
+      ...row,
+      path: row.id || row.path || row.title,
+      score: iamUnifiedSearchTextScore(textForScore, query, base),
+    });
+  };
+
+  for (const d of deployments) pushScored(d, `${d.title} ${d.subtitle || ''}`, 70);
+  for (const s of snippets) pushScored(s, `${s.title} ${s.subtitle || ''}`, 68);
+  for (const p of past_queries) pushScored(p, `${p.title}`, 62);
+  for (const t of tables) pushScored(t, t.title, 100);
+  for (const c of columns) pushScored(c, `${c.title} ${c.subtitle || ''}`, 85);
+  for (const c of conversations) pushScored(c, `${c.title} ${c.subtitle || ''}`, 88);
+  for (const c of convoMessages) pushScored(c, `${c.title} ${c.subtitle || ''}`, 77);
+  for (const k of knowledge) {
+    const rs = typeof k.score === 'number' ? k.score : 0;
+    scored.push({
+      ...k,
+      path: k.id,
+      score: 32 + Math.min(48, rs * 20),
+    });
+  }
+
+  scored.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const merged = new Map();
+  for (const r of scored) {
+    const key = iamUnifiedSearchDedupeKey(r);
+    const prev = merged.get(key);
+    if (!prev || (r.score || 0) > (prev.score || 0)) merged.set(key, r);
+  }
+  const results = Array.from(merged.values())
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, limit);
+
+  const bucketCount =
+    deployments.length +
+    snippets.length +
+    past_queries.length +
+    tables.length +
+    columns.length +
+    conversations.length +
+    knowledge.length;
+
+  return jsonResponse({
+    query,
+    deployments,
+    snippets,
+    past_queries,
+    tables,
+    columns,
+    conversations,
+    knowledge,
+    results,
+    count: bucketCount,
+    results_count: results.length,
+  });
+}
+
+async function handleUnifiedSearchRecent(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ items: [] });
+  try {
+    const q = await env.DB.prepare(
+      `SELECT id, query, result_kind, opened_id, created_at
+       FROM ai_search_analytics
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 30`
+    )
+      .bind(uid)
+      .all();
+    return jsonResponse({ items: q.results || [] });
+  } catch (e) {
+    console.warn('[unified-search/recent]', e?.message ?? e);
+    return jsonResponse({ items: [], error: e?.message || String(e) }, 200);
+  }
+}
+
+async function handleUnifiedSearchTrack(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const qtext = (body?.query || '').toString().trim();
+  if (!qtext) return jsonResponse({ error: 'query required' }, 400);
+  const resultKind = (body?.result_kind || body?.kind || '').toString().trim() || 'open';
+  const openedId = body?.opened_id != null ? String(body.opened_id).slice(0, 200) : null;
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO ai_search_analytics (id, user_id, query, result_kind, opened_id, created_at)
+       VALUES (?, ?, ?, ?, ?, unixepoch())`
+    )
+      .bind(id, uid || null, qtext.slice(0, 2000), resultKind.slice(0, 64), openedId)
+      .run();
+    return jsonResponse({ ok: true, id });
+  } catch (e) {
+    console.warn('[unified-search/track]', e?.message ?? e);
+    return jsonResponse({ ok: false, error: e?.message || String(e) }, 500);
+  }
+}
+
+/** Stricter guardrails for POST /api/database/execute (dashboard /api/d1/query remains more permissive). */
+function iamDatabaseUnifiedDangerReason(sql) {
+  const s = (sql || '').trim();
+  if (!s) return 'query required';
+  if (/^\s*DROP\s+DATABASE\b/i.test(s)) return 'DROP DATABASE is not permitted via this API';
+  if (/\bDROP\s+TABLE\b/i.test(s)) return 'DROP TABLE is not permitted via this API';
+  if (/\bTRUNCATE\b/i.test(s)) return 'TRUNCATE is not permitted via this API';
+  if (/\bDELETE\s+FROM\b/i.test(s) && !/\bWHERE\b/i.test(s)) return 'DELETE without WHERE is not permitted via this API';
+  return null;
+}
+
+function iamResolveUnifiedDbKind(raw) {
+  const s = (raw || 'd1').toString().trim().toLowerCase();
+  if (s === 'd1' || s === 'sqlite') return { engine: 'd1', dbTarget: 'd1' };
+  if (s === 'supabase' || s === 'hyperdrive' || s === 'postgres' || s === 'pg')
+    return { engine: 'hyperdrive', dbTarget: 'hyperdrive' };
+  if (s === 'kv') return { engine: 'kv', dbTarget: 'kv' };
+  if (s === 'do') return { engine: 'do', dbTarget: 'do' };
+  return { engine: 'invalid', dbTarget: 'd1' };
+}
+
+async function iamInsertAiQueryHistoryRow(env, uid, dbTarget, sqlText, ok, rowCount, errorMessage, durationMs) {
+  if (!env?.DB || !uid) return;
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO ai_query_history (id, user_id, db_target, sql_text, ok, row_count, error_message, duration_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+    )
+      .bind(
+        id,
+        uid,
+        (dbTarget || 'd1').toString().trim().slice(0, 32) || 'd1',
+        sqlText.slice(0, 50000),
+        ok,
+        rowCount,
+        errorMessage != null ? String(errorMessage).slice(0, 4000) : null,
+        durationMs != null && Number.isFinite(Number(durationMs)) ? Math.floor(Number(durationMs)) : null
+      )
+      .run();
+  } catch (e) {
+    console.warn('[iamInsertAiQueryHistoryRow]', e?.message ?? e);
+  }
+}
+
+async function iamExecuteD1Unified(db, sql) {
+  const trimmed = sql.trim();
+  const upper = trimmed.toUpperCase();
+  const isRead =
+    upper.startsWith('SELECT') ||
+    upper.startsWith('PRAGMA') ||
+    upper.startsWith('WITH') ||
+    upper.startsWith('EXPLAIN');
+  if (isRead) {
+    const { results, meta } = await db.prepare(sql).all();
+    const rows = results || [];
+    const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+    return { columns, rows, rowsAffected: meta?.changes ?? null };
+  }
+  const run = await db.prepare(sql).run();
+  return { columns: [], rows: [], rowsAffected: run.meta?.changes ?? null };
+}
+
+async function iamExecuteHyperdriveUnified(env, sql) {
+  const { Client } = await import('pg');
+  const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+  await client.connect();
+  try {
+    const res = await client.query(sql);
+    const rows = res.rows || [];
+    const columns = (res.fields || []).map((f) => f.name);
+    return { columns, rows, rowsAffected: res.rowCount };
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+async function handleDatabaseExecute(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+
+  const workspaceId = body?.workspace_id != null ? String(body.workspace_id).trim() : '';
+  if (!workspaceId) return jsonResponse({ error: 'workspace_id required' }, 400);
+  void workspaceId;
+
+  const query = (body?.query || body?.sql || body?.sql_text || '').toString();
+  if (!query.trim()) return jsonResponse({ error: 'query required' }, 400);
+
+  const { engine, dbTarget } = iamResolveUnifiedDbKind(body?.database_type || body?.db_target);
+  if (engine === 'invalid') return jsonResponse({ error: 'Invalid database type' }, 400);
+
+  const danger = iamDatabaseUnifiedDangerReason(query);
+  if (danger && danger !== 'query required') return jsonResponse({ error: danger }, 400);
+
+  const t0 = Date.now();
+  let columns = [];
+  let rows = [];
+  let rowsAffected = null;
+  let ok = 1;
+  let rowCount = null;
+  let errorMessage = null;
+
+  if (engine === 'kv') {
+    errorMessage =
+      'database_type kv is not supported on this endpoint; KV binding is not a SQL engine — use dedicated KV APIs';
+    ok = 0;
+    await iamInsertAiQueryHistoryRow(env, uid, 'kv', query, ok, null, errorMessage, Date.now() - t0);
+    return jsonResponse({ error: errorMessage }, 400);
+  }
+  if (engine === 'do') {
+    errorMessage = 'database_type do is not supported on this endpoint';
+    ok = 0;
+    await iamInsertAiQueryHistoryRow(env, uid, 'do', query, ok, null, errorMessage, Date.now() - t0);
+    return jsonResponse({ error: errorMessage }, 501);
+  }
+
+  try {
+    if (engine === 'd1') {
+      const out = await iamExecuteD1Unified(env.DB, query);
+      columns = out.columns;
+      rows = out.rows;
+      rowsAffected = out.rowsAffected;
+      rowCount = rows.length;
+    } else {
+      if (!env.HYPERDRIVE?.connectionString) {
+        ok = 0;
+        errorMessage = 'hyperdrive not configured';
+        await iamInsertAiQueryHistoryRow(env, uid, 'hyperdrive', query, ok, null, errorMessage, Date.now() - t0);
+        return jsonResponse({ error: errorMessage, columns: [], rows: [] }, 503);
+      }
+      if (/^\s*DROP\s+DATABASE\b/i.test(query.trim())) {
+        ok = 0;
+        errorMessage = 'DROP DATABASE is not permitted via this API';
+        await iamInsertAiQueryHistoryRow(env, uid, 'hyperdrive', query, ok, null, errorMessage, Date.now() - t0);
+        return jsonResponse({ error: errorMessage, columns: [], rows: [] }, 403);
+      }
+      const out = await iamExecuteHyperdriveUnified(env, query);
+      columns = out.columns;
+      rows = out.rows;
+      rowsAffected = out.rowsAffected;
+      rowCount = rows.length;
+    }
+  } catch (e) {
+    ok = 0;
+    errorMessage = e?.message || String(e);
+    columns = [];
+    rows = [];
+    rowsAffected = null;
+    rowCount = null;
+  }
+
+  const durationMs = Date.now() - t0;
+  await iamInsertAiQueryHistoryRow(env, uid, dbTarget, query, ok, ok ? rowCount : null, errorMessage, durationMs);
+
+  if (!ok) {
+    return jsonResponse({ error: errorMessage || 'Query failed', columns, rows }, 200);
+  }
+  return jsonResponse({ columns, rows, rowsAffected });
+}
+
+async function handleDatabaseQueryHistoryCompat(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ history: [], items: [] });
+
+  const url = new URL(request.url);
+  const workspace_id = url.searchParams.get('workspace_id');
+  if (!workspace_id || !String(workspace_id).trim()) {
+    return jsonResponse({ error: 'workspace_id required' }, 400);
+  }
+  void workspace_id;
+
+  const database_type = url.searchParams.get('database_type');
+  const limitRaw = parseInt(url.searchParams.get('limit') || '50', 10);
+  const limit = Math.min(100, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 50));
+
+  try {
+    const params = [uid];
+    let sql = `SELECT id,
+         sql_text AS query_text,
+         db_target AS database_type,
+         duration_ms AS execution_time_ms,
+         row_count AS rows_returned,
+         created_at
+       FROM ai_query_history
+       WHERE user_id = ?`;
+    if (database_type && String(database_type).trim()) {
+      const dt = String(database_type).trim().toLowerCase();
+      const mapped =
+        dt === 'supabase' || dt === 'postgres' || dt === 'pg'
+          ? 'hyperdrive'
+          : dt === 'd1' || dt === 'sqlite'
+            ? 'd1'
+            : null;
+      if (mapped) {
+        sql += ` AND db_target = ?`;
+        params.push(mapped);
+      }
+    }
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(limit);
+    const q = await env.DB.prepare(sql).bind(...params).all();
+    const rows = q.results || [];
+    return jsonResponse({ history: rows, items: rows });
+  } catch (e) {
+    console.warn('[api/database/query-history]', e?.message ?? e);
+    return jsonResponse({ error: e?.message || String(e) }, 500);
+  }
+}
+
+async function handleDatabaseSnippetsCompat(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+
+  const workspace_id = body?.workspace_id != null ? String(body.workspace_id).trim() : '';
+  if (!workspace_id) return jsonResponse({ error: 'workspace_id required' }, 400);
+  void workspace_id;
+
+  const title = (body?.name || body?.title || '').toString().trim().slice(0, 200);
+  const sqlText = (body?.query_text || body?.sql_text || body?.sql || '').toString();
+  if (!title) return jsonResponse({ error: 'name required' }, 400);
+  if (!sqlText.trim()) return jsonResponse({ error: 'query_text required' }, 400);
+
+  const rawDt = (body?.database_type || body?.db_target || 'd1').toString().trim().toLowerCase();
+  let dbTarget = 'd1';
+  if (rawDt === 'supabase' || rawDt === 'hyperdrive' || rawDt === 'postgres' || rawDt === 'pg') dbTarget = 'hyperdrive';
+  else if (rawDt === 'd1' || rawDt === 'sqlite') dbTarget = 'd1';
+  else if (rawDt) return jsonResponse({ error: 'Invalid database_type' }, 400);
+
+  void body.description;
+  void body.tags;
+
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO ai_query_snippets (id, user_id, title, sql_text, db_target, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())`
+    )
+      .bind(id, uid, title, sqlText.slice(0, 50000), dbTarget)
+      .run();
+    return jsonResponse({ success: true, id });
+  } catch (e) {
+    console.warn('[api/database/snippets]', e?.message ?? e);
+    return jsonResponse({ error: e?.message || String(e) }, 500);
+  }
+}
+
+async function handleAgentDbQueryHistoryGet(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ items: [] });
+  try {
+    const q = await env.DB.prepare(
+      `SELECT id, db_target, sql_text, ok, row_count, error_message, duration_ms, created_at
+       FROM ai_query_history
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 100`
+    )
+      .bind(uid)
+      .all();
+    return jsonResponse({ items: q.results || [] });
+  } catch (e) {
+    console.warn('[api/agent/db/query-history GET]', e?.message ?? e);
+    return jsonResponse({ items: [], error: e?.message || String(e) }, 200);
+  }
+}
+
+async function handleAgentDbQueryHistoryPost(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ error: 'user id required' }, 400);
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const sqlText = (body?.sql_text || body?.sql || '').toString();
+  if (!sqlText.trim()) return jsonResponse({ error: 'sql_text required' }, 400);
+  const dbTarget = (body?.db_target || 'd1').toString().trim().slice(0, 32) || 'd1';
+  const ok = body?.ok === false || body?.ok === 0 ? 0 : 1;
+  const rowCount =
+    body?.row_count != null && Number.isFinite(Number(body.row_count)) ? Math.floor(Number(body.row_count)) : null;
+  const errorMessage =
+    body?.error_message != null ? String(body.error_message).slice(0, 4000) : null;
+  const durationMs =
+    body?.duration_ms != null && Number.isFinite(Number(body.duration_ms))
+      ? Math.floor(Number(body.duration_ms))
+      : null;
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO ai_query_history (id, user_id, db_target, sql_text, ok, row_count, error_message, duration_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+    )
+      .bind(id, uid, dbTarget, sqlText.slice(0, 50000), ok, rowCount, errorMessage, durationMs)
+      .run();
+    return jsonResponse({ ok: true, id });
+  } catch (e) {
+    console.warn('[api/agent/db/query-history POST]', e?.message ?? e);
+    return jsonResponse({ ok: false, error: e?.message || String(e) }, 500);
+  }
+}
+
+async function handleAgentDbSnippetsGet(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ items: [] });
+  try {
+    const q = await env.DB.prepare(
+      `SELECT id, title, sql_text, db_target, created_at, updated_at
+       FROM ai_query_snippets
+       WHERE user_id = ?
+       ORDER BY updated_at DESC
+       LIMIT 100`
+    )
+      .bind(uid)
+      .all();
+    return jsonResponse({ items: q.results || [] });
+  } catch (e) {
+    console.warn('[api/agent/db/snippets GET]', e?.message ?? e);
+    return jsonResponse({ items: [], error: e?.message || String(e) }, 200);
+  }
+}
+
+async function handleAgentDbSnippetsPost(request, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uid = authUser.id != null ? String(authUser.id).trim() : '';
+  if (!uid) return jsonResponse({ error: 'user id required' }, 400);
+  let body = {};
+  try {
+    body = await request.json();
+  } catch (_) {}
+  const title = (body?.title || '').toString().trim().slice(0, 200);
+  const sqlText = (body?.sql_text || body?.sql || '').toString();
+  if (!title) return jsonResponse({ error: 'title required' }, 400);
+  if (!sqlText.trim()) return jsonResponse({ error: 'sql_text required' }, 400);
+  const dbTarget = (body?.db_target || 'd1').toString().trim().slice(0, 32) || 'd1';
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO ai_query_snippets (id, user_id, title, sql_text, db_target, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())`
+    )
+      .bind(id, uid, title, sqlText.slice(0, 50000), dbTarget)
+      .run();
+    return jsonResponse({ ok: true, id });
+  } catch (e) {
+    console.warn('[api/agent/db/snippets POST]', e?.message ?? e);
+    return jsonResponse({ ok: false, error: e?.message || String(e) }, 500);
   }
 }
 

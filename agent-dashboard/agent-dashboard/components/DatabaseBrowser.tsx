@@ -10,26 +10,14 @@ import {
   MessageSquare,
   Settings,
   ExternalLink,
-  Filter,
-  Grid,
   X,
-  Plus,
-  Pencil,
-  Trash2,
   Check,
 } from 'lucide-react';
-import { DataGrid } from './DataGrid';
 import { SQLConsole, SqlDialect } from './SQLConsole';
 import { DatabaseAgentChat } from './DatabaseAgentChat';
 
-type DBView = 'tables' | 'query' | 'agent' | 'settings';
+type DBView = 'console' | 'agent' | 'settings';
 type DBTarget = 'd1' | 'hyperdrive';
-type TableSubView = 'data' | 'schema';
-
-interface RowEditState {
-  rowIndex: number | null;
-  data: Record<string, unknown>;
-}
 
 const KNOWN_CONNECTIONS: Record<DBTarget, { name: string; label: string }> = {
   d1: { name: 'Cloudflare D1', label: 'inneranimalmedia-business' },
@@ -40,39 +28,81 @@ function quoteIdent(name: string): string {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
 
-function sqlString(v: unknown): string {
-  if (v === null || v === undefined) return 'NULL';
-  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-  return `'${String(v).replace(/'/g, "''")}'`;
-}
+export type DatabaseExplorerJump = {
+  token: number;
+  /** Prefill console (takes precedence over table). */
+  querySql?: string;
+  /** When set without querySql, open console with SELECT * preview for this table. */
+  table?: string;
+  dbTarget?: DBTarget;
+};
 
-function isValidPgCtid(s: string): boolean {
-  return /^\(\d+,\d+\)$/.test(String(s).trim());
-}
-
-export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
-  const [view, setView] = useState<DBView>('tables');
+export const DatabaseBrowser: React.FC<{
+  onClose?: () => void;
+  explorerJump?: DatabaseExplorerJump | null;
+  onExplorerJumpConsumed?: () => void;
+}> = ({ onClose, explorerJump, onExplorerJumpConsumed }) => {
+  const [view, setView] = useState<DBView>('console');
   const [dbTarget, setDbTarget] = useState<DBTarget>('d1');
   const [hyperdriveOk, setHyperdriveOk] = useState<boolean | null>(null);
   const [tables, setTables] = useState<string[]>([]);
   const [tableFilter, setTableFilter] = useState('');
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [tableSubView, setTableSubView] = useState<TableSubView>('data');
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [schema, setSchema] = useState<Record<string, unknown>[]>([]);
-  const [rowFilter, setRowFilter] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sqlHistory, setSqlHistory] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [editState, setEditState] = useState<RowEditState | null>(null);
+  const [remoteSqlHistory, setRemoteSqlHistory] = useState<
+    { id?: string; sql_text?: string; ok?: number; created_at?: number; duration_ms?: number }[]
+  >([]);
+  const [sqlSnippets, setSqlSnippets] = useState<{ id?: string; title?: string; sql_text?: string }[]>([]);
+  const [consoleInitialSql, setConsoleInitialSql] = useState<string | undefined>(undefined);
+  const [consoleInitialSqlRev, setConsoleInitialSqlRev] = useState(0);
 
   const queryEndpoint = dbTarget === 'hyperdrive' ? '/api/hyperdrive/query' : '/api/d1/query';
   const sqlDialect: SqlDialect = dbTarget === 'hyperdrive' ? 'postgres' : 'd1';
 
+  const pushConsoleSql = useCallback((text: string) => {
+    setConsoleInitialSql(text);
+    setConsoleInitialSqlRev((n) => n + 1);
+  }, []);
+
+  const loadRemoteHistory = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/db/query-history', { credentials: 'same-origin' });
+      const data = res.ok ? await res.json() : { items: [] };
+      setRemoteSqlHistory(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      setRemoteSqlHistory([]);
+    }
+  }, []);
+
+  const loadSnippets = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/db/snippets', { credentials: 'same-origin' });
+      const data = res.ok ? await res.json() : { items: [] };
+      setSqlSnippets(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      setSqlSnippets([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view === 'console') {
+      void loadRemoteHistory();
+      void loadSnippets();
+    }
+  }, [view, loadRemoteHistory, loadSnippets]);
+
   const runSQL = useCallback(
     async (
       sql: string,
-    ): Promise<{ success: boolean; results?: Record<string, unknown>[]; error?: string; meta?: unknown }> => {
+    ): Promise<{
+      success: boolean;
+      results?: Record<string, unknown>[];
+      error?: string;
+      meta?: unknown;
+      executionMs?: number | null;
+    }> => {
+      const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
       try {
         const res = await fetch(queryEndpoint, {
           method: 'POST',
@@ -81,26 +111,150 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
           body: JSON.stringify({ sql }),
         });
         const data = await res.json();
-        if (res.status === 401) return { success: false, error: data.error || 'Unauthorized' };
-        if (res.status === 403) return { success: false, error: data.error || 'Forbidden' };
+        const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : null;
+        if (res.status === 401) {
+          void fetch('/api/agent/db/query-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              sql_text: sql,
+              db_target: dbTarget,
+              ok: false,
+              error_message: data.error || 'Unauthorized',
+              duration_ms: ms,
+            }),
+          }).catch(() => {});
+          return { success: false, error: data.error || 'Unauthorized', executionMs: ms };
+        }
+        if (res.status === 403) {
+          void fetch('/api/agent/db/query-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              sql_text: sql,
+              db_target: dbTarget,
+              ok: false,
+              error_message: data.error || 'Forbidden',
+              duration_ms: ms,
+            }),
+          }).catch(() => {});
+          return { success: false, error: data.error || 'Forbidden', executionMs: ms };
+        }
         if (data.error && !Array.isArray(data.results)) {
-          return { success: false, error: data.error };
+          void fetch('/api/agent/db/query-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              sql_text: sql,
+              db_target: dbTarget,
+              ok: false,
+              error_message: String(data.error),
+              duration_ms: ms,
+            }),
+          }).catch(() => {});
+          void loadRemoteHistory();
+          return { success: false, error: data.error, executionMs: ms };
         }
         if (Array.isArray(data.results)) {
           setSqlHistory((prev) => [sql, ...prev].slice(0, 50));
+          const rowCount = data.results.length;
+          const serverMs =
+            data.executionMs != null && Number.isFinite(Number(data.executionMs))
+              ? Math.round(Number(data.executionMs))
+              : null;
+          const durationForLog = serverMs ?? ms;
+          void fetch('/api/agent/db/query-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              sql_text: sql,
+              db_target: dbTarget,
+              ok: true,
+              row_count: rowCount,
+              duration_ms: durationForLog,
+            }),
+          }).catch(() => {});
+          void loadRemoteHistory();
           return {
             success: true,
             results: data.results as Record<string, unknown>[],
             meta: data.meta,
+            executionMs: serverMs ?? ms,
           };
         }
-        return { success: false, error: data.error || 'Query failed' };
+        void fetch('/api/agent/db/query-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            sql_text: sql,
+            db_target: dbTarget,
+            ok: false,
+            error_message: data.error || 'Query failed',
+            duration_ms: ms,
+          }),
+        }).catch(() => {});
+        void loadRemoteHistory();
+        return { success: false, error: data.error || 'Query failed', executionMs: ms };
       } catch (err: unknown) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
+        const msg = err instanceof Error ? err.message : String(err);
+        void fetch('/api/agent/db/query-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            sql_text: sql,
+            db_target: dbTarget,
+            ok: false,
+            error_message: msg,
+          }),
+        }).catch(() => {});
+        void loadRemoteHistory();
+        const msCatch =
+          typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : null;
+        return { success: false, error: msg, executionMs: msCatch };
       }
     },
-    [queryEndpoint],
+    [queryEndpoint, dbTarget, loadRemoteHistory],
   );
+
+  const saveSnippet = useCallback(
+    async (sql: string) => {
+      const title = window.prompt('Snippet title');
+      if (!title || !title.trim()) return;
+      try {
+        const res = await fetch('/api/agent/db/snippets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ title: title.trim(), sql_text: sql, db_target: dbTarget }),
+        });
+        if (res.ok) void loadSnippets();
+      } catch {
+        /* ignore */
+      }
+    },
+    [dbTarget, loadSnippets],
+  );
+
+  useEffect(() => {
+    if (!explorerJump?.token) return;
+    if (explorerJump.dbTarget) setDbTarget(explorerJump.dbTarget);
+    setView('console');
+    const qs = explorerJump.querySql?.trim();
+    const tbl = explorerJump.table?.trim();
+    if (qs) {
+      pushConsoleSql(qs);
+    } else if (tbl) {
+      const qi = quoteIdent(tbl);
+      pushConsoleSql(`SELECT * FROM ${qi} LIMIT 100;`);
+    }
+    onExplorerJumpConsumed?.();
+  }, [explorerJump?.token, explorerJump?.querySql, explorerJump?.table, explorerJump?.dbTarget, pushConsoleSql, onExplorerJumpConsumed]);
 
   useEffect(() => {
     fetch('/api/hyperdrive/status', { credentials: 'same-origin' })
@@ -115,8 +269,6 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
   const fetchTables = async () => {
     setIsLoading(true);
     setSelectedTable(null);
-    setRows([]);
-    setError(null);
     try {
       const endpoint = dbTarget === 'hyperdrive' ? '/api/hyperdrive/tables' : '/api/agent/db/tables';
       const res = await fetch(endpoint, { credentials: 'same-origin' });
@@ -130,209 +282,30 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
     }
   };
 
-  const fetchTableData = async (table: string) => {
-    setIsLoading(true);
-    setSelectedTable(table);
-    setTableSubView('data');
-    setRowFilter('');
-    setEditState(null);
-    setError(null);
-    const qi = quoteIdent(table);
-    const sql =
-      dbTarget === 'd1'
-        ? `SELECT rowid AS __rowid, * FROM ${qi} LIMIT 200`
-        : `SELECT ctid::text AS __ctid, * FROM ${qi} LIMIT 200`;
-    const result = await runSQL(sql);
-    if (result.success) {
-      setRows(result.results ?? []);
-    } else {
-      setError(result.error ?? null);
-      setRows([]);
-    }
-    setIsLoading(false);
+  const handleTableClick = (tableName: string) => {
+    setSelectedTable(tableName);
+    const qi = quoteIdent(tableName);
+    pushConsoleSql(`SELECT * FROM ${qi} LIMIT 100;`);
   };
 
-  const fetchPgInformationSchemaBrowse = async () => {
-    setIsLoading(true);
+  const handleSqliteMasterClick = () => {
+    setSelectedTable('sqlite_master');
+    pushConsoleSql('SELECT * FROM sqlite_master LIMIT 100;');
+  };
+
+  const handleInformationSchemaClick = () => {
     setSelectedTable('information_schema.tables');
-    setTableSubView('data');
-    setRowFilter('');
-    setEditState(null);
-    setError(null);
-    const result = await runSQL(
-      `SELECT * FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name LIMIT 200`,
+    pushConsoleSql(
+      `SELECT * FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name LIMIT 100;`,
     );
-    if (result.success) setRows(result.results ?? []);
-    else {
-      setError(result.error ?? null);
-      setRows([]);
-    }
-    setIsLoading(false);
-  };
-
-  const fetchSchema = async (table: string) => {
-    setTableSubView('schema');
-    const qi = quoteIdent(table);
-    const result =
-      dbTarget === 'd1'
-        ? await runSQL(`PRAGMA table_info(${qi})`)
-        : await runSQL(
-            `SELECT ordinal_position AS cid, column_name AS name, data_type AS type, is_nullable AS notnull, column_default AS dflt_value
-             FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = '${table.replace(/'/g, "''")}'
-             ORDER BY ordinal_position`,
-          );
-    setSchema(result.success ? (result.results ?? []) : []);
-    if (!result.success) setError(result.error ?? null);
   };
 
   const filteredTables = tables.filter((t) => t.toLowerCase().includes(tableFilter.toLowerCase()));
 
-  const filteredRows = rowFilter.trim()
-    ? rows.filter((r) =>
-        Object.values(r).some((v) => String(v).toLowerCase().includes(rowFilter.toLowerCase())),
-      )
-    : rows;
-
-  const isSystemCatalog =
-    selectedTable === 'sqlite_master' || selectedTable === 'information_schema.tables';
-
-  const handleDelete = async (row: Record<string, unknown>) => {
-    if (!selectedTable || isSystemCatalog) return;
-    const qi = quoteIdent(selectedTable);
-    let delSql: string;
-    if (dbTarget === 'd1') {
-      const rid = row.__rowid ?? row.rowid;
-      if (rid == null) {
-        alert('No rowid — cannot delete safely.');
-        return;
-      }
-      if (!confirm(`Delete row where rowid = ${rid}?`)) return;
-      delSql = `DELETE FROM ${qi} WHERE rowid = ${Number(rid)}`;
-    } else {
-      const ct = row.__ctid;
-      if (ct == null || !isValidPgCtid(String(ct))) {
-        alert('No valid ctid — cannot delete safely.');
-        return;
-      }
-      if (!confirm(`Delete this row (ctid ${ct})?`)) return;
-      delSql = `DELETE FROM ${qi} WHERE ctid = '${String(ct).replace(/'/g, "''")}'::tid`;
-    }
-    const result = await runSQL(delSql);
-    if (result.success) void fetchTableData(selectedTable);
-    else setError(result.error ?? null);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editState || !selectedTable || isSystemCatalog) return;
-    const { rowIndex, data } = editState;
-    const qi = quoteIdent(selectedTable);
-    const metaCols = new Set(['__rowid', '__ctid', 'rowid', 'ctid']);
-    const cols = Object.keys(data).filter((k) => !metaCols.has(k));
-
-    if (rowIndex === null) {
-      const colList = cols.map((c) => quoteIdent(c)).join(', ');
-      const valList = cols.map((c) => sqlString(data[c])).join(', ');
-      const result = await runSQL(`INSERT INTO ${qi} (${colList}) VALUES (${valList})`);
-      if (result.success) {
-        setEditState(null);
-        void fetchTableData(selectedTable);
-      } else setError(result.error ?? null);
-    } else {
-      const row = rows[rowIndex];
-      const setClause = cols
-        .map((c) => `${quoteIdent(c)} = ${sqlString(data[c])}`)
-        .join(', ');
-      let whereSql: string;
-      if (dbTarget === 'd1') {
-        const rid = row.__rowid ?? row.rowid;
-        if (rid == null) {
-          alert('No rowid — cannot update.');
-          return;
-        }
-        whereSql = `rowid = ${Number(rid)}`;
-      } else {
-        const ct = row.__ctid;
-        if (ct == null || !isValidPgCtid(String(ct))) {
-          alert('No valid ctid — cannot update.');
-          return;
-        }
-        whereSql = `ctid = '${String(ct).replace(/'/g, "''")}'::tid`;
-      }
-      const result = await runSQL(`UPDATE ${qi} SET ${setClause} WHERE ${whereSql}`);
-      if (result.success) {
-        setEditState(null);
-        void fetchTableData(selectedTable);
-      } else setError(result.error ?? null);
-    }
-  };
-
-  const startInsert = () => {
-    if (!rows.length || isSystemCatalog) return;
-    const first = rows[0];
-    const blank: Record<string, unknown> = {};
-    Object.keys(first).forEach((k) => {
-      if (k !== '__rowid' && k !== '__ctid' && k !== 'rowid' && k !== 'ctid') blank[k] = '';
-    });
-    setEditState({ rowIndex: null, data: blank });
-  };
-
-  const EditModal = () => {
-    if (!editState) return null;
-    return (
-      <div className="absolute inset-0 z-50 flex items-center justify-center max-md:items-end max-md:justify-center bg-black/60 backdrop-blur-sm">
-        <div
-          className="bg-[var(--bg-panel)] border border-[var(--border-subtle)] shadow-2xl p-6 overflow-y-auto w-full max-w-[480px] mx-4 max-h-[80vh] rounded-xl max-md:fixed max-md:bottom-0 max-md:inset-x-0 max-md:mx-0 max-md:max-w-none max-md:max-h-[min(85vh,100dvh-1rem)] max-md:rounded-t-xl max-md:rounded-b-none max-md:pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[0.8125rem] font-bold uppercase tracking-widest">
-              {editState.rowIndex === null ? 'Insert Row' : 'Edit Row'}
-            </h3>
-            <button type="button" onClick={() => setEditState(null)} className="p-1 hover:bg-[var(--bg-hover)] rounded">
-              <X size={14} />
-            </button>
-          </div>
-          <div className="flex flex-col gap-2">
-            {Object.entries(editState.data).map(([col, val]) => (
-              <div key={col} className="flex flex-col gap-0.5">
-                <label className="text-[0.625rem] font-bold uppercase tracking-widest text-[var(--text-muted)]">{col}</label>
-                <input
-                  value={String(val ?? '')}
-                  onChange={(e) =>
-                    setEditState((s) => (s ? { ...s, data: { ...s.data, [col]: e.target.value } } : s))
-                  }
-                  className="bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-3 py-1.5 text-[0.75rem] font-mono focus:outline-none focus:border-[var(--solar-cyan)]/60"
-                />
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2 mt-5 justify-end">
-            <button
-              type="button"
-              onClick={() => setEditState(null)}
-              className="px-4 py-1.5 text-[0.6875rem] font-bold hover:bg-[var(--bg-hover)] rounded border border-[var(--border-subtle)]"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveEdit()}
-              className="px-4 py-1.5 text-[0.6875rem] font-bold bg-[var(--solar-cyan)]/20 text-[var(--solar-cyan)] rounded border border-[var(--solar-cyan)]/30 hover:bg-[var(--solar-cyan)]/30 flex items-center gap-1.5"
-            >
-              <Check size={12} /> Save
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   const conn = KNOWN_CONNECTIONS[dbTarget];
 
   return (
-    <div className="w-full h-full bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden relative">
-      <EditModal />
-
+    <div className="w-full h-full min-h-0 bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden relative">
       <div className="px-3 sm:px-4 py-2.5 border-b border-[var(--border-subtle)] flex flex-wrap items-center gap-x-3 gap-y-2 justify-between shrink-0 bg-[var(--bg-panel)]">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
           <div className="p-1.5 bg-[var(--solar-blue)]/10 rounded shrink-0">
@@ -375,19 +348,11 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
         <div className="flex gap-1.5 items-center flex-wrap justify-end w-full sm:w-auto overflow-x-auto pb-0.5 sm:pb-0 -mx-1 px-1 sm:mx-0 sm:px-0">
           <button
             type="button"
-            onClick={() => setView('tables')}
+            onClick={() => setView('console')}
             className={`p-1 px-2 rounded text-[0.6875rem] flex items-center gap-1.5 transition-all ${
-              view === 'tables' ? 'bg-[var(--solar-blue)]/20 text-[var(--solar-blue)]' : 'hover:bg-[var(--bg-hover)] text-[var(--text-muted)]'
+              view === 'console' ? 'bg-[var(--solar-cyan)]/20 text-[var(--solar-cyan)]' : 'hover:bg-[var(--bg-hover)] text-[var(--text-muted)]'
             }`}
-          >
-            <Grid size={12} /> Tables
-          </button>
-          <button
-            type="button"
-            onClick={() => setView('query')}
-            className={`p-1 px-2 rounded text-[0.6875rem] flex items-center gap-1.5 transition-all ${
-              view === 'query' ? 'bg-[var(--solar-cyan)]/20 text-[var(--solar-cyan)]' : 'hover:bg-[var(--bg-hover)] text-[var(--text-muted)]'
-            }`}
+            title="SQL console and table list"
           >
             <Terminal size={12} /> Console
           </button>
@@ -431,7 +396,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
       </div>
 
       <div className="flex-1 flex overflow-hidden min-h-0 max-md:flex-col">
-        {(view === 'tables' || view === 'query') && (
+        {view === 'console' && (
           <div className="w-60 max-md:w-full max-md:max-h-[min(38vh,260px)] max-md:min-h-[140px] max-md:shrink-0 border-r max-md:border-r-0 max-md:border-b border-[var(--border-subtle)] flex flex-col bg-[var(--bg-panel)] shrink-0 min-h-0">
             <div className="p-2 border-b border-[var(--border-subtle)]">
               <div className="flex items-center bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-md px-2 py-1 focus-within:border-[var(--solar-blue)]/50 transition-all">
@@ -457,15 +422,9 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   key={table}
                   role="button"
                   tabIndex={0}
-                  onClick={() => {
-                    void fetchTableData(table);
-                    if (view === 'query') setView('tables');
-                  }}
+                  onClick={() => handleTableClick(table)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      void fetchTableData(table);
-                      if (view === 'query') setView('tables');
-                    }
+                    if (e.key === 'Enter' || e.key === ' ') handleTableClick(table);
                   }}
                   className={`group flex items-center gap-2.5 px-3 py-1.5 hover:bg-[var(--bg-hover)] cursor-pointer rounded-md text-[0.75rem] transition-all relative ${
                     selectedTable === table ? 'bg-[var(--bg-hover)] text-[var(--solar-blue)] font-bold' : 'text-[var(--text-main)]'
@@ -497,9 +456,9 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   <div
                     role="button"
                     tabIndex={0}
-                    onClick={() => {
-                      void fetchTableData('sqlite_master');
-                      if (view === 'query') setView('tables');
+                    onClick={handleSqliteMasterClick}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') handleSqliteMasterClick();
                     }}
                     className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-[var(--text-heading)] transition-colors"
                   >
@@ -510,9 +469,9 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   <div
                     role="button"
                     tabIndex={0}
-                    onClick={() => {
-                      void fetchPgInformationSchemaBrowse();
-                      if (view === 'query') setView('tables');
+                    onClick={handleInformationSchemaClick}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') handleInformationSchemaClick();
                     }}
                     className="group flex items-center gap-2.5 px-3 py-1.5 cursor-pointer hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-muted)] hover:text-[var(--text-heading)] transition-colors"
                   >
@@ -521,6 +480,78 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   </div>
                 )}
               </div>
+
+              <>
+                <div className="mt-4 border-t border-[var(--border-subtle)] pt-3">
+                  <div className="text-[0.625rem] font-black uppercase tracking-widest text-[var(--text-muted)] mb-1 px-3 flex items-center justify-between gap-2">
+                    <span>Saved snippets</span>
+                    <button
+                      type="button"
+                      className="text-[0.625rem] text-[var(--solar-cyan)] hover:brightness-110"
+                      onClick={() => void loadSnippets()}
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  {sqlSnippets.length === 0 ? (
+                    <p className="px-3 text-[0.625rem] text-[var(--text-muted)] opacity-80">No snippets yet. Use Save in the console.</p>
+                  ) : (
+                    sqlSnippets.map((s) => (
+                      <button
+                        key={s.id || s.title}
+                        type="button"
+                        onClick={() => {
+                          const t = s.sql_text != null ? String(s.sql_text) : '';
+                          if (!t) return;
+                          pushConsoleSql(t);
+                        }}
+                        className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] rounded-md text-[0.6875rem] text-[var(--text-main)] truncate"
+                        title={s.title}
+                      >
+                        {s.title || 'Untitled'}
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="mt-3 border-t border-[var(--border-subtle)] pt-3">
+                  <div className="text-[0.625rem] font-black uppercase tracking-widest text-[var(--text-muted)] mb-1 px-3 flex items-center justify-between gap-2">
+                    <span>Server history</span>
+                    <button
+                      type="button"
+                      className="text-[0.625rem] text-[var(--solar-cyan)] hover:brightness-110"
+                      onClick={() => void loadRemoteHistory()}
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  {remoteSqlHistory.length === 0 ? (
+                    <p className="px-3 text-[0.625rem] text-[var(--text-muted)] opacity-80">
+                      Runs sync here after migration 225 is applied.
+                    </p>
+                  ) : (
+                    remoteSqlHistory.slice(0, 25).map((h) => {
+                      const st = h.sql_text != null ? String(h.sql_text) : '';
+                      const ok = h.ok !== 0;
+                      return (
+                        <button
+                          key={h.id || st.slice(0, 24)}
+                          type="button"
+                          onClick={() => {
+                            if (!st) return;
+                            pushConsoleSql(st);
+                          }}
+                          className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] rounded-md text-[0.625rem] font-mono text-[var(--text-muted)] border-b border-[var(--border-subtle)]/40"
+                        >
+                          <span className={ok ? 'text-[var(--solar-green)]' : 'text-[var(--solar-red)]'}>
+                            {ok ? 'ok' : 'err'}
+                          </span>{' '}
+                          <span className="text-[var(--text-main)] truncate block">{st.replace(/\s+/g, ' ').slice(0, 72)}</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </>
             </div>
 
             <div className="p-2.5 border-t border-[var(--border-subtle)] bg-[var(--bg-app)] text-[0.625rem] text-[var(--text-muted)] shrink-0 flex items-center justify-between font-mono">
@@ -533,142 +564,17 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
         )}
 
         <div className="flex-1 overflow-hidden bg-[var(--bg-app)] min-h-0 min-w-0 flex flex-col">
-          {view === 'tables' && (
-            <div className="h-full min-h-0 flex flex-col">
-              {selectedTable ? (
-                <>
-                  <div className="px-3 sm:px-4 py-2 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] flex flex-wrap items-center gap-2 justify-between shrink-0">
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-                      <h2 className="text-[0.8125rem] font-bold font-mono truncate max-w-[min(100%,12rem)] sm:max-w-[min(100%,20rem)]">
-                        {selectedTable}
-                      </h2>
-                      <div className="flex gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setTableSubView('data')}
-                          className={`text-[0.625rem] px-1.5 py-0.5 rounded uppercase font-black transition-all ${
-                            tableSubView === 'data'
-                              ? 'bg-[var(--solar-blue)]/10 text-[var(--solar-blue)]'
-                              : 'hover:bg-[var(--bg-hover)] text-[var(--text-muted)]'
-                          }`}
-                        >
-                          Data
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => selectedTable && void fetchSchema(selectedTable)}
-                          className={`text-[0.625rem] px-1.5 py-0.5 rounded uppercase font-black transition-all ${
-                            tableSubView === 'schema'
-                              ? 'bg-[var(--solar-magenta)]/10 text-[var(--solar-magenta)]'
-                              : 'hover:bg-[var(--bg-hover)] text-[var(--text-muted)]'
-                          }`}
-                          disabled={selectedTable === 'information_schema.tables'}
-                        >
-                          Schema
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
-                      {tableSubView === 'data' && !isSystemCatalog && (
-                        <>
-                          <div className="flex items-center bg-[var(--bg-panel)] rounded px-2 h-6 border border-[var(--border-subtle)] min-w-0 flex-1 sm:flex-initial sm:max-w-[200px]">
-                            <Filter size={10} className="text-[var(--text-muted)] mr-1.5 shrink-0" />
-                            <input
-                              placeholder="Filter rows..."
-                              value={rowFilter}
-                              onChange={(e) => setRowFilter(e.target.value)}
-                              className="bg-transparent border-none outline-none text-[0.625rem] min-w-0 flex-1 text-[var(--text-main)] placeholder:text-[var(--text-muted)]"
-                            />
-                            {rowFilter && (
-                              <button type="button" onClick={() => setRowFilter('')}>
-                                <X size={10} className="text-[var(--text-muted)] ml-1" />
-                              </button>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={startInsert}
-                            className="flex items-center gap-1 px-2 py-1 bg-[var(--solar-green)]/10 text-[var(--solar-green)] border border-[var(--solar-green)]/30 rounded text-[0.625rem] font-bold hover:bg-[var(--solar-green)]/20 transition-all"
-                          >
-                            <Plus size={10} /> Insert
-                          </button>
-                        </>
-                      )}
-                      <span className="text-[0.625rem] text-[var(--text-muted)] font-mono">{filteredRows.length} rows</span>
-                    </div>
-                  </div>
-
-                  {error && (
-                    <div className="mx-4 mt-3 p-2 bg-[var(--solar-red)]/10 border border-[var(--solar-red)]/20 rounded text-[var(--solar-red)] text-[0.6875rem] font-mono">
-                      {error}
-                    </div>
-                  )}
-
-                  <div className="flex-1 min-h-0 overflow-auto p-2 sm:p-4 custom-scrollbar">
-                    {tableSubView === 'schema' ? (
-                      <DataGrid data={schema} />
-                    ) : (
-                      <DataGrid
-                        data={filteredRows}
-                        onRowClick={(row) => console.log('Selected:', row)}
-                        rowActions={
-                          isSystemCatalog
-                            ? undefined
-                            : (row, idx) => (
-                                <div className="flex gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setEditState({ rowIndex: idx, data: { ...row } });
-                                    }}
-                                    className="p-1 hover:bg-[var(--solar-blue)]/20 rounded text-[var(--text-muted)] hover:text-[var(--solar-blue)] transition-colors"
-                                    title="Edit"
-                                  >
-                                    <Pencil size={11} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      void handleDelete(row as Record<string, unknown>);
-                                    }}
-                                    className="p-1 hover:bg-[var(--solar-red)]/20 rounded text-[var(--text-muted)] hover:text-[var(--solar-red)] transition-colors"
-                                    title="Delete"
-                                  >
-                                    <Trash2 size={11} />
-                                  </button>
-                                </div>
-                              )
-                        }
-                      />
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center opacity-40">
-                  <div className="p-10 border border-dashed border-[var(--border-subtle)] rounded-full mb-6">
-                    <Database size={48} className="text-[var(--solar-blue)]" />
-                  </div>
-                  <h3 className="text-[0.875rem] font-bold mb-2 uppercase tracking-widest">Database Explorer</h3>
-                  <p className="text-[0.6875rem] font-mono text-center max-w-xs">
-                    D1 (SQLite) or Supabase Postgres via Hyperdrive. Select a table or open the SQL console.
-                  </p>
-                  <div className="flex gap-3 mt-8">
-                    <button
-                      type="button"
-                      onClick={() => setView('query')}
-                      className="px-4 py-1.5 bg-[var(--bg-panel)] border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)] rounded text-[0.6875rem] font-bold transition-all flex items-center gap-2"
-                    >
-                      <Terminal size={14} className="text-[var(--solar-cyan)]" /> Open Console
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+          {view === 'console' && (
+            <SQLConsole
+              key={dbTarget}
+              onExecute={runSQL}
+              history={sqlHistory}
+              dialect={sqlDialect}
+              initialSql={consoleInitialSql}
+              initialSqlRevision={consoleInitialSqlRev}
+              onSaveSnippet={(sql) => void saveSnippet(sql)}
+            />
           )}
-
-          {view === 'query' && <SQLConsole onExecute={runSQL} history={sqlHistory} dialect={sqlDialect} />}
 
           {view === 'agent' && (
             <DatabaseAgentChat
@@ -696,7 +602,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   icon={<HardDrive size={18} style={{ color: 'var(--solar-blue)' }} />}
                   onSelect={() => {
                     setDbTarget('d1');
-                    setView('tables');
+                    setView('console');
                   }}
                 />
                 <ConnectionCard
@@ -709,7 +615,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                   onSelect={() => {
                     if (hyperdriveOk) {
                       setDbTarget('hyperdrive');
-                      setView('tables');
+                      setView('console');
                     }
                   }}
                   disabled={!hyperdriveOk}

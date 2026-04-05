@@ -22,6 +22,8 @@ import { ExcalidrawView } from './components/ExcalidrawView';
 import { DatabaseBrowser } from './components/DatabaseBrowser';
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
 import { GitHubExplorer } from './components/GitHubExplorer';
+import { KnowledgeSearchPanel } from './components/KnowledgeSearchPanel';
+import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
 import { PlaywrightConsole } from './components/PlaywrightConsole';
@@ -38,7 +40,10 @@ import {
   saveWorkspace,
   loadGitBranch,
   formatWorkspaceStatusLine,
+  loadRecentFiles,
+  pushRecentFromActiveFile,
   type IdeWorkspaceSnapshot,
+  type RecentFileEntry,
 } from './src/ideWorkspace';
 import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft } from 'lucide-react';
 
@@ -104,10 +109,12 @@ const App: React.FC = () => {
   const [shellOutputLines, setShellOutputLines] = useState<string[]>([]);
 
   const [ideWorkspace, setIdeWorkspace] = useState<IdeWorkspaceSnapshot>(() => loadWorkspace());
+  const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>(() =>
+    typeof window !== 'undefined' ? loadRecentFiles() : [],
+  );
   const [gitBranch, setGitBranch] = useState(() => loadGitBranch());
   const [errorCount, setErrorCount] = useState(0);
   const [warningCount, setWarningCount] = useState(0);
-  const [spendCount, setSpendCount] = useState('$0.00');
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
   const [tunnelHealthy, setTunnelHealthy] = useState<boolean | null>(null);
   const [tunnelLabel, setTunnelLabel] = useState<string | null>(null);
@@ -353,6 +360,106 @@ const App: React.FC = () => {
 
   const consumeGithubExpandRepo = useCallback(() => setGithubExpandRepo(null), []);
 
+  useEffect(() => {
+    if (!activeFile) return;
+    const t = window.setTimeout(() => {
+      pushRecentFromActiveFile(activeFile);
+      setRecentFiles(loadRecentFiles());
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [activeFile]);
+
+  const openRecentEntry = useCallback(
+    async (entry: RecentFileEntry) => {
+      const applySnapshots = (msg?: string) => {
+        const work = entry.snapshotWorking || '';
+        const orig = entry.snapshotOriginal !== null ? entry.snapshotOriginal : work;
+        setActiveFile({
+          name: entry.name,
+          content: work,
+          originalContent: orig,
+          workspacePath: entry.workspacePath,
+          githubRepo: entry.githubRepo,
+          githubPath: entry.githubPath,
+          githubBranch: entry.githubBranch,
+          r2Key: entry.r2Key,
+          r2Bucket: entry.r2Bucket,
+          driveFileId: entry.driveFileId,
+        });
+        if (msg) setToastMsg(msg);
+        revealMainWorkspaceIfNarrow();
+        setOpenTabs((p) => (p.includes('code') ? p : [...p, 'code']));
+        setActiveTab('code');
+      };
+
+      try {
+        if (entry.githubRepo && entry.githubPath && entry.githubBranch) {
+          const [owner, repo] = entry.githubRepo.split('/');
+          if (!owner || !repo) throw new Error('bad repo');
+          const qs = new URLSearchParams({ path: entry.githubPath, ref: entry.githubBranch });
+          const res = await fetch(
+            `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?${qs}`,
+            { credentials: 'same-origin' },
+          );
+          const data = await res.json();
+          if (!res.ok || data.type !== 'file' || typeof data.content !== 'string') throw new Error('github');
+          const raw = String(data.content).replace(/\n/g, '');
+          const binary = atob(raw);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const text = new TextDecoder().decode(bytes);
+          setActiveFile({
+            name: data.name || entry.name,
+            content: text,
+            originalContent: text,
+            githubPath: entry.githubPath,
+            githubRepo: entry.githubRepo,
+            githubSha: typeof data.sha === 'string' ? data.sha : undefined,
+            githubBranch: entry.githubBranch,
+          });
+        } else if (entry.r2Bucket && entry.r2Key) {
+          const res = await fetch(
+            `/api/r2/file?bucket=${encodeURIComponent(entry.r2Bucket)}&key=${encodeURIComponent(entry.r2Key)}`,
+            { credentials: 'same-origin' },
+          );
+          if (!res.ok) throw new Error('r2');
+          const data = await res.json();
+          const content = typeof data.content === 'string' ? data.content : '';
+          setActiveFile({
+            name: entry.name,
+            content,
+            originalContent: content,
+            r2Key: entry.r2Key,
+            r2Bucket: entry.r2Bucket,
+          });
+        } else if (entry.driveFileId) {
+          const res = await fetch(
+            `/api/integrations/gdrive/file?fileId=${encodeURIComponent(entry.driveFileId)}`,
+            { credentials: 'same-origin' },
+          );
+          if (!res.ok) throw new Error('drive');
+          const data = await res.json();
+          const content = typeof data.content === 'string' ? data.content : '';
+          setActiveFile({
+            name: entry.name,
+            content,
+            originalContent: content,
+            driveFileId: entry.driveFileId,
+          });
+        } else {
+          applySnapshots();
+          return;
+        }
+        revealMainWorkspaceIfNarrow();
+        setOpenTabs((p) => (p.includes('code') ? p : [...p, 'code']));
+        setActiveTab('code');
+      } catch {
+        applySnapshots('Opened from cached snapshot. Use Repos or Files to refresh from remote if needed.');
+      }
+    },
+    [revealMainWorkspaceIfNarrow],
+  );
+
   const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright') => {
     setActiveActivity((prev) => {
       if (prev === activity) return null;
@@ -394,14 +501,6 @@ const App: React.FC = () => {
         setErrorCount(mcp + wx + errAudits);
         setWarningCount(warnAudits.length);
       }
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      const spendRes = await fetch('/api/spend/summary', cred);
-      const spendData = await spendRes.json().catch(() => ({}));
-      if (spendRes.ok && spendData.formatted) setSpendCount(String(spendData.formatted));
     } catch {
       /* ignore */
     }
@@ -625,10 +724,52 @@ const App: React.FC = () => {
     setActiveTab('browser');
   }, [activeFile]);
 
+  const guessMimeForDrive = (fileName: string) => {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const map: Record<string, string> = {
+      html: 'text/html; charset=utf-8',
+      htm: 'text/html; charset=utf-8',
+      css: 'text/css; charset=utf-8',
+      js: 'application/javascript; charset=utf-8',
+      mjs: 'application/javascript; charset=utf-8',
+      json: 'application/json; charset=utf-8',
+      md: 'text/markdown; charset=utf-8',
+      txt: 'text/plain; charset=utf-8',
+      ts: 'text/typescript; charset=utf-8',
+      tsx: 'text/typescript; charset=utf-8',
+      jsx: 'text/javascript; charset=utf-8',
+      xml: 'application/xml; charset=utf-8',
+      svg: 'image/svg+xml',
+      csv: 'text/csv; charset=utf-8',
+    };
+    return map[ext] || 'text/plain; charset=utf-8';
+  };
+
   const handleSaveFile = useCallback(async (content: string) => {
     if (!activeFile) return;
     if (activeFile.driveFileId) {
-      setToastMsg('Drive files are read-only from Monaco — download to edit.');
+      try {
+        const res = await fetch('/api/drive/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            fileId: activeFile.driveFileId,
+            content,
+            mimeType: guessMimeForDrive(activeFile.name || 'file.txt'),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setToastMsg(typeof data.error === 'string' ? data.error : 'Drive save failed');
+          return;
+        }
+        setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
+        setToastMsg('Saved to Google Drive');
+      } catch (e) {
+        console.error(e);
+        setToastMsg('Drive save failed');
+      }
       return;
     }
     if (activeFile.handle) {
@@ -682,6 +823,7 @@ const App: React.FC = () => {
               message: 'Update via Agent Sam',
               content: base64,
               sha: activeFile.githubSha,
+              ...(activeFile.githubBranch ? { branch: activeFile.githubBranch } : {}),
             }),
           },
         );
@@ -981,25 +1123,29 @@ const App: React.FC = () => {
                   <ChevronLeft size={18} strokeWidth={1.75} />
                 </button>
               )}
-              <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail" alt="" className="w-5 h-5 object-contain drop-shadow" />
-              <span className="flex flex-col leading-tight min-w-0">
-                <span className="text-[12px] font-bold tracking-wide text-[var(--text-main)]">{PRODUCT_NAME}</span>
-                <span className="text-[9px] font-medium text-[var(--text-muted)] truncate max-w-[140px]" title={workspaceDisplayName}>
-                  {workspaceDisplayName}
-                </span>
-              </span>
+              <img
+                src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail"
+                alt=""
+                className="w-7 h-7 object-contain drop-shadow shrink-0"
+                title={workspaceDisplayName}
+              />
           </div>
-          
-          {/* Center Dropdown / Project Search Bar */}
-          <div className="flex items-center shrink-0 w-full max-w-[400px]">
-              <div className="w-full relative flex items-center bg-[var(--bg-app)] border border-[var(--border-subtle)] hover:border-[var(--border-focus)] transition-colors rounded shadow-inner h-6">
-                  <Search size={12} className="text-[var(--text-muted)] absolute left-2.5" />
-                  <input 
-                      type="text"
-                      placeholder={`${workspaceDisplayName} — search projects, files, commands…`}
-                      className="w-full bg-transparent pl-7 pr-2 py-1 text-[11px] focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-main)]"
-                  />
-              </div>
+
+          {/* Knowledge search: opens left rail panel (RAG / indexed chunks) */}
+          <div className="flex-1 flex justify-center items-center min-w-0 px-2">
+              <button
+                  type="button"
+                  title="Knowledge search (RAG)"
+                  aria-label="Open knowledge search"
+                  className={`p-2 rounded-md border transition-colors shrink-0 ${
+                    activeActivity === 'search'
+                      ? 'border-[var(--solar-cyan)] bg-[var(--solar-cyan)]/15 text-[var(--solar-cyan)]'
+                      : 'border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]'
+                  }`}
+                  onClick={() => toggleActivity('search')}
+              >
+                  <Search size={18} strokeWidth={1.75} />
+              </button>
           </div>
 
           {/* Right layout cluster: split | side panel | bottom aux | terminal (IAM shell) */}
@@ -1163,6 +1309,8 @@ const App: React.FC = () => {
                           onRemoveCustomAsset={handleRemoveCustomAsset}
                           isEmbedded={true}
                       />
+                  ) : activeActivity === 'search' ? (
+                      <KnowledgeSearchPanel onClose={() => setActiveActivity(null)} />
                   ) : activeActivity === 'files' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
@@ -1172,10 +1320,12 @@ const App: React.FC = () => {
                           onFileSelect={(file) => {
                           setActiveFile({ ...file, originalContent: file.content });
                           openTab('code');
+                          revealMainWorkspaceIfNarrow();
                       }}
                           onOpenInEditor={(file) => {
                               setActiveFile(file);
                               openTab('code');
+                              revealMainWorkspaceIfNarrow();
                           }}
                       />
                   ) : activeActivity === 'mcps' ? (
@@ -1187,6 +1337,7 @@ const App: React.FC = () => {
                           onFileSelect={(file) => {
                               setActiveFile({ ...file, originalContent: file.content });
                               openTab('code');
+                              revealMainWorkspaceIfNarrow();
                           }}
                       />
                   ) : activeActivity === 'sql' ? (
@@ -1198,6 +1349,7 @@ const App: React.FC = () => {
                           onOpenInEditor={(file) => {
                               setActiveFile(file);
                               openTab('code');
+                              revealMainWorkspaceIfNarrow();
                           }}
                       />
                   ) : activeActivity === 'drive' ? (
@@ -1205,6 +1357,7 @@ const App: React.FC = () => {
                           onOpenInEditor={(file) => {
                               setActiveFile(file);
                               openTab('code');
+                              revealMainWorkspaceIfNarrow();
                           }}
                       />
                   ) : activeActivity === 'remote' ? (
@@ -1212,10 +1365,25 @@ const App: React.FC = () => {
                           onOpenInEditor={(file) => {
                               setActiveFile(file);
                               openTab('code');
+                              revealMainWorkspaceIfNarrow();
                           }}
                       />
                   ) : activeActivity === 'playwright' ? (
                       <PlaywrightConsole />
+                  ) : activeActivity === 'projects' ? (
+                      <WorkspaceExplorerPanel
+                        ideWorkspace={ideWorkspace}
+                        workspaceTitle={workspaceDisplayName}
+                        recentFiles={recentFiles}
+                        onRefreshRecent={() => setRecentFiles(loadRecentFiles())}
+                        onOpenRecent={(e) => void openRecentEntry(e)}
+                        onOpenLocalFolder={() => {
+                          setActiveActivity('files');
+                          setNativeFolderOpenSignal((n) => n + 1);
+                        }}
+                        onOpenFilesActivity={() => setActiveActivity('files')}
+                        onOpenGitHubActivity={() => setActiveActivity('actions')}
+                      />
                   ) : (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>
                   )}
@@ -1577,14 +1745,6 @@ const App: React.FC = () => {
         showCursor={activeTab === 'code'}
         line={cursorPos.line}
         col={cursorPos.col}
-        activeTab={
-            activeTab === 'engine'
-              ? 'Sandbox'
-              : activeTab === 'code'
-                ? (activeFile?.name?.split('.').pop()?.toLowerCase() || 'ts')
-                : 'Preview'
-        }
-        spendCount={spendCount}
         version={SHELL_VERSION}
         healthOk={healthOk}
         tunnelHealthy={tunnelHealthy}
@@ -1609,14 +1769,9 @@ const App: React.FC = () => {
           if (isNarrowViewport) narrowBackToCenter();
           openTab('code');
         }}
-        onSpendClick={() => toggleActivity('settings')}
         onVersionClick={() => {}}
         onFormatClick={() => {
           window.dispatchEvent(new CustomEvent('iam-format-document'));
-        }}
-        onActiveTabLabelClick={() => {
-          if (isNarrowViewport) narrowBackToCenter();
-          openTab(activeTab);
         }}
       />
     </div>

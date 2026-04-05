@@ -7,7 +7,8 @@
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
 # After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs via scripts/lib/cicd-d1-log.sh (D1 writes non-fatal).
-# Optional: CICD_D1_LOG=0 to skip | CICD_SKIP_HEALTH_CURL=1 to skip sandbox curl | SANDBOX_HEALTH_URL=... to override check URL
+# Optional: CICD_D1_LOG=0 to skip | CICD_SKIP_HEALTH_CURL=1 to skip sandbox curl | CICD_SKIP_RESEND=1 to skip Resend email
+#           SANDBOX_HEALTH_URL=... to override check URL
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,12 +29,122 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
   source <(grep -v '^#' .env.cloudflare 2>/dev/null | grep -v '^\s*$' | sed 's/^/export /' || true)
 fi
 
+# Resend + internal API secret — merge from .env when token was already in shell (skips full source above)
+if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
+  # shellcheck disable=SC2046
+  export $(grep -E '^(RESEND_API_KEY|RESEND_FROM|RESEND_TO|INTERNAL_API_SECRET)=' "${REPO_ROOT}/.env.cloudflare" | grep -v '^#' | xargs) 2>/dev/null || true
+fi
+RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
+RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
+
 CFG="wrangler.jsonc"
 SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
 PROD_CFG="wrangler.production.toml"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/lib/cicd-d1-log.sh"
+
+_send_sandbox_resend_notification() {
+  local outcome="${1:-success}"
+  local resend_key="${RESEND_API_KEY:-}"
+  [ -z "$resend_key" ] && echo "  WARN: RESEND_API_KEY not set — skipping notification" && return 0
+
+  local status_label status_color
+  if [ "$outcome" = "success" ]; then
+    status_label="LIVE"
+    status_color="#22c55e"
+  else
+    status_label="FAILED"
+    status_color="#ef4444"
+  fi
+
+  local git_sha git_branch git_msg
+  git_sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+  git_branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'main')"
+  git_msg="$(git -C "$REPO_ROOT" log -1 --pretty=%s 2>/dev/null || echo '')"
+
+  local ms_build ms_r2 ms_worker total_ms
+  ms_build="${CICD_MS_BUILD:-0}"
+  ms_r2="${CICD_MS_R2:-0}"
+  ms_worker="${CICD_MS_WORKER:-0}"
+  total_ms="${CICD_WALL_TOTAL_MS:-0}"
+  [[ "$ms_build" =~ ^[0-9]+$ ]] || ms_build=0
+  [[ "$ms_r2" =~ ^[0-9]+$ ]] || ms_r2=0
+  [[ "$ms_worker" =~ ^[0-9]+$ ]] || ms_worker=0
+  [[ "$total_ms" =~ ^[0-9]+$ ]] || total_ms=$(( ms_build + ms_r2 + ms_worker ))
+
+  local vuln_row=""
+  GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
+  GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
+  [ "${GITHUB_VULN_HIGH}" -gt 0 ] 2>/dev/null \
+    && vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#ef4444;font-weight:600;'>${GITHUB_VULN_HIGH} high / ${GITHUB_VULN_MODERATE} moderate</td></tr>" \
+    || vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#22c55e;'>none detected</td></tr>"
+
+  local sb_url pipe_ref gh_ref dash_v
+  dash_v="${CICD_V:-${CURRENT_V:-0}}"
+  sb_url="${SANDBOX_HEALTH_URL:-https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent}"
+  pipe_ref="pipe_${DEPLOY_TS}_sandbox_v${dash_v}"
+  gh_ref="gh_${DEPLOY_TS}_sandbox_v${dash_v}"
+
+  local html_body
+  html_body="<!DOCTYPE html><html><body style='margin:0;padding:0;background:#0f1117;font-family:ui-monospace,monospace;'>
+<div style='max-width:600px;margin:28px auto;background:#1a1d2e;border:1px solid #2d3148;border-radius:8px;overflow:hidden;'>
+  <div style='background:#12151f;padding:16px 24px;border-bottom:3px solid ${status_color};'>
+    <span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${status_color};margin-right:8px;'></span>
+    <span style='color:#e2e8f0;font-size:14px;font-weight:700;letter-spacing:0.05em;'>IAM // SANDBOX ${status_label}</span>
+    <span style='float:right;color:#475569;font-size:11px;margin-top:2px;'>$(date -u +%Y-%m-%d)</span>
+  </div>
+  <div style='padding:14px 24px;'>
+    <table style='width:100%;border-collapse:collapse;'>
+      <tr><td colspan='2' style='padding:8px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>DEPLOY</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;width:130px;'>Status</td><td style='padding:5px 12px;color:${status_color};font-weight:700;'>${status_label}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${SANDBOX_VERSION:-unknown}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Dashboard</td><td style='padding:5px 12px;color:#e2e8f0;'>v${dash_v}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Bucket</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${SANDBOX_BUCKET}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>URL</td><td style='padding:5px 12px;'><a href='${sb_url}' style='color:#60a5fa;text-decoration:none;'>${sb_url}</a></td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Health</td><td style='padding:5px 12px;color:#e2e8f0;'>${SANDBOX_HC:-skipped}</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>GIT</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Branch</td><td style='padding:5px 12px;color:#e2e8f0;'>${git_branch}</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Commit</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${git_sha} — ${git_msg}</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>ASSETS + TIMINGS</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 files (est.)</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_FILES_UPDATED:-0} uploads / ${R2_LINE_COUNT:-0} manifest lines</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Build</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_build}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_r2}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_worker}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Wall</td><td style='padding:5px 12px;color:#e2e8f0;font-weight:600;'>${total_ms}ms</td></tr>
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>QUALITY / SECURITY</td></tr>
+      ${vuln_row}
+      <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>TRACKING</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>D1 Tables</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs, deployments, dashboard_versions</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Pipeline</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>${pipe_ref} (${gh_ref})</td></tr>
+    </table>
+  </div>
+  <div style='padding:10px 24px;border-top:1px solid #2d3148;color:#475569;font-size:11px;display:flex;justify-content:space-between;'>
+    <span>IAM sandbox deploy</span><span>$(date -u +%Y-%m-%dT%H:%M:%SZ)</span>
+  </div>
+</div></body></html>"
+
+  local json_html
+  json_html=$(printf '%s' "$html_body" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null \
+    || printf '"%s"' "$(printf '%s' "$html_body" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n')")
+
+  local http_code
+  http_code=$(curl -sS \
+    -X POST https://api.resend.com/emails \
+    -H "Authorization: Bearer ${resend_key}" \
+    -H "Content-Type: application/json" \
+    -d "{\"from\":\"${RESEND_FROM}\",\"to\":[\"${RESEND_TO}\"],\"subject\":\"[IAM] SANDBOX ${status_label} — dashboard-v${dash_v} — $(date -u +%Y-%m-%d)\",\"html\":${json_html}}" \
+    -o /tmp/resend-sandbox-response.json \
+    -w "%{http_code}" 2>/dev/null || echo "0")
+
+  if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+    local msg_id
+    msg_id=$(grep -o '"id":"[^"]*"' /tmp/resend-sandbox-response.json 2>/dev/null | cut -d'"' -f4 || echo "")
+    echo "  Resend: sent -> ${RESEND_TO} (HTTP ${http_code}${msg_id:+ id=${msg_id}})"
+  else
+    echo "  WARN: Resend failed (HTTP ${http_code}) — check /tmp/resend-sandbox-response.json"
+  fi
+}
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
 CICD_T_BUILD_START=0
@@ -312,6 +423,14 @@ CICD_V="${CURRENT_V:-$(cat "$VER_FILE" 2>/dev/null || echo 0)}"
 cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_FILES_UPDATED" "$R2_BYTE_EST" \
   "$CICD_MS_BUILD" "$CICD_MS_R2" "$CICD_MS_WORKER" "0" "${SANDBOX_HC:-200}" \
   "${SANDBOX_HEALTH_URL}"
+
+if [ "${CICD_SKIP_RESEND:-0}" != "1" ]; then
+  echo ""
+  echo "Sending Resend notification..."
+  _send_sandbox_resend_notification "success"
+  echo ""
+  echo "  Verify: curl -s ${SANDBOX_HEALTH_URL:-https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent} | grep -o 'dashboard-v:[0-9]*'"
+fi
 
 # Post-deploy knowledge sync (non-fatal; after CICD logging)
 echo ""

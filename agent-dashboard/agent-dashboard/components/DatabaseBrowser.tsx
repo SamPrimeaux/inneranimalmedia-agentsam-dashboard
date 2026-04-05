@@ -333,16 +333,18 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
     <div className="w-full h-full bg-[var(--bg-panel)] flex flex-col text-[var(--text-main)] overflow-hidden relative">
       <EditModal />
 
-      <div className="px-4 py-2.5 border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 bg-[var(--bg-panel)]">
-        <div className="flex items-center gap-3">
-          <div className="p-1.5 bg-[var(--solar-blue)]/10 rounded">
+      <div className="px-3 sm:px-4 py-2.5 border-b border-[var(--border-subtle)] flex flex-wrap items-center gap-x-3 gap-y-2 justify-between shrink-0 bg-[var(--bg-panel)]">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+          <div className="p-1.5 bg-[var(--solar-blue)]/10 rounded shrink-0">
             <Database size={14} className="text-[var(--solar-blue)]" />
           </div>
-          <div className="flex flex-col leading-none">
+          <div className="flex flex-col leading-none min-w-0">
             <span className="text-[0.6875rem] font-bold tracking-widest uppercase">Database Explorer</span>
-            <span className="text-[0.6875rem] text-[var(--text-muted)] font-mono mt-0.5">{conn.label}</span>
+            <span className="text-[0.6875rem] text-[var(--text-muted)] font-mono mt-0.5 truncate max-w-[min(100%,14rem)] sm:max-w-none">
+              {conn.label}
+            </span>
           </div>
-          <div className="flex items-center gap-1 ml-2">
+          <div className="flex items-center gap-1 flex-wrap">
             {(['d1', 'hyperdrive'] as DBTarget[]).map((t) => (
               <button
                 key={t}
@@ -370,7 +372,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
           </div>
         </div>
 
-        <div className="flex gap-1.5 items-center">
+        <div className="flex gap-1.5 items-center flex-wrap justify-end w-full sm:w-auto overflow-x-auto pb-0.5 sm:pb-0 -mx-1 px-1 sm:mx-0 sm:px-0">
           <button
             type="button"
             onClick={() => setView('tables')}
@@ -428,9 +430,9 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0 max-md:flex-col">
         {(view === 'tables' || view === 'query') && (
-          <div className="w-60 border-r border-[var(--border-subtle)] flex flex-col bg-[var(--bg-panel)] shrink-0">
+          <div className="w-60 max-md:w-full max-md:max-h-[min(38vh,260px)] max-md:min-h-[140px] max-md:shrink-0 border-r max-md:border-r-0 max-md:border-b border-[var(--border-subtle)] flex flex-col bg-[var(--bg-panel)] shrink-0 min-h-0">
             <div className="p-2 border-b border-[var(--border-subtle)]">
               <div className="flex items-center bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-md px-2 py-1 focus-within:border-[var(--solar-blue)]/50 transition-all">
                 <Search size={12} className="text-[var(--text-muted)] mr-2 shrink-0" />
@@ -530,15 +532,17 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
           </div>
         )}
 
-        <div className="flex-1 overflow-hidden bg-[var(--bg-app)]">
+        <div className="flex-1 overflow-hidden bg-[var(--bg-app)] min-h-0 min-w-0 flex flex-col">
           {view === 'tables' && (
-            <div className="h-full flex flex-col">
+            <div className="h-full min-h-0 flex flex-col">
               {selectedTable ? (
                 <>
-                  <div className="px-4 py-2 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-[0.8125rem] font-bold font-mono">{selectedTable}</h2>
-                      <div className="flex gap-1">
+                  <div className="px-3 sm:px-4 py-2 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] flex flex-wrap items-center gap-2 justify-between shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+                      <h2 className="text-[0.8125rem] font-bold font-mono truncate max-w-[min(100%,12rem)] sm:max-w-[min(100%,20rem)]">
+                        {selectedTable}
+                      </h2>
+                      <div className="flex gap-1 shrink-0">
                         <button
                           type="button"
                           onClick={() => setTableSubView('data')}
@@ -564,16 +568,16 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                         </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
                       {tableSubView === 'data' && !isSystemCatalog && (
                         <>
-                          <div className="flex items-center bg-[var(--bg-panel)] rounded px-2 h-6 border border-[var(--border-subtle)]">
-                            <Filter size={10} className="text-[var(--text-muted)] mr-1.5" />
+                          <div className="flex items-center bg-[var(--bg-panel)] rounded px-2 h-6 border border-[var(--border-subtle)] min-w-0 flex-1 sm:flex-initial sm:max-w-[200px]">
+                            <Filter size={10} className="text-[var(--text-muted)] mr-1.5 shrink-0" />
                             <input
                               placeholder="Filter rows..."
                               value={rowFilter}
                               onChange={(e) => setRowFilter(e.target.value)}
-                              className="bg-transparent border-none outline-none text-[0.625rem] w-28 text-[var(--text-main)] placeholder:text-[var(--text-muted)]"
+                              className="bg-transparent border-none outline-none text-[0.625rem] min-w-0 flex-1 text-[var(--text-main)] placeholder:text-[var(--text-muted)]"
                             />
                             {rowFilter && (
                               <button type="button" onClick={() => setRowFilter('')}>
@@ -600,7 +604,7 @@ export const DatabaseBrowser: React.FC<{ onClose?: () => void }> = ({ onClose })
                     </div>
                   )}
 
-                  <div className="flex-1 overflow-auto p-4 custom-scrollbar">
+                  <div className="flex-1 min-h-0 overflow-auto p-2 sm:p-4 custom-scrollbar">
                     {tableSubView === 'schema' ? (
                       <DataGrid data={schema} />
                     ) : (

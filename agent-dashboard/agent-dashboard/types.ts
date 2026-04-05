@@ -113,5 +113,7 @@ export type ActiveFile = {
   githubPath?: string;
   githubRepo?: string;
   githubSha?: string;
+  /** Branch used for GitHub Contents API (list/get); save/delete should send the same branch. */
+  githubBranch?: string;
   driveFileId?: string;
 };

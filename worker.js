@@ -6344,6 +6344,7 @@ async function writeTelemetry(env, data, modelRates) {
   }
   const sid = sessionId != null ? String(sessionId) : null;
 
+  // agent_telemetry: 20 columns = 17 ? + unixepoch(timestamp) + unixepoch(created_at) + unixepoch(updated_at); .bind supplies 17 values.
   try {
     await env.DB.prepare(
       `INSERT INTO agent_telemetry (
@@ -6352,7 +6353,7 @@ async function writeTelemetry(env, data, modelRates) {
         cache_read_input_tokens, cache_creation_input_tokens,
         computed_cost_usd, total_input_tokens,
         event_type, severity, created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
+      ) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
     ).bind(
       telemetryId, tid ?? null, sid,
       'agent_chat', 'llm_turn', 1, metaJson,
@@ -7081,8 +7082,43 @@ async function logAssistantCodeArtifactIfPresent(env, {
   });
 }
 
+/** INSERT OR IGNORE so FK on agent_messages.conversation_id -> agent_conversations(id) succeeds. Same id used for agent_sessions row (workspace/chat session key). */
+async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId) {
+  if (!env?.DB || conversationId == null || String(conversationId).trim() === '') return;
+  const cid = String(conversationId).trim();
+  const uid =
+    chatUserId != null && String(chatUserId).trim() !== ''
+      ? String(chatUserId).trim()
+      : 'sam_primeaux';
+  const now = Math.floor(Date.now() / 1000);
+  const tenant = (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'system';
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at)
+       VALUES (?, ?, 'chat', 'active', '{}', ?, ?)`
+    )
+      .bind(cid, tenant, now, now)
+      .run();
+  } catch (e) {
+    console.warn('[ensureAgentChatPersistenceParents] agent_sessions', e?.message ?? e);
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO agent_conversations (id, user_id, title, name, created_at, updated_at, is_archived)
+       VALUES (?, ?, 'Chat', ?, ?, ?, 0)`
+    )
+      .bind(cid, uid, cid.length > 120 ? cid.slice(0, 120) : cid, now, now)
+      .run();
+  } catch (e) {
+    console.warn('[ensureAgentChatPersistenceParents] agent_conversations', e?.message ?? e);
+  }
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
-async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false) {
+async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false, chatPersistenceUserId = null) {
+  if (env.DB && conversationId != null && String(conversationId).trim() !== '') {
+    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId);
+  }
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
   const safeOutput = outputTokens ?? 0;
@@ -9223,36 +9259,63 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         let key = params.key || params.path;
         if (!key) { resultText = 'r2_write: key required'; }
         else {
-          const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
-          if (!bucket) { resultText = `r2_write: bucket ${params.bucket} not available`; }
+          const { binding: bucket, name: bucketName, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
+          if (!bucket && !s3Bucket) { resultText = `r2_write: bucket ${params.bucket} not available`; }
           else {
-            key = normalizeSandboxWriteKeyForAssets(bucketName, key);
+            if (bucket) key = normalizeSandboxWriteKeyForAssets(bucketName, key);
             const ct = params.content_type || params.contentType || 'text/plain';
-            await bucket.put(key, params.body ?? '', { httpMetadata: { contentType: ct } });
-            const publicUrl = await buildR2PublicHttpsUrl(env, bucketName, key);
-            const kl = String(key).toLowerCase();
-            const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
-            let browserNavUrl = null;
-            if (bucketName === 'ASSETS' && publicUrl) browserNavUrl = publicUrl;
-            else if (isHtml) browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
-            const uiEvents = [
-              { type: 'r2_file_updated', bucket: bucketName, key },
-              ...(browserNavUrl ? [{ type: 'browser_navigate', url: browserNavUrl }] : []),
-            ];
-            resultText = JSON.stringify({
-              ok: true,
-              key,
-              bucket: bucketName,
-              public_url: publicUrl,
-              broadcast: true,
-              ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
-              ...(browserNavUrl ? { ui_events: uiEvents } : {}),
-            });
+            const putOk = await r2PutViaBindingOrS3(env, bucket, s3Bucket, key, params.body ?? '', ct);
+            if (!putOk) { resultText = `r2_write: bucket ${params.bucket} not available`; }
+            else {
+              void recordR2WriteTraceability(env, {
+                paramsBucketRaw: params.bucket,
+                resolvedBucketName: bucketName,
+                objectKey: key,
+                body: params.body,
+                contentType: ct,
+                tenantId: toolTenantId,
+                userId: request?.user?.id || request?.user_id || 'agent_sam',
+                conversationId,
+                messageId: params.message_id ?? null,
+              });
+              const publicUrl = await buildR2PublicHttpsUrl(env, bucketName, key);
+              const kl = String(key).toLowerCase();
+              const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
+              let browserNavUrl = null;
+              if (bucketName === 'ASSETS' && publicUrl) browserNavUrl = publicUrl;
+              else if (isHtml && (bucketName === 'DASHBOARD' || bucketName === 'TOOLS')) {
+                browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
+              }
+              const uiEvents = [
+                { type: 'r2_file_updated', bucket: bucketName, key },
+                ...(browserNavUrl ? [{ type: 'browser_navigate', url: browserNavUrl }] : []),
+              ];
+              resultText = JSON.stringify({
+                ok: true,
+                key,
+                bucket: bucketName,
+                public_url: publicUrl,
+                broadcast: true,
+                ui_event: { type: 'r2_file_updated', bucket: bucketName, key },
+                ...(browserNavUrl ? { ui_events: uiEvents } : {}),
+              });
+            }
           }
         }
-      } else if (toolName === 'r2_search' && env.R2) {
-        const listed = await env.R2.list({ prefix: params.prefix || '', limit: params.limit || 20 });
-        resultText = JSON.stringify(listed.objects.map(o => ({ key: o.key, size: o.size })));
+      } else if (toolName === 'r2_search') {
+        const { binding: searchBinding, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+        if (!searchBinding && !s3Bucket) {
+          resultText = JSON.stringify({ error: 'r2_search: bucket not available' });
+        } else {
+          const lim = Math.min(Number(params.limit) || 20, 1000);
+          const needle = String(params.query || '').trim().toLowerCase();
+          const listed = await r2ListViaBindingOrS3(env, searchBinding, s3Bucket, params.prefix || '', Math.min(1000, lim * 50));
+          if (listed == null) resultText = JSON.stringify({ error: 'r2_search: list failed' });
+          else {
+            const filtered = needle ? listed.filter((o) => o.key.toLowerCase().includes(needle)) : listed;
+            resultText = JSON.stringify(filtered.slice(0, lim));
+          }
+        }
       } else if (toolName === 'r2_bucket_summary' && env.R2) {
         const listed = await env.R2.list({ limit: 1000 });
         resultText = JSON.stringify({ count: listed.objects.length, truncated: listed.truncated });
@@ -10751,7 +10814,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
 
       const costUsd = calculateCost(effectiveModelRow, inputTokens, outputTokens);
       const routingOpts = opts.routingOpts || null;
-      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts, 0, 0, true);
+      await streamDoneDbWrites(env, conversationId, effectiveModelRow, fullText, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(apiMessages), agentsamAgentRunId, routingOpts, 0, 0, true, opts.persistConversationUserId ?? null);
       await enqueueAgentTelemetryFinalLlmCall(env, ctx, {
         conversationId,
         provider: 'google',
@@ -11447,30 +11510,36 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     ? (env.TENANT_ID ? String(env.TENANT_ID).trim() : null)
     : resolveTenantIdForWorker(chatSseSession, env);
   const skillWorkspaceKey = chatSseSession?.workspace_id ?? tenantIdChatSse ?? null;
-  let chatSseSystemPrompt = agentBaseSystem;
-  try {
-    const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-    const skillSql = message.includes('/')
-      ? `SELECT name, description, content_markdown, slash_trigger
+  const IAM_SSE_BRAND_OUTPUT_POLICY = `## Brand and output policy (Inner Animal Media)
+- Do not use emojis in assistant replies, in files you create or edit (HTML, CSS, JavaScript, markdown, copy, etc.), or in user-visible UI text. Use plain words instead (for example "Hello" or "Looks good"). Only use emojis if the user explicitly asks for them.`;
+
+  const messageHasSlashForSkillBody = String(message || '').includes('/');
+
+  const buildChatSseSystemPromptResolved = async () => {
+    let promptOut = agentBaseSystem;
+    try {
+      const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+      const skillSql = message.includes('/')
+        ? `SELECT name, description, content_markdown, slash_trigger
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`
-      : `SELECT name, description, slash_trigger
+        : `SELECT name, description, slash_trigger
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`;
-    const [skillRows, commandRows, mcpToolRows] = await Promise.all([
-      env.DB.prepare(skillSql).bind(skillWorkspaceKey).all(),
-      env.DB.prepare(
-        `SELECT slug, name, description, category
+      const [skillRows, commandRows, mcpToolRows] = await Promise.all([
+        env.DB.prepare(skillSql).bind(skillWorkspaceKey).all(),
+        env.DB.prepare(
+          `SELECT slug, name, description, category
          FROM agent_commands
          WHERE tenant_id = ? AND COALESCE(status, 'active') = 'active'
          ORDER BY category, slug`
-      )
-        .bind(tenantIdChatSse)
-        .all(),
-      env.DB.prepare(
-        `SELECT tool_name, tool_category, description
+        )
+          .bind(tenantIdChatSse)
+          .all(),
+        env.DB.prepare(
+          `SELECT tool_name, tool_category, description
          FROM mcp_registered_tools
          WHERE COALESCE(enabled, 1) = 1
            AND COALESCE(is_degraded, 0) = 0
@@ -11479,48 +11548,50 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
              OR modes_json LIKE ('%' || '"' || ? || '"' || '%')
            )
          ORDER BY tool_category, tool_name`
-      )
-        .bind(mode)
-        .all(),
-    ]);
+        )
+          .bind(mode)
+          .all(),
+      ]);
 
-    const MCP_SSE_CAP = 40;
-    const mcpAll = mcpToolRows.results || [];
-    const mcpOverCap = mcpAll.length > MCP_SSE_CAP;
-    const mcpSlice = mcpOverCap ? mcpAll.slice(0, MCP_SSE_CAP) : mcpAll;
-    const mcpRemaining = mcpOverCap ? mcpAll.length - MCP_SSE_CAP : 0;
+      const MCP_SSE_CAP = 40;
+      const mcpAll = mcpToolRows.results || [];
+      const mcpOverCap = mcpAll.length > MCP_SSE_CAP;
+      const mcpSlice = mcpOverCap ? mcpAll.slice(0, MCP_SSE_CAP) : mcpAll;
+      const mcpRemaining = mcpOverCap ? mcpAll.length - MCP_SSE_CAP : 0;
 
-    const mcpByCategory = {};
-    for (const t of mcpSlice) {
-      const cat = promptLine(t.tool_category) || 'Other';
-      if (!mcpByCategory[cat]) mcpByCategory[cat] = [];
-      mcpByCategory[cat].push(`  - \`${t.tool_name}\`: ${promptLine(t.description)}`);
-    }
-    let mcpBlock = Object.keys(mcpByCategory)
-      .sort()
-      .map((cat) => `**${cat}**\n${mcpByCategory[cat].join('\n')}`)
-      .join('\n\n');
-    if (mcpRemaining > 0) {
-      mcpBlock += `\n\n(+ ${mcpRemaining} more tools available — ask to load a specific category.)`;
-    }
+      const mcpByCategory = {};
+      for (const t of mcpSlice) {
+        const cat = promptLine(t.tool_category) || 'Other';
+        if (!mcpByCategory[cat]) mcpByCategory[cat] = [];
+        mcpByCategory[cat].push(`  - \`${t.tool_name}\`: ${promptLine(t.description)}`);
+      }
+      let mcpBlock = Object.keys(mcpByCategory)
+        .sort()
+        .map((cat) => `**${cat}**\n${mcpByCategory[cat].join('\n')}`)
+        .join('\n\n');
+      if (mcpRemaining > 0) {
+        mcpBlock += `\n\n(+ ${mcpRemaining} more tools available — ask to load a specific category.)`;
+      }
 
-    const skillsBlock = (skillRows.results || [])
-      .map((s) => {
-        const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
-        const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
-        let line = `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
-        if (message.includes('/') && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
-          line += `\n  ${String(s.content_markdown).trim()}`;
-        }
-        return line;
-      })
-      .join('\n');
+      const skillsBlock = (skillRows.results || [])
+        .map((s) => {
+          const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
+          const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
+          let line = `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
+          if (message.includes('/') && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
+            line += `\n  ${String(s.content_markdown).trim()}`;
+          }
+          return line;
+        })
+        .join('\n');
 
-    const commandsBlock = (commandRows.results || [])
-      .map((c) => `- \`/${promptLine(c.slug)}\` (${promptLine(c.category)}): ${promptLine(c.description)}`)
-      .join('\n');
+      const commandsBlock = (commandRows.results || [])
+        .map((c) => `- \`/${promptLine(c.slug)}\` (${promptLine(c.category)}): ${promptLine(c.description)}`)
+        .join('\n');
 
-    const toolsBlock = `## Your MCP Tools (mcp.inneranimalmedia.com)
+      const toolsBlock = `${IAM_SSE_BRAND_OUTPUT_POLICY}
+
+## Your MCP Tools (mcp.inneranimalmedia.com)
 Call any tool by name via POST /api/mcp/stream. All tools below are live.
 
 ${mcpBlock || '(none registered)'}
@@ -11550,17 +11621,89 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 - **preview_in_browser**: Open a URL in the dashboard browser tab. Pass url directly, or pass r2Key plus optional bucket (default ASSETS). Public ASSETS URLs come from agent_configs slug r2_public_urls (not hardcoded).
 - **get_r2_url**: Return the public HTTPS URL for an R2 key (bucket + key). ASSETS / agent-sam-sandbox-cicd use the same public base from agent_configs slug r2_public_urls.`;
 
-    const partsSys = [];
-    if (personaPrefixSse && String(personaPrefixSse).trim()) partsSys.push(String(personaPrefixSse).trim());
-    if (agentBaseSystem) partsSys.push(agentBaseSystem);
-    partsSys.push(toolsBlock);
-    chatSseSystemPrompt = partsSys.join('\n\n');
-  } catch (e) {
-    console.warn('[agent/chat-sse] dynamic tools block failed', e?.message ?? e);
-  }
+      const partsSys = [];
+      if (personaPrefixSse && String(personaPrefixSse).trim()) partsSys.push(String(personaPrefixSse).trim());
+      if (agentBaseSystem) partsSys.push(agentBaseSystem);
+      partsSys.push(toolsBlock);
+      promptOut = partsSys.join('\n\n');
+    } catch (e) {
+      console.warn('[agent/chat-sse] dynamic tools block failed', e?.message ?? e);
+    }
 
-  if (personaPrefixSse && chatSseSystemPrompt === agentBaseSystem) {
-    chatSseSystemPrompt = [personaPrefixSse.trim(), agentBaseSystem].filter(Boolean).join('\n\n');
+    if (personaPrefixSse && promptOut === agentBaseSystem) {
+      promptOut = [personaPrefixSse.trim(), agentBaseSystem].filter(Boolean).join('\n\n');
+    }
+
+    if (!String(promptOut || '').includes('Brand and output policy (Inner Animal Media)')) {
+      promptOut = [IAM_SSE_BRAND_OUTPUT_POLICY, promptOut].filter(Boolean).join('\n\n');
+    }
+    return promptOut;
+  };
+
+  let chatSseSystemPrompt = agentBaseSystem;
+
+  if (!messageHasSlashForSkillBody && tenantIdChatSse && env.DB) {
+    try {
+      const ssePromptVersion = 'sse_v1';
+      const sseToolsVersion = mode;
+      const basePersonaSig = await sha256hex(`${String(agentBaseSystem || '')}\n---\n${String(personaPrefixSse || '')}`);
+      const cacheHash = await sha256hex(
+        `${tenantIdChatSse}:${modelKey}:${sseToolsVersion}:${ssePromptVersion}:${skillWorkspaceKey || ''}:${agentAiIdSse || ''}:${subagentProfileKeySse || ''}:${basePersonaSig}`,
+      );
+      const cached = await env.DB.prepare(
+        `SELECT compiled_context, token_count FROM ai_compiled_context_cache
+         WHERE context_hash = ? AND (expires_at IS NULL OR expires_at > unixepoch())`,
+      )
+        .bind(cacheHash)
+        .first();
+      if (cached?.compiled_context) {
+        chatSseSystemPrompt = cached.compiled_context;
+        try {
+          const savedTok = Number(cached.token_count) || estimateCompiledContextTokens(cached.compiled_context);
+          await env.DB.prepare(
+            `UPDATE ai_compiled_context_cache SET cache_hit_count = cache_hit_count + 1,
+             last_accessed_at = unixepoch(), estimated_tokens_saved = COALESCE(estimated_tokens_saved, 0) + ?
+             WHERE context_hash = ?`,
+          )
+            .bind(savedTok, cacheHash)
+            .run();
+        } catch (updErr) {
+          await env.DB.prepare(
+            `UPDATE ai_compiled_context_cache SET cache_hit_count = cache_hit_count + 1,
+             last_accessed_at = unixepoch(), access_count = access_count + 1
+             WHERE context_hash = ?`,
+          )
+            .bind(cacheHash)
+            .run()
+            .catch(() => {});
+        }
+      } else {
+        chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+        const tok = estimateCompiledContextTokens(chatSseSystemPrompt);
+        const cacheRowId = crypto.randomUUID();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO ai_compiled_context_cache (id, context_hash, context_type, compiled_context, source_context_ids_json, token_count, tenant_id, expires_at, created_at, last_accessed_at, access_count, cache_hit_count, estimated_tokens_saved)
+             VALUES (?,?,?,?,?,?,?,unixepoch()+86400,unixepoch(),unixepoch(),0,0,0)
+             ON CONFLICT(context_hash) DO UPDATE SET
+               compiled_context = excluded.compiled_context,
+               token_count = excluded.token_count,
+               tenant_id = excluded.tenant_id,
+               expires_at = excluded.expires_at,
+               last_accessed_at = unixepoch()`,
+          )
+            .bind(cacheRowId, cacheHash, 'sse_system', chatSseSystemPrompt, '[]', tok, tenantIdChatSse)
+            .run();
+        } catch (insErr) {
+          console.warn('[agent/chat-sse] sse system cache insert', insErr?.message ?? insErr);
+        }
+      }
+    } catch (cacheWrapErr) {
+      console.warn('[agent/chat-sse] sse system cache', cacheWrapErr?.message ?? cacheWrapErr);
+      chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+    }
+  } else {
+    chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
   }
 
   const mkUpstreamError = async (upstream, providerName) => {
@@ -11597,6 +11740,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
       subagent_id: subagentProfileKeySse,
       agent_id: agentAiIdSse,
       _intent: 'mixed',
+      persistConversationUserId: ingestBypass ? null : chatSseSession?.user_id ?? null,
     };
     if (hasMedia && (apiPlatform === 'gemini_api' || apiPlatform === 'vertex_ai')) {
       sseToolOpts.googleUserParts = buildGoogleParts(message, jsonImages, chatAttachments);
@@ -12162,25 +12306,37 @@ function canonicalNameForAgentR2Binding(env, binding) {
   return 'R2';
 }
 
-/** Default read = iam-platform (R2); default write = ASSETS (sandbox preview) when bound, else agent-sam. Accepts logical names e.g. agent-sam. */
+/** Default read = iam-platform (R2); default write = ASSETS (sandbox preview) when bound, else agent-sam. Accepts logical names e.g. agent-sam.
+ *  `s3Bucket`: when set and `binding` is null, use R2 S3-compatible API (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY) for that bucket name. */
 function resolveAgentR2BucketBinding(env, bucketRaw, defaultKind) {
-  const empty = () =>
-    defaultKind === 'write'
-      ? (env.ASSETS ? { binding: env.ASSETS, name: 'ASSETS' } : { binding: env.DASHBOARD, name: 'DASHBOARD' })
-      : { binding: env.R2, name: 'R2' };
+  const s3Creds = !!(env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY);
+  const empty = () => {
+    if (defaultKind === 'write') {
+      if (env.ASSETS) return { binding: env.ASSETS, name: 'ASSETS', s3Bucket: null };
+      if (env.DASHBOARD) return { binding: env.DASHBOARD, name: 'DASHBOARD', s3Bucket: null };
+      if (s3Creds) return { binding: null, name: 'DASHBOARD', s3Bucket: 'agent-sam' };
+      return { binding: null, name: 'DASHBOARD', s3Bucket: null };
+    }
+    if (env.R2) return { binding: env.R2, name: 'R2', s3Bucket: null };
+    if (s3Creds) return { binding: null, name: 'R2', s3Bucket: 'iam-platform' };
+    return { binding: null, name: 'R2', s3Bucket: null };
+  };
   if (bucketRaw == null || String(bucketRaw).trim() === '') return empty();
   const lower = String(bucketRaw).trim().toLowerCase().replace(/_/g, '-');
   const hit = getR2Binding(env, lower);
-  if (hit) return { binding: hit, name: canonicalNameForAgentR2Binding(env, hit) };
-  if (lower === 'r2') return env.R2 ? { binding: env.R2, name: 'R2' } : empty();
+  if (hit) return { binding: hit, name: canonicalNameForAgentR2Binding(env, hit), s3Bucket: null };
+  if (lower === 'r2') return env.R2 ? { binding: env.R2, name: 'R2', s3Bucket: null } : empty();
   let bn = String(bucketRaw).toUpperCase();
   if (bn === 'TOOLS') bn = 'DASHBOARD';
-  if (bn === 'DASHBOARD' && env.DASHBOARD) return { binding: env.DASHBOARD, name: 'DASHBOARD' };
-  if (bn === 'ASSETS' && env.ASSETS) return { binding: env.ASSETS, name: 'ASSETS' };
-  if (bn === 'DOCS_BUCKET' && env.DOCS_BUCKET) return { binding: env.DOCS_BUCKET, name: 'DOCS_BUCKET' };
-  if (bn === 'AUTORAG_BUCKET' && env.AUTORAG_BUCKET) return { binding: env.AUTORAG_BUCKET, name: 'AUTORAG_BUCKET' };
-  if (bn === 'R2' && env.R2) return { binding: env.R2, name: 'R2' };
-  return { binding: null, name: bn };
+  if (bn === 'DASHBOARD' && env.DASHBOARD) return { binding: env.DASHBOARD, name: 'DASHBOARD', s3Bucket: null };
+  if (bn === 'ASSETS' && env.ASSETS) return { binding: env.ASSETS, name: 'ASSETS', s3Bucket: null };
+  if (bn === 'DOCS_BUCKET' && env.DOCS_BUCKET) return { binding: env.DOCS_BUCKET, name: 'DOCS_BUCKET', s3Bucket: null };
+  if (bn === 'AUTORAG_BUCKET' && env.AUTORAG_BUCKET) return { binding: env.AUTORAG_BUCKET, name: 'AUTORAG_BUCKET', s3Bucket: null };
+  if (bn === 'R2' && env.R2) return { binding: env.R2, name: 'R2', s3Bucket: null };
+  if (lower && s3Creds && /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(lower)) {
+    return { binding: null, name: lower, s3Bucket: lower };
+  }
+  return { binding: null, name: bn, s3Bucket: null };
 }
 
 /** config_json from agent_configs WHERE slug = r2_public_urls (see pickAssetsPublicBaseFromConfig). */
@@ -12383,6 +12539,12 @@ async function sha256hex(message) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** Rough token estimate for cache accounting (chars / 4, min 1). */
+function estimateCompiledContextTokens(text) {
+  const s = String(text || '');
+  return Math.max(1, Math.ceil(s.length / 4));
+}
+
 async function hmacHex(key, message) {
   const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message));
@@ -12408,7 +12570,8 @@ async function getSigningKey(secret, date, region, service) {
   return hmacBytes(kService, 'aws4_request');
 }
 
-async function signR2Request(method, bucket, path, query, env) {
+/** SigV4 for R2 S3 API. Optional `payloadOpts` for PUT object: `{ body: string|Uint8Array, contentType }`. */
+async function signR2Request(method, bucket, path, query, env, payloadOpts = null) {
   const accessKey = env.R2_ACCESS_KEY_ID;
   const secretKey = env.R2_SECRET_ACCESS_KEY;
   if (!accessKey || !secretKey) return null;
@@ -12422,15 +12585,42 @@ async function signR2Request(method, bucket, path, query, env) {
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '').slice(0, 15) + 'Z';
   const dateStamp = amzDate.slice(0, 8);
 
-  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${EMPTY_HASH}\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  let payloadHash = EMPTY_HASH;
+  let bodyBytes = null;
+  if (payloadOpts != null && method === 'PUT') {
+    const raw = payloadOpts.body;
+    bodyBytes =
+      raw == null || raw === ''
+        ? new Uint8Array(0)
+        : typeof raw === 'string'
+          ? new TextEncoder().encode(raw)
+          : new Uint8Array(raw);
+    const dig = await crypto.subtle.digest('SHA-256', bodyBytes);
+    payloadHash = Array.from(new Uint8Array(dig))
+      .map((x) => x.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  const headerMap = {
+    host,
+    'x-amz-content-sha256': payloadHash,
+    'x-amz-date': amzDate,
+  };
+  if (bodyBytes) {
+    headerMap['content-type'] = payloadOpts.contentType || 'application/octet-stream';
+    headerMap['content-length'] = String(bodyBytes.byteLength);
+  }
+
+  const sortedKeys = Object.keys(headerMap).sort();
+  const canonicalHeaders = sortedKeys.map((k) => `${k}:${headerMap[k]}\n`).join('');
+  const signedHeaders = sortedKeys.join(';');
   const canonicalRequest = [
     method,
     `/${bucket}${path}`,
     query || '',
     canonicalHeaders,
     signedHeaders,
-    EMPTY_HASH,
+    payloadHash,
   ].join('\n');
 
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
@@ -12441,7 +12631,105 @@ async function signR2Request(method, bucket, path, query, env) {
 
   const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
-  return { endpoint, headers: { 'x-amz-content-sha256': EMPTY_HASH, 'x-amz-date': amzDate, Authorization: authHeader } };
+  const fetchHeaders = {
+    'x-amz-content-sha256': payloadHash,
+    'x-amz-date': amzDate,
+    Authorization: authHeader,
+  };
+  if (bodyBytes) {
+    fetchHeaders['content-type'] = headerMap['content-type'];
+    fetchHeaders['content-length'] = headerMap['content-length'];
+  }
+
+  return { endpoint, headers: fetchHeaders, bodyBytes };
+}
+
+function r2ObjectPathForS3(key) {
+  const k = String(key || '').replace(/^\/+/, '');
+  if (!k) return '';
+  return `/${k.split('/').map((s) => encodeURIComponent(s)).join('/')}`;
+}
+
+async function r2GetViaBindingOrS3(env, binding, s3BucketName, key) {
+  if (binding && binding.get) {
+    return binding.get(key);
+  }
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return null;
+  const path = r2ObjectPathForS3(key);
+  const signed = await signR2Request('GET', s3BucketName, path, '', env);
+  if (!signed) return null;
+  const res = await fetch(signed.endpoint, { method: 'GET', headers: signed.headers });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`R2 S3 GET failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  const text = await res.text();
+  return { text: async () => text };
+}
+
+async function r2PutViaBindingOrS3(env, binding, s3BucketName, key, body, contentType) {
+  const ct = contentType || 'application/octet-stream';
+  const payload = body ?? '';
+  if (binding && binding.put) {
+    await binding.put(key, payload, { httpMetadata: { contentType: ct } });
+    return true;
+  }
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return false;
+  const path = r2ObjectPathForS3(key);
+  const signed = await signR2Request('PUT', s3BucketName, path, '', env, { body: payload, contentType: ct });
+  if (!signed) return false;
+  const res = await fetch(signed.endpoint, {
+    method: 'PUT',
+    headers: signed.headers,
+    body: signed.bodyBytes.byteLength ? signed.bodyBytes : undefined,
+  });
+  if (!res.ok) throw new Error(`R2 S3 PUT failed: ${res.status} ${(await res.text()).slice(0, 400)}`);
+  return true;
+}
+
+async function r2DeleteViaBindingOrS3(env, binding, s3BucketName, key) {
+  if (binding && binding.delete) {
+    await binding.delete(key);
+    return true;
+  }
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return false;
+  const path = r2ObjectPathForS3(key);
+  const signed = await signR2Request('DELETE', s3BucketName, path, '', env);
+  if (!signed) return false;
+  const res = await fetch(signed.endpoint, { method: 'DELETE', headers: signed.headers });
+  if (res.ok || res.status === 404) return true;
+  throw new Error(`R2 S3 DELETE failed: ${res.status}`);
+}
+
+async function r2ListViaBindingOrS3(env, binding, s3BucketName, prefix, limit) {
+  const lim = Math.min(Math.max(1, Number(limit) || 100), 1000);
+  if (binding && binding.list) {
+    const listed = await binding.list({ prefix: prefix || '', limit: lim });
+    return (listed.objects || []).map((o) => ({ key: o.key, size: o.size }));
+  }
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return null;
+  const out = [];
+  let cursor;
+  let guard = 0;
+  do {
+    const pageSize = Math.min(1000, Math.max(1, lim - out.length));
+    const qParams = { 'list-type': '2', 'max-keys': String(pageSize) };
+    if (prefix) qParams.prefix = prefix;
+    if (cursor) qParams['continuation-token'] = cursor;
+    const q = buildR2Query(qParams);
+    const signed = await signR2Request('GET', s3BucketName, '', q, env);
+    if (!signed) return null;
+    const listResp = await fetch(signed.endpoint, { method: 'GET', headers: signed.headers });
+    if (!listResp.ok) throw new Error(`R2 S3 list failed: ${listResp.status}`);
+    const parsed = parseListObjectsV2Xml(await listResp.text());
+    for (const o of parsed.objects) {
+      if (!o.key || o.key.endsWith('/')) continue;
+      out.push({ key: o.key, size: o.size });
+      if (out.length >= lim) break;
+    }
+    cursor = parsed.isTruncated && out.length < lim ? parsed.nextToken : undefined;
+    guard++;
+    if (guard > 50) break;
+  } while (cursor && out.length < lim);
+  return out.slice(0, lim);
 }
 
 function parseListObjectsV2Xml(xml) {
@@ -12839,12 +13127,15 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
     const ghHeaders = { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' };
     const filePath = url.searchParams.get('path') || '';
+    const ghRef = url.searchParams.get('ref') || '';
     const ghContentsPath = (p) => (p ? p.split('/').map((seg) => encodeURIComponent(seg)).join('/') : '');
+    const ghContentsUrl = (pathSeg) => {
+      let u = `https://api.github.com/repos/${repo}/contents/${ghContentsPath(pathSeg)}`;
+      if (ghRef) u += (u.includes('?') ? '&' : '?') + `ref=${encodeURIComponent(ghRef)}`;
+      return u;
+    };
     if (method === 'GET') {
-      const res = await fetch(
-        `https://api.github.com/repos/${repo}/contents/${ghContentsPath(filePath)}`,
-        { headers: ghHeaders },
-      );
+      const res = await fetch(ghContentsUrl(filePath), { headers: ghHeaders });
       const data = await res.json();
       return jsonResponse(data, res.ok ? 200 : res.status);
     }
@@ -12965,6 +13256,61 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     return jsonResponse({ content: text }, res.ok ? 200 : res.status);
   }
 
+  /** Overwrite file body on Drive (media upload). Requires drive.file / drive.readonly scopes. */
+  if (pathLower === '/api/drive/file' && method === 'POST') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const body = await request.json().catch(() => ({}));
+    const fileId = body.fileId != null ? String(body.fileId) : '';
+    const content = body.content != null ? String(body.content) : '';
+    if (!fileId) return jsonResponse({ error: 'fileId required' }, 400);
+    const mimeType =
+      body.mimeType != null && String(body.mimeType).trim()
+        ? String(body.mimeType).trim()
+        : 'text/plain; charset=utf-8';
+    let tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const patchMedia = async (accessToken) =>
+      fetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': mimeType,
+          },
+          body: content,
+        },
+      );
+    let res = await patchMedia(tokenRow.access_token);
+    if (res.status === 401 && tokenRow.refresh_token && env.GOOGLE_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET) {
+      const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: env.GOOGLE_CLIENT_ID,
+          client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+          refresh_token: tokenRow.refresh_token,
+          grant_type: 'refresh_token',
+        }),
+      });
+      const refreshed = await refreshRes.json();
+      if (refreshed.access_token) {
+        await env.DB.prepare(
+          `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive' AND account_identifier = ''`
+        )
+          .bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), integrationUserId)
+          .run();
+        res = await patchMedia(refreshed.access_token);
+      }
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return jsonResponse(data, res.status);
+    return jsonResponse({ ok: true, id: data.id, name: data.name, modifiedTime: data.modifiedTime });
+  }
+
   if (pathLower === '/api/drive/search' && method === 'GET') {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
@@ -13029,6 +13375,55 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
       mimeType: data.mimeType,
       webViewLink: data.webViewLink ?? data.webContentLink ?? null,
     });
+  }
+
+  if (pathLower === '/api/drive/folder' && method === 'POST') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const integrationUserId = authUser.email || authUser.id;
+    const body = await request.json().catch(() => ({}));
+    const name = body.name != null ? String(body.name).trim() : '';
+    const parentId = body.parentId != null ? String(body.parentId) : 'root';
+    if (!name) return jsonResponse({ error: 'name required' }, 400);
+    let tokenRow = await getIntegrationToken(env.DB, integrationUserId, 'google_drive', '');
+    if (!tokenRow) return jsonResponse({ error: 'not_connected' }, 400);
+    const meta = { name, mimeType: 'application/vnd.google-apps.folder' };
+    if (parentId && parentId !== 'root') meta.parents = [parentId];
+    const doCreate = async (accessToken) =>
+      fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(meta),
+      });
+    let res = await doCreate(tokenRow.access_token);
+    if (res.status === 401 && tokenRow.refresh_token && env.GOOGLE_CLIENT_ID && env.GOOGLE_OAUTH_CLIENT_SECRET) {
+      const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: env.GOOGLE_CLIENT_ID,
+          client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+          refresh_token: tokenRow.refresh_token,
+          grant_type: 'refresh_token',
+        }),
+      });
+      const refreshed = await refreshRes.json();
+      if (refreshed.access_token) {
+        await env.DB.prepare(
+          `UPDATE user_oauth_tokens SET access_token = ?, expires_at = ?, updated_at = unixepoch() WHERE user_id = ? AND provider = 'google_drive' AND account_identifier = ''`
+        )
+          .bind(refreshed.access_token, Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600), integrationUserId)
+          .run();
+        res = await doCreate(refreshed.access_token);
+      }
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return jsonResponse(data, res.status);
+    return jsonResponse({ id: data.id, name: data.name, mimeType: data.mimeType });
   }
 
   if (pathLower === '/api/drive/delete' && method === 'DELETE') {
@@ -14286,12 +14681,14 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const recipientId = String(authUser.id || '').trim();
+      if (!recipientId) return jsonResponse({ notifications: [] });
       try {
         const { results } = await env.DB.prepare(
           `SELECT id, subject, message, status, created_at FROM notifications
-           WHERE recipient_id = 'user_sam_primeaux' AND read_at IS NULL
+           WHERE recipient_id = ? AND read_at IS NULL
            ORDER BY created_at DESC LIMIT 20`
-        ).all();
+        ).bind(recipientId).all();
         return jsonResponse({ notifications: results || [] });
       } catch (e) {
         console.warn('[api/agent/notifications] GET', e?.message ?? e);
@@ -14307,9 +14704,11 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       try {
+        const recipientId = String(authUser.id || '').trim();
+        if (!recipientId) return jsonResponse({ error: 'Invalid session' }, 400);
         const upd = await env.DB.prepare(
-          `UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND recipient_id = 'user_sam_primeaux'`
-        ).bind(nid).run();
+          `UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND recipient_id = ?`
+        ).bind(nid, recipientId).run();
         const n = upd.meta?.changes ?? upd.changes ?? 0;
         if (!n) return jsonResponse({ error: 'Not found' }, 404);
         return jsonResponse({ ok: true, id: nid });
@@ -18565,7 +18964,71 @@ async function runGdriveOauthBuiltinTool(env, toolName, params, opts = {}) {
   }
 }
 
-/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). opts.oauthUserId: optional email/id for gdrive_* D1 token lookup when params omit user_id. */
+/** After R2 put via r2_write — D1 inventory + optional agent_file_changes (FK-safe). */
+async function recordR2WriteTraceability(env, {
+  paramsBucketRaw,
+  resolvedBucketName,
+  objectKey,
+  body,
+  contentType,
+  tenantId,
+  userId,
+  conversationId,
+  messageId,
+}) {
+  if (!env?.DB) return;
+  try {
+    const rawB = String(paramsBucketRaw ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, '-');
+    const bucketIdMap = {
+      'iam-platform': 'r2_iam_platform',
+      'agent-sam': 'r2_agent_sam',
+      tools: 'r2_tools',
+      'iam-docs': 'r2_iam_docs',
+      autorag: 'r2_autorag',
+      'inneranimalmedia-assets': 'r2_inneranimalmedia_assets',
+      dashboard: 'r2_agent_sam',
+    };
+    const bindingToR2 = {
+      DASHBOARD: 'r2_agent_sam',
+      R2: 'r2_iam_platform',
+      ASSETS: 'r2_inneranimalmedia_assets',
+      DOCS_BUCKET: 'r2_iam_docs',
+      AUTORAG_BUCKET: 'r2_autorag',
+      TOOLS: 'r2_tools',
+    };
+    const bucketId = bucketIdMap[rawB] || bindingToR2[String(resolvedBucketName || '')] || 'r2_iam_platform';
+    let byteLen = 0;
+    if (typeof body === 'string') byteLen = body.length;
+    else if (body != null && typeof body.byteLength === 'number') byteLen = body.byteLength;
+    const tid = (tenantId != null && String(tenantId).trim()) || tenantIdFromEnv(env) || 'system';
+    const uid = (userId != null && String(userId).trim()) || 'agent_sam';
+    const objId = crypto.randomUUID();
+    const ct = (contentType != null && String(contentType).trim()) || 'application/octet-stream';
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO r2_objects
+       (id,tenant_id,bucket_id,object_key,content_type,file_size,uploaded_by,is_active,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,1,unixepoch(),unixepoch())`,
+    ).bind(objId, tid, bucketId, objectKey, ct, byteLen, uid).run();
+    const mid = messageId != null && String(messageId).trim() ? String(messageId).trim() : '';
+    if (conversationId && mid) {
+      const fp = `${String(paramsBucketRaw || resolvedBucketName || '')}/${objectKey}`;
+      const afterSnippet =
+        typeof body === 'string' && body.substring ? body.substring(0, 2000) : '';
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO agent_file_changes
+         (id,conversation_id,message_id,file_path,change_type,after_content,created_at)
+         VALUES (?,?,?,?,?,?,unixepoch())`,
+      ).bind(crypto.randomUUID(), conversationId, mid, fp, 'write', afterSnippet).run();
+    }
+  } catch (e) {
+    console.warn('[recordR2WriteTraceability]', e?.message ?? e);
+  }
+}
+
+/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). opts.oauthUserId: optional email/id for gdrive_* D1 token lookup when params omit user_id. opts.messageId: optional assistant/user message id for agent_file_changes. */
 async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opts = {}) {
   const allowRemoteMcp = opts.allowRemoteMcp !== false;
   const suppressTelemetry = !!opts.suppressTelemetry;
@@ -19228,14 +19691,14 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
-    const { binding: bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
-    if (!bucket) {
+    const { binding: bucket, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+    if (!bucket && !s3Bucket) {
       const errMsg = `r2_read: bucket ${params.bucket} not available`;
       await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
     try {
-      const obj = await bucket.get(key);
+      const obj = await r2GetViaBindingOrS3(env, bucket, s3Bucket, key);
       const resultText = obj ? await obj.text() : `Key not found: ${key}`;
       await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
@@ -19245,11 +19708,23 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
-  if (tool_name === 'r2_list' && env.R2) {
+  if (tool_name === 'r2_list') {
     const prefix = params.prefix ?? '';
+    const lim = Math.min(Number(params.limit) || 50, 1000);
+    const { binding: listBinding, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+    if (!listBinding && !s3Bucket) {
+      const errMsg = 'r2_list: bucket not available';
+      await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+      return { error: errMsg };
+    }
     try {
-      const list = await env.R2.list({ prefix, limit: 50 });
-      const resultText = JSON.stringify(list.objects.map(o => ({ key: o.key, size: o.size })));
+      const rows = await r2ListViaBindingOrS3(env, listBinding, s3Bucket, prefix, lim);
+      if (rows == null) {
+        const errMsg = 'r2_list: S3 list failed (credentials or bucket)';
+        await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
+        return { error: errMsg };
+      }
+      const resultText = JSON.stringify(rows);
       await rec( { conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
@@ -19376,17 +19851,31 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: 'r2_write: key required' };
     }
     try {
-      const { binding: bucket, name: bucketName } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
-      if (!bucket) return { error: `r2_write: bucket ${params.bucket} not available` };
-      key = normalizeSandboxWriteKeyForAssets(bucketName, key);
+      const { binding: bucket, name: bucketName, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'write');
+      if (!bucket && !s3Bucket) return { error: `r2_write: bucket ${params.bucket} not available` };
+      if (bucket) key = normalizeSandboxWriteKeyForAssets(bucketName, key);
       const ct = params.content_type || params.contentType || 'text/plain; charset=utf-8';
-      await bucket.put(key, body ?? '', { httpMetadata: { contentType: ct } });
+      const putOk = await r2PutViaBindingOrS3(env, bucket, s3Bucket, key, body ?? '', ct);
+      if (!putOk) return { error: `r2_write: bucket ${params.bucket} not available` };
+      void recordR2WriteTraceability(env, {
+        paramsBucketRaw: params.bucket,
+        resolvedBucketName: bucketName,
+        objectKey: key,
+        body,
+        contentType: ct,
+        tenantId: defaultTenantForMcp,
+        userId: cmdAuditUserId,
+        conversationId,
+        messageId: opts.messageId ?? params.message_id ?? null,
+      });
       const publicUrl = await buildR2PublicHttpsUrl(env, bucketName, key);
       const kl = String(key).toLowerCase();
       const isHtml = kl.endsWith('.html') || kl.endsWith('.htm');
       let browserNavUrl = null;
       if (bucketName === 'ASSETS' && publicUrl) browserNavUrl = publicUrl;
-      else if (isHtml) browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
+      else if (isHtml && (bucketName === 'DASHBOARD' || bucketName === 'TOOLS')) {
+        browserNavUrl = `https://tools.inneranimalmedia.com/${key}`;
+      }
       const ui_events = [
         { type: 'r2_file_updated', bucket: bucketName, key },
         ...(browserNavUrl ? [{ type: 'browser_navigate', url: browserNavUrl }] : []),
@@ -19403,7 +19892,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       const resultText = JSON.stringify(payload);
       let byteLen = 0;
       if (typeof body === 'string') byteLen = body.length;
-      else if (body && typeof body.byteLength === 'number') byteLen = body.byteLength;
+      else if (body != null && typeof body.byteLength === 'number') byteLen = body.byteLength;
       await insertAiGenerationLog(env, {
         generationType: 'r2_write_asset',
         responseText: `${bucketName}:${key}`,
@@ -19426,12 +19915,25 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       return { error: errMsg };
     }
   }
-  if (tool_name === 'r2_search' && env.R2) {
+  if (tool_name === 'r2_search') {
+    const prefix = params.prefix ?? '';
+    const limit = Math.min(Number(params.limit) || 20, 1000);
+    const needle = String(params.query ?? params.q ?? '').trim().toLowerCase();
+    const { binding: searchBinding, s3Bucket } = resolveAgentR2BucketBinding(env, params.bucket, 'read');
+    if (!searchBinding && !s3Bucket) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'r2_search: bucket not available', serviceName: 'builtin' });
+      return { error: 'r2_search: bucket not available' };
+    }
     try {
-      const prefix = params.prefix ?? '';
-      const limit = Number(params.limit) || 20;
-      const listed = await env.R2.list({ prefix, limit });
-      const resultText = JSON.stringify(listed.objects.map((o) => ({ key: o.key, size: o.size })));
+      const listed = await r2ListViaBindingOrS3(env, searchBinding, s3Bucket, prefix, Math.min(1000, limit * 50));
+      if (listed == null) {
+        await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: null, error: 'r2_search: list failed', serviceName: 'builtin' });
+        return { error: 'r2_search: list failed' };
+      }
+      const filtered = needle
+        ? listed.filter((o) => o.key.toLowerCase().includes(needle))
+        : listed;
+      const resultText = JSON.stringify(filtered.slice(0, limit));
       await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
       return { result: resultText };
     } catch (e) {
@@ -22069,6 +22571,7 @@ function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
       const totIn = tin + crd + cwd;
       const id = crypto.randomUUID();
       const ts = Math.floor(Date.now() / 1000);
+      // agent_telemetry: 20 columns = 18 ? + unixepoch(created_at) + unixepoch(updated_at); .bind must supply 18 values.
       await env.DB.prepare(
         `INSERT INTO agent_telemetry (
           id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
@@ -22076,7 +22579,7 @@ function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
           cache_read_input_tokens, cache_creation_input_tokens,
           computed_cost_usd, total_input_tokens,
           event_type, severity, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`
       ).bind(
         id,
         tenantId,
@@ -22485,6 +22988,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
           0,
           lastUsage.cache_read_input_tokens,
           true,
+          opts.persistConversationUserId ?? null,
         );
         await logAssistantCodeArtifactIfPresent(env, {
           fullText: lastContent,
@@ -22681,6 +23185,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
           0,
           lastUsage.cache_read_input_tokens,
           true,
+          opts.persistConversationUserId ?? null,
         );
         await logAssistantCodeArtifactIfPresent(env, {
           fullText: lastContent,
@@ -23129,7 +23634,24 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         } catch (_) {}
         return;
       }
-        await streamDoneDbWrites(env, conversationId, model, lastContent, inputTokens, outputTokens, costUsd, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
+      await streamDoneDbWrites(
+        env,
+        conversationId,
+        model,
+        lastContent,
+        inputTokens,
+        outputTokens,
+        costUsd,
+        agent_id,
+        ctx,
+        getLastUserMessageText(messages),
+        opts.agentsamAgentRunId || null,
+        opts.routingOpts || null,
+        lastUsage.cache_creation_input_tokens,
+        lastUsage.cache_read_input_tokens,
+        true,
+        opts.persistConversationUserId ?? null,
+      );
       await logAssistantCodeArtifactIfPresent(env, {
         fullText: lastContent,
         modelKey: model.model_key,
@@ -23293,7 +23815,24 @@ async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, 
         const finalInputTokens = lastUsage.input_tokens || 0;
         const finalOutputTokens = lastUsage.output_tokens || 0;
         const finalCost = calculateCost(model, finalInputTokens, finalOutputTokens);
-        await streamDoneDbWrites(env, conversationId, model, lastContent, finalInputTokens, finalOutputTokens, finalCost, agent_id, ctx, getLastUserMessageText(messages), opts.agentsamAgentRunId || null, opts.routingOpts || null, lastUsage.cache_creation_input_tokens, lastUsage.cache_read_input_tokens, true);
+        await streamDoneDbWrites(
+          env,
+          conversationId,
+          model,
+          lastContent,
+          finalInputTokens,
+          finalOutputTokens,
+          finalCost,
+          agent_id,
+          ctx,
+          getLastUserMessageText(messages),
+          opts.agentsamAgentRunId || null,
+          opts.routingOpts || null,
+          lastUsage.cache_creation_input_tokens,
+          lastUsage.cache_read_input_tokens,
+          true,
+          opts.persistConversationUserId ?? null,
+        );
         await logAssistantCodeArtifactIfPresent(env, {
           fullText: lastContent,
           modelKey: model.model_key,

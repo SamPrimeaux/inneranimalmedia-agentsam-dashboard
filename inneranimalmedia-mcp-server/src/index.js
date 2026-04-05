@@ -11,15 +11,15 @@ const SERVER_NAME = 'InnerAnimalMedia MCP';
 const SERVER_VERSION = '2.0.0';
 const RESEND_API = 'https://api.resend.com';
 const MAIN_DEFAULT = 'https://inneranimalmedia.com';
-const REPO_CD = 'cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia';
+const REPO_CD = 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard';
 
 const IMPLEMENTED_TOOL_LIST = [
-  { name: 'r2_write', description: 'Write bytes to R2 (iam-platform bucket)', inputSchema: { type: 'object', properties: { key: { type: 'string', description: 'Object key path' }, body: { type: 'string' }, contentType: { type: 'string' } }, required: ['key', 'body'] } },
-  { name: 'r2_read', description: 'Read an object from R2 (iam-platform)', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } },
-  { name: 'r2_list', description: 'List R2 objects under optional prefix', inputSchema: { type: 'object', properties: { prefix: { type: 'string' }, limit: { type: 'integer', default: 50 } } } },
-  { name: 'r2_search', description: 'List objects with prefix, return keys containing query substring', inputSchema: { type: 'object', properties: { prefix: { type: 'string' }, query: { type: 'string' }, limit: { type: 'integer', default: 20 } }, required: ['query'] } },
+  { name: 'r2_write', description: 'Write to R2: use bucket (binding name or any account bucket); bound buckets use Workers binding, others use S3 API.', inputSchema: { type: 'object', properties: { bucket: { type: 'string' }, key: { type: 'string', description: 'Object key path' }, body: { type: 'string' }, contentType: { type: 'string' }, content_type: { type: 'string' } }, required: ['key', 'body'] } },
+  { name: 'r2_read', description: 'Read from R2 (optional bucket; default iam-platform).', inputSchema: { type: 'object', properties: { bucket: { type: 'string' }, key: { type: 'string' } }, required: ['key'] } },
+  { name: 'r2_list', description: 'List objects (optional bucket; default iam-platform).', inputSchema: { type: 'object', properties: { bucket: { type: 'string' }, prefix: { type: 'string' }, limit: { type: 'integer', default: 50 } } } },
+  { name: 'r2_search', description: 'Filter keys by substring (optional bucket; default iam-platform).', inputSchema: { type: 'object', properties: { bucket: { type: 'string' }, prefix: { type: 'string' }, query: { type: 'string' }, limit: { type: 'integer', default: 20 } }, required: ['query'] } },
   { name: 'r2_bucket_summary', description: 'Object counts for agent-sam, iam-platform, autorag, iam-docs', inputSchema: { type: 'object', properties: {} } },
-  { name: 'r2_delete', description: 'Delete an R2 object (default bucket iam-platform)', inputSchema: { type: 'object', properties: { key: { type: 'string' }, bucket: { type: 'string', enum: ['iam-platform', 'agent-sam', 'autorag', 'iam-docs', 'inneranimalmedia-assets'] } }, required: ['key'] } },
+  { name: 'r2_delete', description: 'Delete an R2 object (optional bucket; default iam-platform). Any bucket name allowed when S3 credentials are set.', inputSchema: { type: 'object', properties: { key: { type: 'string' }, bucket: { type: 'string' } }, required: ['key'] } },
   { name: 'd1_query', description: 'Run a read-only SELECT on D1', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
   { name: 'd1_write', description: 'Run INSERT/UPDATE/DELETE on D1', inputSchema: { type: 'object', properties: { sql: { type: 'string' }, params: { type: 'array' } }, required: ['sql'] } },
   { name: 'd1_schema_introspect', description: 'PRAGMA table_info for one table or all user tables', inputSchema: { type: 'object', properties: { table: { type: 'string' } } } },
@@ -134,14 +134,218 @@ async function resendFetch(env, method, path, body) {
   }
 }
 
-function pickR2(env, bucketName) {
-  const b = bucketName || 'iam-platform';
-  if (b === 'iam-platform' || b === 'R2') return env.R2;
-  if (b === 'agent-sam' || b === 'DASHBOARD') return env.DASHBOARD;
-  if (b === 'autorag' || b === 'AUTORAG') return env.AUTORAG;
-  if (b === 'iam-docs' || b === 'IAM_DOCS') return env.IAM_DOCS;
-  if (b === 'inneranimalmedia-assets' || b === 'ASSETS') return env.ASSETS;
-  return env.R2;
+/** Workers R2 binding for known buckets; null => use S3-compatible API if credentials exist. */
+function pickR2Binding(env, bucketName) {
+  const b = String(bucketName || 'iam-platform').trim().toLowerCase().replace(/_/g, '-');
+  if (b === 'iam-platform' || b === 'r2') return env.R2;
+  if (b === 'agent-sam' || b === 'dashboard') return env.DASHBOARD;
+  if (b === 'tools') return env.TOOLS;
+  if (b === 'autorag') return env.AUTORAG;
+  if (b === 'iam-docs') return env.IAM_DOCS;
+  if (b === 'inneranimalmedia-assets' || b === 'assets' || b === 'agent-sam-sandbox-cicd') return env.ASSETS;
+  return null;
+}
+
+const MCP_R2_EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+function mcpR2S3Host(env) {
+  const id = String(env.CLOUDFLARE_ACCOUNT_ID || 'ede6590ac0d2fb7daf155b35653457b2').trim();
+  return id ? `${id}.r2.cloudflarestorage.com` : null;
+}
+
+async function mcpSha256Hex(input) {
+  const data = typeof input === 'string' ? new TextEncoder().encode(input) : new Uint8Array(input);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+async function mcpHmacBytes(key, message) {
+  const k = typeof key === 'string' ? new TextEncoder().encode(key) : new Uint8Array(key);
+  const cryptoKey = await crypto.subtle.importKey('raw', k, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message));
+  return new Uint8Array(sig);
+}
+
+async function mcpGetSigningKey(secret, date, region, service) {
+  const kDate = await mcpHmacBytes('AWS4' + secret, date);
+  const kRegion = await mcpHmacBytes(kDate, region);
+  const kService = await mcpHmacBytes(kRegion, service);
+  return mcpHmacBytes(kService, 'aws4_request');
+}
+
+async function mcpHmacHex(key, message) {
+  const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function mcpBuildR2Query(params) {
+  const keys = Object.keys(params).filter((k) => params[k] != null && params[k] !== '');
+  keys.sort();
+  return keys.map((k) => k + '=' + encodeURIComponent(params[k])).join('&');
+}
+
+/** SigV4 for R2 S3. payloadOpts: { body, contentType } for PUT. */
+async function mcpSignR2Request(env, method, bucket, path, query, payloadOpts = null) {
+  const accessKey = env.R2_ACCESS_KEY_ID;
+  const secretKey = env.R2_SECRET_ACCESS_KEY;
+  if (!accessKey || !secretKey) return null;
+  const host = mcpR2S3Host(env);
+  if (!host) return null;
+  const region = 'auto';
+  const service = 's3';
+  const endpoint = `https://${host}/${bucket}${path}${query ? '?' + query : ''}`;
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '').slice(0, 15) + 'Z';
+  const dateStamp = amzDate.slice(0, 8);
+  let payloadHash = MCP_R2_EMPTY_HASH;
+  let bodyBytes = null;
+  if (payloadOpts != null && method === 'PUT') {
+    const raw = payloadOpts.body;
+    bodyBytes =
+      raw == null || raw === ''
+        ? new Uint8Array(0)
+        : typeof raw === 'string'
+          ? new TextEncoder().encode(raw)
+          : new Uint8Array(raw);
+    payloadHash = await mcpSha256Hex(bodyBytes);
+  }
+  const headerMap = { host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
+  if (bodyBytes) {
+    headerMap['content-type'] = payloadOpts.contentType || 'application/octet-stream';
+    headerMap['content-length'] = String(bodyBytes.byteLength);
+  }
+  const sortedKeys = Object.keys(headerMap).sort();
+  const canonicalHeaders = sortedKeys.map((k) => `${k}:${headerMap[k]}\n`).join('');
+  const signedHeaders = sortedKeys.join(';');
+  const canonicalRequest = [method, `/${bucket}${path}`, query || '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, await mcpSha256Hex(canonicalRequest)].join('\n');
+  const signingKey = await mcpGetSigningKey(secretKey, dateStamp, region, service);
+  const signature = await mcpHmacHex(signingKey, stringToSign);
+  const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const fetchHeaders = { 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate, Authorization: authHeader };
+  if (bodyBytes) {
+    fetchHeaders['content-type'] = headerMap['content-type'];
+    fetchHeaders['content-length'] = headerMap['content-length'];
+  }
+  return { endpoint, headers: fetchHeaders, bodyBytes };
+}
+
+function mcpR2ObjectPath(key) {
+  const k = String(key || '').replace(/^\/+/, '');
+  if (!k) return '';
+  return `/${k.split('/').map((s) => encodeURIComponent(s)).join('/')}`;
+}
+
+function mcpS3BucketName(env, bucketArg) {
+  const b = String(bucketArg || 'iam-platform').trim().toLowerCase().replace(/_/g, '-');
+  if (pickR2Binding(env, bucketArg)) return null;
+  if (!env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return null;
+  if (/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(b)) return b;
+  return null;
+}
+
+async function mcpR2Get(env, bucketArg, key) {
+  const bind = pickR2Binding(env, bucketArg);
+  if (bind) return bind.get(key);
+  const s3b = mcpS3BucketName(env, bucketArg);
+  if (!s3b) return null;
+  const path = mcpR2ObjectPath(key);
+  const signed = await mcpSignR2Request(env, 'GET', s3b, path, '');
+  if (!signed) return null;
+  const res = await fetch(signed.endpoint, { method: 'GET', headers: signed.headers });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`R2 S3 GET ${res.status}`);
+  const text = await res.text();
+  return { text: async () => text };
+}
+
+async function mcpR2Put(env, bucketArg, key, body, contentType) {
+  const ct = contentType || 'application/octet-stream';
+  const payload = body ?? '';
+  const bind = pickR2Binding(env, bucketArg);
+  if (bind) {
+    await bind.put(key, payload, { httpMetadata: { contentType: ct } });
+    return true;
+  }
+  const s3b = mcpS3BucketName(env, bucketArg);
+  if (!s3b) return false;
+  const path = mcpR2ObjectPath(key);
+  const signed = await mcpSignR2Request(env, 'PUT', s3b, path, '', { body: payload, contentType: ct });
+  if (!signed) return false;
+  const res = await fetch(signed.endpoint, {
+    method: 'PUT',
+    headers: signed.headers,
+    body: signed.bodyBytes.byteLength ? signed.bodyBytes : undefined,
+  });
+  if (!res.ok) throw new Error(`R2 S3 PUT ${res.status} ${(await res.text()).slice(0, 200)}`);
+  return true;
+}
+
+async function mcpR2Delete(env, bucketArg, key) {
+  const bind = pickR2Binding(env, bucketArg);
+  if (bind) {
+    await bind.delete(key);
+    return true;
+  }
+  const s3b = mcpS3BucketName(env, bucketArg);
+  if (!s3b) return false;
+  const path = mcpR2ObjectPath(key);
+  const signed = await mcpSignR2Request(env, 'DELETE', s3b, path, '');
+  if (!signed) return false;
+  const res = await fetch(signed.endpoint, { method: 'DELETE', headers: signed.headers });
+  if (res.ok || res.status === 404) return true;
+  throw new Error(`R2 S3 DELETE ${res.status}`);
+}
+
+function mcpParseListObjectsV2Xml(xml) {
+  const objects = [];
+  let isTruncated = false;
+  let nextToken = null;
+  if (/<IsTruncated>true<\/IsTruncated>/i.test(xml)) isTruncated = true;
+  const nextMatch = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/);
+  if (nextMatch) nextToken = nextMatch[1];
+  const contentsBlocks = xml.match(/<Contents>[\s\S]*?<\/Contents>/g) || [];
+  for (const block of contentsBlocks) {
+    const keyMatch = block.match(/<Key>([^<]*)<\/Key>/);
+    const sizeMatch = block.match(/<Size>([^<]*)<\/Size>/);
+    const k = keyMatch ? keyMatch[1] : '';
+    const size = sizeMatch ? parseInt(sizeMatch[1], 10) || 0 : 0;
+    if (k && !k.endsWith('/')) objects.push({ key: k, size });
+  }
+  return { objects, isTruncated, nextToken };
+}
+
+async function mcpR2List(env, bucketArg, prefix, limit) {
+  const lim = Math.min(Math.max(1, Number(limit) || 100), 1000);
+  const bind = pickR2Binding(env, bucketArg);
+  if (bind) {
+    const listed = await bind.list({ prefix: prefix || '', limit: lim });
+    return (listed.objects || []).map((o) => ({ key: o.key, size: o.size }));
+  }
+  const s3b = mcpS3BucketName(env, bucketArg);
+  if (!s3b) return null;
+  const out = [];
+  let cursor;
+  let guard = 0;
+  do {
+    const pageSize = Math.min(1000, Math.max(1, lim - out.length));
+    const qParams = { 'list-type': '2', 'max-keys': String(pageSize) };
+    if (prefix) qParams.prefix = prefix;
+    if (cursor) qParams['continuation-token'] = cursor;
+    const q = mcpBuildR2Query(qParams);
+    const signed = await mcpSignR2Request(env, 'GET', s3b, '', q);
+    if (!signed) return null;
+    const listResp = await fetch(signed.endpoint, { method: 'GET', headers: signed.headers });
+    if (!listResp.ok) throw new Error(`R2 S3 list ${listResp.status}`);
+    const parsed = mcpParseListObjectsV2Xml(await listResp.text());
+    out.push(...parsed.objects);
+    cursor = parsed.isTruncated && out.length < lim ? parsed.nextToken : undefined;
+    guard++;
+    if (guard > 50) break;
+  } while (cursor && out.length < lim);
+  return out.slice(0, lim);
 }
 
 async function countR2Objects(binding, maxList = 100000) {
@@ -213,50 +417,52 @@ async function handleToolCall(name, args, env) {
   let result;
 
   if (name === 'r2_write') {
-    if (!env.R2) result = textContent('Error: R2 binding not configured.');
+    const key = args.key || args.path;
+    const bodyContent = args.body ?? args.content ?? '';
+    if (!key) result = textContent('Error: key required');
     else {
-      const key = args.key || args.path;
-      const bodyContent = args.body ?? args.content ?? '';
-      if (!key) result = textContent('Error: key required');
-      else {
-        await env.R2.put(key, bodyContent, { httpMetadata: args.contentType ? { contentType: args.contentType } : undefined });
-        result = textContent('OK: wrote ' + key);
+      try {
+        const ct = args.contentType || args.content_type || 'text/plain; charset=utf-8';
+        const ok = await mcpR2Put(env, args.bucket, key, bodyContent, ct);
+        if (!ok) result = textContent('Error: bucket not available (binding or R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)');
+        else result = textContent('OK: wrote ' + (args.bucket || 'iam-platform') + '/' + key);
+      } catch (e) {
+        result = textContent('Error: ' + (e?.message ?? String(e)));
       }
     }
   } else if (name === 'r2_read') {
-    if (!env.R2) result = textContent('Error: R2 binding not configured');
+    const key = args.key || args.path;
+    if (!key) result = textContent('Error: key required');
     else {
-      const key = args.key || args.path;
-      const obj = key ? await env.R2.get(key) : null;
-      result = textContent(obj ? await obj.text() : 'Key not found: ' + (key || ''));
+      try {
+        const obj = await mcpR2Get(env, args.bucket, key);
+        result = textContent(obj ? await obj.text() : 'Key not found: ' + key);
+      } catch (e) {
+        result = textContent('Error: ' + (e?.message ?? String(e)));
+      }
     }
   } else if (name === 'r2_list') {
-    if (!env.R2) result = textContent('Error: R2 binding not configured');
-    else {
+    try {
       const lim = Math.min(Number(args.limit) || 50, 1000);
-      const list = await env.R2.list({ prefix: args.prefix || '', limit: lim });
-      result = textContent(JSON.stringify(list.objects.map((o) => ({ key: o.key, size: o.size })), null, 2));
+      const rows = await mcpR2List(env, args.bucket, args.prefix || '', lim);
+      if (rows == null) result = textContent('Error: bucket not available (binding or S3 credentials)');
+      else result = textContent(JSON.stringify(rows, null, 2));
+    } catch (e) {
+      result = textContent('Error: ' + (e?.message ?? String(e)));
     }
   } else if (name === 'r2_search') {
-    const bucket = pickR2(env, 'iam-platform');
-    if (!bucket) result = textContent('Error: R2 binding not configured');
-    else {
+    try {
       const q = String(args.query || '');
       const lim = Math.min(Number(args.limit) || 20, 500);
-      const pref = args.prefix || '';
-      const out = [];
-      let cursor;
-      const needle = q.toLowerCase();
-      do {
-        const list = await bucket.list({ prefix: pref, limit: 1000, cursor });
-        for (const o of list.objects) {
-          if (o.key.toLowerCase().includes(needle)) out.push({ key: o.key, size: o.size });
-          if (out.length >= lim) break;
-        }
-        if (out.length >= lim) break;
-        cursor = list.truncated ? list.cursor : undefined;
-      } while (cursor);
-      result = textContent(JSON.stringify({ matches: out, count: out.length }, null, 2));
+      const listed = await mcpR2List(env, args.bucket, args.prefix || '', Math.min(1000, lim * 50));
+      if (listed == null) result = textContent('Error: bucket not available');
+      else {
+        const needle = q.toLowerCase();
+        const out = needle ? listed.filter((o) => o.key.toLowerCase().includes(needle)) : listed;
+        result = textContent(JSON.stringify({ matches: out.slice(0, lim), count: Math.min(out.length, lim) }, null, 2));
+      }
+    } catch (e) {
+      result = textContent('Error: ' + (e?.message ?? String(e)));
     }
   } else if (name === 'r2_bucket_summary') {
     const pairs = [
@@ -275,14 +481,17 @@ async function handleToolCall(name, args, env) {
     }
     result = textContent(JSON.stringify(summary, null, 2));
   } else if (name === 'r2_delete') {
-    const bname = args.bucket || 'iam-platform';
-    const bucket = pickR2(env, bname);
     const key = args.key;
+    const bname = args.bucket || 'iam-platform';
     if (!key) result = textContent('Error: key required');
-    else if (!bucket) result = textContent('Error: bucket binding not configured for ' + bname);
     else {
-      await bucket.delete(key);
-      result = textContent('OK: deleted ' + bname + '/' + key);
+      try {
+        const ok = await mcpR2Delete(env, bname, key);
+        if (!ok) result = textContent('Error: bucket not available for ' + bname);
+        else result = textContent('OK: deleted ' + bname + '/' + key);
+      } catch (e) {
+        result = textContent('Error: ' + (e?.message ?? String(e)));
+      }
     }
   } else if (name === 'd1_query') {
     if (!env.DB) result = textContent('Error: DB binding not configured');

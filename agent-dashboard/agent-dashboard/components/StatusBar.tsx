@@ -2,6 +2,20 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GitBranch, XCircle, AlertTriangle, Bell, Check } from 'lucide-react';
 import { SHELL_VERSION } from '../src/shellVersion';
 
+/** Strip emoji / variation selectors for status-line display (project rule: no emoji in product UI). */
+function stripEmojiFromNotificationText(s: string | null | undefined): string {
+  if (!s) return '';
+  try {
+    return s
+      .replace(/\p{Extended_Pictographic}/gu, '')
+      .replace(/\uFE0F/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  } catch {
+    return s.replace(/\uFE0F/g, '').trim();
+  }
+}
+
 export type AgentNotificationRow = {
   id: string;
   subject?: string | null;
@@ -18,9 +32,7 @@ interface StatusBarProps {
   line?: number;
   col?: number;
   showCursor?: boolean;
-  activeTab?: string;
   version?: string;
-  spendCount?: string;
   /** Worker /api/health */
   healthOk?: boolean | null;
   /** CF tunnel (auth) */
@@ -44,10 +56,8 @@ interface StatusBarProps {
   onErrorsClick?: () => void;
   onWarningsClick?: () => void;
   onCursorClick?: () => void;
-  onSpendClick?: () => void;
   onVersionClick?: () => void;
   onFormatClick?: () => void;
-  onActiveTabLabelClick?: () => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -58,9 +68,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   line = 1,
   col = 1,
   showCursor = false,
-  activeTab = 'JavaScript',
   version = SHELL_VERSION,
-  spendCount = '$0.00',
   healthOk = null,
   tunnelHealthy = null,
   tunnelLabel = null,
@@ -79,10 +87,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onErrorsClick,
   onWarningsClick,
   onCursorClick,
-  onSpendClick,
   onVersionClick,
   onFormatClick,
-  onActiveTabLabelClick,
 }) => {
   const cursorText = showCursor ? `Ln ${line}, Col ${col}` : 'Ln --, Col --';
   const versionDisplay =
@@ -172,11 +178,11 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                       onClick={() => void onMarkNotificationRead?.(n.id)}
                     >
                       <div className="text-[12px] font-medium text-[var(--text-main)] line-clamp-2">
-                        {n.subject?.trim() || 'Notice'}
+                        {stripEmojiFromNotificationText(n.subject?.trim()) || 'Notice'}
                       </div>
                       {n.message && (
                         <div className="text-[11px] text-[var(--text-muted)] mt-0.5 line-clamp-3 whitespace-pre-wrap">
-                          {n.message}
+                          {stripEmojiFromNotificationText(n.message)}
                         </div>
                       )}
                       {n.created_at && (
@@ -189,7 +195,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             )}
           </div>
           <p className="px-3 py-1.5 text-[10px] text-[var(--text-muted)] border-t border-[var(--border-subtle)]/40">
-            Polled from D1. Deploy alerts also go out by email when the worker sends them.
+            Unread rows from D1 for your account. Deploy alerts also go out by email when the worker sends them.
           </p>
         </div>
       )}
@@ -280,22 +286,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           >
             {eolLabel}
           </div>
-          <button
-            type="button"
-            className="flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors text-[var(--text-main)] font-semibold flex-shrink-0 border-0 bg-transparent"
-            title="Focus this surface"
-            onClick={() => onActiveTabLabelClick?.()}
-          >
-            {activeTab}
-          </button>
-          <button
-            type="button"
-            className="flex items-center hover:text-[var(--solar-yellow)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors font-bold text-[10px] tracking-tight border-0 bg-transparent"
-            title="Open settings"
-            onClick={() => onSpendClick?.()}
-          >
-            {spendCount}
-          </button>
           {chatModeLabel && (
             <div
               className="hidden min-[1000px]:flex items-center px-2 h-full text-[var(--text-muted)] font-semibold border-x border-[var(--border-subtle)]/20 max-w-[120px] truncate"

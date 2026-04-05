@@ -1,6 +1,83 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { FolderOpen, File as FileIcon, ChevronRight, ChevronDown, Folder, HardDrive, Cloud, Github, Box, FileCode2, Loader2 } from 'lucide-react';
+import {
+    FolderOpen,
+    File as FileIcon,
+    ChevronRight,
+    ChevronDown,
+    Folder,
+    HardDrive,
+    Cloud,
+    Github,
+    Box,
+    FileCode2,
+    Loader2,
+    Upload,
+    Trash2,
+    FolderPlus,
+    Search,
+    RefreshCw,
+} from 'lucide-react';
 import type { ActiveFile } from '../types';
+import { GitHubExplorer } from './GitHubExplorer';
+import { GoogleDriveExplorer } from './GoogleDriveExplorer';
+
+const NATIVE_WS_DB_NAME = 'iam-agent-native-workspace-v1';
+const NATIVE_WS_STORE = 'handles';
+const NATIVE_WS_KEY = 'directory';
+
+function openNativeWsDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(NATIVE_WS_DB_NAME, 1);
+    req.onerror = () => reject(req.error);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(NATIVE_WS_STORE)) db.createObjectStore(NATIVE_WS_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+  });
+}
+
+async function persistNativeDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await openNativeWsDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(NATIVE_WS_STORE, 'readwrite');
+    tx.objectStore(NATIVE_WS_STORE).put(handle, NATIVE_WS_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+
+async function clearPersistedNativeDirectoryHandle(): Promise<void> {
+  try {
+    const db = await openNativeWsDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(NATIVE_WS_STORE, 'readwrite');
+      tx.objectStore(NATIVE_WS_STORE).delete(NATIVE_WS_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadPersistedNativeDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
+  try {
+    const db = await openNativeWsDb();
+    const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+      const tx = db.transaction(NATIVE_WS_STORE, 'readonly');
+      const req = tx.objectStore(NATIVE_WS_STORE).get(NATIVE_WS_KEY);
+      req.onsuccess = () => resolve((req.result as FileSystemDirectoryHandle) || null);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return handle;
+  } catch {
+    return null;
+  }
+}
 
 function bucketLabelToBinding(label: string): string {
     const b = label.trim().toLowerCase();
@@ -10,6 +87,27 @@ function bucketLabelToBinding(label: string): string {
     if (b === 'iam-docs') return 'DOCS_BUCKET';
     if (b === 'autorag') return 'AUTORAG_BUCKET';
     return 'DASHBOARD';
+}
+
+/** agent-sam and tools share env.DASHBOARD — show one row to avoid duplicate trees. */
+function dedupeR2BucketLabels(names: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const n of names) {
+        const sig = bucketLabelToBinding(n);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        out.push(n);
+    }
+    return out;
+}
+
+function parentR2Prefix(prefix: string): string {
+    if (!prefix) return '';
+    const trimmed = prefix.replace(/\/+$/, '');
+    if (!trimmed) return '';
+    const i = trimmed.lastIndexOf('/');
+    return i < 0 ? '' : trimmed.slice(0, i + 1);
 }
 
 interface FileNode {
@@ -33,14 +131,21 @@ export const LocalExplorer: React.FC<{
     const [expandedSections, setExpandedSections] = useState({
         local: true,
         r2: true,
-        github: false,
-        drive: false
+        github: true,
+        drive: true,
     });
 
     const [r2Buckets, setR2Buckets] = useState<string[]>([]);
     const [r2ExpandedBucket, setR2ExpandedBucket] = useState<string | null>(null);
+    const [r2PrefixByBucket, setR2PrefixByBucket] = useState<Record<string, string>>({});
+    const [r2PrefixesByBucket, setR2PrefixesByBucket] = useState<Record<string, string[]>>({});
     const [r2ObjectsByBucket, setR2ObjectsByBucket] = useState<Record<string, { key: string; size?: number }[]>>({});
     const [r2Loading, setR2Loading] = useState(false);
+    const [r2Err, setR2Err] = useState<string | null>(null);
+    const [r2SearchQ, setR2SearchQ] = useState<Record<string, string>>({});
+    const [r2SearchMode, setR2SearchMode] = useState<Record<string, boolean>>({});
+    const r2UploadRef = useRef<HTMLInputElement>(null);
+    const [r2UploadTargetBucket, setR2UploadTargetBucket] = useState<string | null>(null);
     const lastNativeFolderSignal = useRef(0);
 
     const loadR2Buckets = useCallback(async () => {
@@ -57,16 +162,154 @@ export const LocalExplorer: React.FC<{
         loadR2Buckets();
     }, [loadR2Buckets]);
 
-    const loadR2List = async (bucket: string) => {
+    const loadR2List = useCallback(async (bucket: string, prefixOverride?: string) => {
         setR2Loading(true);
+        setR2Err(null);
+        const prefix = prefixOverride !== undefined ? prefixOverride : (r2PrefixByBucket[bucket] ?? '');
         try {
-            const qs = new URLSearchParams({ bucket, prefix: '' });
+            const qs = new URLSearchParams({ bucket, prefix });
             const res = await fetch(`/api/r2/list?${qs}`, { credentials: 'same-origin' });
             const data = await res.json();
+            if (!res.ok) {
+                setR2Err(typeof data.error === 'string' ? data.error : `R2 list failed (${res.status})`);
+                setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: [] }));
+                setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: [] }));
+                return;
+            }
             const rows = Array.isArray(data.objects) ? data.objects : [];
+            const prefs = Array.isArray(data.prefixes) ? data.prefixes : [];
             setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: rows }));
-        } catch {
+            setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: prefs }));
+        } catch (e) {
+            setR2Err(e instanceof Error ? e.message : 'R2 list failed');
             setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: [] }));
+            setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: [] }));
+        } finally {
+            setR2Loading(false);
+        }
+    }, [r2PrefixByBucket]);
+
+    const setR2Prefix = (bucket: string, prefix: string) => {
+        setR2PrefixByBucket((prev) => ({ ...prev, [bucket]: prefix }));
+        setR2SearchMode((m) => ({ ...m, [bucket]: false }));
+        void loadR2List(bucket, prefix);
+    };
+
+    const openR2Bucket = (bucket: string) => {
+        setR2ExpandedBucket(bucket);
+        setR2PrefixByBucket((prev) => ({ ...prev, [bucket]: '' }));
+        setR2SearchMode((m) => ({ ...m, [bucket]: false }));
+        void loadR2List(bucket, '');
+    };
+
+    const runR2Search = async (bucket: string) => {
+        const q = (r2SearchQ[bucket] || '').trim().toLowerCase();
+        if (q.length < 2) {
+            setR2Err('R2 search: at least 2 characters.');
+            return;
+        }
+        setR2Loading(true);
+        setR2Err(null);
+        try {
+            const prefix = r2PrefixByBucket[bucket] ?? '';
+            const qs = new URLSearchParams({ bucket, q, prefix });
+            const res = await fetch(`/api/r2/search?${qs}`, { credentials: 'same-origin' });
+            const data = await res.json();
+            const rows = Array.isArray(data.objects) ? data.objects : [];
+            setR2SearchMode((m) => ({ ...m, [bucket]: true }));
+            setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: rows }));
+            setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: [] }));
+        } catch (e) {
+            setR2Err(e instanceof Error ? e.message : 'R2 search failed');
+        } finally {
+            setR2Loading(false);
+        }
+    };
+
+    const clearR2Search = (bucket: string) => {
+        setR2SearchQ((prev) => ({ ...prev, [bucket]: '' }));
+        setR2SearchMode((m) => ({ ...m, [bucket]: false }));
+        void loadR2List(bucket);
+    };
+
+    const uploadToR2 = async (bucket: string, files: FileList | null) => {
+        if (!files?.length) return;
+        const prefix = r2PrefixByBucket[bucket] ?? '';
+        setR2Loading(true);
+        setR2Err(null);
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                const fd = new FormData();
+                fd.append('bucket', bucket);
+                fd.append('key', `${prefix}${f.name}`);
+                fd.append('file', f);
+                const res = await fetch('/api/r2/upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    setR2Err(typeof data.error === 'string' ? data.error : `Upload failed: ${f.name}`);
+                    break;
+                }
+            }
+        } catch (e) {
+            setR2Err(e instanceof Error ? e.message : 'Upload failed');
+        } finally {
+            setR2Loading(false);
+            if (r2UploadRef.current) r2UploadRef.current.value = '';
+            setR2UploadTargetBucket(null);
+            void loadR2List(bucket);
+        }
+    };
+
+    const createR2Folder = async (bucket: string) => {
+        const name = window.prompt('Folder name (prefix segment, no slashes)');
+        if (!name || !name.trim()) return;
+        const seg = name.trim().replace(/\/+/g, '').replace(/^\./, '');
+        if (!seg) return;
+        const prefix = r2PrefixByBucket[bucket] ?? '';
+        const key = `${prefix}${seg}/`;
+        const binding = bucketLabelToBinding(bucket);
+        setR2Loading(true);
+        setR2Err(null);
+        try {
+            const res = await fetch('/api/r2/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ bucket: binding, key, content: '' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setR2Err(typeof data.error === 'string' ? data.error : 'Create folder marker failed');
+                return;
+            }
+            void loadR2List(bucket);
+        } catch (e) {
+            setR2Err(e instanceof Error ? e.message : 'Create folder failed');
+        } finally {
+            setR2Loading(false);
+        }
+    };
+
+    const deleteR2Key = async (bucket: string, key: string) => {
+        if (!window.confirm(`Delete R2 object?\n${key}`)) return;
+        setR2Loading(true);
+        setR2Err(null);
+        try {
+            const res = await fetch('/api/r2/delete', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ bucket, key }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setR2Err(typeof data.error === 'string' ? data.error : 'Delete failed');
+                return;
+            }
+            void loadR2List(bucket);
+        } catch (e) {
+            setR2Err(e instanceof Error ? e.message : 'Delete failed');
         } finally {
             setR2Loading(false);
         }
@@ -117,6 +360,32 @@ export const LocalExplorer: React.FC<{
         });
     }, []);
 
+    useEffect(() => {
+        if (typeof indexedDB === 'undefined') return;
+        void (async () => {
+            try {
+                const h = await loadPersistedNativeDirectoryHandle();
+                if (!h || typeof (h as any).queryPermission !== 'function') return;
+                let perm = await (h as any).queryPermission({ mode: 'readwrite' });
+                if (perm === 'prompt' && typeof (h as any).requestPermission === 'function') {
+                    perm = await (h as any).requestPermission({ mode: 'readwrite' });
+                }
+                if (perm !== 'granted') return;
+                const root: FileNode = {
+                    name: h.name,
+                    kind: 'directory',
+                    handle: h,
+                    isOpen: true,
+                    children: await getEntries(h),
+                };
+                setRootDir(root);
+                onWorkspaceRootChange?.({ folderName: root.name });
+            } catch (e) {
+                console.warn('[LocalExplorer] native workspace restore skipped', e);
+            }
+        })();
+    }, [getEntries, onWorkspaceRootChange]);
+
     const handleOpenFolder = useCallback(async () => {
         try {
             // File System Access API (Chromium); not in all TS DOM libs
@@ -131,10 +400,17 @@ export const LocalExplorer: React.FC<{
             };
             setRootDir(root);
             onWorkspaceRootChange?.({ folderName: root.name });
+            await persistNativeDirectoryHandle(dirHandle);
         } catch (err) {
             console.error('Failed to open directory:', err);
         }
     }, [getEntries, onWorkspaceRootChange]);
+
+    const disconnectNativeFolder = useCallback(async () => {
+        setRootDir(null);
+        onWorkspaceRootChange?.({ folderName: '' });
+        await clearPersistedNativeDirectoryHandle();
+    }, [onWorkspaceRootChange]);
 
     useEffect(() => {
         if (nativeFolderOpenSignal === 0 || nativeFolderOpenSignal === lastNativeFolderSignal.current) return;
@@ -224,15 +500,47 @@ export const LocalExplorer: React.FC<{
                 {expandedSections.local && (
                     <div className="px-2 pb-2">
                         {!rootDir ? (
-                            <div className="py-2 flex flex-col items-center justify-center">
-                                <button onClick={handleOpenFolder} className="text-[11px] text-[var(--solar-blue)] hover:text-white hover:underline transition-all font-mono tracking-wide py-1 px-3 border border-[var(--solar-blue)]/30 rounded">Connect Native Folder</button>
+                            <div className="py-2 flex flex-col items-center justify-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleOpenFolder()}
+                                    className="text-[11px] text-[var(--solar-blue)] hover:text-white hover:underline transition-all font-mono tracking-wide py-1 px-3 border border-[var(--solar-blue)]/30 rounded"
+                                >
+                                    Connect Native Folder
+                                </button>
+                                <p className="text-[9px] text-[var(--text-muted)] text-center max-w-[200px] leading-relaxed">
+                                    Chromium: grants read/write for this site. The folder is remembered across visits when the browser allows.
+                                </p>
                             </div>
                         ) : (
-                            <div className="font-mono mt-1">{renderTree(rootDir)}</div>
+                            <div className="font-mono mt-1">
+                                <div className="flex items-center justify-between px-1 pb-1">
+                                    <span className="text-[9px] text-[var(--text-muted)] truncate">{rootDir.name}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => void disconnectNativeFolder()}
+                                        className="text-[9px] text-[var(--text-muted)] hover:text-[var(--solar-orange)]"
+                                    >
+                                        Disconnect
+                                    </button>
+                                </div>
+                                {renderTree(rootDir)}
+                            </div>
                         )}
                     </div>
                 )}
             </div>
+
+            <input
+                ref={r2UploadRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                    const bucket = r2UploadTargetBucket;
+                    if (bucket) void uploadToR2(bucket, e.target.files);
+                }}
+            />
 
             {/* Section 2: Cloudflare R2 */}
             <div className="flex flex-col border-b border-[var(--border-subtle)]/50 pb-1">
@@ -245,13 +553,20 @@ export const LocalExplorer: React.FC<{
                     <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Cloudflare R2</span>
                 </div>
                 {expandedSections.r2 && (
-                    <div className="px-4 py-2 text-[11px] text-[var(--text-muted)] flex flex-col gap-1 font-mono">
+                    <div className="px-4 py-2 text-[11px] text-[var(--text-muted)] flex flex-col gap-2 font-mono">
+                        {r2Err && (
+                            <p className="text-[10px] text-[var(--solar-orange)] break-words">{r2Err}</p>
+                        )}
                         {r2Buckets.length === 0 && !r2Loading && (
                             <span className="text-[10px] italic">No buckets listed.</span>
                         )}
-                        {r2Buckets.map((b) => {
+                        {dedupeR2BucketLabels(r2Buckets).map((b) => {
                             const open = r2ExpandedBucket === b;
                             const objs = r2ObjectsByBucket[b] || [];
+                            const prefs = r2PrefixesByBucket[b] || [];
+                            const prefix = r2PrefixByBucket[b] ?? '';
+                            const searchOn = r2SearchMode[b];
+                            const shortName = (full: string) => (prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full);
                             return (
                                 <div key={b} className="border border-[var(--border-subtle)]/40 rounded overflow-hidden">
                                     <button
@@ -260,8 +575,7 @@ export const LocalExplorer: React.FC<{
                                             if (open) {
                                                 setR2ExpandedBucket(null);
                                             } else {
-                                                setR2ExpandedBucket(b);
-                                                void loadR2List(b);
+                                                openR2Bucket(b);
                                             }
                                         }}
                                         className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-[var(--bg-hover)] text-left text-[12px]"
@@ -271,38 +585,114 @@ export const LocalExplorer: React.FC<{
                                         <span className="truncate">{b}</span>
                                     </button>
                                     {open && (
-                                        <div className="px-2 pb-2">
+                                        <div className="px-2 pb-2 flex flex-col gap-1">
+                                            <div className="flex flex-wrap items-center gap-1 text-[9px] text-[var(--text-muted)] border-b border-[var(--border-subtle)]/30 pb-1">
+                                                <span className="truncate max-w-full">/{prefix || ''}</span>
+                                                {prefix ? (
+                                                    <button
+                                                        type="button"
+                                                        className="text-[var(--solar-cyan)] hover:underline shrink-0"
+                                                        onClick={() => setR2Prefix(b, parentR2Prefix(prefix))}
+                                                    >
+                                                        Up
+                                                    </button>
+                                                ) : null}
+                                                <button
+                                                    type="button"
+                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                    title="Refresh"
+                                                    onClick={() => void loadR2List(b)}
+                                                >
+                                                    <RefreshCw size={11} className={r2Loading && r2ExpandedBucket === b ? 'animate-spin' : ''} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                    title="Upload into this prefix"
+                                                    onClick={() => {
+                                                        setR2UploadTargetBucket(b);
+                                                        r2UploadRef.current?.click();
+                                                    }}
+                                                >
+                                                    <Upload size={11} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="p-0.5 hover:bg-[var(--bg-hover)] rounded shrink-0"
+                                                    title="New folder prefix"
+                                                    onClick={() => void createR2Folder(b)}
+                                                >
+                                                    <FolderPlus size={11} />
+                                                </button>
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                <Search size={10} className="text-[var(--text-muted)] shrink-0" />
+                                                <input
+                                                    type="search"
+                                                    value={r2SearchQ[b] || ''}
+                                                    onChange={(e) => setR2SearchQ((prev) => ({ ...prev, [b]: e.target.value }))}
+                                                    onKeyDown={(e) => e.key === 'Enter' && void runR2Search(b)}
+                                                    placeholder="Filter keys (search)"
+                                                    className="flex-1 min-w-0 bg-[var(--bg-app)] border border-[var(--border-subtle)]/50 rounded px-1 py-0.5 text-[10px] outline-none"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="text-[9px] px-1 py-0.5 rounded bg-[var(--bg-hover)]"
+                                                    onClick={() => void runR2Search(b)}
+                                                >
+                                                    Go
+                                                </button>
+                                                {searchOn && (
+                                                    <button type="button" className="text-[9px] text-[var(--solar-cyan)] shrink-0" onClick={() => clearR2Search(b)}>
+                                                        List
+                                                    </button>
+                                                )}
+                                            </div>
                                             {r2Loading && r2ExpandedBucket === b && (
                                                 <div className="flex items-center gap-1 py-1 text-[10px]">
                                                     <Loader2 size={10} className="animate-spin" /> Loading…
                                                 </div>
                                             )}
+                                            {!searchOn &&
+                                                prefs.map((p) => (
+                                                    <button
+                                                        key={p}
+                                                        type="button"
+                                                        onClick={() => setR2Prefix(b, p)}
+                                                        className="flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded text-left w-full"
+                                                    >
+                                                        <Folder size={12} className="text-[var(--solar-blue)] shrink-0" />
+                                                        <span className="truncate text-[10px]">{shortName(p)}</span>
+                                                    </button>
+                                                ))}
                                             {objs.map((o) => (
                                                 <div
                                                     key={o.key}
-                                                    role={onOpenInEditor ? 'button' : undefined}
-                                                    tabIndex={onOpenInEditor ? 0 : undefined}
-                                                    onClick={() => {
-                                                        if (onOpenInEditor) void openR2Key(b, o.key);
-                                                    }}
-                                                    onKeyDown={(e) => {
-                                                        if (!onOpenInEditor) return;
-                                                        if (e.key === 'Enter' || e.key === ' ') {
-                                                            e.preventDefault();
-                                                            void openR2Key(b, o.key);
-                                                        }
-                                                    }}
-                                                    className={`flex items-center gap-1 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group ${
-                                                        onOpenInEditor ? 'cursor-pointer' : ''
-                                                    }`}
+                                                    className="flex items-center gap-0.5 pl-2 py-0.5 hover:bg-[var(--bg-hover)] rounded group"
                                                 >
-                                                    <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
-                                                    <span className="truncate flex-1 text-[10px]">{o.key}</span>
+                                                    <div
+                                                        role={onOpenInEditor ? 'button' : undefined}
+                                                        tabIndex={onOpenInEditor ? 0 : undefined}
+                                                        onClick={() => {
+                                                            if (onOpenInEditor) void openR2Key(b, o.key);
+                                                        }}
+                                                        onKeyDown={(e) => {
+                                                            if (!onOpenInEditor) return;
+                                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                                e.preventDefault();
+                                                                void openR2Key(b, o.key);
+                                                            }
+                                                        }}
+                                                        className={`flex flex-1 min-w-0 items-center gap-1 ${onOpenInEditor ? 'cursor-pointer' : ''}`}
+                                                    >
+                                                        <FileIcon size={12} className="text-[var(--text-muted)] shrink-0" />
+                                                        <span className="truncate text-[10px]">{searchOn ? o.key : shortName(o.key)}</span>
+                                                    </div>
                                                     {onOpenInEditor && (
                                                         <button
                                                             type="button"
-                                                            title="Open"
-                                                            className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)]"
+                                                            title="Open in editor"
+                                                            className="p-0.5 opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] shrink-0"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 void openR2Key(b, o.key);
@@ -311,6 +701,14 @@ export const LocalExplorer: React.FC<{
                                                             <FileCode2 size={11} />
                                                         </button>
                                                     )}
+                                                    <button
+                                                        type="button"
+                                                        title="Delete object"
+                                                        className="p-0.5 opacity-50 hover:opacity-100 text-[var(--text-muted)] hover:text-[var(--solar-orange)] shrink-0"
+                                                        onClick={() => void deleteR2Key(b, o.key)}
+                                                    >
+                                                        <Trash2 size={11} />
+                                                    </button>
                                                 </div>
                                             ))}
                                         </div>
@@ -333,8 +731,8 @@ export const LocalExplorer: React.FC<{
                     <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">GitHub Sync</span>
                 </div>
                 {expandedSections.github && (
-                    <div className="px-8 py-3 text-[11px] text-[var(--text-muted)] font-mono">
-                        No active repository linked.
+                    <div className="min-h-[200px] max-h-[min(45vh,380px)] flex flex-col overflow-hidden border-t border-[var(--border-subtle)]/30 mx-1 mb-1 rounded border border-[var(--border-subtle)]/40">
+                        <GitHubExplorer onOpenInEditor={onOpenInEditor} />
                     </div>
                 )}
             </div>
@@ -350,9 +748,8 @@ export const LocalExplorer: React.FC<{
                     <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Google Drive</span>
                 </div>
                 {expandedSections.drive && (
-                    <div className="px-10 py-3 text-[11px] text-[var(--text-muted)] flex flex-col font-mono">
-                        <span className="mb-2">OAuth Missing.</span>
-                        <a href="#" className="text-[var(--solar-blue)] hover:text-white hover:underline">Authenticate Workspace</a>
+                    <div className="min-h-[200px] max-h-[min(45vh,380px)] flex flex-col overflow-hidden border-t border-[var(--border-subtle)]/30 mx-1 mb-1 rounded border border-[var(--border-subtle)]/40">
+                        <GoogleDriveExplorer onOpenInEditor={onOpenInEditor} />
                     </div>
                 )}
             </div>

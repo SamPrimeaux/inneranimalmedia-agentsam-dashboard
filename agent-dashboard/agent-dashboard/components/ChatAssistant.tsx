@@ -2361,7 +2361,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      window.location.href = '/api/oauth/github/start';
+                      window.location.href = '/api/oauth/github/start?return_to=/dashboard/agent';
                     }}
                     className="rounded-lg border border-[var(--border-subtle)] bg-[var(--scene-bg)] px-4 py-2 text-[12px] font-medium text-[var(--text-main)]"
                   >

@@ -46,6 +46,7 @@ const LANG_MAP: Record<string, string> = {
   go: 'go',
   rs: 'rust',
   sql: 'sql',
+  pgsql: 'sql',
   graphql: 'graphql', gql: 'graphql',
   env: 'plaintext',
   txt: 'plaintext',

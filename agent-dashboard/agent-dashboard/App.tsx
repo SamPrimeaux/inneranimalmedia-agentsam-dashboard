@@ -113,6 +113,8 @@ const App: React.FC = () => {
     () => typeof window !== 'undefined' && window.innerWidth < 768,
   );
   const mobileSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  /** Mobile chat repo drawer: expand this repo when opening the GitHub / Deploy panel. */
+  const [githubExpandRepo, setGithubExpandRepo] = useState<string | null>(null);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -314,6 +316,20 @@ const App: React.FC = () => {
     setActiveActivity(null);
     setAgentPosition('off');
   }, []);
+
+  const openGitHubFromChat = useCallback((opts?: { expandRepoFullName?: string }) => {
+    const fn = opts?.expandRepoFullName?.trim();
+    if (fn) setGithubExpandRepo(fn);
+    setActiveActivity('actions');
+  }, []);
+
+  const openDashboardFromChat = useCallback(() => {
+    narrowBackToCenter();
+    setActiveTab('welcome');
+    setOpenTabs((prev) => (prev.includes('welcome') ? prev : [...prev, 'welcome']));
+  }, [narrowBackToCenter]);
+
+  const consumeGithubExpandRepo = useCallback(() => setGithubExpandRepo(null), []);
 
   const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'sql' | 'projects' | 'settings' | 'drive' | 'playwright') => {
     setActiveActivity((prev) => {
@@ -916,7 +932,7 @@ const App: React.FC = () => {
                     }
                     {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
-                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
+                    <div className="h-10 max-md:hidden border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
                     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                     <ChatAssistant 
                         activeProject={activeProject} 
@@ -954,6 +970,9 @@ const App: React.FC = () => {
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
                         onBrowserNavigate={handleBrowserNavigateFromAgent}
+                        onOpenGitHubIntegration={openGitHubFromChat}
+                        onMobileOpenDashboard={openDashboardFromChat}
+                        onOpenCodeTab={() => openTab('code')}
                     />
                     </div>
                 </div>
@@ -1017,6 +1036,8 @@ const App: React.FC = () => {
                       <DatabaseBrowser onClose={() => setActiveActivity(null)} />
                   ) : activeActivity === 'actions' ? (
                       <GitHubExplorer
+                          expandRepoFullName={githubExpandRepo}
+                          onExpandRepoConsumed={consumeGithubExpandRepo}
                           onOpenInEditor={(file) => {
                               setActiveFile(file);
                               openTab('code');
@@ -1238,7 +1259,7 @@ const App: React.FC = () => {
                     }
                     {...(narrowNeedsBack && !activeActivity ? mobileEdgeSwipeHandlers : {})}
                 >
-                    <div className="h-10 border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
+                    <div className="h-10 max-md:hidden border-b border-[var(--border-subtle)] flex items-center px-4 font-semibold text-[11px] tracking-widest uppercase text-[var(--text-muted)] shrink-0">{PRODUCT_NAME}</div>
                     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                          <ChatAssistant 
                             activeProject={activeProject} 
@@ -1276,6 +1297,9 @@ const App: React.FC = () => {
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}
                             onBrowserNavigate={handleBrowserNavigateFromAgent}
+                            onOpenGitHubIntegration={openGitHubFromChat}
+                            onMobileOpenDashboard={openDashboardFromChat}
+                            onOpenCodeTab={() => openTab('code')}
                          />
                     </div>
                 </div>

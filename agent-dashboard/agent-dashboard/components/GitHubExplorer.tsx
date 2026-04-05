@@ -12,7 +12,10 @@ type GhItem = {
 
 export const GitHubExplorer: React.FC<{
     onOpenInEditor?: (file: ActiveFile) => void;
-}> = ({ onOpenInEditor }) => {
+    /** Expand this repo at root (e.g. mobile chat repo picker). Parent clears after consume. */
+    expandRepoFullName?: string | null;
+    onExpandRepoConsumed?: () => void;
+}> = ({ onOpenInEditor, expandRepoFullName, onExpandRepoConsumed }) => {
     const [isAuthenticated, setIsAuthenticated] = useState(true);
     const [repos, setRepos] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -78,6 +81,15 @@ export const GitHubExplorer: React.FC<{
             setLoadingPath(null);
         }
     }, []);
+
+    useEffect(() => {
+        const fn = expandRepoFullName?.trim();
+        if (!fn) return;
+        setExpandedRepo(fn);
+        setPathByRepo((p) => ({ ...p, [fn]: '' }));
+        void loadContents(fn, '');
+        onExpandRepoConsumed?.();
+    }, [expandRepoFullName, loadContents, onExpandRepoConsumed]);
 
     const toggleRepo = (fullName: string) => {
         if (expandedRepo === fullName) {

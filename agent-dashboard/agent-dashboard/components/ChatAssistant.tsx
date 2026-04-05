@@ -20,6 +20,13 @@ import {
   FileCode,
   X,
   ChevronDown,
+  ChevronLeft,
+  MoreHorizontal,
+  GitBranch,
+  LayoutDashboard,
+  Zap,
+  ExternalLink,
+  FolderGit2,
 } from 'lucide-react';
 import { ProjectType } from '../types';
 import type { ActiveFile } from '../types';
@@ -56,6 +63,12 @@ interface ChatAssistantProps {
   onBrowserNavigate?: (event: { type: 'browser_navigate'; url: string }) => void;
   /** Dropped or attached .glb: parent uses a blob URL and should open the Voxel (engine) tab. */
   onGlbFileSelect?: (file: File) => void;
+  /** Mobile: open GitHub repos panel (`actions` activity); optional repo to expand. */
+  onOpenGitHubIntegration?: (opts?: { expandRepoFullName?: string }) => void;
+  /** Mobile: leave full-screen chat and show the main editor / welcome workspace. */
+  onMobileOpenDashboard?: () => void;
+  /** Open the code editor tab from chat (e.g. mobile Context tab). */
+  onOpenCodeTab?: () => void;
 }
 
 type StagedAttachment = {
@@ -143,27 +156,42 @@ function startOfWeekMondayLocal(): number {
   return d.getTime();
 }
 
-function sessionGroupLabel(ts: number): 'Today' | 'This Week' | 'Older' {
+function startOfMonthLocal(): number {
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function sessionGroupLabel(ts: number): 'Today' | 'This Week' | 'This Month' | 'Older' {
   if (!ts) return 'Older';
   const startToday = startOfTodayLocal();
   if (ts >= startToday) return 'Today';
   const startWeek = startOfWeekMondayLocal();
   if (ts >= startWeek) return 'This Week';
+  const startMonth = startOfMonthLocal();
+  if (ts >= startMonth) return 'This Month';
   return 'Older';
 }
 
 function groupSessionsByBucket(rows: AgentSessionRow[]): { label: string; items: AgentSessionRow[] }[] {
   const withTs = rows.map((r) => ({ row: r, ts: sessionStartedAtMs(r) }));
   withTs.sort((a, b) => b.ts - a.ts);
-  const buckets: Record<'Today' | 'This Week' | 'Older', AgentSessionRow[]> = {
+  const buckets: Record<'Today' | 'This Week' | 'This Month' | 'Older', AgentSessionRow[]> = {
     Today: [],
     'This Week': [],
+    'This Month': [],
     Older: [],
   };
   for (const { row, ts } of withTs) {
     buckets[sessionGroupLabel(ts)].push(row);
   }
-  const order: ('Today' | 'This Week' | 'Older')[] = ['Today', 'This Week', 'Older'];
+  const order: ('Today' | 'This Week' | 'This Month' | 'Older')[] = [
+    'Today',
+    'This Week',
+    'This Month',
+    'Older',
+  ];
   return order.filter((l) => buckets[l].length > 0).map((label) => ({ label, items: buckets[label] }));
 }
 
@@ -650,6 +678,8 @@ const getLangMeta = (lang: string) => {
   return map[lang] ?? { ext: lang || 'txt', icon: <FileText size={15} /> };
 };
 
+const LS_GH_REPO = 'iam-chat-github-repo-context';
+
 export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   activeProject,
   activeFileContent,
@@ -664,6 +694,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onR2FileUpdated,
   onBrowserNavigate,
   onGlbFileSelect,
+  onOpenGitHubIntegration,
+  onMobileOpenDashboard,
+  onOpenCodeTab,
 }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -692,6 +725,65 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [conversationId, setConversationId] = useState<string>(() =>
     typeof localStorage !== 'undefined' ? localStorage.getItem(LS_CONV) || '' : ''
   );
+  const [viewMode, setViewMode] = useState<'list' | 'thread'>(() =>
+    typeof window !== 'undefined' && localStorage.getItem('iam-agent-chat-conversation-id')
+      ? 'thread'
+      : 'list'
+  );
+  const [threadTitle, setThreadTitle] = useState<string>('');
+
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+  const [mobileHubTab, setMobileHubTab] = useState<'agents' | 'automations' | 'dashboard'>('agents');
+  const [mobileThreadTab, setMobileThreadTab] = useState<'chat' | 'context'>('chat');
+  const [repoDrawerOpen, setRepoDrawerOpen] = useState(false);
+  const [ghRepos, setGhRepos] = useState<Array<{ id: string | number; full_name: string; name: string; default_branch?: string }>>(
+    []
+  );
+  const [ghReposLoading, setGhReposLoading] = useState(false);
+  const [ghReposAuthed, setGhReposAuthed] = useState(true);
+  const [githubRepoContext, setGithubRepoContext] = useState<string | null>(() => {
+    try {
+      return typeof localStorage !== 'undefined' ? localStorage.getItem(LS_GH_REPO) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [repoSearch, setRepoSearch] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 767px)');
+    const u = () => setIsNarrow(mq.matches);
+    mq.addEventListener('change', u);
+    return () => mq.removeEventListener('change', u);
+  }, []);
+
+  const loadGhRepos = useCallback(async () => {
+    setGhReposLoading(true);
+    try {
+      const res = await fetch('/api/integrations/github/repos', { credentials: 'same-origin' });
+      if (!res.ok) {
+        setGhReposAuthed(false);
+        setGhRepos([]);
+        return;
+      }
+      setGhReposAuthed(true);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : data.repos || [];
+      setGhRepos(Array.isArray(list) ? list : []);
+    } catch {
+      setGhReposAuthed(false);
+      setGhRepos([]);
+    } finally {
+      setGhReposLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (repoDrawerOpen) void loadGhRepos();
+  }, [repoDrawerOpen, loadGhRepos]);
 
   const [sessions, setSessions] = useState<AgentSessionRow[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -729,6 +821,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, []);
 
   const handleNewChat = useCallback(() => {
+    setViewMode('thread');
+    setMobileThreadTab('chat');
+    setThreadTitle('New Chat');
     if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_CONV);
     setConversationId('');
     sessionListRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -736,11 +831,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, []);
 
   const handleSelectSession = useCallback((id: string) => {
+    setViewMode('thread');
+    setMobileThreadTab('chat');
+    setThreadTitle(sessions.find((s) => s.id === id)?.name || 'Conversation');
     if (!id) return;
     localStorage.setItem(LS_CONV, id);
     setConversationId(id);
     window.dispatchEvent(new CustomEvent(IAM_AGENT_CHAT_CONVERSATION_CHANGE, { detail: { id } }));
-  }, []);
+  }, [sessions]);
 
   const sessionGroups = useMemo(() => groupSessionsByBucket(sessions), [sessions]);
 
@@ -950,11 +1048,26 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   );
 
   const displayMessages = useMemo(() => {
-    if (!conversationId) {
+    if (viewMode === 'list') {
       return messages.filter((m) => !(m.role === 'assistant' && isAgentSamEmptyThreadGreeting(m.content)));
     }
     return messages;
-  }, [conversationId, messages]);
+  }, [viewMode, messages]);
+
+  const showEmptyThreadPlaceholder = useMemo(() => {
+    if (viewMode !== 'thread') return false;
+    if (displayMessages.length === 0) return true;
+    return displayMessages.every(
+      (m) => m.role === 'assistant' && isAgentSamEmptyThreadGreeting(m.content)
+    );
+  }, [viewMode, displayMessages]);
+
+  useEffect(() => {
+    if (viewMode !== 'thread' || !conversationId.trim()) return;
+    const row = sessions.find((s) => s.id === conversationId);
+    const n = row?.name && String(row.name).replace(/\s+/g, ' ').trim();
+    if (n) setThreadTitle(n);
+  }, [viewMode, conversationId, sessions]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -1109,6 +1222,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
     if (totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES) return;
 
+    if (isNarrow && viewMode === 'list' && mobileHubTab === 'agents') {
+      setViewMode('thread');
+      setMobileThreadTab('chat');
+      if (!threadTitle.trim() || threadTitle === 'New Chat') {
+        setThreadTitle('Chat');
+      }
+    }
+
     const userMessage = text || '(attachment)';
     setPendingToolApproval(null);
     setInput('');
@@ -1150,7 +1271,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       }
     }
 
-    const messageForApi = await buildMentionContext(userMessage, {
+    let messageForApi = await buildMentionContext(userMessage, {
       activeFileName,
       activeFileContent: activeFileContent ?? null,
       activeFile: activeFile ?? null,
@@ -1158,6 +1279,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       editorCursorColumn,
       attachContextFiles: attachContextFiles.length ? attachContextFiles : undefined,
     });
+    const ghCtx = githubRepoContext?.trim();
+    if (ghCtx) {
+      messageForApi += `${MENTION_CONTEXT_HEADER}### Selected GitHub repository\nThe user chose **${ghCtx}** as the active repo in the dashboard. Prefer \`github_file\` with repo="${ghCtx}" when reading files, and direct them to the Deploy/GitHub panel to browse or open files.`;
+    }
 
     const form = new FormData();
     form.append('message', messageForApi);
@@ -1515,6 +1640,27 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     }
   };
 
+  const mobileAgentsHome = isNarrow && mobileHubTab === 'agents' && viewMode === 'list';
+  const mobileAgentsThread = isNarrow && mobileHubTab === 'agents' && viewMode === 'thread';
+  const hubBodyVisible = isNarrow && mobileHubTab !== 'agents';
+  const sessionBlockVisible = !isNarrow || (mobileHubTab === 'agents' && viewMode === 'list');
+  const messagesVisible =
+    !isNarrow || (mobileHubTab === 'agents' && viewMode === 'thread' && mobileThreadTab === 'chat');
+  const contextTabVisible =
+    isNarrow && mobileHubTab === 'agents' && viewMode === 'thread' && mobileThreadTab === 'context';
+  const composerVisible =
+    !isNarrow ||
+    (mobileHubTab === 'agents' &&
+      (viewMode === 'list' || (viewMode === 'thread' && mobileThreadTab === 'chat')));
+  const composerFlexOrder = mobileAgentsHome ? 'order-2' : 'order-5';
+  const sessionFlexOrder = mobileAgentsHome ? 'order-3' : 'order-2';
+
+  const filteredGhRepos = useMemo(() => {
+    const q = repoSearch.trim().toLowerCase();
+    if (!q) return ghRepos;
+    return ghRepos.filter((r) => (r.full_name || '').toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q));
+  }, [ghRepos, repoSearch]);
+
   return (
     <>
       <div className="flex flex-col h-[100dvh] overflow-hidden bg-[var(--bg-panel)] w-full">
@@ -1527,7 +1673,167 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         .chat-hide-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
-        <div className="shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38dvh,280px)] min-h-0">
+        {isNarrow && (
+          <header className="grid grid-cols-[auto_1fr_auto] items-center gap-2 px-3 py-2.5 border-b border-[var(--border-subtle)] shrink-0 bg-[var(--bg-panel)] z-10">
+            <img
+              src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail"
+              alt=""
+              className="w-6 h-6 rounded object-cover shrink-0"
+            />
+            <nav className="flex items-center justify-center gap-3 min-w-0 overflow-x-auto chat-hide-scroll">
+              {(['agents', 'automations', 'dashboard'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setMobileHubTab(tab)}
+                  className={`shrink-0 text-[13px] font-medium transition-colors whitespace-nowrap ${
+                    mobileHubTab === tab ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                  }`}
+                >
+                  {tab === 'agents' ? 'Agents' : tab === 'automations' ? 'Automations' : 'Dashboard'}
+                </button>
+              ))}
+            </nav>
+            <div
+              className="w-7 h-7 rounded-full bg-[var(--bg-hover)] border border-[var(--border-subtle)] flex items-center justify-center text-[9px] text-[var(--text-muted)] shrink-0"
+              aria-hidden
+            >
+              ·
+            </div>
+          </header>
+        )}
+
+        {isNarrow && mobileAgentsThread && (
+          <div className="shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] z-10">
+            <div className="flex items-center gap-2 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('list');
+                  setMobileThreadTab('chat');
+                }}
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)]"
+                aria-label="Back to conversations"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <span className="flex-1 text-[14px] font-semibold text-[var(--text-main)] truncate">{threadTitle}</span>
+              <button
+                type="button"
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
+                aria-label="More options"
+              >
+                <MoreHorizontal size={18} />
+              </button>
+            </div>
+            <div className="flex gap-2 px-3 pb-2">
+              <button
+                type="button"
+                onClick={() => setMobileThreadTab('chat')}
+                className={`px-3 py-1 rounded-md text-[12px] font-medium transition-colors ${
+                  mobileThreadTab === 'chat'
+                    ? 'bg-[var(--scene-bg)] text-[var(--text-main)] border border-[var(--border-subtle)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                }`}
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileThreadTab('context')}
+                className={`px-3 py-1 rounded-md text-[12px] font-medium transition-colors ${
+                  mobileThreadTab === 'context'
+                    ? 'bg-[var(--scene-bg)] text-[var(--text-main)] border border-[var(--border-subtle)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                }`}
+              >
+                Context
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!isNarrow &&
+          (viewMode === 'list' ? (
+            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
+                Agent Sam
+              </span>
+            </div>
+          ) : (
+            <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-[var(--border-subtle)]">
+              <button
+                type="button"
+                onClick={() => setViewMode('list')}
+                className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-main)]"
+                aria-label="Back to conversations"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span className="flex-1 text-[13px] font-semibold text-[var(--text-main)] truncate">{threadTitle}</span>
+              <button
+                type="button"
+                className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-[var(--text-muted)]"
+                aria-label="More options"
+              >
+                <MoreHorizontal size={15} />
+              </button>
+            </div>
+          ))}
+
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+        {hubBodyVisible && (
+          <div className="order-1 flex-1 min-h-0 overflow-y-auto chat-hide-scroll px-4 py-4 space-y-4">
+            {mobileHubTab === 'automations' ? (
+              <>
+                <h2 className="text-[16px] font-semibold text-[var(--text-heading)]">Automations and GitHub</h2>
+                <p className="text-[12px] text-[var(--text-muted)] leading-relaxed">
+                  Open the full GitHub repository browser (same as the Deploy tab) to work in any connected repo, browse
+                  files, and open them in the editor.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onOpenGitHubIntegration?.()}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--scene-bg)] text-[13px] font-medium text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                >
+                  <FolderGit2 size={18} className="text-[var(--solar-cyan)]" />
+                  Open GitHub repos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.open('https://github.com/new', '_blank', 'noopener,noreferrer')}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[13px] font-medium text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                >
+                  <Zap size={18} className="text-[var(--solar-yellow)]" />
+                  Create new repository on GitHub
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 className="text-[16px] font-semibold text-[var(--text-heading)]">Workspace</h2>
+                <p className="text-[12px] text-[var(--text-muted)] leading-relaxed">
+                  Return to the main editor, welcome screen, and tabs. Themes from Settings still apply everywhere via your
+                  workspace <code className="text-[var(--solar-cyan)]">cms_themes</code> selection.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onMobileOpenDashboard?.()}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--scene-bg)] text-[13px] font-medium text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                >
+                  <LayoutDashboard size={18} className="text-[var(--solar-cyan)]" />
+                  Open dashboard / editor
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {sessionBlockVisible && (
+        <div
+          className={`shrink-0 flex flex-col border-b border-[var(--border-subtle)] max-h-[min(38dvh,280px)] min-h-0 ${sessionFlexOrder} ${
+            viewMode === 'thread' ? 'max-md:hidden' : 'max-md:flex-1 max-md:max-h-none'
+          }`}
+        >
           <div className="flex justify-end px-3 pt-2 pb-1 shrink-0">
             <button
               type="button"
@@ -1539,7 +1845,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           </div>
           <div
             ref={sessionListRef}
-            className="flex-1 min-h-[72px] overflow-y-auto chat-hide-scroll"
+            className={`flex-1 min-h-[72px] overflow-y-auto chat-hide-scroll ${
+              viewMode === 'thread' ? 'max-md:hidden' : ''
+            }`}
             aria-label="Chat sessions"
           >
             {sessionsLoading ? (
@@ -1604,60 +1912,74 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             )}
           </div>
         </div>
+        )}
 
+        {messagesVisible && (
         <div
           ref={scrollRef}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
+          className="order-4 flex flex-col flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-6 pb-4 space-y-6 w-full chat-hide-scroll"
         >
-          {displayMessages.map((msg, i) => (
-            <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
-                <div
-                  className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${
-                    msg.role === 'user'
-                      ? 'bg-[var(--border-subtle)]'
-                      : 'bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30'
-                  }`}
-                >
-                  {msg.role === 'user' ? (
-                    <User size={11} className="text-[var(--text-muted)]" />
-                  ) : (
-                    <Bot size={11} className="text-[var(--solar-cyan)]" />
-                  )}
-                </div>
-                <div
-                  className={`agent-content text-[0.8125rem] leading-relaxed ${
-                    msg.role === 'user'
-                      ? 'bg-[var(--scene-bg)] border border-[var(--border-subtle)] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
-                      : 'text-[var(--text-main)] w-full'
-                  }`}
-                >
-                  {msg.role === 'user' && msg.attachmentPreviews && msg.attachmentPreviews.length > 0 ? (
-                    <div className="flex flex-wrap gap-2 mb-2">
-                      {msg.attachmentPreviews.map((ap, j) =>
-                        ap.type === 'image' && ap.previewUrl ? (
-                          <img
-                            key={j}
-                            src={ap.previewUrl}
-                            alt=""
-                            className="max-h-40 max-w-full rounded-lg border border-[var(--border-subtle)] object-contain"
-                          />
-                        ) : (
-                          <span
-                            key={j}
-                            className="text-[0.6875rem] text-[var(--text-muted)] px-2 py-1 rounded border border-[var(--border-subtle)]/60"
-                          >
-                            {ap.name}
-                          </span>
-                        )
-                      )}
-                    </div>
-                  ) : null}
-                  {renderMessageContent(msg.content, i)}
+          {showEmptyThreadPlaceholder ? (
+            <div className="flex flex-col items-center justify-center flex-1 gap-3 px-6">
+              <div className="w-10 h-10 rounded-xl bg-[var(--solar-cyan)]/15 border border-[var(--solar-cyan)]/25 flex items-center justify-center">
+                <Bot size={18} className="text-[var(--solar-cyan)]" />
+              </div>
+              <p className="text-[13px] font-semibold text-[var(--text-main)]">What should we work on?</p>
+              <p className="text-[11px] text-[var(--text-muted)] text-center leading-relaxed">
+                Type below to start a conversation with Agent Sam.
+              </p>
+            </div>
+          ) : (
+            displayMessages.map((msg, i) => (
+              <div key={i} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse max-w-[85%]' : 'max-w-full w-full'}`}>
+                  <div
+                    className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center mt-1 ${
+                      msg.role === 'user'
+                        ? 'bg-[var(--border-subtle)]'
+                        : 'bg-[var(--solar-cyan)]/20 border border-[var(--solar-cyan)]/30'
+                    }`}
+                  >
+                    {msg.role === 'user' ? (
+                      <User size={11} className="text-[var(--text-muted)]" />
+                    ) : (
+                      <Bot size={11} className="text-[var(--solar-cyan)]" />
+                    )}
+                  </div>
+                  <div
+                    className={`agent-content text-[0.8125rem] leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-[var(--scene-bg)] border border-[var(--border-subtle)] px-4 py-3 rounded-2xl rounded-tr-sm text-[var(--text-main)]'
+                        : 'text-[var(--text-main)] w-full'
+                    }`}
+                  >
+                    {msg.role === 'user' && msg.attachmentPreviews && msg.attachmentPreviews.length > 0 ? (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {msg.attachmentPreviews.map((ap, j) =>
+                          ap.type === 'image' && ap.previewUrl ? (
+                            <img
+                              key={j}
+                              src={ap.previewUrl}
+                              alt=""
+                              className="max-h-40 max-w-full rounded-lg border border-[var(--border-subtle)] object-contain"
+                            />
+                          ) : (
+                            <span
+                              key={j}
+                              className="text-[0.6875rem] text-[var(--text-muted)] px-2 py-1 rounded border border-[var(--border-subtle)]/60"
+                            >
+                              {ap.name}
+                            </span>
+                          )
+                        )}
+                      </div>
+                    ) : null}
+                    {renderMessageContent(msg.content, i)}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))
+          )}
 
           {isLoading && (
             <div className="flex justify-start">
@@ -1676,9 +1998,55 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             </div>
           )}
         </div>
+        )}
 
+        {contextTabVisible && (
+          <div className="order-4 flex-1 min-h-0 overflow-y-auto chat-hide-scroll px-4 py-4 space-y-4 border-t border-[var(--border-subtle)]">
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--scene-bg)] p-4 space-y-3">
+              <h3 className="text-[12px] font-semibold text-[var(--text-heading)] uppercase tracking-wide">Editor</h3>
+              <p className="text-[12px] text-[var(--text-muted)] font-mono break-all">
+                {activeFile ? getEditorDisplayPath(activeFile, activeFileName) : 'No file open'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onOpenCodeTab?.()}
+                className="w-full py-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[13px] font-medium text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+              >
+                Open code editor
+              </button>
+            </div>
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--scene-bg)] p-4 space-y-3">
+              <h3 className="text-[12px] font-semibold text-[var(--text-heading)] uppercase tracking-wide">GitHub</h3>
+              <p className="text-[12px] text-[var(--text-muted)]">
+                {githubRepoContext?.trim()
+                  ? `Selected repo: ${githubRepoContext}`
+                  : 'Pick a repository from the Agents home screen (repo button below the composer).'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onOpenGitHubIntegration?.(githubRepoContext?.trim() ? { expandRepoFullName: githubRepoContext.trim() } : undefined)}
+                className="w-full py-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] text-[13px] font-medium text-[var(--text-main)] hover:bg-[var(--bg-hover)] flex items-center justify-center gap-2"
+              >
+                <GitBranch size={16} className="text-[var(--solar-cyan)]" />
+                Open GitHub browser
+              </button>
+              <button
+                type="button"
+                onClick={() => window.open('https://github.com/new', '_blank', 'noopener,noreferrer')}
+                className="w-full py-2.5 rounded-lg border border-[var(--border-subtle)] text-[13px] font-medium text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] flex items-center justify-center gap-2"
+              >
+                <ExternalLink size={16} />
+                Create new repo on GitHub
+              </button>
+            </div>
+          </div>
+        )}
+
+        {composerVisible && (
         <div
-          className="flex-shrink-0 w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2"
+          className={`${composerFlexOrder} flex-shrink-0 w-full px-3 pt-2 bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] space-y-2 ${
+            mobileAgentsHome ? 'border-b border-[var(--border-subtle)] md:border-b-0' : ''
+          }`}
           style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
         >
           {pendingToolApproval && (
@@ -1874,8 +2242,124 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               </button>
             </div>
           </div>
+          {mobileAgentsHome && (
+            <button
+              type="button"
+              onClick={() => setRepoDrawerOpen(true)}
+              className="flex w-full items-center gap-1.5 text-left text-[11px] text-[var(--text-muted)] transition-colors hover:text-[var(--text-main)] py-2 px-1 rounded-lg hover:bg-[var(--bg-hover)]"
+            >
+              <FolderGit2 size={14} className="shrink-0 text-[var(--solar-cyan)]" />
+              <span className="min-w-0 flex-1 truncate">
+                {githubRepoContext?.trim() || 'Select GitHub repository'}
+              </span>
+              <ChevronDown size={14} className="shrink-0 opacity-60" />
+            </button>
+          )}
         </div>
+        )}
+
+        </div>
+
       </div>
+
+      {repoDrawerOpen && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-[70] bg-[var(--text-main)]/50"
+            aria-label="Close repository picker"
+            onClick={() => setRepoDrawerOpen(false)}
+          />
+          <div className="fixed bottom-0 left-0 right-0 z-[80] flex max-h-[min(72dvh,520px)] flex-col rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-[0_-8px_32px_color-mix(in_srgb,var(--text-main)_12%,transparent)]">
+            <div className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-[var(--border-subtle)]" aria-hidden />
+            <div className="shrink-0 border-b border-[var(--border-subtle)] px-4 py-3">
+              <h3 className="text-[14px] font-semibold text-[var(--text-main)]">Repositories</h3>
+              <input
+                type="search"
+                value={repoSearch}
+                onChange={(e) => setRepoSearch(e.target.value)}
+                placeholder="Search repos"
+                className="mt-2 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--scene-bg)] py-2 px-3 text-[13px] text-[var(--text-main)] placeholder:text-[var(--text-placeholder-strong)] outline-none focus:border-[var(--solar-cyan)]"
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto chat-hide-scroll p-2">
+              {!ghReposAuthed && !ghReposLoading ? (
+                <div className="space-y-3 px-2 py-6 text-center">
+                  <p className="text-[12px] text-[var(--text-muted)]">Connect GitHub to list repositories.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = '/api/oauth/github/start';
+                    }}
+                    className="rounded-lg border border-[var(--border-subtle)] bg-[var(--scene-bg)] px-4 py-2 text-[12px] font-medium text-[var(--text-main)]"
+                  >
+                    Connect GitHub
+                  </button>
+                </div>
+              ) : ghReposLoading ? (
+                <div className="flex justify-center py-8 text-[var(--text-muted)]">
+                  <Loader2 className="animate-spin" size={24} />
+                </div>
+              ) : filteredGhRepos.length === 0 ? (
+                <p className="px-3 py-6 text-center text-[12px] text-[var(--text-muted)]">No repositories match.</p>
+              ) : (
+                filteredGhRepos.map((repo) => {
+                  const full = String(repo.full_name || '');
+                  const selected = githubRepoContext === full;
+                  return (
+                    <div key={String(repo.id)} className="mb-1 flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            localStorage.setItem(LS_GH_REPO, full);
+                          } catch {
+                            /* ignore */
+                          }
+                          setGithubRepoContext(full);
+                          setRepoDrawerOpen(false);
+                        }}
+                        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[13px] transition-colors hover:bg-[var(--bg-hover)] ${
+                          selected ? 'bg-[var(--scene-bg)] ring-1 ring-[var(--solar-cyan)]/40' : ''
+                        }`}
+                      >
+                        <span className="truncate font-medium text-[var(--text-main)]">{full}</span>
+                        {repo.default_branch ? (
+                          <span className="shrink-0 text-[10px] text-[var(--text-muted)]">{repo.default_branch}</span>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        title="Browse files in Deploy tab"
+                        onClick={() => {
+                          try {
+                            localStorage.setItem(LS_GH_REPO, full);
+                          } catch {
+                            /* ignore */
+                          }
+                          setGithubRepoContext(full);
+                          setRepoDrawerOpen(false);
+                          onOpenGitHubIntegration?.({ expandRepoFullName: full });
+                        }}
+                        className="shrink-0 rounded-lg border border-[var(--border-subtle)] px-2 py-2 text-[11px] text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)]"
+                      >
+                        Files
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+              <button
+                type="button"
+                onClick={() => window.open('https://github.com/new', '_blank', 'noopener,noreferrer')}
+                className="mt-2 w-full rounded-lg border border-dashed border-[var(--border-subtle)] py-3 text-[12px] font-medium text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-main)]"
+              >
+                Create new repository on GitHub
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {typeof document !== 'undefined' &&
         attachMenuOpen &&

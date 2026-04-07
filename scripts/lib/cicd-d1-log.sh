@@ -159,7 +159,7 @@ cicd_log_sandbox_deploy() {
     final_status="failed"
     final_conclusion="failed"
   fi
-  [[ "$hc_code" =~ ^2[0-9][0-9]$ ]] || {
+  [[ "$hc_code" =~ ^(2[0-9][0-9]|30[12378])$ ]] || {
     pipe_status="failed"
     final_status="failed"
     final_conclusion="failed"
@@ -429,7 +429,7 @@ cicd_log_prod_promote() {
     final_status="failed"
     final_conclusion="failed"
   fi
-  [[ "$hc_code" =~ ^2[0-9][0-9]$ ]] || {
+  [[ "$hc_code" =~ ^(2[0-9][0-9]|30[12378])$ ]] || {
     pipe_status="failed"
     final_status="failed"
     final_conclusion="failed"

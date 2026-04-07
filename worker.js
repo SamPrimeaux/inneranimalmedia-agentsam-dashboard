@@ -6433,7 +6433,7 @@ function appendCidiPipelineRunFromDeploy(env, {
 }) {
   if (!env?.DB || !deploymentId) return;
   env.DB.prepare(
-    `INSERT OR IGNORE INTO cidi_pipeline_runs
+    `INSERT OR IGNORE INTO cicd_pipeline_runs
       (run_id, branch, env, status, commit_hash,
        worker_version_id, notes, created_at)
     VALUES (?, 'main', ?, 'passed', ?, ?, ?, datetime('now'))`
@@ -6443,7 +6443,7 @@ function appendCidiPipelineRunFromDeploy(env, {
     String(gitHash || 'unknown'),
     String(versionId || deploymentId),
     String(description || 'deploy via script')
-  ).run().catch((e) => console.warn('[cidi_pipeline_runs]', e?.message ?? e));
+  ).run().catch((e) => console.warn('[cicd_pipeline_runs]', e?.message ?? e));
 }
 
 async function runPostDeployQualityChecks(env, deploymentId) {
@@ -19024,7 +19024,7 @@ async function handleCidiApi(request, url, env, ctx) {
     const env_name = body.env === 'sandbox' ? 'sandbox' : 'production';
 
     await env.DB.prepare(
-      `INSERT INTO cidi_pipeline_runs 
+      `INSERT INTO cicd_pipeline_runs 
        (run_id, env, status, branch, triggered_at) 
        VALUES (?, ?, 'running', ?, datetime('now'))`
     ).bind(runId, env_name, branch).run();
@@ -19211,7 +19211,7 @@ async function handleCidiApi(request, url, env, ctx) {
 
     const allPassed = results.every(r => r.status === 'pass');
     await env.DB.prepare(
-      `UPDATE cidi_pipeline_runs 
+      `UPDATE cicd_pipeline_runs 
        SET status=?, completed_at=datetime('now') 
        WHERE run_id=?`
     ).bind(allPassed ? 'passed' : 'failed', runId).run();
@@ -19224,7 +19224,7 @@ async function handleCidiApi(request, url, env, ctx) {
     const runs = await env.DB.prepare(
       `SELECT run_id, env, status, branch, commit_hash, 
               triggered_at, completed_at, notes
-       FROM cidi_pipeline_runs 
+       FROM cicd_pipeline_runs 
        ORDER BY triggered_at DESC LIMIT 20`
     ).all();
 

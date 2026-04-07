@@ -6,7 +6,9 @@
 # Override: SANDBOX_BUCKET=my-bucket ./scripts/deploy-sandbox.sh
 # Usage: ./scripts/deploy-sandbox.sh [--skip-build] [--worker-only]
 # Auto-called by: npm run deploy:sandbox (which Cloudflare Workers Builds triggers on git push)
-# After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs via scripts/lib/cicd-d1-log.sh (D1 writes non-fatal).
+# After deploy: logs cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs,
+#               pipeline_runs, cicd_notifications, tracking_metrics, quality_runs, quality_results
+#               via scripts/lib/cicd-d1-log.sh (D1 writes non-fatal).
 # Optional: CICD_D1_LOG=0 to skip | CICD_SKIP_HEALTH_CURL=1 to skip sandbox curl | CICD_SKIP_RESEND=1 to skip Resend email
 #           SANDBOX_HEALTH_URL=... to override check URL
 set -euo pipefail
@@ -29,8 +31,7 @@ if [ -f "./scripts/with-cloudflare-env.sh" ] && [ -z "${CLOUDFLARE_API_TOKEN:-}"
   source <(grep -v '^#' .env.cloudflare 2>/dev/null | grep -v '^\s*$' | sed 's/^/export /' || true)
 fi
 
-# Resend + internal API secret — merge from .env when token was already in shell (skips full source above)
-# Never run bare `export` (empty $(...) ): bash then prints the whole environment as declare -x lines.
+# Resend + internal API secret — merge from .env when token was already in shell
 if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
   _iam_resend_kv=$(grep -E '^(RESEND_API_KEY|RESEND_FROM|RESEND_TO|INTERNAL_API_SECRET)=' "${REPO_ROOT}/.env.cloudflare" | grep -v '^#' | xargs || true)
   if [ -n "${_iam_resend_kv}" ]; then
@@ -89,10 +90,7 @@ _send_sandbox_resend_notification() {
   [[ "$total_ms" =~ ^[0-9]+$ ]] || total_ms=$(( ms_build + ms_r2 + ms_worker ))
 
   local vuln_row=""
-  GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
-  GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
-  [ "${GITHUB_VULN_HIGH}" -gt 0 ] 2>/dev/null \
-  local audit_json audit_high audit_moderate audit_critical
+  local audit_json audit_high audit_moderate
   audit_json=$(cd "${REPO_ROOT}/agent-dashboard/agent-dashboard" && npm audit --json 2>/dev/null || echo '{}')
   audit_high=$(echo "$audit_json" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('high',0)+v.get('critical',0))" 2>/dev/null || echo 0)
   audit_moderate=$(echo "$audit_json" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('moderate',0))" 2>/dev/null || echo 0)
@@ -137,7 +135,7 @@ _send_sandbox_resend_notification() {
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>QUALITY / SECURITY</td></tr>
       ${vuln_row}
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>TRACKING</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>D1 Tables</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs, deployments, dashboard_versions</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>D1 Tables</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_runs, pipeline_runs, cicd_notifications, tracking_metrics, quality_runs, quality_results</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Pipeline</td><td style='padding:5px 12px;color:#64748b;font-size:11px;'>${pipe_ref} (${gh_ref})</td></tr>
     </table>
   </div>
@@ -163,8 +161,13 @@ _send_sandbox_resend_notification() {
     local msg_id
     msg_id=$(grep -o '"id":"[^"]*"' /tmp/resend-sandbox-response.json 2>/dev/null | cut -d'"' -f4 || echo "")
     echo "  Resend: sent -> ${RESEND_TO} (HTTP ${http_code}${msg_id:+ id=${msg_id}})"
+    # Export for cicd_notifications D1 row (read by cicd_log_resend_notification in cicd-d1-log.sh)
+    export CICD_RESEND_MESSAGE_ID="${msg_id:-}"
+    export CICD_RESEND_HTTP_STATUS="${http_code}"
   else
     echo "  WARN: Resend failed (HTTP ${http_code}) — check /tmp/resend-sandbox-response.json"
+    export CICD_RESEND_MESSAGE_ID=""
+    export CICD_RESEND_HTTP_STATUS="${http_code}"
   fi
 }
 
@@ -173,7 +176,6 @@ CICD_T_BUILD_START=0
 CICD_T_BUILD_END=0
 CICD_T_R2_START=0
 CICD_T_R2_END=0
-# Submodule meauxcad uses npm workspaces; SPA output is agent-dashboard/agent-dashboard/dist (not submodule root dist/).
 DIST_DIR="${REPO_ROOT}/agent-dashboard/agent-dashboard/dist"
 MANIFEST_NAME=".deploy-manifest"
 MANIFEST_PATH="${DIST_DIR}/${MANIFEST_NAME}"
@@ -214,7 +216,6 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     exit 1
   fi
 
-  # Monotonic deploy version (embedded in HTML comment for curl | grep checks)
   CURRENT_V=$(cat "$VER_FILE" 2>/dev/null || echo "0")
   NEXT_V=$((CURRENT_V + 1))
   echo "$NEXT_V" > "$VER_FILE"
@@ -222,8 +223,6 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   perl -i -pe "s|</html>|<!-- dashboard-v:${NEXT_V} --></html>|" "${DIST_DIR}/index.html"
   CURRENT_V=$NEXT_V
 
-  # Manifest: all files under dist/ except the manifest itself (paths use /).
-  # Exclude macOS metadata so AppleDouble / Finder junk never lands in R2.
   : > "$MANIFEST_PATH"
   (
     cd "$DIST_DIR"
@@ -272,7 +271,6 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     --file "${DIST_DIR}/index.html" --content-type "text/html" \
     --config "$CFG" --remote 2>&1 | tee -a "$R2_CICD_LOG"
 
-  # Workspace shell — same keys worker serves for /dashboard/iam-workspace-shell + /static/dashboard/shell.css
   echo "  Uploading static/dashboard/iam-workspace-shell.html..."
   "${WRANGLER[@]}" r2 object put "${SANDBOX_BUCKET}/static/dashboard/iam-workspace-shell.html" \
     --file "${REPO_ROOT}/dashboard/iam-workspace-shell.html" --content-type "text/html" \
@@ -285,7 +283,6 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   echo "  R2 uploads complete."
   CICD_T_R2_END=$(date +%s)
 
-  # Log to dashboard_versions in D1 (is_production=0) — one row per dist file + HTML shell
   sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
   page_name_for() {
     local f="$1"
@@ -341,7 +338,6 @@ EOF
     if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
       export CICD_R2_BUNDLE_BYTES
     else
-      # Avoid $(($(du...) * 1024)) — nested $(/( parses as subshell + junk and can yield "2_BUNDLE_BYTES: command not found".
       _du_k=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{s+=$1} END {print s+0}')
       CICD_R2_BUNDLE_BYTES=$(( (_du_k) * 1024 ))
       export CICD_R2_BUNDLE_BYTES
@@ -359,6 +355,10 @@ cat /tmp/sandbox-deploy-out.txt
 
 SANDBOX_VERSION=$(grep "Current Version ID:" /tmp/sandbox-deploy-out.txt | awk '{print $NF}' | head -1 || true)
 [[ "$SANDBOX_VERSION" =~ ^[a-f0-9-]{36}$ ]] || SANDBOX_VERSION="unknown"
+
+# Parse worker startup time from wrangler output for quality gate
+WORKER_STARTUP_LINE=$(grep -i "Worker Startup Time:" /tmp/sandbox-deploy-out.txt 2>/dev/null | head -1 || true)
+export CICD_WORKER_STARTUP_MS=$(echo "$WORKER_STARTUP_LINE" | grep -oE '[0-9]+' | head -1 || echo "0")
 
 export CICD_PHASE_SANDBOX_END_UNIX="$CICD_T_WORKER_END"
 export CICD_PHASE_SANDBOX_DURATION_MS=$(( (CICD_T_WORKER_END - CICD_SB_DEPLOY_START_UNIX) * 1000 ))
@@ -399,7 +399,13 @@ DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
   2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
 echo "[deploy-sandbox] D1 deployment row updated"
 
-# CICD audit (cicd_github_runs, cicd_pipeline_runs, cicd_run_steps, cicd_events, cicd_notifications)
+# ── Vuln counts for quality gates + notification (exported before cicd_log_sandbox_deploy) ──
+_AUDIT_JSON=$(cd "${REPO_ROOT}/agent-dashboard/agent-dashboard" && npm audit --json 2>/dev/null || echo '{}')
+export GITHUB_VULN_HIGH=$(echo "$_AUDIT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('high',0)+v.get('critical',0))" 2>/dev/null || echo "0")
+export GITHUB_VULN_MODERATE=$(echo "$_AUDIT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('moderate',0))" 2>/dev/null || echo "0")
+unset _AUDIT_JSON
+
+# ── CICD audit — writes all D1 tables including notifications, metrics, quality ──
 CICD_MS_BUILD=$(( (CICD_T_BUILD_END - CICD_T_BUILD_START) * 1000 ))
 CICD_MS_R2=$(( (CICD_T_R2_END - CICD_T_R2_START) * 1000 ))
 CICD_MS_WORKER=$(( (CICD_T_WORKER_END - CICD_T_WORKER_START) * 1000 ))
@@ -426,7 +432,6 @@ if [ "$WORKER_ONLY" -eq 0 ] && [ -f "${MANIFEST_PATH:-}" ]; then
   R2_BYTE_EST=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}' || echo 0)
   R2_FILES_UPDATED=$((R2_LINE_COUNT + 4))
   if [ -f "${R2_CICD_LOG:-}" ]; then
-    # grep returns 1 when no match; with pipefail that would abort the whole script after a successful deploy.
     r2_parsed=$(grep -oE '[0-9]+ files' "$R2_CICD_LOG" 2>/dev/null | head -1 | awk '{print $1}' || true)
     if [[ "$r2_parsed" =~ ^[0-9]+$ ]] && [ "$r2_parsed" -gt 0 ]; then
       R2_FILES_UPDATED="$r2_parsed"
@@ -481,4 +486,5 @@ else
 fi
 echo ""
 
+exit 0
 exit 0

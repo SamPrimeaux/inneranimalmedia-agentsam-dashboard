@@ -391,12 +391,6 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const [height, setHeight]         = useState(DEFAULT_HEIGHT);
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [activeTab, setActiveTab]   = useState<ShellTab>('terminal');
-
-    useEffect(() => {
-      props.onHeightChange?.(isCollapsed ? 0 : height);
-      document.documentElement.style.setProperty('--terminal-height', (isCollapsed ? 0 : height) + 'px');
-      return () => document.documentElement.style.setProperty('--terminal-height', '0px');
-    }, [height, isCollapsed]);
     const [status, setStatus]         = useState<'connecting' | 'online' | 'offline'>('connecting');
     const [aiOpen, setAiOpen]         = useState(false);
     const [restarting, setRestarting] = useState(false);

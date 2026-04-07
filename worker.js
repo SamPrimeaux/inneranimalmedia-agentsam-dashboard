@@ -7467,7 +7467,7 @@ async function logAssistantCodeArtifactIfPresent(env, {
 }
 
 /** INSERT OR IGNORE so FK on agent_messages.conversation_id -> agent_conversations(id) succeeds. Same id used for agent_sessions row (workspace/chat session key). */
-async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId) {
+async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId, workspaceId = null) {
   if (!env?.DB || conversationId == null || String(conversationId).trim() === '') return;
   const cid = String(conversationId).trim();
   const uid =
@@ -7491,7 +7491,7 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
       `INSERT OR IGNORE INTO agent_conversations (id, user_id, title, name, created_at, updated_at, is_archived, tenant_id, workspace_id)
        VALUES (?, ?, 'Chat', ?, ?, ?, 0, ?, ?)`
     )
-      .bind(cid, uid, cid.length > 120 ? cid.slice(0, 120) : cid, now, now, tenant, null)
+      .bind(cid, uid, cid.length > 120 ? cid.slice(0, 120) : cid, now, now, tenant, workspaceId || null)
       .run();
   } catch (e) {
     console.warn('[ensureAgentChatPersistenceParents] agent_conversations', e?.message ?? e);
@@ -7501,7 +7501,7 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
 async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false, chatPersistenceUserId = null) {
   if (env.DB && conversationId != null && String(conversationId).trim() !== '') {
-    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId);
+    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId, routingOpts?.workspaceId || "ws_inneranimalmedia");
   }
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;

@@ -1704,7 +1704,7 @@ const App: React.FC = () => {
 
               {/* Editor + optional aux bottom + terminal — flex column so drawer respects drag height */}
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
-                  <div className="flex-1 min-h-0 relative flex flex-col">
+                  <div className="flex-1 min-h-0 relative flex flex-col" style={{ paddingBottom: 'var(--terminal-height, 0px)' }}>
                   {/* 3D CANVAS MOUNT - Permanently in DOM to avoid WebGL context loss */}
                   <div 
                       ref={containerRef} 

@@ -135,7 +135,8 @@ DEPLOY_START=$(date +%s)
 echo "Deploying worker..."
 set -o pipefail
 DEPLOY_LOG=$(mktemp)
-if ! ./scripts/with-cloudflare-env.sh wrangler deploy --config "$CONFIG" 2>&1 | tee "$DEPLOY_LOG"; then
+DEPLOY_MSG="$(cat "$(dirname "$0")/../agent-dashboard/.sandbox-deploy-version" 2>/dev/null | xargs printf 'v%s' || echo 'v?') | $(git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(git log -1 --pretty=%s 2>/dev/null | cut -c1-60)"
+if ! ./scripts/with-cloudflare-env.sh wrangler deploy --config "$CONFIG" --message "$DEPLOY_MSG" 2>&1 | tee "$DEPLOY_LOG"; then
   rm -f "$DEPLOY_LOG"
   set +o pipefail
   exit 1

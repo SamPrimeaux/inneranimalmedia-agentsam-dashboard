@@ -476,7 +476,8 @@ case "$MODE" in
     cd "$REPO_ROOT/agent-dashboard" && npm run build
     hr; log "Deploying to sandbox worker ($SANDBOX_WORKER)..."; hr
     START_MS=$(($(date +%s%N)/1000000))
-    "$CF_ENV_WRAPPER" wrangler deploy --config "$SANDBOX_CONFIG"
+    DEPLOY_MSG="$(cat "$REPO_ROOT/agent-dashboard/.sandbox-deploy-version" 2>/dev/null | xargs printf 'v%s' || echo 'v?') | $(git_hash | cut -c1-7) | ${DEPLOY_NOTE:-sandbox}"
+    "$CF_ENV_WRAPPER" wrangler deploy --config "$SANDBOX_CONFIG" --message "$DEPLOY_MSG"
     END_MS=$(($(date +%s%N)/1000000))
     DURATION=$(( END_MS - START_MS ))
     local_ver="v$(date +%Y%m%d)"
@@ -492,7 +493,8 @@ case "$MODE" in
     preflight
     run_benchmark
     hr; log "Promoting to production ($IAM_WORKER)..."; hr
-    "$CF_ENV_WRAPPER" wrangler deploy --config "$IAM_PROD_CONFIG"
+    DEPLOY_MSG="$(cat "$REPO_ROOT/agent-dashboard/.sandbox-deploy-version" 2>/dev/null | xargs printf 'v%s' || echo 'v?') | $(git_hash | cut -c1-7) | ${DEPLOY_NOTE:-promote}"
+    "$CF_ENV_WRAPPER" wrangler deploy --config "$IAM_PROD_CONFIG" --message "$DEPLOY_MSG"
     local_ver="v$(date +%Y%m%d)"
     hash=$(git_hash)
     write_deploy_record "production" "$IAM_WORKER" "$local_ver" ""

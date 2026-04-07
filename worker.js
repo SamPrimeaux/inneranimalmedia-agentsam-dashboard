@@ -6348,7 +6348,7 @@ function appendMcpAuditLogAndStats(env, {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, unixepoch())`
   ).bind(
     tid,
-    conversationId ?? '',
+    conversationId || null,
     toolName,
     toolCategory ?? 'builtin',
     argsSlice,
@@ -18523,6 +18523,16 @@ async function handleMcpApi(req, u, e, ctx) {
             rows = r.results || [];
           } catch (_) {}
           return jsonResponse({ suggestions: rows });
+        }
+        if (pathLower === '/api/mcp/commands/use' && method === 'POST') {
+          let body = {};
+          try { body = await req.json(); } catch (_) {}
+          const suggId = String(body.id || '').trim();
+          if (!suggId) return jsonResponse({ error: 'id required' }, 400);
+          try {
+            await e.DB.prepare("UPDATE mcp_command_suggestions SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = unixepoch() WHERE id = ?").bind(suggId).run();
+          } catch (_) {}
+          return jsonResponse({ ok: true });
         }
         if (pathLower === '/api/mcp/dispatch' && method === 'POST') {
           let body = {};

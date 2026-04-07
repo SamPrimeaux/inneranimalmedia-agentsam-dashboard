@@ -721,7 +721,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
       term.open(terminalRef.current);
-      setTimeout(() => fitAddon.fit(), 50);
+      setTimeout(() => fitAddon.fit(), 150);
 
       // Intercept `?` → open AI panel instead of sending to PTY
       term.onData(data => {
@@ -736,9 +736,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       xtermRef.current  = term;
       fitAddonRef.current = fitAddon;
 
-      const onResize = () => setTimeout(() => fitAddonRef.current?.fit(), 50);
+      const onResize = () => requestAnimationFrame(() => fitAddonRef.current?.fit());
       window.addEventListener('resize', onResize);
-      return () => { window.removeEventListener('resize', onResize); term.dispose(); };
+      const ro = new ResizeObserver(() => requestAnimationFrame(() => fitAddonRef.current?.fit()));
+      if (terminalRef.current) ro.observe(terminalRef.current);
+      return () => { window.removeEventListener('resize', onResize); ro.disconnect(); term.dispose(); };
     }, [isCollapsed, activeTab]);
 
     // ── Drag resize ───────────────────────────────────────────────────────────
@@ -749,7 +751,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       const onMove = (me: MouseEvent) => {
         const next = Math.max(MIN_HEIGHT, Math.min(startH + (startY - me.clientY), maxH));
         setHeight(next);
-        setTimeout(() => fitAddonRef.current?.fit(), 30);
+        requestAnimationFrame(() => fitAddonRef.current?.fit());
       };
       const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
       document.addEventListener('mousemove', onMove);

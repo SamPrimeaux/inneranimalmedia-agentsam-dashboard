@@ -7575,6 +7575,14 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
   const ctxKey = `agent-sessions/${conversationId}/context.json`;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      "UPDATE agent_conversations SET r2_context_key = ?, message_count = message_count + 1, last_message_at = ?, total_cost_usd = total_cost_usd + ?, model = ?, project_id = COALESCE(project_id, ?) WHERE id = ?"
+    ).bind(ctxKey, now, amountUsd || 0, safeModelKey, routingOpts?.projectId ?? null, conversationId).run();
+  } catch (e) {
+    console.error('[agent/chat] agent_conversations UPDATE failed:', e?.message ?? e);
+  }
   let _sessionCtx = { messages: [], message_count: 0 };
   try {
     let kv = null;

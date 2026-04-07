@@ -7569,8 +7569,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   }
   try {
     await env.DB.prepare(
-      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, token_count, created_at) VALUES (?,?,?,?,?,?,?,?,unixepoch())"
-    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, msgR2Key, 'iam-platform', tokenCount).run();
+      "INSERT INTO agent_messages (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, token_count, cost_usd, tenant_id, user_id, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())"
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? env.TENANT_ID ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
@@ -16045,8 +16045,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           }).catch(() => {});
         }
         await env.DB.prepare(
-          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, r2_key, r2_bucket, token_count, created_at) VALUES (?,?,?,?,?,?,?,?,unixepoch())"
-        ).bind(id, convId, role, body.content, body.provider || null, msgR2Key, 'iam-platform', tokenCount || 0).run();
+          "INSERT INTO agent_messages (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, token_count, cost_usd, tenant_id, user_id, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())"
+        ).bind(id, convId, role, body.content, body.provider || null, body.model || null, 0, 0, tokenCount || 0, 0, null, null, msgR2Key, 'iam-platform').run();
         const ctxKey = `agent-sessions/${convId}/context.json`;
         let ctx = { messages: [], message_count: 0 };
         try {

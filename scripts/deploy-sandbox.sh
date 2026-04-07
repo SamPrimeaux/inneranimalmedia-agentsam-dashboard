@@ -48,6 +48,17 @@ PROD_CFG="wrangler.production.toml"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/lib/cicd-d1-log.sh"
 
+fmt_ms() {
+  local ms=${1:-0}
+  if [ "$ms" -ge 60000 ]; then
+    printf '%dm %ds' $(( ms / 60000 )) $(( (ms % 60000) / 1000 ))
+  elif [ "$ms" -ge 1000 ]; then
+    printf '%ds' $(( ms / 1000 ))
+  else
+    printf '%dms' "$ms"
+  fi
+}
+
 _send_sandbox_resend_notification() {
   local outcome="${1:-success}"
   local resend_key="${RESEND_API_KEY:-}"
@@ -81,8 +92,15 @@ _send_sandbox_resend_notification() {
   GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
   GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
   [ "${GITHUB_VULN_HIGH}" -gt 0 ] 2>/dev/null \
-    && vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#ef4444;font-weight:600;'>${GITHUB_VULN_HIGH} high / ${GITHUB_VULN_MODERATE} moderate</td></tr>" \
-    || vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#22c55e;'>none detected</td></tr>"
+  local audit_json audit_high audit_moderate audit_critical
+  audit_json=$(cd "${REPO_ROOT}/agent-dashboard/agent-dashboard" && npm audit --json 2>/dev/null || echo '{}')
+  audit_high=$(echo "$audit_json" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('high',0)+v.get('critical',0))" 2>/dev/null || echo 0)
+  audit_moderate=$(echo "$audit_json" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('metadata',{}).get('vulnerabilities',{}); print(v.get('moderate',0))" 2>/dev/null || echo 0)
+  if [ "${audit_high:-0}" -gt 0 ] || [ "${audit_moderate:-0}" -gt 0 ]; then
+    vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#ef4444;font-weight:600;'>${audit_high} high / ${audit_moderate} moderate</td></tr>"
+  else
+    vuln_row="<tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Advisories</td><td style='padding:5px 12px;color:#22c55e;'>none detected</td></tr>"
+  fi
 
   local sb_url pipe_ref gh_ref dash_v
   dash_v="${CICD_V:-${CURRENT_V:-0}}"
@@ -94,7 +112,7 @@ _send_sandbox_resend_notification() {
   html_body="<!DOCTYPE html><html><body style='margin:0;padding:0;background:#0f1117;font-family:ui-monospace,monospace;'>
 <div style='max-width:600px;margin:28px auto;background:#1a1d2e;border:1px solid #2d3148;border-radius:8px;overflow:hidden;'>
   <div style='background:#12151f;padding:16px 24px;border-bottom:3px solid ${status_color};'>
-    <span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${status_color};margin-right:8px;'></span>
+    <img src='https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail' style='height:24px;vertical-align:middle;margin-right:10px;' alt='IAM'/><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${status_color};margin-right:8px;'></span>
     <span style='color:#e2e8f0;font-size:14px;font-weight:700;letter-spacing:0.05em;'>IAM // SANDBOX ${status_label}</span>
     <span style='float:right;color:#475569;font-size:11px;margin-top:2px;'>$(date -u +%Y-%m-%d)</span>
   </div>
@@ -112,10 +130,10 @@ _send_sandbox_resend_notification() {
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Commit</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${git_sha} — ${git_msg}</td></tr>
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>ASSETS + TIMINGS</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 files (est.)</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_FILES_UPDATED:-0} uploads / ${R2_LINE_COUNT:-0} manifest lines</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Build</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_build}ms</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_r2}ms</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_worker}ms</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Wall</td><td style='padding:5px 12px;color:#e2e8f0;font-weight:600;'>${total_ms}ms</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Build</td><td style='padding:5px 12px;color:#e2e8f0;'>$(fmt_ms ${ms_build})</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2</td><td style='padding:5px 12px;color:#e2e8f0;'>$(fmt_ms ${ms_r2})</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>$(fmt_ms ${ms_worker})</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Wall</td><td style='padding:5px 12px;color:#e2e8f0;font-weight:600;'>$(fmt_ms ${total_ms})</td></tr>
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>QUALITY / SECURITY</td></tr>
       ${vuln_row}
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>TRACKING</td></tr>
@@ -440,7 +458,7 @@ cicd_log_sandbox_deploy "$SANDBOX_VERSION" "$CICD_V" "$SANDBOX_BUCKET" "$R2_FILE
 if [ "${CICD_SKIP_RESEND:-0}" != "1" ]; then
   echo ""
   echo "Sending Resend notification..."
-  _send_sandbox_resend_notification "success"
+  _send_sandbox_resend_notification "$([[ "$SANDBOX_VERSION" != "unknown" ]] && echo success || echo failed)"
   echo ""
   echo "  Verify: curl -s ${SANDBOX_HEALTH_URL:-https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent} | grep -o 'dashboard-v:[0-9]*'"
 fi

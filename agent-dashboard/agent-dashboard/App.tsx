@@ -119,6 +119,7 @@ const App: React.FC = () => {
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
   );
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [terminalPanelHeight, setTerminalPanelHeight] = useState(0);
   /** Layout: optional split editor chrome (reserved for Monaco split view). */
   const [splitLayout, setSplitLayout] = useState(false);
   /** Mirrored from Lab shell for Output tab (build / r2 / help). */
@@ -1703,7 +1704,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Editor + optional aux bottom + terminal — flex column so drawer respects drag height */}
-              <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative" style={{ paddingBottom: terminalPanelHeight }}>
                   <div className="flex-1 min-h-0 relative flex flex-col">
                   {/* 3D CANVAS MOUNT - Permanently in DOM to avoid WebGL context loss */}
                   <div 
@@ -1798,6 +1799,7 @@ const App: React.FC = () => {
                           onOutputLine={(line) =>
                             setShellOutputLines((prev) => [...prev.slice(-250), line])
                           }
+                          onHeightChange={setTerminalPanelHeight}
                       />
                   )}
               </div>

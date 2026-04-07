@@ -31,6 +31,7 @@ interface XTermShellProps {
   workspaceLabel?: string;
   workspaceId?: string;
   productLabel?: string;
+  onHeightChange?: (h: number) => void;
 }
 
 const MIN_HEIGHT = 140;
@@ -391,6 +392,10 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const [height, setHeight]         = useState(DEFAULT_HEIGHT);
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [activeTab, setActiveTab]   = useState<ShellTab>('terminal');
+
+    useEffect(() => {
+      props.onHeightChange?.(isCollapsed ? 0 : height);
+    }, [height, isCollapsed]);
     const [status, setStatus]         = useState<'connecting' | 'online' | 'offline'>('connecting');
     const [aiOpen, setAiOpen]         = useState(false);
     const [restarting, setRestarting] = useState(false);

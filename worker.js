@@ -9643,7 +9643,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
                 } else {
                   const repo = params.repo; const path = params.path;
                   if (!repo || !path) { resultText = JSON.stringify({ error: 'repo and path required' }); } else {
-                    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
+                    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${tokenRow.access_token}`, 'User-Agent': 'IAM-Platform' } });
                     const data = await res.json();
                     if (!res.ok) resultText = JSON.stringify({ error: data.message || 'Not found' });
                     else if (data.content) resultText = atob((data.content || '').replace(/\n/g, ''));
@@ -19468,7 +19468,7 @@ async function runGithubPatBuiltinTool(env, toolName, params) {
     const path = p.path;
     if (!repo || !path) return { error: 'repo and path required' };
     const res = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`,
+      `https://api.github.com/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`,
       { headers }
     );
     const data = await res.json().catch(() => ({}));

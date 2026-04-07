@@ -19475,6 +19475,7 @@ async function runGithubPatBuiltinTool(env, toolName, params) {
     if (!res.ok) return { error: typeof data.message === 'string' ? data.message : 'Not found' };
     if (data.content) {
       const text = atob(String(data.content).replace(/\n/g, ''));
+      if (p.start_line || p.end_line) { const lines = text.split("\n"); return { ok: true, content: lines.slice((p.start_line||1)-1, p.end_line||lines.length).join("\n"), sha: data.sha??null }; }
       return { ok: true, content: text, sha: data.sha ?? null };
     }
     return { ok: true, listing: data };

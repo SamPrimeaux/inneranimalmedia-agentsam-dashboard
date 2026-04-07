@@ -50,3 +50,4 @@ audit-*.txt
 # macOS metadata junk
 migrations/._*
 **/.DS_Store
+._*

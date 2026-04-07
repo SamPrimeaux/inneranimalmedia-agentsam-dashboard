@@ -7488,10 +7488,10 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
   }
   try {
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO agent_conversations (id, user_id, title, name, created_at, updated_at, is_archived)
-       VALUES (?, ?, 'Chat', ?, ?, ?, 0)`
+      `INSERT OR IGNORE INTO agent_conversations (id, user_id, title, name, created_at, updated_at, is_archived, tenant_id, workspace_id)
+       VALUES (?, ?, 'Chat', ?, ?, ?, 0, ?, ?)`
     )
-      .bind(cid, uid, cid.length > 120 ? cid.slice(0, 120) : cid, now, now)
+      .bind(cid, uid, cid.length > 120 ? cid.slice(0, 120) : cid, now, now, tenant, null)
       .run();
   } catch (e) {
     console.warn('[ensureAgentChatPersistenceParents] agent_conversations', e?.message ?? e);
@@ -7570,7 +7570,7 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   try {
     await env.DB.prepare(
       "INSERT INTO agent_messages (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, token_count, cost_usd, tenant_id, user_id, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())"
-    ).bind(msgId, conversationId, role, fullContent.slice(0, 50000), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? env.TENANT_ID ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 500), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? env.TENANT_ID ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
@@ -11756,7 +11756,7 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
   }
 }
 
-async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null, modelRates = null) {
+async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null, modelRates = null, agent_id = null, ctx = null, routingOpts = null, chatPersistenceUserId = null) {
   const reader = branch2.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -11780,6 +11780,8 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
           continue;
         }
         accumulateUsageFromJson(apiPlatform, j, acc);
+        if (j?.delta?.type === 'text_delta' && j?.delta?.text) fullText += j.delta.text;
+        if (typeof j?.delta === 'string') fullText += j.delta;
       }
     }
   } catch (e) {
@@ -11787,6 +11789,7 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   } finally {
     reader.releaseLock();
   }
+  let fullText = '';
   let inputTok = acc.in;
   let outputTok = acc.out;
   let cacheReadTok = acc.cacheRead || 0;
@@ -11827,6 +11830,9 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
       ) / 1_000_000
       : 0;
     await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
+  }
+  if (fullText && env.DB && conversationId) {
+    await streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTok, outputTok, 0, agent_id, ctx, '', agentsamRunId, routingOpts, 0, 0, true, chatPersistenceUserId);
   }
 }
 
@@ -12315,9 +12321,9 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
+      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap, agentAiIdSse, ctx, { tenantId: tenantIdChatSse }, ingestBypass ? null : chatSseSession?.user_id ?? null));
     } else {
-      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
+      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap, agentAiIdSse, ctx, { tenantId: tenantIdChatSse }, ingestBypass ? null : chatSseSession?.user_id ?? null);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }

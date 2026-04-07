@@ -1228,11 +1228,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       messageForApi += `${MENTION_CONTEXT_HEADER}### Selected GitHub repository\nThe user chose **${ghCtx}** as the active repo in the dashboard. Prefer \`github_file\` with repo="${ghCtx}" when reading files, and direct them to the Deploy/GitHub panel to browse or open files.`;
     }
 
+    const effectiveConvId = conversationId || (() => { const id = crypto.randomUUID(); setConversationId(id); try { localStorage.setItem(LS_AGENT_CHAT_CONVERSATION_ID, id); } catch (_) {} return id; })();
     const form = new FormData();
     form.append('message', messageForApi);
     form.append('mode', mode);
     form.append('model', selectedModelKey);
-    form.append('conversationId', conversationId || '');
+    form.append('conversationId', effectiveConvId);
     form.append('contextMode', String(activeProject));
     attachments.forEach((a) => form.append('files', a.file));
 

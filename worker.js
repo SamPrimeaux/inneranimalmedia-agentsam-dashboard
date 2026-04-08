@@ -12029,7 +12029,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
           .bind(tenantIdChatSse)
           .all(),
         env.DB.prepare(
-          `SELECT tool_name, tool_category, description
+          `SELECT tool_name, tool_category, description, input_schema
          FROM mcp_registered_tools
          WHERE COALESCE(enabled, 1) = 1
            AND COALESCE(is_degraded, 0) = 0
@@ -12127,10 +12127,11 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     if (!String(promptOut || '').includes('Brand and output policy (Inner Animal Media)')) {
       promptOut = [IAM_SSE_BRAND_OUTPUT_POLICY, promptOut].filter(Boolean).join('\n\n');
     }
-    return promptOut;
+    return { prompt: promptOut, tools: mcpSlice || [] };
   };
 
   let chatSseSystemPrompt = agentBaseSystem;
+  let lastLoadedToolsSse = [];
 
   if (!messageHasSlashForSkillBody && tenantIdChatSse && env.DB) {
     try {
@@ -12168,7 +12169,9 @@ You can delegate tasks directly to Claude Code running on the host machine by st
             .catch(() => { });
         }
       } else {
-        chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+        const { prompt: pOut, tools: tOut } = await buildChatSseSystemPromptResolved();
+        chatSseSystemPrompt = pOut;
+        lastLoadedToolsSse = tOut;
         const tok = estimateCompiledContextTokens(chatSseSystemPrompt);
         const cacheRowId = crypto.randomUUID();
         try {
@@ -12190,10 +12193,14 @@ You can delegate tasks directly to Claude Code running on the host machine by st
       }
     } catch (cacheWrapErr) {
       console.warn('[agent/chat-sse] sse system cache', cacheWrapErr?.message ?? cacheWrapErr);
-      chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+      const { prompt: pOut, tools: tOut } = await buildChatSseSystemPromptResolved();
+      chatSseSystemPrompt = pOut;
+      lastLoadedToolsSse = tOut;
     }
   } else {
-    chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+    const { prompt: pOut, tools: tOut } = await buildChatSseSystemPromptResolved();
+    chatSseSystemPrompt = pOut;
+    lastLoadedToolsSse = tOut;
   }
 
   const mkUpstreamError = async (upstream, providerName) => {
@@ -12307,6 +12314,20 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         max_tokens: 8192,
         stream: true,
         system: chatSseSystemPrompt,
+        tools: (lastLoadedToolsSse || []).map(t => {
+          let props = {};
+          try { props = JSON.parse(t.input_schema || '{}'); } catch (_) {}
+          return {
+            name: t.tool_name,
+            description: (t.description || t.tool_name).slice(0, 500),
+            input_schema: {
+              type: "object",
+              properties: props,
+              required: Object.entries(props).filter(([,v]) => v && v.required).map(([k]) => k)
+            }
+          };
+        }),
+        tool_choice: { type: "auto" },
         messages: [
           {
             role: 'user',

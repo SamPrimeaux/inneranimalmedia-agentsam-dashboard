@@ -12127,7 +12127,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     if (!String(promptOut || '').includes('Brand and output policy (Inner Animal Media)')) {
       promptOut = [IAM_SSE_BRAND_OUTPUT_POLICY, promptOut].filter(Boolean).join('\n\n');
     }
-    return { prompt: promptOut, tools: mcpSlice || [] };
+    return { prompt: promptOut, tools: (typeof mcpSlice !== "undefined" ? mcpSlice : []) };
   };
 
   let chatSseSystemPrompt = agentBaseSystem;

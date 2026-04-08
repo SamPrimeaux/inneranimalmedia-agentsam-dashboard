@@ -1,0 +1,555 @@
+5: * Browser: MYBROWSER -- Playwright for /api/browser/* and /api/playwright/* when binding is configured.
+112:/** GET /api/settings/theme JSON body (variables  optional terminal / monaco). */
+134:/** Merge cms_themes.config into API `variables` (GET /api/settings/theme). Supports cssVars (camelCase) and css_vars. */
+253:/** Build `/api/themes/active` payload from a cms_themes row (joined or direct). */
+481:/** Zero Trust / mac tunnel — only superadmin-group users may restart connections (POST /api/tunnel/restart). */
+557:/** Lowercase hostnames always permitted for Agent Sam fetch URL validation (e.g. https://claude.ai/api/mcp/auth_callback). */
+709:    if (request.method === 'POST' && (url.pathname === '/broadcast' || url.pathname.endsWith('/broadcast'))) {
+804:    if (url.pathname === '/health') {
+808:    if (url.pathname === '/history') {
+817:    if (url.pathname === '/message' && request.method === 'POST') {
+833:    if (url.pathname === '/rag-cache' && request.method === 'GET') {
+854:    if (url.pathname === '/rag-cache' && request.method === 'POST') {
+1416:// (Crypto matches /api/env/* _vaultDecrypt; defined at module scope so fetch can call it.)
+1450:// ----- Inbound webhooks (/api/hooks/*) -----
+1585:  '/api/hooks/github': '/api/webhooks/github',
+1586:  '/api/hooks/cursor': '/api/webhooks/cursor',
+1587:  '/api/hooks/stripe': '/api/webhooks/stripe',
+1588:  '/api/hooks/internal': '/api/webhooks/internal',
+1589:  '/api/hooks/supabase': '/api/webhooks/supabase',
+1590:  '/api/hooks/openai': '/api/webhooks/openai',
+2461:    (pathLower === '/api/settings' && method === 'GET' && (url.searchParams.get('category') || '').trim()) ||
+2462:    (pathLower === '/api/settings/appearance' && method === 'PATCH') ||
+2463:    (pathLower === '/api/ai/guardrails' && method === 'GET') ||
+2464:    (pathLower === '/api/ai/models' && method === 'GET') ||
+2465:    (/^\/api\/ai\/models\/[^/]+$/.test(pathLower) && method === 'PATCH') ||
+2466:    (pathLower === '/api/ai/routing-rules' && (method === 'GET' || method === 'POST')) ||
+2467:    (/^\/api\/ai\/routing-rules\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+2468:    (pathLower === '/api/ai/integrations' && method === 'GET') ||
+2469:    (pathLower === '/api/agent/rules' && method === 'GET') ||
+2470:    (pathLower === '/api/commands/custom' && method === 'GET') ||
+2471:    (pathLower === '/api/hooks/subscriptions' && (method === 'GET' || method === 'POST')) ||
+2472:    (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') ||
+2473:    (/^\/api\/hooks\/subscriptions\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+2474:    (pathLower === '/api/settings/deploy-context' && method === 'GET') ||
+2475:    (pathLower === '/api/settings/docs-providers' && method === 'GET') ||
+2476:    (pathLower === '/api/settings/agent-config' && method === 'PATCH') ||
+2477:    (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') ||
+2478:    (pathLower === '/api/hooks/executions' && method === 'GET') ||
+2479:    (pathLower === '/api/knowledge' && method === 'GET') ||
+2480:    (pathLower === '/api/knowledge/crawl' && method === 'POST') ||
+2481:    (pathLower === '/api/app-icons' && method === 'GET') ||
+2482:    (pathLower === '/api/spend' && method === 'GET') ||
+2483:    (pathLower === '/api/spend/summary' && method === 'GET') ||
+2484:    (pathLower === '/api/spend/unified' && method === 'GET') ||
+2485:    (pathLower === '/api/billing' && method === 'GET') ||
+2486:    (pathLower === '/api/cidi/current' && method === 'GET') ||
+2487:    (pathLower === '/api/deploy/rollback' && method === 'POST');
+2493:    if (pathLower === '/api/settings' && method === 'GET') {
+2500:    if (pathLower === '/api/settings/appearance' && method === 'PATCH') {
+2519:    if (pathLower === '/api/settings/deploy-context' && method === 'GET') {
+2529:    if (pathLower === '/api/settings/docs-providers' && method === 'GET') {
+2575:    if (pathLower === '/api/ai/guardrails' && method === 'GET') {
+2579:    if (pathLower === '/api/ai/models' && method === 'GET') {
+2607:    if (pathLower === '/api/ai/routing-rules' && method === 'GET') {
+2613:    if (pathLower === '/api/ai/routing-rules' && method === 'POST') {
+2683:    if (pathLower === '/api/ai/integrations' && method === 'GET') {
+2687:    if (pathLower === '/api/settings/agent-config' && method === 'PATCH') {
+2706:    if (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') {
+2736:    if (pathLower === '/api/agent/rules' && method === 'GET') {
+2742:    if (pathLower === '/api/commands/custom' && method === 'GET') {
+2748:    if (pathLower === '/api/hooks/subscriptions' && method === 'GET') {
+2787:    if (pathLower === '/api/hooks/subscriptions' && method === 'POST') {
+2817:    if (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') {
+2860:    if (pathLower === '/api/hooks/executions' && method === 'GET') {
+2867:    if (pathLower === '/api/knowledge' && method === 'GET') {
+2874:    if (pathLower === '/api/knowledge/crawl' && method === 'POST') {
+2892:    if (pathLower === '/api/app-icons' && method === 'GET') {
+2898:    if (pathLower === '/api/spend' && method === 'GET') {
+2932:    if (pathLower === '/api/spend/summary' && method === 'GET') {
+2948:    if (pathLower === '/api/spend/unified' && method === 'GET') {
+2960:    if (pathLower === '/api/billing' && method === 'GET') {
+2971:    if (pathLower === '/api/cidi/current' && method === 'GET') {
+2976:    if (pathLower === '/api/deploy/rollback' && method === 'POST') {
+3008:    if (url.pathname.startsWith('/api/meauxcad/d1/')) {
+3015:        if (request.method === 'GET' && url.pathname === '/api/meauxcad/d1/tables') {
+3020:        if (request.method === 'GET' && url.pathname.startsWith('/api/meauxcad/d1/schema/')) {
+3026:        if (request.method === 'POST' && url.pathname === '/api/meauxcad/d1/query') {
+3054:      // /api/tools-proxy/* — proxy tools keys through DASHBOARD R2 (sandbox has no TOOLS binding)
+3055:      if (pathLower.startsWith('/api/tools-proxy/') && env.DASHBOARD) {
+3056:        const proxyKey = path.slice('/api/tools-proxy/'.length);
+3088:      if (path === '/api/health' || pathLower === '/api/health') {
+3096:      if (pathLower === '/api/system/health' && methodUpper === 'GET') {
+3118:      if (path === '/health' || pathLower === '/health') {
+3141:      if (pathLower.startsWith('/api/meauxcad/')) {
+3149:        // POST /api/meauxcad/agent-runs — create an IAM agent run from MeauxCAD
+3150:        if (pathLower === '/api/meauxcad/agent-runs' && methodUpper === 'POST') {
+3171:        // POST /api/meauxcad/deployments — log MeauxCAD deploy to shared deployments table
+3172:        if (pathLower === '/api/meauxcad/deployments' && methodUpper === 'POST') {
+3198:      // ----- API: Webhooks (canonical /api/webhooks/*  /api/email/inbound; legacy /api/hooks/*) -----
+3199:      if ((pathLower === '/api/webhooks/health' || pathLower === '/api/hooks/health') && methodUpper === 'GET') {
+3203:        if (pathLower === '/api/email/inbound') {
+3204:          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend_inbound', source: 'resend', endpointPath: '/api/email/inbound' }, ctx);
+3206:        if (pathLower === '/api/webhooks/resend') {
+3207:          return handleInboundWebhook(env, request, secret, { verifyKind: 'resend', source: 'resend', endpointPath: '/api/webhooks/resend' }, ctx);
+3209:        if (pathLower === '/api/webhooks/stripe') {
+3210:          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/webhooks/stripe' }, ctx);
+3212:        if (pathLower === '/api/webhooks/github') {
+3213:          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/webhooks/github' }, ctx);
+3215:        if (pathLower === '/api/webhooks/cursor') {
+3216:          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/webhooks/cursor' }, ctx);
+3218:        if (pathLower === '/api/webhooks/cloudflare') {
+3219:          return handleInboundWebhook(env, request, secret, { verifyKind: 'cloudflare', source: 'cloudflare', endpointPath: '/api/webhooks/cloudflare' }, ctx);
+3221:        if (pathLower === '/api/webhooks/supabase') {
+3222:          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/webhooks/supabase' }, ctx);
+3224:        if (pathLower === '/api/webhooks/openai') {
+3225:          return handleInboundWebhook(env, request, secret, { verifyKind: 'openai', source: 'openai', endpointPath: '/api/webhooks/openai' }, ctx);
+3227:        if (pathLower === '/api/webhooks/internal') {
+3228:          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/webhooks/internal' }, ctx);
+3230:        if (pathLower === '/api/hooks/github') {
+3231:          return handleInboundWebhook(env, request, secret, { verifyKind: 'github', source: 'github', endpointPath: '/api/hooks/github' }, ctx);
+3233:        if (pathLower === '/api/hooks/cursor') {
+3234:          return handleInboundWebhook(env, request, secret, { verifyKind: 'cursor', source: 'cursor', endpointPath: '/api/hooks/cursor' }, ctx);
+3236:        if (pathLower === '/api/hooks/stripe') {
+3237:          return handleInboundWebhook(env, request, secret, { verifyKind: 'stripe', source: 'stripe', endpointPath: '/api/hooks/stripe' }, ctx);
+3239:        if (pathLower === '/api/hooks/internal') {
+3240:          return handleInboundWebhook(env, request, secret, { verifyKind: 'internal', source: 'internal', endpointPath: '/api/hooks/internal' }, ctx);
+3242:        if (pathLower === '/api/hooks/supabase') {
+3243:          return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/hooks/supabase' }, ctx);
+3248:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/post-deploy') {
+3273:      if (url.pathname === '/api/deployments/log' && (request.method || 'GET').toUpperCase() === 'POST') {
+3276:      if (url.pathname === '/api/deployments/recent' && (request.method || 'GET').toUpperCase() === 'GET') {
+3281:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/record-deploy') {
+3328:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/deploy-complete') {
+3380:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/telemetry/v1/traces') {
+3482:      if (pathLower.startsWith('/api/browser/')) {
+3487:      if (pathLower === '/api/overview/stats') {
+3490:      if (pathLower === '/api/overview/recent-activity') {
+3493:      if (pathLower === '/api/overview/checkpoints') {
+3496:      if (pathLower === '/api/overview/activity-strip') {
+3499:      if (pathLower === '/api/overview/deployments') {
+3504:      if (url.pathname === '/api/dashboard/time-track/manual' && request.method === 'POST') {
+3510:      if (pathLower.startsWith('/api/dashboard/time-track')) {
+3515:      if (pathLower === '/api/colors/all') {
+3520:      if (pathLower.startsWith('/api/finance/')) {
+3525:      if (pathLower === '/api/clients') {
+3530:      if (pathLower === '/api/projects') {
+3535:      if (pathLower.startsWith('/api/hub/')) {
+3536:        const hubPath = pathLower.slice('/api/hub/'.length);
+3550:      if (pathLower === '/api/billing/summary') {
+3555:      if (pathLower === '/api/oauth/google/start') {
+3558:      if (pathLower === '/api/oauth/google/callback') {
+3561:      if (pathLower === '/auth/callback/google') {
+3566:      if (pathLower === '/api/oauth/github/start') {
+3569:      if (pathLower === '/api/oauth/github/callback') {
+3572:      if (pathLower === '/auth/callback/github') {
+3577:      if (pathLower === '/api/auth/login' && (request.method || 'GET').toUpperCase() === 'POST') {
+3580:      if (pathLower === '/api/auth/backup-code' && (request.method || 'GET').toUpperCase() === 'POST') {
+3583:      if (pathLower === '/api/auth/logout' && (request.method || 'GET').toUpperCase() === 'POST') {
+3588:      if ((pathLower === '/api/admin/overnight/validate' || pathLower === '/api/admin/overnight/start') && (request.method || 'GET').toUpperCase() === 'POST') {
+3593:        if (pathLower === '/api/admin/overnight/validate') {
+3597:        if (pathLower === '/api/admin/overnight/start') {
+3603:      if (pathLower === '/api/admin/retention' && (request.method || 'GET').toUpperCase() === 'GET') {
+3619:      if (pathLower === '/api/admin/archive-conversations' && (request.method || 'GET').toUpperCase() === 'POST') {
+3631:      if (pathLower === '/api/admin/cleanup/stuck-runs' && (request.method || 'GET').toUpperCase() === 'GET') {
+3654:      if (pathLower === '/api/admin/db-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+3741:      // POST /api/admin/vectorize-kb — index ai_knowledge_base (is_indexed=0) into Vectorize; optional ai_knowledge_chunks audit.
+3742:      if (pathLower === '/api/admin/vectorize-kb' && (request.method || 'GET').toUpperCase() === 'POST') {
+3798:      // POST /api/admin/reindex-codebase — index R2 source/ (worker.js, agent-dashboard, mcp-server, docs) into Vectorize
+3799:      if (pathLower === '/api/admin/reindex-codebase' && (request.method || 'GET').toUpperCase() === 'POST') {
+3803:      // POST /api/admin/trigger-workflow — trigger ai_workflow_pipelines, log to ai_workflow_executions
+3804:      if (pathLower === '/api/admin/trigger-workflow' && (request.method || 'GET').toUpperCase() === 'POST') {
+3840:      if (pathLower === '/api/workflow/run' && methodUpper === 'POST') {
+3880:      if (path === '/api/integrations/status') {
+3901:      if (path.startsWith('/api/integrations/')) {
+3908:        if (method === 'GET' && path === '/api/integrations/gdrive/files') {
+3945:        if (method === 'GET' && path === '/api/integrations/gdrive/file') {
+3972:        if (method === 'GET' && path === '/api/integrations/github/repos') {
+3978:        if (method === 'GET' && path === '/api/integrations/github/files') {
+3986:        if (method === 'GET' && path === '/api/integrations/github/file') {
+3997:        if (method === 'GET' && path === '/api/integrations/github/raw') {
+4012:        if (method === 'GET' && path === '/api/integrations/gdrive/raw') {
+4025:      // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
+4026:      if (path === '/api/git/status' && method === 'GET') {
+4077:      // NOTE: Must be above the /api/agent/* catch-all or handleAgentApi swallows it
+4078:      if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
+4160:      // ----- API: Agent Sam settings plane (/api/agentsam/*) — MUST be before /api/agent (agentsam starts with "agent") -----
+4161:      if (pathLower.startsWith('/api/agentsam/') || pathLower === '/api/agentsam') {
+4165:      // ----- API: Draw canvas — project_draws  DASHBOARD R2 (before /api/agent) -----
+4166:      if (pathLower.startsWith('/api/draw')) {
+4170:      // ----- API: Agent dashboard (/api/agent/*), terminal session (/api/terminal/*), Playwright (/api/playwright/*) -----
+4171:      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/playwright') || pathLower.startsWith('/api/images') || pathLower.startsWith('/api/screenshots') || pathLower === '/api/loading-states' || pathLower === '/api/chat' || pathLower === '/api/models' || pathLower.startsWith('/api/telemetry')) {
+4172:        // Alias /api/chat -> /api/agent/chat
+4173:        if (pathLower === '/api/chat') url.pathname = '/api/agent/chat';
+4174:        // Alias /api/models -> /api/agent/models
+4175:        if (pathLower === '/api/models') url.pathname = '/api/agent/models';
+4180:      if (pathLower === '/api/generate' && methodUpper === 'POST') {
+4190:      if (pathLower === '/api/meshy/latest' && methodUpper === 'GET') {
+4193:      if (pathLower === '/api/drive/sync') {
+4197:      // ----- API: MCP dashboard (/api/mcp/*) -----
+4198:      if (pathLower.startsWith('/api/mcp/')) {
+4202:      if (pathLower.startsWith('/api/cidi/')) {
+4211:      if (pathLower.startsWith('/api/r2/')) {
+4216:      if (pathLower === '/api/workers' && (request.method || 'GET').toUpperCase() === 'GET') {
+4232:      if (pathLower === '/api/cloudflare/workers/list' && (request.method || 'GET').toUpperCase() === 'GET') {
+4289:      if (pathLower === '/api/tunnel/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+4303:            /** /api/tunnel/status does not use isSamOnlyUser; 403 here is almost always Cloudflare API (token scope). */
+4341:      if (pathLower === '/api/tunnel/restart' && (request.method || 'GET').toUpperCase() === 'POST') {
+4371:      if (pathLower === '/api/commands' && request.method === 'GET') {
+4435:      if (pathLower === '/api/themes' && request.method === 'GET') {
+4449:      if (pathLower === '/api/themes/active' && request.method === 'GET') {
+4492:      if (pathLower === '/api/themes/apply' && request.method === 'POST') {
+4527:      if (pathLower.startsWith('/api/vault')) {
+4533:    if (pathLower.startsWith('/api/env/')) {
+4535:      if (pathLower === '/api/env/spend' && (request.method || 'GET').toUpperCase() === 'GET') {
+4586:      // ── GET /api/env/secrets — list all (no values) ──
+4587:      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'GET') {
+4597:      // ── GET /api/env/audit — audit log ──
+4598:      if (pathLower === '/api/env/audit' && (request.method || 'GET').toUpperCase() === 'GET') {
+4611:      // ── POST /api/env/secrets — create new encrypted secret ──
+4612:      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'POST') {
+4637:      // ── POST /api/env/secrets/reveal — decrypt  return value ──
+4638:      if (pathLower === '/api/env/secrets/reveal' && (request.method || 'GET').toUpperCase() === 'POST') {
+4654:      // ── POST /api/env/secrets/test/:keyName — live provider test ──
+4701:      // ── PATCH /api/env/secrets/:keyName — rotate value ──
+4723:      // ── DELETE /api/env/secrets/:keyName — soft delete ──
+4733:      return jsonResponse({ error: 'Unknown /api/env route' }, 404);
+4735:    // ── END /api/env/* ──────────────────────────────────────────
+4737:    // /api/d1/query — D1 SQL runner (auth required). Dashboard CRUD: allow DML/DDL; block only cluster-level DROP DATABASE patterns.
+4738:    if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+4770:    // /api/hyperdrive/status — Hyperdrive binding  Postgres connectivity (no auth; same-origin only useful with session)
+4771:    if (pathLower === '/api/hyperdrive/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+4790:    // GET /api/hyperdrive/tables — public schema table names (same shape as GET /api/agent/db/tables)
+4791:    if (pathLower === '/api/hyperdrive/tables' && (request.method || 'GET').toUpperCase() === 'GET') {
+4816:    // POST /api/hyperdrive/query — Postgres via Hyperdrive (same response shape as POST /api/d1/query)
+4817:    if (pathLower === '/api/hyperdrive/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+4848:    // POST /api/database/execute — stricter safety than /api/d1/query; logs ai_query_history (migration 225). Body: workspace_id, database_type, query (aliases: sql, sql_text).
+4849:    if (pathLower === '/api/database/execute' && (request.method || 'GET').toUpperCase() === 'POST') {
+4852:    // GET /api/database/query-history — template-style; requires workspace_id (reserved); filters optional database_type -> db_target.
+4853:    if (pathLower === '/api/database/query-history' && (request.method || 'GET').toUpperCase() === 'GET') {
+4856:    // POST /api/database/snippets — template body name/query_text/database_type -> ai_query_snippets (title, sql_text, db_target).
+4857:    if (pathLower === '/api/database/snippets' && (request.method || 'GET').toUpperCase() === 'POST') {
+4862:      if (pathLower === '/api/search/federated' && methodUpper === 'POST') {
+4867:      if (pathLower === '/api/unified-search' && methodUpper === 'POST') {
+4870:      if (pathLower === '/api/unified-search/recent' && methodUpper === 'GET') {
+4873:      if (pathLower === '/api/unified-search/track' && methodUpper === 'POST') {
+4878:      if (url.pathname === '/api/search/debug' && (request.method || 'GET').toUpperCase() === 'GET') {
+4907:      if (url.pathname === '/api/search/docs' && request.method === 'POST') {
+4951:      if (url.pathname === '/api/search/docs/status' && request.method === 'GET') {
+4976:      if (url.pathname === '/api/search/docs/index' && request.method === 'POST') {
+4990:      // ----- API: Custom RAG ingest (/api/rag/ingest) -----
+4991:      if (url.pathname === '/api/rag/ingest' && request.method === 'POST') {
+5024:      if (url.pathname === '/api/rag/ingest-batch' && request.method === 'POST') {
+5070:      // ----- API: Custom RAG query (/api/rag/query) -----
+5071:      if (url.pathname === '/api/rag/query' && request.method === 'POST') {
+5139:      if (url.pathname === '/api/rag/feedback' && request.method === 'POST') {
+5166:      if (pathLower === '/api/rag/status' && methodUpper === 'GET') {
+5179:      if (url.pathname === '/api/search') {
+5233:      if (pathLower === '/api/settings/profile') {
+5296:      if (pathLower === '/api/settings/profile/avatar' && (request.method || 'GET').toUpperCase() === 'POST') {
+5309:          const avatarUrl = `${new URL(request.url).origin}/api/settings/avatar?user=${encodeURIComponent(settingsSessionUserId)}`;
+5321:      if (pathLower.startsWith('/api/settings/avatar') && (request.method || 'GET').toUpperCase() === 'GET') {
+5340:      if (pathLower === '/api/settings/preferences') {
+5391:      if (pathLower === '/api/settings/security/change-password' && (request.method || 'GET').toUpperCase() === 'POST') {
+5410:      if (pathLower === '/api/settings/security/backup-codes/generate' && (request.method || 'GET').toUpperCase() === 'POST') {
+5464:      if (pathLower === '/api/settings/sessions' && (request.method || 'GET').toUpperCase() === 'GET') {
+5476:      if (pathLower.match(/^\/api\/settings\/sessions\/all$/) && (request.method || 'GET').toUpperCase() === 'DELETE') {
+5507:      if ((request.method || 'GET').toUpperCase() === 'GET' && pathLower === '/api/settings/emails') {
+5515:      if (pathLower === '/api/workspace/create' && (request.method || '').toUpperCase() === 'POST') {
+5611:      if (pathLower === '/api/settings/workspaces' || pathLower === '/api/workspaces') {
+5692:      if (pathLower === '/api/settings/workspace/default' && (request.method === 'PUT' || request.method === 'PATCH')) {
+5728:      if (url.pathname === '/api/settings/theme') {
+5808:        if (pathLower === '/api/agent/session/ws' && env.IAM_COLLAB) {
+5849:      if (pathLower === '/auth/signin' || pathLower === '/auth/login' || pathLower === '/auth/signup') {
+5858:      if (pathLower === '/dashboard' || pathLower === '/dashboard/') {
+5859:        return Response.redirect(url.origin  '/dashboard/overview', 302);
+5862:      // Session gate: all /dashboard/* HTML (overview, agent, fragments, etc.) — static /static/* and /auth/* stay public
+5863:      if (env.DASHBOARD && pathLower.startsWith('/dashboard/')) {
+5874:      // Dashboard page fragments: /dashboard/pages/<name>.html -> static/dashboard/pages/<name>.html (for shell #page-content injection)
+5878:        const fragmentKey = `static/dashboard/pages/${pageName}`;
+5884:      if (pathLower.startsWith('/dashboard/')) {
+5885:        const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
+5886:        const key = `static/dashboard/${segment}.html`;
+5897:      // /static/dashboard/agent/ so the browser requests .../static/dashboard/agent/assets/chunk.js
+5899:      if (!obj && assetKey.startsWith('static/dashboard/agent/')) {
+5900:        const relAgent = assetKey.slice('static/dashboard/agent/'.length);
+5904:      if (!obj && env.DASHBOARD && assetKey.startsWith('static/dashboard/agent/')) {
+5905:        const relAgent = assetKey.slice('static/dashboard/agent/'.length);
+5909:      if (!obj && pathLower === '/static/dashboard/glb-viewer.html' && env.DASHBOARD) {
+5910:        obj = await env.DASHBOARD.get('static/dashboard/glb-viewer.html');
+5913:      // Dashboard static: if path is /static/dashboard/foo.js and not found, try dashboard/foo.js
+5914:      if (!obj && pathLower.startsWith('/static/dashboard/') && env.DASHBOARD) {
+5915:        const staticSegment = pathLower.slice('/static/dashboard/'.length).split('/')[0];
+5917:        // Finance, Billing, Clients: script may be requested lowercase; R2 keys are capitalized .jsx (same dir: agent-sam static/dashboard/)
+5918:        if (!obj && staticSegment === 'finance.jsx') obj = await env.DASHBOARD.get('static/dashboard/Finance.jsx');
+5919:        if (!obj && staticSegment === 'billing.jsx') obj = await env.DASHBOARD.get('static/dashboard/Billing.jsx');
+5920:        if (!obj && staticSegment === 'clients.jsx') obj = await env.DASHBOARD.get('static/dashboard/Clients.jsx');
+5922:        if (!obj && staticSegment === 'Finance.jsx') obj = await env.DASHBOARD.get('static/dashboard/Finance.jsx');
+5923:        if (!obj && staticSegment === 'Billing.jsx') obj = await env.DASHBOARD.get('static/dashboard/Billing.jsx');
+5924:        if (!obj && staticSegment === 'Clients.jsx') obj = await env.DASHBOARD.get('static/dashboard/Clients.jsx');
+5927:        const noCache = pathLower.startsWith('/static/dashboard/agent/') || pathLower.startsWith('/dashboard/') || url.searchParams.has('v');
+5932:      if (env.STATIC_ASSETS && !pathLower.startsWith('/api/')) {
+6113:  if (pathLower === '/api/browser/screenshot' && method === 'GET') {
+6174:    if (pathLower === '/api/browser/health') {
+6183:    if (pathLower === '/api/browser/metrics') {
+6909:/** Base system instructions for /api/agent/chat — from D1 only (no hardcoded persona). */
+7950:/** Log section-level prompt telemetry for /api/agent/chat. Logs approximate chars/tokens per section, mode, provider, stream, tool count, message count. */
+8264:/** Per-panel tool categories for /dashboard/mcp (request body agent_id). Agent Sam / unknown ids: no filter. */
+8350: * Core RAG ingest for one autorag object_key. Used by POST /api/rag/ingest and /api/rag/ingest-batch.
+9692:          error: 'Tool requires approval. Approve in the UI or call /api/agent/chat/execute-approved-tool with the same tool_name and params.',
+9878:          error: 'Tool requires approval. Approve in the UI or call /api/agent/chat/execute-approved-tool with the same tool_name and params.',
+10105: * Used by POST /api/agent/terminal/run and runToolLoop (terminal_execute).
+10755: * https://cursor.com/docs/cloud-agent/api/endpoints — Basic auth: btoa(CURSOR_API_KEY  ':').
+11565:/** Direct upstream SSE passthrough for /api/agent/chat with tee-based telemetry. */
+12092:Call any tool by name via POST /api/mcp/stream. All tools below are live.
+12907:/** IAM Explorer /api/r2/file: allowlisted binding names only (no env.TOOLS). */
+13303:  if (pathLower === '/api/version' && method === 'GET') {
+13328:  if (pathLower === '/api/workspaces/current/shell' && method === 'GET') {
+13365:  if (pathLower === '/api/workspaces/list' && method === 'GET') {
+13435:  if (pathLower === '/api/r2/list' && method === 'GET') {
+13442:  if (pathLower === '/api/r2/get' && method === 'GET') {
+13467:  if (pathLower === '/api/r2/file' && method === 'GET') {
+13491:          previewUrl: `/api/r2/get?bucket=${encodeURIComponent(bucketParam)}&key=${encodeURIComponent(key)}`,
+13511:  if (pathLower === '/api/r2/file' && method === 'POST') {
+13534:  if (pathLower === '/api/r2/upload' && method === 'POST') {
+13579:  if (pathLower === '/api/r2/delete' && method === 'DELETE') {
+13599:  if (pathLower === '/api/r2/move' && method === 'PUT') {
+13624:  if (pathLower === '/api/github/repos' && method === 'GET') {
+13750:  if (pathLower === '/api/drive/list' && method === 'GET') {
+13766:  if (pathLower === '/api/drive/get' && method === 'GET') {
+13784:  if (pathLower === '/api/drive/file' && method === 'POST') {
+13838:  if (pathLower === '/api/drive/search' && method === 'GET') {
+13855:  if (pathLower === '/api/drive/upload' && method === 'POST') {
+13904:  if (pathLower === '/api/drive/folder' && method === 'POST') {
+13953:  if (pathLower === '/api/drive/delete' && method === 'DELETE') {
+13980:  if (pathLower === '/api/r2/buckets' && method === 'GET') {
+13984:  if (pathLower === '/api/r2/stats' && method === 'GET' && url.searchParams.get('bucket')) {
+13993:  if (pathLower === '/api/r2/sync' && method === 'POST') {
+14044:    if (pathLower === '/api/r2/stats' && !url.searchParams.get('bucket')) {
+14067:    if (pathLower === '/api/r2/sync' && method === 'POST') {
+14099:    if (pathLower === '/api/r2/list' && method === 'GET') {
+14157:            '" is not bound. List is only available for worker-bound buckets (see GET /api/r2/buckets) or when R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are set.',
+14177:    if (pathLower === '/api/r2/search' && method === 'GET') {
+14210:    if (pathLower === '/api/r2/upload' && method === 'POST') {
+14219:      const publicUrl = `${url.origin}/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`;
+14223:    if (pathLower === '/api/r2/delete' && method === 'DELETE') {
+14243:    if (pathLower === '/api/r2/file' && method === 'DELETE') {
+14255:    if (pathLower === '/api/r2/url' && method === 'GET') {
+14259:      const workerUrl = `${url.origin}/api/r2/buckets/${encodeURIComponent(bucket)}/object/${encodeURIComponent(key)}`;
+14270:    if (pathLower === '/api/r2/buckets/bulk-action' && method === 'POST') {
+14410:      const proxyUrl = `${url.origin}/api/r2/buckets/${encodeURIComponent(name)}/object/${encodeURIComponent(key)}`;
+14495:        metadataJson: { route: '/api/r2/upload', bucket_binding: name, key, byte_length: body.byteLength, content_type: contentType },
+14529:    if (pathLower === '/api/draw/save' && method === 'POST') {
+14553:              route: '/api/draw/save',
+14567:    if (pathLower === '/api/draw/list' && method === 'GET') {
+14586:    // ── GET /api/draw/libraries ──────────────────────────────────────
+14587:    if (pathLower === '/api/draw/libraries' && method === 'GET') {
+14597:    // ── GET /api/draw/load ───────────────────────────────────────────
+14598:    if (pathLower === '/api/draw/load' && method === 'GET') {
+14613:    // ── POST /api/draw/save (scene JSON — falls through from PNG handler above) ──
+14614:    if (pathLower === '/api/draw/save' && method === 'POST') {
+14637:    // ── GET /api/artifacts/:id/content ──────────────────────────────
+14654:    // ── POST /api/tools/image/generate ──────────────────────────────
+14655:    if (pathLower === '/api/tools/image/generate' && method === 'POST') {
+14740:          const pubUrl = `/api/artifacts/${artId}/content`;
+14768:              route: '/api/tools/image/generate',
+14795:    // ── GET /api/image/jobs/:id ──────────────────────────────────────
+14910:    if (pathLower === '/api/agent/browse' && method === 'POST') {
+14954:    if (pathLower === '/api/telemetry/summary' && method === 'GET') {
+14982:    if (pathLower === '/api/telemetry/tools' && method === 'GET') {
+15006:    if (pathLower === '/api/agent/vertex-test' && method === 'POST') {
+15032:    if (pathLower === '/api/agent/modes' && method === 'GET') {
+15047:    if (pathLower === '/api/agent/commands' && method === 'GET') {
+15070:    if (pathLower === '/api/agent/session/mode' && method === 'POST') {
+15096:    if (pathLower === '/api/agent/problems' && method === 'GET') {
+15152:    if (pathLower === '/api/agent/keyboard-shortcuts' && method === 'GET') {
+15204:    if (pathLower === '/api/agent/notifications' && method === 'GET') {
+15246:    if (pathLower === '/api/agent/context-picker/catalog' && method === 'GET') {
+15331:    if (pathLower === '/api/agent/memory/list' && method === 'GET') {
+15357:    if (pathLower === '/api/agent/db/tables' && method === 'GET') {
+15374:    if (pathLower === '/api/agent/db/query-history' && method === 'GET') {
+15377:    if (pathLower === '/api/agent/db/query-history' && method === 'POST') {
+15380:    if (pathLower === '/api/agent/db/snippets' && method === 'GET') {
+15383:    if (pathLower === '/api/agent/db/snippets' && method === 'POST') {
+15387:    if (pathLower === '/api/agent/memory/sync' && method === 'POST') {
+15402:    if (pathLower === '/api/agent/reindex-codebase' && method === 'POST') {
+15418:    if (pathLower === '/api/agent/git/status' && method === 'GET') {
+15447:    if (pathLower === '/api/agent/git/sync' && method === 'POST') {
+15484:          body: `Proposal ID: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+15495:    if (pathLower === '/api/agent/boot') {
+15559:    if (pathLower === '/api/loading-states' && (method || 'GET').toUpperCase() === 'GET') {
+15587:    if (pathLower === '/api/agent/conversations/search' && method === 'GET') {
+15597:    if (pathLower === '/api/terminal/session/register' && method === 'POST') {
+15648:    if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
+15687:    if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
+15711:    if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
+15722:    if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
+15807:    if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
+15829:    if (pathLower === '/api/agent/terminal/complete' && method === 'POST') {
+15861:    if (pathLower === '/api/terminal/assist' && method === 'POST') {
+15932:    if (pathLower === '/api/monaco/complete' && method === 'POST') {
+16121:    if (pathLower === '/api/playwright/screenshot' && method === 'POST') {
+16230:    if (pathLower === '/api/agent/models') {
+16266:    if (pathLower === '/api/agent/sessions') {
+16315:    if (pathLower === '/api/agent/workers-ai/image' && method === 'POST') {
+16339:            route: '/api/agent/workers-ai/image',
+16351:    if (pathLower === '/api/agent/workers-ai/tts' && method === 'POST') {
+16382:    if (pathLower === '/api/agent/workers-ai/stt' && method === 'POST') {
+16412:    if (pathLower === '/api/agent/propose' && method === 'POST') {
+16448:          body: `Risk: ${risk}\nProposal ID: ${proposalId}\n\nCommand:\n${commandText.slice(0, 2000)}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+16511:    if (pathLower === '/api/agent/proposals/pending' && method === 'GET') {
+16524:    if (pathLower === '/api/agent/workflows/trigger' && method === 'POST') {
+16598:    if (pathLower === '/api/agent/chat' && method === 'POST') {
+16602:    if (pathLower === '/api/agent/do-history' && method === 'GET') {
+16621:    if (pathLower === '/api/agent/playwright' && method === 'POST') {
+16635:    if (pathLower === '/api/agent/mcp') {
+16642:    if (pathLower === '/api/agent/cidi') {
+16653:    if (pathLower === '/api/agent/telemetry') {
+16664:    if (pathLower === '/api/agent/rag/query' && method === 'POST') {
+16688:    if (pathLower === '/api/agent/rag/status' && method === 'GET') {
+16699:    if (pathLower === '/api/agent/rag/index-memory' && method === 'POST') {
+16712:    if (pathLower === '/api/agent/rag/compact-chats' && method === 'POST') {
+16732:    if (pathLower === '/api/agent/queue' && method === 'POST') {
+16757:    if (pathLower === '/api/agent/queue/status' && method === 'GET') {
+16801:    if (pathLower === '/api/agent/plan/approve' && method === 'POST') {
+16818:    if (pathLower === '/api/agent/plan/reject' && method === 'POST') {
+16835:    if (pathLower === '/api/agent/chat/execute-approved-tool' && method === 'POST') {
+16868:    if (pathLower === '/api/integrations/drive/list' && method === 'GET') {
+16871:    if (pathLower === '/api/integrations/github/list' && method === 'GET') {
+16875:    if (method === 'GET' && pathLower === '/api/integrations/gdrive/files') {
+16887:    if (method === 'GET' && pathLower === '/api/integrations/gdrive/file') {
+16899:    if (method === 'GET' && pathLower === '/api/integrations/github/repos') {
+16911:    if (method === 'GET' && pathLower === '/api/integrations/github/files') {
+16925:    if (method === 'GET' && pathLower === '/api/integrations/github/file') {
+16941:    if (pathLower === '/api/screenshots' && method === 'GET') {
+16967:            thumbnail: baseUrl  '/api/screenshots/asset?key='  encodeURIComponent(key),
+16968:            url: baseUrl  '/api/screenshots/asset?key='  encodeURIComponent(key),
+16978:    if (pathLower === '/api/screenshots/asset' && method === 'GET') {
+17004:    if (pathLower === '/api/screenshots' && method === 'DELETE') {
+17022:    if (pathLower === '/api/images' && method === 'GET') {
+17052:    if (pathLower === '/api/images' && method === 'POST') {
+17099:    if (pathLower.startsWith('/api/images/') && pathLower.endsWith('/meta')) {
+17126:    if (pathLower === '/api/agent/today-todo' && method === 'GET') {
+17153:    if (pathLower === '/api/agent/today-todo' && method === 'PUT') {
+17180:    if (pathLower === '/api/agent/context/bootstrap' && method === 'GET') {
+17202:    if (pathLower === '/api/agent/bootstrap' && method === 'GET') {
+17262:    if (pathLower === '/api/agent/r2-save' && method === 'POST') {
+17305: * Start an MCP minion workflow run or return a dry-run preview. Shared by POST /api/mcp/workflows/:id/run
+17413:    if (pathLower === '/api/agentsam/config' && method === 'GET') {
+17439:    if (pathLower === '/api/agentsam/user-policy' && method === 'GET') {
+17449:    if (pathLower === '/api/agentsam/user-policy' && method === 'PATCH') {
+17471:    if (pathLower === '/api/agentsam/hooks' && method === 'GET') {
+17509:    if (pathLower === '/api/agentsam/hooks' && method === 'POST') {
+17579:    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'GET') {
+17593:    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'POST') {
+17627:    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'GET') {
+17641:    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'POST') {
+17662:    if (pathLower === '/api/agentsam/tools-registry' && method === 'GET') {
+17682:    if (pathLower === '/api/agentsam/fetch-domains' && method === 'GET') {
+17696:    if (pathLower === '/api/agentsam/fetch-domains' && method === 'POST') {
+17736:    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'GET') {
+17750:    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'POST') {
+17790:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'GET') {
+17800:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'POST') {
+17816:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'DELETE') {
+17827:    if (pathLower === '/api/agentsam/feature-flags' && method === 'GET') {
+17909:    if (pathLower === '/api/agentsam/rules' && method === 'GET') {
+17919:    if (pathLower === '/api/agentsam/rules' && method === 'POST') {
+17933:    if (pathLower === '/api/agentsam/subagents' && method === 'GET') {
+17944:    if (pathLower === '/api/agentsam/subagents' && method === 'POST') {
+18002:    if (pathLower === '/api/agentsam/skills' && method === 'GET') {
+18019:    if (pathLower === '/api/agentsam/skills' && method === 'POST') {
+18086:    if (pathLower === '/api/agentsam/ignore-patterns/reorder' && method === 'PATCH') {
+18155:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'POST') {
+18178:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'GET') {
+18188:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'PATCH') {
+18217:    if (pathLower === '/api/agentsam/index-status' && method === 'GET') {
+18238:    if (pathLower === '/api/agentsam/indexing-summary' && method === 'GET') {
+18280:    if (pathLower === '/api/agentsam/autorag/stats' && method === 'GET') {
+18283:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+18288:    if (pathLower === '/api/agentsam/autorag/files' && method === 'GET') {
+18309:    if (pathLower === '/api/agentsam/autorag/sync' && method === 'POST') {
+18312:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+18317:    if (pathLower === '/api/agentsam/autorag/files' && method === 'DELETE') {
+18326:    if (pathLower === '/api/agentsam/autorag/upload' && method === 'POST') {
+18341:    if (pathLower === '/api/agentsam/autorag/search' && method === 'POST') {
+18344:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+18349:    if (pathLower === '/api/agentsam/runs' && method === 'GET') {
+18390:    if (pathLower === '/api/agentsam/ai' && method === 'GET') {
+18443:    if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
+18451:    if (pathLower === '/api/mcp/credentials' && method === 'GET') {
+18459:    if (pathLower === '/api/mcp/audit' && method === 'GET') {
+18468:    if (pathLower === '/api/mcp/stats' && method === 'GET') {
+18477:    if (pathLower === '/api/mcp/status' && method === 'GET') {
+18480:    if (pathLower === '/api/mcp/agents' && method === 'GET') {
+18503:        if (pathLower === '/api/mcp/tools' && method === 'GET') {
+18519:        if (pathLower === '/api/mcp/commands' && method === 'GET') {
+18527:        if (pathLower === '/api/mcp/dispatch' && method === 'POST') {
+18566:        if (pathLower === '/api/mcp/a11y') {
+18571:              endpoint: '/api/mcp/a11y',
+18585:            if (!target || target === 'https://inneranimalmedia.com/api/mcp/a11y') {
+18609:        if (pathLower === '/api/mcp/imgx') {
+18611:            return jsonResponse({ ok: true, service: 'imgx-remote-builtin', endpoint: '/api/mcp/imgx', providers: listImgxProviders(e) }, 200);
+18624:        if (pathLower === '/api/mcp/services/health' && method === 'GET') {
+18753:        if (pathLower === '/api/mcp/services') {
+18776:        // ----- /api/mcp/stream — SSE tool execution -----
+18777:        if (pathLower === '/api/mcp/stream' && method === 'POST') {
+18859:        // ----- end /api/mcp/stream -----
+18860:        if (pathLower === '/api/mcp/invoke' && method === 'POST') {
+18902:        if (pathLower === '/api/mcp/workflows' && method === 'GET') {
+18912:        if (pathLower === '/api/mcp/workflows' && method === 'POST') {
+19018:  // POST /api/cidi/run — execute smoke suite
+19019:  if (pathLower === '/api/cidi/run' && method === 'POST') {
+19038:        const r = await fetch(`${sandboxBase}/api/mcp/status`);
+19042:      const u = new URL('https://inneranimalmedia.com/api/mcp/status');
+19050:        const r = await fetch(`${sandboxBase}/api/mcp/invoke`, {
+19058:      const u = new URL('https://inneranimalmedia.com/api/mcp/invoke');
+19222:  // GET /api/cidi/runs — last 20 runs with results
+19223:  if (pathLower === '/api/cidi/runs' && method === 'GET') {
+19722:/** Invoke MCP tool from chat (same logic as /api/mcp/invoke). Returns { result } or { error }. opts.skipApprovalCheck: when true, skip requires_approval check (caller is execute-approved-tool). opts.suppressTelemetry: when true, skip recordMcpToolCall (workflow runner records its own rows). opts.allowRemoteMcp: when false, do not call remote MCP (used by inneranimalmedia-mcp-server proxy to avoid loops). opts.oauthUserId: optional email/id for gdrive_* D1 token lookup when params omit user_id. opts.messageId: optional assistant/user message id for agent_file_changes. */
+20687:    const deployCmd = `cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml 2>&1 | tee /tmp/deploy_out.txt && VERSION=$(grep 'Current Version ID:' /tmp/deploy_out.txt | awk '{print $NF}') && curl -s -X POST https://inneranimalmedia.com/api/internal/deploy-complete -H 'Content-Type: application/json' -d "{\"deploy_id\":\"${deployId}\",\"version_id\":\"$VERSION\",\"status\":\"success\"}"`;
+21339:      name: 'HTTP: production /api/health',
+21341:      url: 'https://inneranimalmedia.com/api/health',
+21359:      url: 'https://sandbox.inneranimalmedia.com/api/health',
+21375:      name: 'Tester: sandbox smoke (/api/health)',
+21377:      url: 'https://sandbox.inneranimalmedia.com/api/health',
+21861:            body: `Run: ${workflowRunId}\nStep: ${stepName}\nProposal: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+25488:/** Stricter guardrails for POST /api/database/execute (dashboard /api/d1/query remains more permissive). */
+26239:    { name: 'INGEST_SECRET', type: 'secret', description: 'X-Ingest-Secret bypass for /api/rag/ingest, /api/rag/query, /api/rag/feedback (MCP)' },
+26240:    { name: 'INTERNAL_WEBHOOK_SECRET', type: 'secret', description: '/api/webhooks/internal X-IAM-Signature HMAC' },
+26271:  if (path === '/api/vault/registry' && method === 'GET') return vaultRegistry();
+26272:  if (path === '/api/vault/projects' && method === 'GET') return vaultListProjects(env);
+26273:  if (path === '/api/vault/audit' && method === 'GET') return vaultFullAudit(request, env);
+26275:  if (path === '/api/vault/secrets') {
+27230: * Call from deploy script: curl -X POST .../api/internal/post-deploy -H "X-Internal-Secret: $INTERNAL_API_SECRET" [-d '{"cursor_rules_md":"..."}']
+27238:    'GET /api/health', 'POST /api/telemetry/v1/traces', 'GET /api/overview/stats', 'GET /api/overview/recent-activity',
+27239:    'GET /api/overview/checkpoints', 'GET /api/overview/activity-strip', 'GET /api/overview/deployments',
+27240:    'GET /api/colors/all', 'GET /api/clients', 'GET /api/projects', 'GET /api/billing/summary',
+27241:    'GET /api/oauth/google/start', 'GET /api/oauth/google/callback', 'GET /api/oauth/github/start', 'GET /api/oauth/github/callback',
+27242:    'POST /api/auth/login', 'POST /api/auth/logout', 'POST /api/admin/overnight/validate', 'POST /api/admin/overnight/start',
+27243:    'POST /api/admin/vectorize-kb', 'GET /api/integrations/status', 'GET /api/integrations/gdrive/files', 'GET /api/integrations/github/repos',
+27244:    'GET /api/git/status', 'POST /api/agent/chat', 'GET /api/agent/context', 'GET /api/agent/bootstrap', 'POST /api/agent/rag/query',
+27245:    'GET /api/agent/sessions/:id/messages', 'POST /api/agent/sessions/:id/messages', 'POST /api/agent/run',
+27246:    'POST /api/internal/post-deploy',
+27799:/** Handle POST /api/admin/reindex-codebase — sync or async codebase indexing into Vectorize. */
+28423:/** GET /api/overview/activity-strip -- session required. Returns weekly_activity, recent_activity, worked_this_week, projects. */
+28593:/** GET /api/overview/deployments -- session required. Returns deployments[] (20) and cicd_runs (10). */
+29535:/** POST /api/auth/login -- body: { email, password, next? }. JSON clients get { ok, redirect }  Set-Cookie; others 302. */
+29567:      : '/dashboard/overview';
+29648:/** POST /api/auth/backup-code -- body: { email, code }. Verifies one-time backup code, marks it used, creates session. Returns 200  Set-Cookie  { ok, redirect }. */
+29687:  const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
+29693:/** POST /api/auth/logout -- clear session cookie and redirect to sign-in. */
+29725:/** POST /api/admin/overnight/validate -- run in worker (remote). D1 check, before screenshots to R2, one proof email WITH screenshot attachments. */
+29747:        await pageObj.goto(`${baseUrl}/dashboard/${page}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+29772:    <p style="color:#475569;font-size:12px;margin-top:8px">To run full pipeline: POST /api/admin/overnight/start</p>
+29800:/** POST /api/admin/overnight/start -- run in worker (remote). Before screenshots  first pipeline email WITH attachments, set D1 OVERNIGHT_STATUS for cron progress. */
+29815:        await pageObj.goto(`${baseUrl}/dashboard/${page}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+30053:  let path = '/dashboard/overview';
+30058:  if (!path.startsWith('/') || path.startsWith('//')) path = '/dashboard/overview';
+30068:  const safeReturn = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':')) ? returnTo : '/dashboard/overview';
+30105:  let returnTo = `${origin(url)}/dashboard/overview`;
+30113:    returnTo = `${origin(url)}/dashboard/overview`;
+30203:  const safeReturn = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':')) ? returnTo : '/dashboard/overview';
+30205:  const redirectUri = `${origin(url)}/api/oauth/github/callback`;
+30209:    connectGitHub: safeReturn === '/dashboard/agent' || returnTo === '/dashboard/agent'
+30234:  let returnTo = `${origin(url)}/dashboard/overview`;

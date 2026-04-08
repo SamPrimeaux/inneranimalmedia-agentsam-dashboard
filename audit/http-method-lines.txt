@@ -1,0 +1,421 @@
+709:    if (request.method === 'POST' && (url.pathname === '/broadcast' || url.pathname.endsWith('/broadcast'))) {
+817:    if (url.pathname === '/message' && request.method === 'POST') {
+833:    if (url.pathname === '/rag-cache' && request.method === 'GET') {
+854:    if (url.pathname === '/rag-cache' && request.method === 'POST') {
+2459:  const method = (request.method || 'GET').toUpperCase();
+2461:    (pathLower === '/api/settings' && method === 'GET' && (url.searchParams.get('category') || '').trim()) ||
+2462:    (pathLower === '/api/settings/appearance' && method === 'PATCH') ||
+2463:    (pathLower === '/api/ai/guardrails' && method === 'GET') ||
+2464:    (pathLower === '/api/ai/models' && method === 'GET') ||
+2465:    (/^\/api\/ai\/models\/[^/]+$/.test(pathLower) && method === 'PATCH') ||
+2466:    (pathLower === '/api/ai/routing-rules' && (method === 'GET' || method === 'POST')) ||
+2467:    (/^\/api\/ai\/routing-rules\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+2468:    (pathLower === '/api/ai/integrations' && method === 'GET') ||
+2469:    (pathLower === '/api/agent/rules' && method === 'GET') ||
+2470:    (pathLower === '/api/commands/custom' && method === 'GET') ||
+2471:    (pathLower === '/api/hooks/subscriptions' && (method === 'GET' || method === 'POST')) ||
+2472:    (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') ||
+2473:    (/^\/api\/hooks\/subscriptions\/[^/]+$/.test(pathLower) && (method === 'PATCH' || method === 'DELETE')) ||
+2474:    (pathLower === '/api/settings/deploy-context' && method === 'GET') ||
+2475:    (pathLower === '/api/settings/docs-providers' && method === 'GET') ||
+2476:    (pathLower === '/api/settings/agent-config' && method === 'PATCH') ||
+2477:    (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') ||
+2478:    (pathLower === '/api/hooks/executions' && method === 'GET') ||
+2479:    (pathLower === '/api/knowledge' && method === 'GET') ||
+2480:    (pathLower === '/api/knowledge/crawl' && method === 'POST') ||
+2481:    (pathLower === '/api/app-icons' && method === 'GET') ||
+2482:    (pathLower === '/api/spend' && method === 'GET') ||
+2483:    (pathLower === '/api/spend/summary' && method === 'GET') ||
+2484:    (pathLower === '/api/spend/unified' && method === 'GET') ||
+2485:    (pathLower === '/api/billing' && method === 'GET') ||
+2486:    (pathLower === '/api/cidi/current' && method === 'GET') ||
+2487:    (pathLower === '/api/deploy/rollback' && method === 'POST');
+2493:    if (pathLower === '/api/settings' && method === 'GET') {
+2500:    if (pathLower === '/api/settings/appearance' && method === 'PATCH') {
+2519:    if (pathLower === '/api/settings/deploy-context' && method === 'GET') {
+2529:    if (pathLower === '/api/settings/docs-providers' && method === 'GET') {
+2575:    if (pathLower === '/api/ai/guardrails' && method === 'GET') {
+2579:    if (pathLower === '/api/ai/models' && method === 'GET') {
+2584:    if (modelPatch && method === 'PATCH') {
+2607:    if (pathLower === '/api/ai/routing-rules' && method === 'GET') {
+2613:    if (pathLower === '/api/ai/routing-rules' && method === 'POST') {
+2638:      if (rr && method === 'PATCH') {
+2677:      if (rr && method === 'DELETE') {
+2683:    if (pathLower === '/api/ai/integrations' && method === 'GET') {
+2687:    if (pathLower === '/api/settings/agent-config' && method === 'PATCH') {
+2706:    if (pathLower === '/api/settings/marketplace-catalog' && method === 'GET') {
+2736:    if (pathLower === '/api/agent/rules' && method === 'GET') {
+2742:    if (pathLower === '/api/commands/custom' && method === 'GET') {
+2748:    if (pathLower === '/api/hooks/subscriptions' && method === 'GET') {
+2787:    if (pathLower === '/api/hooks/subscriptions' && method === 'POST') {
+2817:    if (pathLower === '/api/hooks/subscriptions/reorder' && method === 'PATCH') {
+2829:      if (hm && method === 'PATCH') {
+2852:      if (hm && method === 'DELETE') {
+2860:    if (pathLower === '/api/hooks/executions' && method === 'GET') {
+2867:    if (pathLower === '/api/knowledge' && method === 'GET') {
+2874:    if (pathLower === '/api/knowledge/crawl' && method === 'POST') {
+2892:    if (pathLower === '/api/app-icons' && method === 'GET') {
+2898:    if (pathLower === '/api/spend' && method === 'GET') {
+2932:    if (pathLower === '/api/spend/summary' && method === 'GET') {
+2948:    if (pathLower === '/api/spend/unified' && method === 'GET') {
+2960:    if (pathLower === '/api/billing' && method === 'GET') {
+2971:    if (pathLower === '/api/cidi/current' && method === 'GET') {
+2976:    if (pathLower === '/api/deploy/rollback' && method === 'POST') {
+3015:        if (request.method === 'GET' && url.pathname === '/api/meauxcad/d1/tables') {
+3020:        if (request.method === 'GET' && url.pathname.startsWith('/api/meauxcad/d1/schema/')) {
+3026:        if (request.method === 'POST' && url.pathname === '/api/meauxcad/d1/query') {
+3050:      const methodUpper = (request.method || 'GET').toUpperCase();
+3248:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/post-deploy') {
+3273:      if (url.pathname === '/api/deployments/log' && (request.method || 'GET').toUpperCase() === 'POST') {
+3276:      if (url.pathname === '/api/deployments/recent' && (request.method || 'GET').toUpperCase() === 'GET') {
+3281:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/record-deploy') {
+3328:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/deploy-complete') {
+3380:      if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/telemetry/v1/traces') {
+3423:                  http_method: attrMap['http.request.method'] ?? attrMap['http.method'] ?? null,
+3504:      if (url.pathname === '/api/dashboard/time-track/manual' && request.method === 'POST') {
+3537:        const method = (request.method || 'GET').toUpperCase();
+3539:        if (taskIdMatch && method === 'PATCH') return handleHubTaskUpdate(request, env, taskIdMatch[1]);
+3542:          if (method === 'POST') return handleHubTaskCreate(request, env);
+3577:      if (pathLower === '/api/auth/login' && (request.method || 'GET').toUpperCase() === 'POST') {
+3580:      if (pathLower === '/api/auth/backup-code' && (request.method || 'GET').toUpperCase() === 'POST') {
+3583:      if (pathLower === '/api/auth/logout' && (request.method || 'GET').toUpperCase() === 'POST') {
+3588:      if ((pathLower === '/api/admin/overnight/validate' || pathLower === '/api/admin/overnight/start') && (request.method || 'GET').toUpperCase() === 'POST') {
+3603:      if (pathLower === '/api/admin/retention' && (request.method || 'GET').toUpperCase() === 'GET') {
+3619:      if (pathLower === '/api/admin/archive-conversations' && (request.method || 'GET').toUpperCase() === 'POST') {
+3631:      if (pathLower === '/api/admin/cleanup/stuck-runs' && (request.method || 'GET').toUpperCase() === 'GET') {
+3654:      if (pathLower === '/api/admin/db-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+3742:      if (pathLower === '/api/admin/vectorize-kb' && (request.method || 'GET').toUpperCase() === 'POST') {
+3799:      if (pathLower === '/api/admin/reindex-codebase' && (request.method || 'GET').toUpperCase() === 'POST') {
+3804:      if (pathLower === '/api/admin/trigger-workflow' && (request.method || 'GET').toUpperCase() === 'POST') {
+3902:        const method = (request.method || 'GET').toUpperCase();
+3908:        if (method === 'GET' && path === '/api/integrations/gdrive/files') {
+3945:        if (method === 'GET' && path === '/api/integrations/gdrive/file') {
+3972:        if (method === 'GET' && path === '/api/integrations/github/repos') {
+3978:        if (method === 'GET' && path === '/api/integrations/github/files') {
+3986:        if (method === 'GET' && path === '/api/integrations/github/file') {
+3997:        if (method === 'GET' && path === '/api/integrations/github/raw') {
+4012:        if (method === 'GET' && path === '/api/integrations/gdrive/raw') {
+4026:      if (path === '/api/git/status' && method === 'GET') {
+4078:      if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
+4216:      if (pathLower === '/api/workers' && (request.method || 'GET').toUpperCase() === 'GET') {
+4232:      if (pathLower === '/api/cloudflare/workers/list' && (request.method || 'GET').toUpperCase() === 'GET') {
+4250:      if (cfWorkerSourceMatch && (request.method || 'GET').toUpperCase() === 'GET') {
+4289:      if (pathLower === '/api/tunnel/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+4341:      if (pathLower === '/api/tunnel/restart' && (request.method || 'GET').toUpperCase() === 'POST') {
+4371:      if (pathLower === '/api/commands' && request.method === 'GET') {
+4435:      if (pathLower === '/api/themes' && request.method === 'GET') {
+4449:      if (pathLower === '/api/themes/active' && request.method === 'GET') {
+4492:      if (pathLower === '/api/themes/apply' && request.method === 'POST') {
+4535:      if (pathLower === '/api/env/spend' && (request.method || 'GET').toUpperCase() === 'GET') {
+4587:      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'GET') {
+4598:      if (pathLower === '/api/env/audit' && (request.method || 'GET').toUpperCase() === 'GET') {
+4612:      if (pathLower === '/api/env/secrets' && (request.method || 'GET').toUpperCase() === 'POST') {
+4638:      if (pathLower === '/api/env/secrets/reveal' && (request.method || 'GET').toUpperCase() === 'POST') {
+4656:      if (testMatch && (request.method || 'GET').toUpperCase() === 'POST') {
+4703:      if (secretMatch && (request.method || 'GET').toUpperCase() === 'PATCH') {
+4724:      if (secretMatch && (request.method || 'GET').toUpperCase() === 'DELETE') {
+4738:    if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+4771:    if (pathLower === '/api/hyperdrive/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+4791:    if (pathLower === '/api/hyperdrive/tables' && (request.method || 'GET').toUpperCase() === 'GET') {
+4817:    if (pathLower === '/api/hyperdrive/query' && (request.method || 'GET').toUpperCase() === 'POST') {
+4849:    if (pathLower === '/api/database/execute' && (request.method || 'GET').toUpperCase() === 'POST') {
+4853:    if (pathLower === '/api/database/query-history' && (request.method || 'GET').toUpperCase() === 'GET') {
+4857:    if (pathLower === '/api/database/snippets' && (request.method || 'GET').toUpperCase() === 'POST') {
+4878:      if (url.pathname === '/api/search/debug' && (request.method || 'GET').toUpperCase() === 'GET') {
+4907:      if (url.pathname === '/api/search/docs' && request.method === 'POST') {
+4951:      if (url.pathname === '/api/search/docs/status' && request.method === 'GET') {
+4976:      if (url.pathname === '/api/search/docs/index' && request.method === 'POST') {
+4991:      if (url.pathname === '/api/rag/ingest' && request.method === 'POST') {
+5024:      if (url.pathname === '/api/rag/ingest-batch' && request.method === 'POST') {
+5071:      if (url.pathname === '/api/rag/query' && request.method === 'POST') {
+5139:      if (url.pathname === '/api/rag/feedback' && request.method === 'POST') {
+5181:        if (request.method === 'POST') {
+5234:        if ((request.method || 'GET').toUpperCase() === 'GET') {
+5274:        if ((request.method || 'GET').toUpperCase() === 'PATCH' || (request.method || 'GET').toUpperCase() === 'PUT') {
+5296:      if (pathLower === '/api/settings/profile/avatar' && (request.method || 'GET').toUpperCase() === 'POST') {
+5321:      if (pathLower.startsWith('/api/settings/avatar') && (request.method || 'GET').toUpperCase() === 'GET') {
+5341:        if ((request.method || 'GET').toUpperCase() === 'GET') {
+5367:        if ((request.method || 'GET').toUpperCase() === 'PATCH' || (request.method || 'GET').toUpperCase() === 'PUT') {
+5391:      if (pathLower === '/api/settings/security/change-password' && (request.method || 'GET').toUpperCase() === 'POST') {
+5410:      if (pathLower === '/api/settings/security/backup-codes/generate' && (request.method || 'GET').toUpperCase() === 'POST') {
+5464:      if (pathLower === '/api/settings/sessions' && (request.method || 'GET').toUpperCase() === 'GET') {
+5476:      if (pathLower.match(/^\/api\/settings\/sessions\/all$/) && (request.method || 'GET').toUpperCase() === 'DELETE') {
+5494:      if (sessionsIdMatch && (request.method || 'GET').toUpperCase() === 'DELETE') {
+5507:      if ((request.method || 'GET').toUpperCase() === 'GET' && pathLower === '/api/settings/emails') {
+5515:      if (pathLower === '/api/workspace/create' && (request.method || '').toUpperCase() === 'POST') {
+5561:        const method = (request.method || 'GET').toUpperCase();
+5563:        if (method === 'GET') {
+5574:        if (method === 'PATCH') {
+5612:        const method = (request.method || 'GET').toUpperCase();
+5614:        if (method === 'GET') {
+5674:        if (method === 'PATCH' || method === 'PUT') {
+5692:      if (pathLower === '/api/settings/workspace/default' && (request.method === 'PUT' || request.method === 'PATCH')) {
+5708:      if (wsThemeMatch && (request.method === 'PUT' || request.method === 'PATCH')) {
+5730:        if (request.method === 'GET') {
+5775:        if (request.method === 'PATCH') {
+5864:        const dashHtmlMethod = (request.method || 'GET').toUpperCase();
+5943:      const errMethod = (request.method || 'GET').toUpperCase();
+6111:  const method = (request.method || 'GET').toUpperCase();
+6113:  if (pathLower === '/api/browser/screenshot' && method === 'GET') {
+13087:  if (payloadOpts != null && method === 'PUT') {
+13301:  const method = (request.method || 'GET').toUpperCase();
+13303:  if (pathLower === '/api/version' && method === 'GET') {
+13328:  if (pathLower === '/api/workspaces/current/shell' && method === 'GET') {
+13365:  if (pathLower === '/api/workspaces/list' && method === 'GET') {
+13383:  if (wsIdMatch && (method === 'GET' || method === 'PATCH')) {
+13391:    if (method === 'GET') {
+13405:    if (method === 'PATCH') {
+13435:  if (pathLower === '/api/r2/list' && method === 'GET') {
+13438:    const req2 = new Request(u.toString(), { method: request.method, headers: request.headers });
+13442:  if (pathLower === '/api/r2/get' && method === 'GET') {
+13467:  if (pathLower === '/api/r2/file' && method === 'GET') {
+13511:  if (pathLower === '/api/r2/file' && method === 'POST') {
+13534:  if (pathLower === '/api/r2/upload' && method === 'POST') {
+13579:  if (pathLower === '/api/r2/delete' && method === 'DELETE') {
+13599:  if (pathLower === '/api/r2/move' && method === 'PUT') {
+13624:  if (pathLower === '/api/github/repos' && method === 'GET') {
+13661:    if (method === 'GET') {
+13666:    if (method === 'POST') {
+13685:    if (method === 'DELETE') {
+13706:  if (ghBranchesMatch && method === 'GET') {
+13725:  if (ghCommitsMatch && method === 'GET') {
+13750:  if (pathLower === '/api/drive/list' && method === 'GET') {
+13766:  if (pathLower === '/api/drive/get' && method === 'GET') {
+13784:  if (pathLower === '/api/drive/file' && method === 'POST') {
+13838:  if (pathLower === '/api/drive/search' && method === 'GET') {
+13855:  if (pathLower === '/api/drive/upload' && method === 'POST') {
+13904:  if (pathLower === '/api/drive/folder' && method === 'POST') {
+13953:  if (pathLower === '/api/drive/delete' && method === 'DELETE') {
+13978:  const method = (request.method || 'GET').toUpperCase();
+13980:  if (pathLower === '/api/r2/buckets' && method === 'GET') {
+13984:  if (pathLower === '/api/r2/stats' && method === 'GET' && url.searchParams.get('bucket')) {
+13993:  if (pathLower === '/api/r2/sync' && method === 'POST') {
+14067:    if (pathLower === '/api/r2/sync' && method === 'POST') {
+14099:    if (pathLower === '/api/r2/list' && method === 'GET') {
+14177:    if (pathLower === '/api/r2/search' && method === 'GET') {
+14210:    if (pathLower === '/api/r2/upload' && method === 'POST') {
+14223:    if (pathLower === '/api/r2/delete' && method === 'DELETE') {
+14243:    if (pathLower === '/api/r2/file' && method === 'DELETE') {
+14255:    if (pathLower === '/api/r2/url' && method === 'GET') {
+14270:    if (pathLower === '/api/r2/buckets/bulk-action' && method === 'POST') {
+14299:      if (method === 'GET') {
+14304:      if (method === 'PUT') {
+14314:    if (bucketsObjectsMatch && method === 'GET') {
+14321:    if (syncMatch && method === 'POST') {
+14407:    if (urlKeyMatch && method === 'GET') {
+14415:    if (objectKeyMatch && method === 'GET') {
+14444:    if (objectKeyMatch && method === 'PUT') {
+14456:    if (deleteObjectMatch && method === 'DELETE') {
+14481:    if (uploadMatch && method === 'POST') {
+14522:  const method = (request.method || 'GET').toUpperCase();
+14529:    if (pathLower === '/api/draw/save' && method === 'POST') {
+14567:    if (pathLower === '/api/draw/list' && method === 'GET') {
+14576:    if (oneMatch && method === 'GET') {
+14587:    if (pathLower === '/api/draw/libraries' && method === 'GET') {
+14598:    if (pathLower === '/api/draw/load' && method === 'GET') {
+14614:    if (pathLower === '/api/draw/save' && method === 'POST') {
+14639:    if (artifactMatch && method === 'GET') {
+14655:    if (pathLower === '/api/tools/image/generate' && method === 'POST') {
+14797:    if (imgJobMatch && method === 'GET') {
+14907:  const method = (request.method || 'GET').toUpperCase();
+14910:    if (pathLower === '/api/agent/browse' && method === 'POST') {
+14954:    if (pathLower === '/api/telemetry/summary' && method === 'GET') {
+14982:    if (pathLower === '/api/telemetry/tools' && method === 'GET') {
+15006:    if (pathLower === '/api/agent/vertex-test' && method === 'POST') {
+15032:    if (pathLower === '/api/agent/modes' && method === 'GET') {
+15047:    if (pathLower === '/api/agent/commands' && method === 'GET') {
+15070:    if (pathLower === '/api/agent/session/mode' && method === 'POST') {
+15096:    if (pathLower === '/api/agent/problems' && method === 'GET') {
+15152:    if (pathLower === '/api/agent/keyboard-shortcuts' && method === 'GET') {
+15168:    if (keyboardShortcutsPatch && method === 'PATCH') {
+15204:    if (pathLower === '/api/agent/notifications' && method === 'GET') {
+15224:    if (agentNotifReadMatch && method === 'PATCH') {
+15246:    if (pathLower === '/api/agent/context-picker/catalog' && method === 'GET') {
+15331:    if (pathLower === '/api/agent/memory/list' && method === 'GET') {
+15357:    if (pathLower === '/api/agent/db/tables' && method === 'GET') {
+15374:    if (pathLower === '/api/agent/db/query-history' && method === 'GET') {
+15377:    if (pathLower === '/api/agent/db/query-history' && method === 'POST') {
+15380:    if (pathLower === '/api/agent/db/snippets' && method === 'GET') {
+15383:    if (pathLower === '/api/agent/db/snippets' && method === 'POST') {
+15387:    if (pathLower === '/api/agent/memory/sync' && method === 'POST') {
+15402:    if (pathLower === '/api/agent/reindex-codebase' && method === 'POST') {
+15418:    if (pathLower === '/api/agent/git/status' && method === 'GET') {
+15447:    if (pathLower === '/api/agent/git/sync' && method === 'POST') {
+15587:    if (pathLower === '/api/agent/conversations/search' && method === 'GET') {
+15597:    if (pathLower === '/api/terminal/session/register' && method === 'POST') {
+15648:    if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
+15687:    if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
+15711:    if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
+15722:    if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
+15807:    if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
+15829:    if (pathLower === '/api/agent/terminal/complete' && method === 'POST') {
+15861:    if (pathLower === '/api/terminal/assist' && method === 'POST') {
+15932:    if (pathLower === '/api/monaco/complete' && method === 'POST') {
+15976:      if (method === 'PATCH') {
+16005:      if (method === 'DELETE') {
+16014:      if (method === 'GET') {
+16040:      if (method === 'POST') {
+16114:    if (playwrightJobMatch && (request.method || 'GET').toUpperCase() === 'GET') {
+16121:    if (pathLower === '/api/playwright/screenshot' && method === 'POST') {
+16207:      if (method === 'PUT') {
+16248:    if (agentMcpSessionPatch && method === 'PATCH') {
+16267:      if (method === 'POST') {
+16315:    if (pathLower === '/api/agent/workers-ai/image' && method === 'POST') {
+16351:    if (pathLower === '/api/agent/workers-ai/tts' && method === 'POST') {
+16382:    if (pathLower === '/api/agent/workers-ai/stt' && method === 'POST') {
+16412:    if (pathLower === '/api/agent/propose' && method === 'POST') {
+16458:    if (proposalApproveMatch && method === 'POST') {
+16491:    if (proposalDenyMatch && method === 'POST') {
+16511:    if (pathLower === '/api/agent/proposals/pending' && method === 'GET') {
+16524:    if (pathLower === '/api/agent/workflows/trigger' && method === 'POST') {
+16549:    if (workflowStatusMatch && method === 'PATCH') {
+16598:    if (pathLower === '/api/agent/chat' && method === 'POST') {
+16602:    if (pathLower === '/api/agent/do-history' && method === 'GET') {
+16621:    if (pathLower === '/api/agent/playwright' && method === 'POST') {
+16664:    if (pathLower === '/api/agent/rag/query' && method === 'POST') {
+16688:    if (pathLower === '/api/agent/rag/status' && method === 'GET') {
+16699:    if (pathLower === '/api/agent/rag/index-memory' && method === 'POST') {
+16712:    if (pathLower === '/api/agent/rag/compact-chats' && method === 'POST') {
+16732:    if (pathLower === '/api/agent/queue' && method === 'POST') {
+16757:    if (pathLower === '/api/agent/queue/status' && method === 'GET') {
+16790:    if (queueIdMatch && method === 'DELETE') {
+16801:    if (pathLower === '/api/agent/plan/approve' && method === 'POST') {
+16818:    if (pathLower === '/api/agent/plan/reject' && method === 'POST') {
+16835:    if (pathLower === '/api/agent/chat/execute-approved-tool' && method === 'POST') {
+16868:    if (pathLower === '/api/integrations/drive/list' && method === 'GET') {
+16871:    if (pathLower === '/api/integrations/github/list' && method === 'GET') {
+16875:    if (method === 'GET' && pathLower === '/api/integrations/gdrive/files') {
+16887:    if (method === 'GET' && pathLower === '/api/integrations/gdrive/file') {
+16899:    if (method === 'GET' && pathLower === '/api/integrations/github/repos') {
+16911:    if (method === 'GET' && pathLower === '/api/integrations/github/files') {
+16925:    if (method === 'GET' && pathLower === '/api/integrations/github/file') {
+16941:    if (pathLower === '/api/screenshots' && method === 'GET') {
+16978:    if (pathLower === '/api/screenshots/asset' && method === 'GET') {
+17004:    if (pathLower === '/api/screenshots' && method === 'DELETE') {
+17022:    if (pathLower === '/api/images' && method === 'GET') {
+17052:    if (pathLower === '/api/images' && method === 'POST') {
+17088:    if (method === 'DELETE' && /^\/api\/images\/[^/]+$/.test(pathLower)) {
+17104:      if (method === 'GET') {
+17111:      if (method === 'POST') {
+17126:    if (pathLower === '/api/agent/today-todo' && method === 'GET') {
+17153:    if (pathLower === '/api/agent/today-todo' && method === 'PUT') {
+17180:    if (pathLower === '/api/agent/context/bootstrap' && method === 'GET') {
+17202:    if (pathLower === '/api/agent/bootstrap' && method === 'GET') {
+17262:    if (pathLower === '/api/agent/r2-save' && method === 'POST') {
+17363:  const method = (request.method || 'GET').toUpperCase();
+17413:    if (pathLower === '/api/agentsam/config' && method === 'GET') {
+17439:    if (pathLower === '/api/agentsam/user-policy' && method === 'GET') {
+17449:    if (pathLower === '/api/agentsam/user-policy' && method === 'PATCH') {
+17471:    if (pathLower === '/api/agentsam/hooks' && method === 'GET') {
+17509:    if (pathLower === '/api/agentsam/hooks' && method === 'POST') {
+17543:      if (hm && method === 'PATCH') {
+17572:      if (hm && method === 'DELETE') {
+17579:    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'GET') {
+17593:    if ((pathLower === '/api/agentsam/command-allowlist' || pathLower === '/api/agentsam/cmd-allowlist') && method === 'POST') {
+17617:      if (m && method === 'DELETE') {
+17627:    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'GET') {
+17641:    if (pathLower === '/api/agentsam/mcp-allowlist' && method === 'POST') {
+17662:    if (pathLower === '/api/agentsam/tools-registry' && method === 'GET') {
+17673:      if (m && method === 'DELETE') {
+17682:    if (pathLower === '/api/agentsam/fetch-domains' && method === 'GET') {
+17696:    if (pathLower === '/api/agentsam/fetch-domains' && method === 'POST') {
+17724:      if (m && method === 'DELETE') {
+17736:    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'GET') {
+17750:    if (pathLower === '/api/agentsam/fetch-allowlist' && method === 'POST') {
+17778:      if (m && method === 'DELETE') {
+17790:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'GET') {
+17800:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'POST') {
+17816:    if (pathLower === '/api/agentsam/trusted-origins' && method === 'DELETE') {
+17827:    if (pathLower === '/api/agentsam/feature-flags' && method === 'GET') {
+17840:      if (m && method === 'PUT') {
+17861:      if (rulesRev && method === 'GET') {
+17875:      if (rulesOne && method === 'GET') {
+17883:      if (rulesOne && method === 'PATCH') {
+17909:    if (pathLower === '/api/agentsam/rules' && method === 'GET') {
+17919:    if (pathLower === '/api/agentsam/rules' && method === 'POST') {
+17933:    if (pathLower === '/api/agentsam/subagents' && method === 'GET') {
+17944:    if (pathLower === '/api/agentsam/subagents' && method === 'POST') {
+17970:      if (m && method === 'PATCH') {
+17994:      if (m && method === 'DELETE') {
+18002:    if (pathLower === '/api/agentsam/skills' && method === 'GET') {
+18019:    if (pathLower === '/api/agentsam/skills' && method === 'POST') {
+18054:      if (m && method === 'PATCH') {
+18078:      if (m && method === 'DELETE') {
+18086:    if (pathLower === '/api/agentsam/ignore-patterns/reorder' && method === 'PATCH') {
+18104:      if (ignOne && ignOne[1] !== 'reorder' && method === 'DELETE') {
+18120:      if (ignOne && ignOne[1] !== 'reorder' && method === 'PATCH') {
+18155:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'POST') {
+18178:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'GET') {
+18188:    if (pathLower === '/api/agentsam/ignore-patterns' && method === 'PATCH') {
+18217:    if (pathLower === '/api/agentsam/index-status' && method === 'GET') {
+18238:    if (pathLower === '/api/agentsam/indexing-summary' && method === 'GET') {
+18280:    if (pathLower === '/api/agentsam/autorag/stats' && method === 'GET') {
+18288:    if (pathLower === '/api/agentsam/autorag/files' && method === 'GET') {
+18309:    if (pathLower === '/api/agentsam/autorag/sync' && method === 'POST') {
+18317:    if (pathLower === '/api/agentsam/autorag/files' && method === 'DELETE') {
+18326:    if (pathLower === '/api/agentsam/autorag/upload' && method === 'POST') {
+18341:    if (pathLower === '/api/agentsam/autorag/search' && method === 'POST') {
+18349:    if (pathLower === '/api/agentsam/runs' && method === 'GET') {
+18364:      if (m && method === 'PATCH') {
+18390:    if (pathLower === '/api/agentsam/ai' && method === 'GET') {
+18443:    if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
+18451:    if (pathLower === '/api/mcp/credentials' && method === 'GET') {
+18459:    if (pathLower === '/api/mcp/audit' && method === 'GET') {
+18468:    if (pathLower === '/api/mcp/stats' && method === 'GET') {
+18477:    if (pathLower === '/api/mcp/status' && method === 'GET') {
+18480:    if (pathLower === '/api/mcp/agents' && method === 'GET') {
+18503:        if (pathLower === '/api/mcp/tools' && method === 'GET') {
+18519:        if (pathLower === '/api/mcp/commands' && method === 'GET') {
+18527:        if (pathLower === '/api/mcp/dispatch' && method === 'POST') {
+18567:          if (method === 'GET') {
+18575:          if (method === 'POST') {
+18610:          if (method === 'GET') {
+18613:          if (method === 'POST') {
+18624:        if (pathLower === '/api/mcp/services/health' && method === 'GET') {
+18729:        if (mcpSvcPingMatch && method === 'POST') {
+18754:          if (method === 'GET') {
+18758:          if (method === 'POST') {
+18777:        if (pathLower === '/api/mcp/stream' && method === 'POST') {
+18860:        if (pathLower === '/api/mcp/invoke' && method === 'POST') {
+18902:        if (pathLower === '/api/mcp/workflows' && method === 'GET') {
+18912:        if (pathLower === '/api/mcp/workflows' && method === 'POST') {
+18946:        if (wfPatchMatch && method === 'PATCH') {
+18972:        if (wfRunMatch && method === 'POST') {
+18990:        if (wfRunsListMatch && method === 'GET') {
+19016:  const method = request.method.toUpperCase();
+19019:  if (pathLower === '/api/cidi/run' && method === 'POST') {
+19223:  if (pathLower === '/api/cidi/runs' && method === 'GET') {
+26269:  const method = request.method;
+26271:  if (path === '/api/vault/registry' && method === 'GET') return vaultRegistry();
+26272:  if (path === '/api/vault/projects' && method === 'GET') return vaultListProjects(env);
+26273:  if (path === '/api/vault/audit' && method === 'GET') return vaultFullAudit(request, env);
+26276:    if (method === 'GET') return vaultListSecrets(request, env);
+26277:    if (method === 'POST') return vaultCreateSecret(request, env);
+26284:    if (action === 'reveal' && method === 'POST') return vaultRevealSecret(id, 'viewed', request, env);
+26285:    if (action === 'copy' && method === 'POST') return vaultRevealSecret(id, 'copied', request, env);
+26286:    if (action === 'rotate' && method === 'POST') return vaultRotateSecret(id, request, env);
+26287:    if (action === 'audit' && method === 'GET') return vaultGetSecretAudit(id, env);
+26288:    if (!action && method === 'GET') return vaultGetSecret(id, env);
+26289:    if (!action && method === 'PUT') return vaultEditSecret(id, request, env);
+26290:    if (!action && method === 'DELETE') return vaultRevokeSecret(id, env, request);
+28425:  if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+28595:  if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+28654:  const method = (request.method || 'GET').toUpperCase();
+28656:  if (method === 'GET') {
+28677:  if (method === 'POST') {
+28860:      const method = (request.method || 'GET').toUpperCase();
+28861:      if (method === 'GET') return handleTimeTrackHeartbeat(request, env);
+28944:  const method = (request.method || 'GET').toUpperCase();
+28947:  if (pathSeg[2] === 'transactions' && pathSeg[3] && method === 'GET') {
+28950:  if (pathSeg[2] === 'transactions' && pathSeg[3] && (method === 'PUT' || method === 'DELETE')) {
+28953:  if (pathSeg[2] === 'transactions' && method === 'GET') {
+28956:  if (pathSeg[2] === 'transactions' && method === 'POST') {
+28959:  if (pathSeg[2] === 'import-csv' && method === 'POST') {
+29281:  if (method === 'DELETE') {
+29321:  const method = (request.method || 'GET').toUpperCase();
+29323:  if (method === 'GET') {
+29341:  if (method === 'POST') {
+29358:  if (method === 'DELETE') {
+29376:  if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+29454:  if (request.method !== 'POST') return Response.json({ error: 'Method not allowed' }, { status: 405 });
+29473:  if (request.method !== 'PATCH') return Response.json({ error: 'Method not allowed' }, { status: 405 });

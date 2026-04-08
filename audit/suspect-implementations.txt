@@ -1,0 +1,136 @@
+worker.js:4: * Durable Objects: IAM_COLLAB, CHESS_SESSION (stubs until full logic restored from R2).
+worker.js:86:/** Replace %%TOKEN%% placeholders in terminal.login_scene using theme cssVars (hex only). */
+worker.js:751:/** Legacy KV-backed stub (migration v3). */
+worker.js:760:/** Stub for migration v4 class name; AGENT_SESSION uses {@link AgentChatSqlV1}. */
+worker.js:1071:  if (!token) return jsonResponse({ error: 'Deploy tracking not configured' }, 501);
+worker.js:1677:      if (!s) return { ok: false, status: 501, message: 'GITHUB_WEBHOOK_SECRET not configured' };
+worker.js:1684:      if (!s) return { ok: false, status: 501, message: 'STRIPE_WEBHOOK_SECRET not configured' };
+worker.js:1691:      if (!s) return { ok: false, status: 501, message: 'CURSOR_WEBHOOK_SECRET not configured' };
+worker.js:1698:      if (!s) return { ok: false, status: 501, message: 'RESEND_WEBHOOK_SECRET not configured' };
+worker.js:1707:      if (!s) return { ok: false, status: 501, message: 'RESEND_INBOUND_WEBHOOK_SECRET not configured' };
+worker.js:1716:      if (!s) return { ok: false, status: 501, message: 'SUPABASE_WEBHOOK_SECRET not configured' };
+worker.js:1723:      if (!s) return { ok: false, status: 501, message: 'DEPLOY_TRACKING_TOKEN not configured' };
+worker.js:1730:      if (!s) return { ok: false, status: 501, message: 'INTERNAL_WEBHOOK_SECRET not configured' };
+worker.js:1737:      if (!s) return { ok: false, status: 501, message: 'OPENAI_WEBHOOK_SECRET not configured' };
+worker.js:1988:  const placeholders = cols.map(() => '?').join(', ');
+worker.js:1990:  const sql = `${verb} INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`;
+worker.js:2095:      return { ok: false, error: 'update_cidi: update_active_workflows not implemented' };
+worker.js:2399:    console.log('[hooks] attempting hook_executions INSERT', {
+worker.js:2408:          id, subscription_id, webhook_event_id, tenant_id, attempt, status,
+worker.js:3165:            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+worker.js:3189:            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+worker.js:3251:          return jsonResponse({ error: 'post-deploy not configured (INTERNAL_API_SECRET)' }, 501);
+worker.js:3284:          return jsonResponse({ error: 'record-deploy not configured (INTERNAL_API_SECRET)' }, 501);
+worker.js:3331:          return jsonResponse({ error: 'deploy-complete not configured (INTERNAL_API_SECRET)' }, 501);
+worker.js:4185:          const systemPrompt = 'Return only a JSON array of voxel entities matching this schema — no markdown, no explanation, no code fences: [{"id":"string","name":"string","type":"prop","position":{"x":0,"y":0,"z":0},"behavior":{"type":"dynamic","mass":1},"voxels":[{"x":0,"y":0,"z":0,"color":16711680}]}]. Use integer voxel colors (e.g. 16711680 for red).';
+worker.js:4186:          const r = await env.AI.run('@cf/google/gemini-2.5-flash', { contents: [{ role: 'system', parts: [{ text: systemPrompt }] }, { role: 'user', parts: [{ text: p }] }] });
+worker.js:4852:    // GET /api/database/query-history — template-style; requires workspace_id (reserved); filters optional database_type -> db_target.
+worker.js:4856:    // POST /api/database/snippets — template body name/query_text/database_type -> ai_query_snippets (title, sql_text, db_target).
+worker.js:5802:          const stub = env.IAM_COLLAB.get(id);
+worker.js:5803:          return stub.fetch(request);
+worker.js:5812:          const stub = env.IAM_COLLAB.get(id);
+worker.js:5813:          return stub.fetch(request);
+worker.js:6293:  console.log('[cmd_audit] INSERT attempted', commandKey);
+worker.js:6342:  console.log('[mcp_audit_log] INSERT attempted');
+worker.js:6361:  console.log('[mcp_tool_call_stats] UPSERT attempted');
+worker.js:6910:async function loadAgentsamAiSystemPromptForChat(env, agentAiId) {
+worker.js:7330: * Does not use deprecated cursor_* tables.
+worker.js:8491:            generationConfig: { maxOutputTokens: 20, temperature: 0 },
+worker.js:8807:async function invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage, maxTokensOverride) {
+worker.js:8828:          system: systemPrompt,
+worker.js:8847:            { role: 'system', content: systemPrompt },
+worker.js:8858:      const text = await singleRoundNoTools(env, 'google', modelKey, systemPrompt, [{ role: 'user', content: userMessage }]);
+worker.js:8867:            { role: 'system', content: systemPrompt },
+worker.js:8899:  const conversationIdOrPlaceholder = conversationId || 'mixed-' + now;
+worker.js:8913:      ).bind(taskId, conversationIdOrPlaceholder, null, title, content, 'running', i, '[]', '[]', now, now, '{}').run();
+worker.js:9343:      let resultText = `Tool ${toolName} not implemented`;
+worker.js:9934:            // TODO: Wire provider-native per-tool token counts when available; defaults are 0/0 today.
+worker.js:10080:          bearerAttempts: tokens.length,
+worker.js:10082:            ? 'PTY_AUTH_TOKEN and TERMINAL_SECRET are the same in Worker (one attempt). iam-pty must export identical PTY_AUTH_TOKEN; restart PM2 after editing ecosystem.config.cjs.'
+worker.js:11354:  // Strip tool-related system instructions for Google — toolConfig NONE prevents calls but system prompt still triggers attempts
+worker.js:11986:  const agentBaseSystem = await loadAgentsamAiSystemPromptForChat(env, agentAiIdSse);
+worker.js:12015:  const buildChatSseSystemPromptResolved = async () => {
+worker.js:12140:  let chatSseSystemPrompt = agentBaseSystem;
+worker.js:12157:        chatSseSystemPrompt = cached.compiled_context;
+worker.js:12178:        chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+worker.js:12179:        const tok = estimateCompiledContextTokens(chatSseSystemPrompt);
+worker.js:12192:            .bind(cacheRowId, cacheHash, 'sse_system', chatSseSystemPrompt, '[]', tok, tenantIdChatSse)
+worker.js:12200:      chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+worker.js:12203:    chatSseSystemPrompt = await buildChatSseSystemPromptResolved();
+worker.js:12252:            chatSseSystemPrompt,
+worker.js:12266:            chatSseSystemPrompt,
+worker.js:12278:          chatSseSystemPrompt,
+worker.js:12316:        system: chatSseSystemPrompt,
+worker.js:12353:        systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
+worker.js:12378:      systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
+worker.js:12429:          { role: 'system', content: chatSseSystemPrompt },
+worker.js:12467:          { role: 'system', content: chatSseSystemPrompt },
+worker.js:12515:              { role: 'system', content: chatSseSystemPrompt },
+worker.js:15465:            id, tenant_id, agent_session_id, proposed_by, command_source, command_name, command_text, filled_template, rationale, risk_level, status, created_at, updated_at
+worker.js:15892:      const systemPrompt = fragment?.fragment_text ?? 'You are a terminal assistant. Be concise.';
+worker.js:15901:      const text = await invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage);
+worker.js:15961:      const systemPrompt = fragment?.fragment_text ?? 'You are a terminal assistant. Be concise.';
+worker.js:15969:      const text = await invokeTerminalAssistCompletion(env, rule, systemPrompt, userMessage, 150);
+worker.js:16429:            id, tenant_id, agent_session_id, proposed_by, command_source, command_name, command_text, filled_template, rationale, risk_level, status, created_at, updated_at
+worker.js:16611:        const _doHistStub = env.AGENT_SESSION.get(_doHistId);
+worker.js:16613:        const _doHistResp = await _doHistStub.fetch(new Request(`https://do/history?limit=${encodeURIComponent(_lim)}`));
+worker.js:16869:      return jsonResponse({ error: 'Drive file list not implemented yet. OAuth tokens must be stored after Connect Google Drive; then list files via Google Drive API.', files: [] }, 501);
+worker.js:16872:      return jsonResponse({ error: 'GitHub file list not implemented yet. OAuth tokens must be stored after Connect GitHub; then list repos/files via GitHub API.', files: [] }, 501);
+worker.js:17126:    if (pathLower === '/api/agent/today-todo' && method === 'GET') {
+worker.js:17131:          const row = await env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'today_todo' AND tenant_id = ?").bind(todayTid).first();
+worker.js:17136:            const o = await env.R2.get('memory/today-todo.md');
+worker.js:17142:                ).bind(todayTid, 'agent-sam-primary', 'user_context', 'today_todo', markdown, 0.95).run();
+worker.js:17153:    if (pathLower === '/api/agent/today-todo' && method === 'PUT') {
+worker.js:17168:          ).bind(putTid, 'agent-sam-primary', 'user_context', 'today_todo', markdown, 0.95).run();
+worker.js:17171:          await env.R2.put('memory/today-todo.md', markdown);
+worker.js:17223:        let todayTodo = '';
+worker.js:17232:            const o4 = await env.R2.get('memory/today-todo.md');
+worker.js:17233:            if (o4) todayTodo = await o4.text();
+worker.js:17236:        const bootTidTodo = tenantIdFromEnv(env);
+worker.js:17237:        if (!todayTodo && env.DB && bootTidTodo) {
+worker.js:17238:          const row = await env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'today_todo' AND tenant_id = ?").bind(bootTidTodo).first();
+worker.js:17239:          if (row?.value) todayTodo = String(row.value);
+worker.js:17245:          today_todo: todayTodo || null,
+worker.js:17247:          hint: 'AI Search indexes from R2 automatically. Store daily logs in R2 at memory/daily/YYYY-MM-DD.md. Store schema/records memory at memory/schema-and-records.md. Store today\'s to-do at memory/today-todo.md or agent_memory_index key today_todo.',
+worker.js:17454:      const placeholders = keys.map(() => '?').join(', ');
+worker.js:17459:        VALUES (?, ?, ${placeholders})
+worker.js:18274:          autorag_legacy_deprecated: true,
+worker.js:18283:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+worker.js:18312:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+worker.js:18344:        JSON.stringify({ error: 'deprecated', message: 'Use /api/search/docs instead' }),
+worker.js:19234:      const placeholders = runIds.map(() => '?').join(',');
+worker.js:19239:         WHERE run_id IN (${placeholders})
+worker.js:21215:    const stub = env.IAM_COLLAB.get(id);
+worker.js:21216:    await stub.fetch(
+worker.js:21587:              id, tenant_id, agent_session_id, proposed_by, command_source, command_name, command_text, filled_template, rationale, risk_level, status, created_at, updated_at, tool
+worker.js:21837:              id, tenant_id, agent_session_id, proposed_by, command_source, command_name, command_text, filled_template, rationale, risk_level, status, created_at, updated_at, tool
+worker.js:22009:async function dispatchMcpTool(env, tool_name, input_template, session_id) {
+worker.js:22013:    input_template && typeof input_template === 'object' ? input_template : {},
+worker.js:22050:      let input_template =
+worker.js:22051:        (step.input_template && typeof step.input_template === 'object' ? step.input_template : null) ||
+worker.js:22054:      if (input_template.inject_step_results === true && stepOutputs.length > 0) {
+worker.js:22055:        input_template = { ...input_template, step_results: JSON.stringify(stepOutputs).slice(0, 8000) };
+worker.js:22058:      let attempt = 0;
+worker.js:22064:      while (attempt < retry_max) {
+worker.js:22065:        attempt++;
+worker.js:22067:          dispatchResult = await dispatchMcpTool(env, tool_name, input_template, session_id);
+worker.js:22098:          JSON.stringify(input_template),
+worker.js:22271: * Raw CDP (Tracing/Performance) is attempted via context.newCDPSession when the runtime supports it.
+worker.js:25104:/** Subsequence fuzzy bonus (template-style). */
+worker.js:25154: * Does not use project_files / KV recent / Supabase AutoRAG placeholders (schema differs; KV is MCP-bound).
+worker.js:25609:    return jsonResponse({ error: errorMessage }, 501);
+worker.js:27381:  const placeholders = keepIds.map(() => '?').join(',');
+worker.js:27384:      `DELETE FROM agent_messages WHERE conversation_id = ? AND id NOT IN (${placeholders})`
+worker.js:27498: * Archive long conversations to R2 (iam-platform), stub marker in D1; does not delete message rows (review first).
+worker.js:27638:  if (!keys.includes('memory/today-todo.md')) keys.push('memory/today-todo.md');
+worker.js:27805:    return new Response(JSON.stringify({ success: true, message: 'Indexing started' }), {
+worker.js:28151:        WHERE tenant_id=? AND status IN ('todo','in_progress','blocked')
+worker.js:29463:      `INSERT INTO tasks (id, title, status, priority, project_id, tenant_id, created_at) VALUES (?, ?, 'todo', ?, ?, 'system', unixepoch())`
+worker.js:29477:    if (!status || !['todo','in_progress','review','blocked','done','cancelled'].includes(status))
+worker.js:29478:      return Response.json({ error: 'status required (todo|in_progress|review|blocked|done|cancelled)' }, { status: 400 });
+worker.js:30177:  const oauthPlaceholder = 'oauth';
+worker.js:30181:    ).bind(userId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+worker.js:30311:  const oauthPlaceholder = 'oauth';
+worker.js:30315:    ).bind(userId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+worker.js:30353:    const stub = env.IAM_COLLAB.get(id);
+worker.js:30354:    await stub.fetch(new Request('https://internal/broadcast', {

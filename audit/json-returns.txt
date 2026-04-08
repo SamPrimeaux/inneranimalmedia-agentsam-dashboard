@@ -1,0 +1,128 @@
+719:      return new Response(JSON.stringify({ ok: true, delivered, queued: delivered === 0 }), {
+724:      return new Response(JSON.stringify({ do: 'IAMCollaborationSession', ok: true, room: url.pathname }), {
+754:    return new Response(JSON.stringify({ do: 'IAMSession', ok: true, legacy: true }), {
+763:    return new Response(JSON.stringify({ do: 'IAMAgentSession', ok: true, legacy: true }), {
+805:      return Response.json({ ok: true, class: 'AgentChatSqlV1' });
+814:      return Response.json({ messages: rows.reverse() });
+830:      return Response.json({ ok: true });
+835:      if (!hash) return Response.json({ hit: false });
+842:      if (!rows.length) return Response.json({ hit: false });
+844:      return Response.json({
+864:      return Response.json({ ok: true });
+873:    return new Response(JSON.stringify({ do: 'MeauxSession', ok: true }), {
+881:    return new Response(JSON.stringify({ do: 'ChessRoom', ok: true }), {
+3017:          return Response.json({ success: true, tables: results.map(r => r.name) });
+3023:          return Response.json({ success: true, schema: results });
+3031:            return Response.json({ success: false, error: 'Write operations blocked. Enable "Write Mode" in settings.' }, { status: 403 });
+3035:          return Response.json({ success: true, results });
+3038:        return Response.json({ success: false, error: e.message }, { status: 500 });
+3084:        return new Response(JSON.stringify({ error: 'Not found', path }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+3090:        return new Response(JSON.stringify({ ok, worker: 'inneranimalmedia', bindings: { ASSETS: !!env.ASSETS, DASHBOARD: !!env.DASHBOARD } }), {
+3146:          return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+3157:              return new Response(JSON.stringify({ error: 'workspace_id required (or configure TENANT_ID)' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+3165:            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+3167:            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+3189:            return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
+3191:            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+3195:        return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+3381:        if (!env.DB) return new Response(JSON.stringify({ error: 'DB not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+3477:          return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+4410:          return new Response(JSON.stringify({
+4421:          return new Response(JSON.stringify({
+4880:        if (!dbgUser) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+4882:          return Response.json({ error: 'hyperdrive not configured' }, { status: 503 });
+4892:            return Response.json({
+4902:          return Response.json({ error: e?.message || String(e) }, { status: 500 });
+5015:          return new Response(JSON.stringify(_out.data), { headers: { 'Content-Type': 'application/json' } });
+5019:          return new Response(JSON.stringify({ error: e?.message }), { status: 500 });
+5129:          return new Response(JSON.stringify({
+5134:          return new Response(JSON.stringify({ error: e?.message }), { status: 500 });
+5187:        if (!query) return Response.json({ error: 'query required' }, { status: 400 });
+5211:          return Response.json({
+5227:        return Response.json({ answer, sources: data });
+5739:                  return Response.json(themeApiPayloadFromRow(requested, themeRow));
+5746:              return Response.json(themeApiPayloadFromRow(defaultSlug, themeRow || { name: defaultSlug, config: '{}' }));
+5748:              return Response.json({ theme: defaultSlug, name: defaultSlug, variables: {}, is_dark: 1, monaco_theme: 'vs-dark', terminal: null });
+5757:                return Response.json(parsed);
+5770:            return Response.json(payload);
+5772:            return Response.json({ theme: 'meaux-glass-blue', name: 'meaux-glass-blue', variables: {}, is_dark: 1, monaco_theme: 'vs-dark', terminal: null });
+5776:          if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 });
+5780:          if (!normalizedTheme) return Response.json({ ok: false, error: 'Invalid theme' }, { status: 400 });
+5791:          return Response.json({ success: true });
+5793:        return Response.json({ error: 'method not allowed' }, { status: 405 });
+5954:      return new Response(JSON.stringify({ error: 'Worker error', message: String(err.message) }), {
+6095:  return new Response(JSON.stringify({ error: 'Not found', path }), {
+6104:    return new Response(JSON.stringify({
+6151:      return new Response(JSON.stringify({ error: String(err?.message || err) }), {
+6175:      return new Response(JSON.stringify({
+6184:      return new Response(JSON.stringify({ ok: true, url: targetUrl, metrics }), {
+6191:    return new Response(JSON.stringify({
+13356:      return new Response(JSON.stringify(out), {
+15605:        return new Response(JSON.stringify({ error: 'PTY_AUTH_TOKEN not configured on worker' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+15609:        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+15615:        return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+15624:        return new Response(JSON.stringify({ error: 'session_id and tunnel_url required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+15631:        return new Response(JSON.stringify({ error: 'TENANT_ID not configured on worker' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+15641:        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+15645:      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+15650:      if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+15672:        return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+15674:      if (!session) return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+15675:      return new Response(JSON.stringify({
+15866:        return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+15935:        return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+16309:      return new Response(JSON.stringify(results || []), {
+25064:  return new Response(JSON.stringify(body), {
+26086:  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+27805:    return new Response(JSON.stringify({ success: true, message: 'Indexing started' }), {
+27810:  return new Response(JSON.stringify(result), {
+28714:    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+28718:    return Response.json({ error: 'project and hours required' }, { status: 400 });
+28742:  return Response.json({ success: true, id }, { headers: { 'Content-Type': 'application/json' } });
+28821:  return Response.json({
+29057:  return Response.json({
+29201:  return Response.json({ success: true, transactions: transactions.results ?? [] });
+29223:    return Response.json({ error: 'Missing required fields' }, { status: 400 });
+29231:  return Response.json({ success: true, id });
+29244:    return Response.json({ error: 'csv required' }, { status: 400 });
+29248:    return Response.json({ success: true, imported: 0 });
+29276:  return Response.json({ success: true, imported });
+29335:      return Response.json({ success: true, clients: clients.results ?? [] });
+29337:      return Response.json({ success: false, error: String(e?.message || e), clients: [] });
+29349:    if (!name || !email) return Response.json({ error: 'name and email required' }, { status: 400 });
+29355:    return Response.json({ success: true, id: clientId });
+29368:    return Response.json({ success: true, deleted: (r.meta?.changes ?? 0) > 0 });
+29387:    return Response.json({ success: true, projects: projects.results ?? [] });
+29389:    return Response.json({ success: false, error: String(e?.message || e), projects: [] });
+29395:  if (!env.DB) return Response.json({ steps: [], error: 'DB unavailable' }, { status: 503 });
+29401:    return Response.json({ steps: r.results ?? [] });
+29403:    return Response.json({ steps: [], error: String(e?.message || e) });
+29408:  if (!env.DB) return Response.json({ tasks: [], error: 'DB unavailable' }, { status: 503 });
+29417:    return Response.json({ tasks: r.results ?? [] });
+29419:    return Response.json({ tasks: [] });
+29424:  if (!env.DB) return Response.json({ hours_today: 0, spend_this_week: 0, agent_calls_today: 0 }, { status: 503 });
+29434:    return Response.json({ hours_today: Number(hours), spend_this_week: Number(spend), agent_calls_today: Number(calls) });
+29436:    return Response.json({ hours_today: 0, spend_this_week: 0, agent_calls_today: 0 });
+29441:  if (!env.DB) return Response.json({ rows: [], error: 'DB unavailable' }, { status: 503 });
+29446:    return Response.json({ rows: (r.results ?? []).map(row => ({ ...row, exit_code: row.exit_code ?? null })) });
+29448:    return Response.json({ rows: [] });
+29453:  if (!env.DB) return Response.json({ error: 'DB unavailable' }, { status: 503 });
+29454:  if (request.method !== 'POST') return Response.json({ error: 'Method not allowed' }, { status: 405 });
+29458:    if (!title) return Response.json({ error: 'title required' }, { status: 400 });
+29465:    return Response.json({ ok: true, id });
+29467:    return Response.json({ error: String(e?.message || e) }, { status: 500 });
+29472:  if (!env.DB) return Response.json({ error: 'DB unavailable' }, { status: 503 });
+29473:  if (request.method !== 'PATCH') return Response.json({ error: 'Method not allowed' }, { status: 405 });
+29478:      return Response.json({ error: 'status required (todo|in_progress|review|blocked|done|cancelled)' }, { status: 400 });
+29480:    return Response.json({ ok: true });
+29482:    return Response.json({ error: String(e?.message || e) }, { status: 500 });
+29498:  return Response.json({ success: true, invoices: invoices.results ?? [], total_collected: total });
+29547:    return new Response(JSON.stringify(ok ? { ok: true, ...data } : { ok: false, ...data }), {
+29651:    return new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+29657:    return new Response(JSON.stringify({ error: 'Invalid request' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+29662:    return new Response(JSON.stringify({ error: 'Email and backup code are required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+29670:    return new Response(JSON.stringify({ error: 'Invalid or already used backup code' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+29674:    return new Response(JSON.stringify({ error: 'Account not found' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+29690:  return new Response(JSON.stringify({ ok: true, redirect: redirectUrl }), { status: 200, headers });
+30064:    return new Response(JSON.stringify({ error: 'OAuth not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+30200:    return new Response(JSON.stringify({ error: 'OAuth not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });

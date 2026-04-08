@@ -1,0 +1,11 @@
+/dashboard/agent
+/dashboard/agent/
+/dashboard/agent/assets/chunk.js
+/dashboard/Billing.jsx
+/dashboard/Clients.jsx
+/dashboard/Finance.jsx
+/dashboard/foo.js
+/dashboard/glb-viewer.html
+/dashboard/mcp
+/dashboard/overview
+/dashboard/pages/

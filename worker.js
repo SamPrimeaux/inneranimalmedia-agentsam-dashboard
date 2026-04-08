@@ -1857,7 +1857,7 @@ function cidiActivityIp(hookCtx) {
 }
 
 /**
- * After a successful cicd_runs row insert: mirror to deployments + optional cidi_activity_log.
+ * After a successful cicd_runs row insert: mirror to deployments + cicd_events audit trail.
  * Uses github_repositories.cloudflare_worker_name when repo matches; else heuristics.
  */
 async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
@@ -24787,7 +24787,7 @@ const RETENTION_PURGE_TABLE_CONFIG = {
   mcp_command_suggestions: { dateColumn: 'created_at', compare: 'unix' },
   terminal_sessions: { dateColumn: 'updated_at', compare: 'unix' },
   cicd_runs: { dateColumn: 'created_at', compare: 'datetime' },
-  cidi_activity_log: { dateColumn: 'created_at', compare: 'datetime' },
+  cicd_events: { dateColumn: 'created_at', compare: 'unix' },
   agent_messages: { dateColumn: 'created_at', compare: 'datetime' },
 };
 

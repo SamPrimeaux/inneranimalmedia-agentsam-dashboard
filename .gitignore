@@ -47,6 +47,12 @@ reports/
 *.bak*
 audit-*.txt
 
+# One-off audit / analysis output dirs
+audit/
+
+# Source backup copies (not deployed)
+agentsam-clean/
+
 # macOS metadata junk
 migrations/._*
 **/.DS_Store

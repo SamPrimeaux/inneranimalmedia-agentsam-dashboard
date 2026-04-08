@@ -2467,7 +2467,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
     (pathLower === '/api/spend/summary' && method === 'GET') ||
     (pathLower === '/api/spend/unified' && method === 'GET') ||
     (pathLower === '/api/billing' && method === 'GET') ||
-    (pathLower === '/api/cicd/current' && method === 'GET') ||
     (pathLower === '/api/deploy/rollback' && method === 'POST');
   if (!isPhase1) return null;
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -2951,13 +2950,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
          ORDER BY bs.updated_at DESC LIMIT 100`
       ).all();
       return jsonResponse({ subscriptions: results || [] });
-    }
-    if (pathLower === '/api/cicd/current' && method === 'GET') {
-      // Returns the most recent cicd_runs entry for the main IAM pipeline
-      const row = await env.DB.prepare(
-        `SELECT * FROM cicd_runs WHERE worker_name = 'inneranimal-dashboard' ORDER BY queued_at DESC LIMIT 1`
-      ).first();
-      return jsonResponse({ cicd_run: row || null });
     }
     if (pathLower === '/api/deploy/rollback' && method === 'POST') {
       const body = await request.json().catch(() => ({}));
@@ -6194,15 +6186,9 @@ function resolveAnthropicModelKey(modelKey) {
 }
 
 /** Compute cost from ai_models row (D1). Never use a hardcoded map. */
-function calculateCost(model, inputTokens, outputTokens) {
+function calculateCost(model, inputTokens, outputTokens, cacheReadTokens = 0, cacheWriteTokens = 0) {
   if (!model || (inputTokens == null && outputTokens == null)) return 0;
-  const inputRate = Number(model.input_rate_per_mtok);
-  const outputRate = Number(model.output_rate_per_mtok);
-  const inR = Number.isFinite(inputRate) ? inputRate : 0;
-  const outR = Number.isFinite(outputRate) ? outputRate : 0;
-  const inTok = Number(inputTokens) || 0;
-  const outTok = Number(outputTokens) || 0;
-  return (inTok / 1e6 * inR) + (outTok / 1e6 * outR);
+  return computeUsdFromModelRatesRow(model.model_key, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
 }
 
 /** AI Gateway compat: model string for gateway (provider/model). Used only when AI_GATEWAY_BASE_URL is set. */
@@ -6642,7 +6628,8 @@ async function loadAiModelRatesMap(env) {
   try {
     const { results } = await env.DB.prepare(
       `SELECT model_key, input_rate_per_mtok, output_rate_per_mtok,
-              cache_read_rate_per_mtok, cache_write_rate_per_mtok
+              cache_read_rate_per_mtok, cache_write_rate_per_mtok,
+              pricing_unit, cost_per_unit
        FROM ai_models WHERE COALESCE(is_active, 0) = 1`
     ).all();
     const map = {};
@@ -6679,16 +6666,7 @@ async function writeTelemetry(env, data, modelRates) {
   if (computedCostUsdOverride != null && Number.isFinite(Number(computedCostUsdOverride))) {
     estimatedCost = Number(computedCostUsdOverride);
   } else if (rates) {
-    const inR = Number(rates.input_rate_per_mtok) || 0;
-    const outR = Number(rates.output_rate_per_mtok) || 0;
-    const cr = Number(rates.cache_read_rate_per_mtok) || 0;
-    const cw = Number(rates.cache_write_rate_per_mtok) || 0;
-    estimatedCost = (
-      (Number(inputTokens) || 0) * inR +
-      (Number(outputTokens) || 0) * outR +
-      (Number(cacheReadTokens) || 0) * cr +
-      (Number(cacheWriteTokens) || 0) * cw
-    ) / 1_000_000;
+    estimatedCost = computeUsdFromModelRatesRow(modelKey, rates, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
   }
 
   const telemetryId = `tel_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -6773,6 +6751,26 @@ function extractWorkersAiUsageFromJson(j) {
 
 function computeUsdFromModelRatesRow(modelKey, ratesRow, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens) {
   if (!ratesRow) return 0;
+  const unit = (ratesRow.pricing_unit || 'usd_per_mtok').toLowerCase();
+
+  if (unit === 'free' || unit === 'subscription') return 0;
+
+  if (unit === 'neurons_per_mtok') {
+    // Workers AI neurons: $0.011 / 1,000 neurons (0.000011 per neuron)
+    // input_rate_per_mtok stores neurons per 1M tokens
+    const inRate = Number(ratesRow.input_rate_per_mtok) || 0;
+    const outRate = Number(ratesRow.output_rate_per_mtok) || 0;
+    const inCost = (Number(inputTokens) || 0) * inRate * 0.000011 / 1_000_000;
+    const outCost = (Number(outputTokens) || 0) * outRate * 0.000011 / 1_000_000;
+    return inCost + outCost;
+  }
+
+  if (unit === 'per_image' || unit === 'per_second' || unit === 'per_character') {
+    // cost_per_unit is flat fee per image/sec/char. outputTokens represents unit count.
+    return (Number(outputTokens) || 0) * (Number(ratesRow.cost_per_unit) || 0);
+  }
+
+  // Default: usd_per_mtok
   const inR = Number(ratesRow.input_rate_per_mtok) || 0;
   const outR = Number(ratesRow.output_rate_per_mtok) || 0;
   const cr = Number(ratesRow.cache_read_rate_per_mtok) || 0;
@@ -7504,38 +7502,11 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
       rowForTelemetry = await resolveGoogleModelRowForVertexAi(env, modelRow);
     }
   }
-  let amountUsd;
-  if (typeof rowForTelemetry?.input_rate_per_mtok === 'number' && typeof rowForTelemetry?.output_rate_per_mtok === 'number') {
-    amountUsd = calculateCost(rowForTelemetry, safeInput, safeOutput);
-  } else {
-    const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
-    amountUsd = Math.round((safeInput * rateIn + safeOutput * rateOut) * 1e8) / 1e8;
-  }
-  let inputRateCol = typeof rowForTelemetry?.input_rate_per_mtok === 'number' ? rowForTelemetry.input_rate_per_mtok : null;
-  let outputRateCol = typeof rowForTelemetry?.output_rate_per_mtok === 'number' ? rowForTelemetry.output_rate_per_mtok : null;
-  const fbRates = getTelemetryFallbackRates(safeModelKey);
-  inputRateCol = inputRateCol ?? fbRates.in;
-  outputRateCol = outputRateCol ?? fbRates.out;
+  let amountUsd = computeUsdFromModelRatesRow(safeModelKey, rowForTelemetry, safeInput, safeOutput, safeCacheRead, safeCacheCreate);
   if ((!amountUsd || amountUsd === 0) && (safeInput > 0 || safeOutput > 0)) {
-    amountUsd = Math.round(((safeInput * inputRateCol + safeOutput * outputRateCol) / 1_000_000) * 1e8) / 1e8;
-  }
-  // Neuron cost for Workers AI (CF bills neurons, not tokens)
-  const NEURON_MULTIPLIERS = {
-    '@cf/meta/llama-3.1-8b-instruct': 0.4,
-    '@cf/meta/llama-4-scout-17b-16e-instruct': 0.6,
-    '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 1.8,
-    '@cf/moonshotai/kimi-k2.5': 1.2,
-    '@cf/nvidia/nemotron-3-120b-a12b': 2.0,
-    '@cf/zai-org/glm-4.7-flash': 0.5,
-  };
-  const NEURON_RATE = 0.000011; // $0.011 per 1,000 neurons
-  let neuronsUsed = 0;
-  let neuronCostUsd = 0;
-  if (safeProvider === 'workers_ai' || safeModelKey?.startsWith('@cf/')) {
-    const mult = NEURON_MULTIPLIERS[safeModelKey] ?? 0.8;
-    neuronsUsed = Math.round((safeInput + safeOutput) * mult);
-    neuronCostUsd = neuronsUsed * NEURON_RATE;
-    if (!amountUsd || amountUsd === 0) amountUsd = neuronCostUsd;
+    // Fallback if DB row missing rates
+    const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
+    amountUsd = (safeInput * rateIn / 1_000_000) + (safeOutput * rateOut / 1_000_000);
   }
   const msgId = crypto.randomUUID();
   const role = 'assistant';
@@ -11858,14 +11829,7 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   }
   if (agentsamRunId) {
     const r = ratesMap[modelKey] || modelRow;
-    const computedCostUsd = r
-      ? (
-        (inputTok * (Number(r.input_rate_per_mtok) || 0)) +
-        (outputTok * (Number(r.output_rate_per_mtok) || 0)) +
-        (cacheReadTok * (Number(r.cache_read_rate_per_mtok) || 0)) +
-        (cacheWriteTok * (Number(r.cache_write_rate_per_mtok) || 0))
-      ) / 1_000_000
-      : 0;
+    const computedCostUsd = computeUsdFromModelRatesRow(modelKey, r, inputTok, outputTok, cacheReadTok, cacheWriteTok);
     await completeAgentsamAgentRun(env, agentsamRunId, conversationId, inputTok, outputTok, computedCostUsd);
   }
   if (fullText && env.DB && conversationId) {
@@ -19060,6 +19024,14 @@ async function handleCidiApi(request, url, env, ctx) {
 
   const pathLower = url.pathname.toLowerCase();
   const method = request.method.toUpperCase();
+
+  // GET /api/cicd/current — most recent run
+  if (pathLower === '/api/cicd/current' && method === 'GET') {
+    const row = await env.DB.prepare(
+      `SELECT * FROM cicd_runs WHERE worker_name = 'inneranimal-dashboard' ORDER BY queued_at DESC LIMIT 1`
+    ).first();
+    return jsonResponse({ cicd_run: row || null });
+  }
 
   // POST /api/cicd/run — execute smoke suite
   if (pathLower === '/api/cicd/run' && method === 'POST') {

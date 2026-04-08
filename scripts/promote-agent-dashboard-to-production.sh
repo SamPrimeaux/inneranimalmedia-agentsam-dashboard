@@ -26,7 +26,7 @@ echo "Building agent-dashboard..."
 
 echo "Uploading to agent-sam..."
 "${WRAP[@]}" agent-sam/static/dashboard/agent.html --file=dashboard/agent.html --content-type='text/html; charset=utf-8' --remote -c "$CONFIG"
-"${WRAP[@]}" agent-sam/static/dashboard/agent/agent-dashboard.js --file=agent-dashboard/dist/agent-dashboard.js --content-type='application/javascript; charset=utf-8' --remote -c "$CONFIG"
-"${WRAP[@]}" agent-sam/static/dashboard/agent/agent-dashboard.css --file=agent-dashboard/dist/agent-dashboard.css --content-type='text/css; charset=utf-8' --remote -c "$CONFIG"
+"${WRAP[@]}" agent-sam/static/dashboard/agent/agent-dashboard.js --file=agent-dashboard/agent-dashboard/dist/agent-dashboard.js --content-type='application/javascript; charset=utf-8' --remote -c "$CONFIG"
+"${WRAP[@]}" agent-sam/static/dashboard/agent/agent-dashboard.css --file=agent-dashboard/agent-dashboard/dist/agent-dashboard.css --content-type='text/css; charset=utf-8' --remote -c "$CONFIG"
 
 echo "Done. R2 updated. If worker.js routing changed, run deploy only after Sam types: deploy approved"

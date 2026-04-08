@@ -22,6 +22,19 @@ export default defineConfig(({ mode }) => {
       },
       optimizeDeps: {
         include: ['react', 'react-dom', '@excalidraw/excalidraw'],
+      },
+      build: {
+        outDir: 'dist',
+        rollupOptions: {
+          output: {
+            entryFileNames: 'agent-dashboard.js',
+            chunkFileNames: '[name].js',
+            assetFileNames: (assetInfo) => {
+              if (assetInfo.name?.endsWith('.css')) return 'agent-dashboard.css';
+              return '[name][extname]';
+            }
+          }
+        }
       }
     };
 });

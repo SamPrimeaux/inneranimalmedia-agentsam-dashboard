@@ -12149,6 +12149,8 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         .first();
       if (cached?.compiled_context) {
         chatSseSystemPrompt = cached.compiled_context;
+        const { tools: cachedPathTools } = await buildChatSseSystemPromptResolved();
+        lastLoadedToolsSse = cachedPathTools;
         try {
           const savedTok = Number(cached.token_count) || estimateCompiledContextTokens(cached.compiled_context);
           await env.DB.prepare(

@@ -13,6 +13,8 @@ import { handlers as storageHandlers } from './builtin/storage.js';
 import { handlers as platformHandlers } from './builtin/platform.js';
 import { handlers as agentHandlers } from './builtin/agent.js';
 import { handlers as workflowHandlers } from './builtin/workflow.js';
+import { handlers as anthropicCliHandlers } from './builtin/anthropic-cli.js';
+import { handlers as anthropicBatchHandlers } from './builtin/anthropic-batch.js';
 
 /**
  * Universal Tool Dispatcher (Omni-Sam v2.0).
@@ -98,6 +100,12 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName === 'terminal_execute':
         case toolName === 'run_command':
             return await termHandlers.run_command?.(params, env);
+
+        // ── CATEGORY: intelligence / llm ops (6 Tools) ──────────────────
+        case toolName.startsWith('anthropic_cli'):
+            return await anthropicCliHandlers[toolName]?.(params, env);
+        case toolName.startsWith('anthropic_batch'):
+            return await anthropicBatchHandlers[toolName]?.(params, env);
 
         default:
             return { error: `Tool integration for '${toolName}' not found.` };

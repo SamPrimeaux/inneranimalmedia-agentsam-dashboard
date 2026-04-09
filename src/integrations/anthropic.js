@@ -1,5 +1,6 @@
 import { jsonResponse } from '../core/responses.js';
 import { getAuthUser } from '../core/auth.js';
+import { runBuiltinTool } from '../tools/ai-dispatch.js';
 
 /**
  * Standardizes Anthropic model keys for API requests.

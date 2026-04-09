@@ -20967,6 +20967,49 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     return { result: payload };
   }
 
+  if (tool_name.startsWith('fs_')) {
+    const ptyToken = (env.PTY_AUTH_TOKEN || env.TERMINAL_SECRET || '').trim();
+    if (!ptyToken) {
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: 'PTY_AUTH_TOKEN not configured', serviceName: 'pty_bridge' });
+      return { error: 'PTY_AUTH_TOKEN not configured on worker' };
+    }
+    const ptyBase = (env.TERMINAL_WS_URL || 'https://terminal.inneranimalmedia.com').replace(/^ws/, 'http');
+    const bridgeUrl = new URL('/mcp/filesystem', ptyBase).toString();
+
+    try {
+      const ptyRest0 = Date.now();
+      const res = await fetch(bridgeUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ptyToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'tools/call',
+          params: { name: tool_name, arguments: params }
+        })
+      });
+      const rawText = await res.text();
+      if (!res.ok) {
+        const errMsg = `FS Bridge ${res.status}: ${rawText.slice(0, 200)}`;
+        await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: errMsg, serviceName: 'pty_bridge', durationMs: Date.now() - ptyRest0 });
+        return { error: errMsg };
+      }
+      const dataLine = rawText.split('\n').find(l => l.startsWith('data:'));
+      const parsed = dataLine ? JSON.parse(dataLine.slice(5).trim()) : JSON.parse(rawText);
+      const content = parsed?.result?.content ?? parsed?.result ?? parsed;
+      const out = { result: content };
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: content, error: null, serviceName: 'pty_bridge', durationMs: Date.now() - ptyRest0 });
+      return out;
+    } catch (e) {
+      const errMsg = `FS Bridge error: ${e.message}`;
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: errMsg, serviceName: 'pty_bridge' });
+      return { error: errMsg };
+    }
+  }
+
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();
   if (!toolRow) {
     await rec({ conversationId, toolName: tool_name, toolCategory: 'mcp', toolInput: params, result: null, error: 'Tool not found', serviceName: null });

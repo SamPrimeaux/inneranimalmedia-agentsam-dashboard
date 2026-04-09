@@ -1,5 +1,13 @@
 import { jsonResponse } from '../core/responses.js';
 import { getAuthUser, getIntegrationToken } from '../core/auth.js';
+import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
+
+// Integrations
+import { chatWithToolsAnthropic } from '../integrations/anthropic.js';
+import { handleCanvasApi } from '../integrations/canvas.js';
+import { handleHyperdriveApi } from '../integrations/hyperdrive.js';
+import { handleBrowserRequest, handlePlaywrightJobApi } from '../integrations/playwright.js';
+import { handleGitHubApi } from '../integrations/github.js';
 
 /**
  * Main dispatcher for Dashboard-related API routes (/api/agent/*, /api/terminal/*).
@@ -99,11 +107,10 @@ export async function handleDashboardApi(request, url, env, ctx) {
         const sep = wssUrl.includes('?') ? '&' : '?';
         let themeSlug = 'meaux-storm-gray';
         
-        if (authUser.id && env.DB) {
-            try {
-                const row = await env.DB.prepare('SELECT theme FROM user_settings WHERE user_id = ? LIMIT 1').bind(authUser.id).first();
-                if (row?.theme) themeSlug = normalizeThemeSlug(row.theme);
-            } catch (_) { /* Fallback to default */ }
+        // Dynamic Workspace-Aware Theme Resolution
+        if (env.DB) {
+            const workspaceId = url.searchParams.get('workspace_id') || url.searchParams.get('tenant_id');
+            themeSlug = await getWorkspaceTheme(env, workspaceId);
         }
         
         const socketUrl = `${wssUrl}${sep}token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
@@ -153,17 +160,47 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
-    return jsonResponse({ error: 'Dashboard route not found or not yet modularized' }, 404);
-}
+    // ── /api/chat (Anthropic Engine) ─────────────────────────────────────────
+    if (pathLower === '/api/chat') {
+        try {
+            const body = await request.json();
+            return chatWithToolsAnthropic(env, request, {
+                modelKey: body.model || 'claude-3-5-sonnet-20240620',
+                systemPrompt: body.system || 'You are Agent Sam.',
+                messages: body.messages || [],
+                tools: body.tools || [],
+                agentId: body.agent_id,
+                conversationId: body.conversation_id
+            });
+        } catch (e) {
+            return jsonResponse({ error: 'Chat failed', detail: e.message }, 500);
+        }
+    }
 
-/**
- * Standardizes theme slugs for the terminal renderer.
- */
-function normalizeThemeSlug(value) {
-    if (!value) return 'meaux-storm-gray';
-    let s = value.toLowerCase().trim();
-    s = s.replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
-    if (s === 'dark' || s === 'black') return 'meaux-storm-gray';
-    if (s === 'light' || s === 'white' || s === 'solarized-light') return 'solarized-light';
-    return s;
+    // ── /api/draw/* (Canvas Engine) ──────────────────────────────────────────
+    if (pathLower.startsWith('/api/draw')) {
+        return handleCanvasApi(request, env);
+    }
+
+    // ── /api/hyperdrive (Postgres Proxy) ─────────────────────────────────────
+    if (pathLower === '/api/hyperdrive') {
+        return handleHyperdriveApi(request, env);
+    }
+
+    // ── /api/browser (Playwright Rendering) ──────────────────────────────────
+    if (pathLower.startsWith('/api/browser')) {
+        return handleBrowserRequest(request, url, env);
+    }
+
+    // ── /api/playwright (Browser Jobs) ───────────────────────────────────────
+    if (pathLower.startsWith('/api/playwright')) {
+        return handlePlaywrightJobApi(request, env);
+    }
+
+    // ── /api/agent/github (GitHub Bridge) ────────────────────────────────────
+    if (pathLower.startsWith('/api/agent/github')) {
+        return handleGitHubApi(request, env);
+    }
+
+    return jsonResponse({ error: 'Dashboard route not found or not yet modularized' }, 404);
 }

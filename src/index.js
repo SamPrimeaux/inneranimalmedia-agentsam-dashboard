@@ -26,6 +26,10 @@ export default {
     // ── Modular Dashboard API ────────────────────────────────────────────────
     if (pathLower.startsWith('/api/agent') || 
         pathLower.startsWith('/api/terminal') || 
+        pathLower.startsWith('/api/draw') ||
+        pathLower.startsWith('/api/hyperdrive') ||
+        pathLower.startsWith('/api/browser') ||
+        pathLower.startsWith('/api/playwright') ||
         pathLower === '/api/chat') {
       return handleDashboardApi(request, url, env, ctx);
     }

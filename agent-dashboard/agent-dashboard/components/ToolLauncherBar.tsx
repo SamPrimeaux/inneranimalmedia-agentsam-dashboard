@@ -1,111 +1,118 @@
-import React from 'react';
-import { PenLine, Box, Triangle, ExternalLink, Wand2, Layers } from 'lucide-react';
+import React, { useRef } from 'react';
+import { PenLine, Box, Triangle, Wand2, Layers, Upload, Plus } from 'lucide-react';
 
 interface Tool {
   id: string;
   icon: React.ReactNode;
   label: string;
-  sublabel: string;
   url: string;
   color: string;
-  glowColor: string;
 }
 
 interface ToolLauncherBarProps {
   onNavigate: (url: string) => void;
+  onImportGlb?: (file: File) => void;
 }
 
-export const ToolLauncherBar: React.FC<ToolLauncherBarProps> = ({ onNavigate }) => {
+export const ToolLauncherBar: React.FC<ToolLauncherBarProps> = ({ onNavigate, onImportGlb }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const tools: Tool[] = [
     {
-      id: 'excalidraw',
-      icon: <PenLine size={18} />,
-      label: 'Excalidraw',
-      sublabel: 'Whiteboard & Diagrams',
-      url: 'https://excalidraw.com',
-      color: 'text-[var(--solar-violet)]',
-      glowColor: 'hover:border-[var(--solar-violet)]/50 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--solar-violet)_15%,transparent)]',
-    },
-    {
       id: 'meshy',
-      icon: <Box size={18} />,
-      label: 'Meshy AI',
-      sublabel: '3D Model Generator',
+      icon: <Box size={16} />,
+      label: 'Meshy',
       url: 'https://app.meshy.ai',
       color: 'text-[var(--solar-cyan)]',
-      glowColor: 'hover:border-[var(--solar-cyan)]/50 hover:shadow-[0_0_20px_rgba(42,161,152,0.15)]',
-    },
-    {
-      id: 'blender',
-      icon: <Triangle size={18} />,
-      label: 'Blender',
-      sublabel: '3D Creation Suite',
-      url: 'https://www.blender.org/download',
-      color: 'text-[var(--solar-orange)]',
-      glowColor: 'hover:border-[var(--solar-orange)]/50 hover:shadow-[0_0_20px_color-mix(in_srgb,var(--solar-orange)_15%,transparent)]',
     },
     {
       id: 'spline',
-      icon: <Wand2 size={18} />,
+      icon: <Wand2 size={16} />,
       label: 'Spline',
-      sublabel: '3D Design Tool',
       url: 'https://app.spline.design',
       color: 'text-[var(--solar-blue)]',
-      glowColor: 'hover:border-[var(--solar-blue)]/50 hover:shadow-[0_0_20px_rgba(38,139,210,0.15)]',
+    },
+    {
+      id: 'blender',
+      icon: <Triangle size={16} />,
+      label: 'Blender',
+      url: 'https://www.blender.org/download',
+      color: 'text-[var(--solar-orange)]',
+    },
+    {
+      id: 'excalidraw',
+      icon: <PenLine size={16} />,
+      label: 'Draw',
+      url: 'https://excalidraw.com',
+      color: 'text-[var(--solar-violet)]',
     },
     {
       id: 'tldraw',
-      icon: <Layers size={18} />,
+      icon: <Layers size={16} />,
       label: 'tldraw',
-      sublabel: 'Infinite Canvas',
       url: 'https://tldraw.com',
       color: 'text-[var(--solar-green)]',
-      glowColor: 'hover:border-[var(--solar-green)]/50 hover:shadow-[0_0_20px_rgba(133,153,0,0.15)]',
     },
   ];
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onImportGlb) {
+      onImportGlb(file);
+    }
+  };
+
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-auto px-6 pb-6">
-      <div className="max-w-3xl mx-auto">
-        {/* Section Label */}
-        <div className="flex items-center gap-2 mb-3 px-1">
-          <div className="h-px flex-1 bg-[var(--border-subtle)]/40" />
-          <span className="text-[10px] font-black uppercase tracking-[0.25em] text-[var(--text-muted)]">Creative Tools</span>
-          <div className="h-px flex-1 bg-[var(--border-subtle)]/40" />
-        </div>
+    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
+      <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-panel)]/80 backdrop-blur-xl shadow-2xl glass-panel">
+        {/* Upload Button */}
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="flex items-center justify-center p-2 rounded-full hover:bg-[var(--bg-hover)] text-[var(--solar-cyan)] transition-all group relative"
+          title="Import GLB Model"
+        >
+          <Upload size={16} />
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase tracking-widest font-bold">
+            Import GLB
+          </div>
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".glb"
+          onChange={handleFileChange}
+          className="hidden"
+        />
 
-        {/* Tool Pills */}
-        <div className="flex items-center gap-3 overflow-x-auto pb-1 scrollbar-hide justify-center flex-wrap">
-          {tools.map((tool) => (
-            <button
-              key={tool.id}
-              onClick={() => onNavigate(tool.url)}
-              className={`group flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[var(--border-subtle)]/50 bg-[var(--bg-app)]/80 backdrop-blur-md transition-all duration-200 shrink-0 ${tool.glowColor}`}
-            >
-              {/* Icon */}
-              <div className={`transition-transform group-hover:-translate-y-0.5 duration-200 ${tool.color}`}>
-                {tool.icon}
-              </div>
+        <div className="w-px h-4 bg-[var(--border-subtle)] mx-0.5" />
 
-              {/* Labels */}
-              <div className="text-left">
-                <div className={`text-[12px] font-bold tracking-tight leading-none mb-0.5 transition-colors ${tool.color}`}>
-                  {tool.label}
-                </div>
-                <div className="text-[10px] text-[var(--text-muted)] font-medium leading-none">
-                  {tool.sublabel}
-                </div>
-              </div>
+        {/* Tool Icons */}
+        {tools.map((tool) => (
+          <button
+            key={tool.id}
+            onClick={() => onNavigate(tool.url)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-[var(--bg-hover)] transition-all group relative border border-transparent hover:border-[var(--border-subtle)]"
+          >
+            <div className={`transition-transform group-hover:scale-110 ${tool.color}`}>
+              {tool.icon}
+            </div>
+            <span className="text-[11px] font-bold text-[var(--text-muted)] group-hover:text-[var(--text-main)] transition-colors">
+              {tool.label}
+            </span>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase tracking-widest font-bold">
+              Launch {tool.label}
+            </div>
+          </button>
+        ))}
 
-              {/* External link indicator */}
-              <ExternalLink
-                size={11}
-                className="text-[var(--text-muted)] opacity-0 group-hover:opacity-70 transition-opacity ml-1"
-              />
-            </button>
-          ))}
-        </div>
+        <div className="w-px h-4 bg-[var(--border-subtle)] mx-0.5" />
+
+        {/* Add more placeholder */}
+        <button className="flex items-center justify-center p-2 rounded-full hover:bg-[var(--bg-hover)] text-[var(--text-muted)] transition-all">
+          <Plus size={16} />
+        </button>
       </div>
     </div>
   );
 };
+

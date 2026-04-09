@@ -19,7 +19,8 @@
     "cannon-es": "0.20.0",
     "lucide-react": "^0.553.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "source-map": "^0.7.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260329.1",

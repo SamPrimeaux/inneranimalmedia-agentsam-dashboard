@@ -29224,7 +29224,7 @@ async function handleTimeTrackHeartbeat(request, env) {
     `SELECT COALESCE(SUM(duration_minutes),0)*60 as secs
      FROM time_logs
      WHERE start_time >= ${weekStart}`
-  ).first();
+  ).first().catch(() => ({ secs: 0 }));
 
   const weekSeconds = (weekA?.secs ?? 0) + (weekB?.secs ?? 0) + liveSecs;
 

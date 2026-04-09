@@ -31,11 +31,11 @@ interface WelcomeLauncherProps {
 }
 
 const ALL_WORKSPACES = [
-  { name: 'inneranimalmedia---meaux-games---meauxcad', path: '/Volumes/Expansion', icon: <Star size={14} />, color: 'text-[var(--solar-yellow)]', tag: 'Active' },
+  { name: 'inneranimalmedia---agent-sam---core', path: '/Volumes/Expansion', icon: <Star size={14} />, color: 'text-[var(--solar-yellow)]', tag: 'Active' },
   { name: 'samprimeaux', path: '/Users', icon: <HardDrive size={14} />, color: 'text-[var(--solar-magenta)]', tag: null },
   { name: 'cursor-efficiency-setup', path: '~/Downloads', icon: <LayoutTemplate size={14} />, color: 'text-[var(--solar-cyan)]', tag: null },
   { name: 'Downloads', path: '~', icon: <FolderOpen size={14} />, color: 'text-[var(--solar-blue)]', tag: null },
-  { name: 'meaux-dashboard', path: '/Volumes/Expansion', icon: <Box size={14} />, color: 'text-[var(--solar-green)]', tag: null },
+  { name: 'agent-sam-dashboard', path: '/Volumes/Expansion', icon: <Box size={14} />, color: 'text-[var(--solar-green)]', tag: null },
   { name: 'inneranimal-api', path: '/Volumes/Expansion', icon: <Star size={14} />, color: 'text-[var(--solar-orange)]', tag: null },
   { name: 'iam-cms', path: '/Volumes/Expansion', icon: <LayoutTemplate size={14} />, color: 'text-[var(--solar-violet)]', tag: null },
 ];

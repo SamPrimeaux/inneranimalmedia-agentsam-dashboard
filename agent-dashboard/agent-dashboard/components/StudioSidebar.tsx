@@ -72,7 +72,7 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
 
   const projects = [
     { id: ProjectType.CHESS, name: 'Meaaux Games', icon: <Gamepad2 size={20} />, desc: '3D Physics Chess' },
-    { id: ProjectType.CAD, name: 'MeauxCAD', icon: <Layers size={20} />, desc: 'Precision Blueprints' },
+    { id: ProjectType.CAD, name: 'Agent Sam', icon: <Layers size={20} />, desc: 'Precision Blueprints' },
     { id: ProjectType.SANDBOX, name: 'Sandbox Lab', icon: <Box size={20} />, desc: 'Voxel Physics Fun' },
   ];
 
@@ -158,7 +158,7 @@ export const StudioSidebar: React.FC<SidebarProps> = ({
             <Package className="text-[var(--solar-cyan)]" size={20} />
           </div>
           <div>
-            <h1 className="text-[14px] font-black tracking-widest text-white uppercase italic">MeauxCAD</h1>
+            <h1 className="text-[14px] font-black tracking-widest text-white uppercase italic">Agent Sam</h1>
             <p className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Studio Engine</p>
           </div>
         </div>

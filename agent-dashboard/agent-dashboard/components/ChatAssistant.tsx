@@ -643,6 +643,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const attachButtonRef = useRef<HTMLButtonElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);

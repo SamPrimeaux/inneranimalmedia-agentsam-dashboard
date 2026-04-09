@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const DEFAULT_URL = 'https://inneranimalmedia.com';
+const DEFAULT_URL = typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com';
 
 function normalizeNavigate(raw: string): string {
     const next = raw.trim();
     if (!next) return DEFAULT_URL;
-    // Blob / data URLs from local HTML preview — do not prefix with https://
-    if (/^(blob:|data:)/i.test(next)) return next;
-    if (!/^https?:\/\//i.test(next)) return `https://${next}`;
+    // Special protocols
+    if (/^(blob:|data:|about:)/i.test(next)) return next;
+    // Protocol-less domains
+    if (!/^https?:\/\//i.test(next)) {
+        if (next.includes('.') || next.includes('localhost')) return `https://${next}`;
+        return DEFAULT_URL;
+    }
     return next;
 }
 

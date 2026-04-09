@@ -30,7 +30,6 @@ import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
 import { PlaywrightConsole } from './components/PlaywrightConsole';
-import { MCPPanel } from './components/MCPPanel';
 import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
 import {

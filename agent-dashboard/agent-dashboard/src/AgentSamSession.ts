@@ -1,6 +1,6 @@
 import type { DurableObjectState } from '@cloudflare/workers-types';
 
-export class MeauxCADSession {
+export class AgentSamSession {
   state: DurableObjectState;
 
   constructor(state: DurableObjectState) {

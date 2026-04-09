@@ -109,7 +109,7 @@ function buildGameBanner(workspaceLabel: string, productLabel: string, workspace
     ``,
     `${DM}  Workspace : ${wsLine}${R}`,
     id ? `${DM}  ID        : ${id}${R}` : '',
-    `${DM}  Type ${Y}?${DM} for AI help · ${Y}Ctrl+A${DM} to toggle AI panel · ${Y}1-5${DM} for quick actions${R}`,
+    footer,
     footer,
     ``,
   ].filter(l => l !== undefined) as string[];
@@ -117,245 +117,7 @@ function buildGameBanner(workspaceLabel: string, productLabel: string, workspace
   return lines.join('\r\n');
 }
 
-// ─── AI Assist Panel ──────────────────────────────────────────────────────────
-interface AIMessage { role: 'user' | 'assistant'; content: string }
 
-interface AIPanelProps {
-  visible: boolean;
-  onClose: () => void;
-  onRunCommand: (cmd: string) => void;
-  terminalBuffer: string;
-}
-
-function AIPanel({ visible, onClose, onRunCommand, terminalBuffer }: AIPanelProps) {
-  const [messages, setMessages] = useState<AIMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (visible) setTimeout(() => inputRef.current?.focus(), 120);
-  }, [visible]);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
-
-  const send = useCallback(async (text?: string) => {
-    const q = (text ?? input).trim();
-    if (!q || loading) return;
-    setInput('');
-    const userMsg: AIMessage = { role: 'user', content: q };
-    setMessages(prev => [...prev, userMsg]);
-    setLoading(true);
-
-    try {
-      const context = terminalBuffer.slice(-3000);
-      const res = await fetch('/api/agent/chat', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: q,
-          mode: 'ask',
-        }),
-      });
-
-      if (!res.ok) throw new Error(`${res.status}`);
-      const ct = res.headers.get('content-type') ?? '';
-
-      let reply = '';
-      if (ct.includes('text/event-stream')) {
-        const reader = res.body!.getReader();
-        const dec = new TextDecoder();
-        let partialMsg: AIMessage = { role: 'assistant', content: '' };
-        setMessages(prev => [...prev, partialMsg]);
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = dec.decode(value);
-          for (const line of chunk.split('\n')) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const d = JSON.parse(line.slice(6));
-              if (d.type === 'text' && d.text) {
-                reply += d.text;
-                setMessages(prev => {
-                  const copy = [...prev];
-                  copy[copy.length - 1] = { role: 'assistant', content: reply };
-                  return copy;
-                });
-              }
-            } catch (_) {}
-          }
-        }
-      } else {
-        const data = await res.json();
-        reply = data.response ?? data.content ?? data.message ?? JSON.stringify(data);
-        setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
-      }
-    } catch (e: unknown) {
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: `[ERR] ${e instanceof Error ? e.message : String(e)}` },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  }, [input, loading, terminalBuffer]);
-
-  // Extract bash commands from AI response for one-click run
-  function extractCommands(text: string): string[] {
-    const matches = [...text.matchAll(/```(?:bash|sh|zsh|shell)?\n([\s\S]*?)```/g)];
-    return matches.map(m => m[1].trim()).filter(Boolean);
-  }
-
-  function renderMessage(msg: AIMessage, i: number) {
-    const isUser = msg.role === 'user';
-    const commands = !isUser ? extractCommands(msg.content) : [];
-
-    // Simple markdown-ish rendering
-    const rendered = msg.content
-      .replace(/```(?:bash|sh|zsh|shell)?\n([\s\S]*?)```/g, '___CMD___$1___END___')
-      .split('\n');
-
-    return (
-      <div key={i} className={`mb-4 ${isUser ? 'ml-4' : 'mr-2'}`}>
-        <div className={`text-[9px] font-mono tracking-widest uppercase mb-1 ${
-          isUser ? 'text-right text-[var(--solar-yellow)]/60' : 'text-[var(--solar-cyan)]/60'
-        }`}>
-          {isUser ? 'YOU' : '// AI ASSIST'}
-        </div>
-        <div className={`text-[11px] leading-relaxed font-mono rounded px-3 py-2 border ${
-          isUser
-            ? 'bg-[var(--solar-yellow)]/5 border-[var(--solar-yellow)]/20 text-[var(--text-main)] text-right'
-            : 'bg-[var(--solar-cyan)]/5 border-[var(--solar-cyan)]/15 text-[var(--text-main)]'
-        }`}>
-          {rendered.map((line, li) => {
-            if (line.startsWith('___CMD___')) {
-              const code = line.replace('___CMD___', '').replace('___END___', '');
-              return (
-                <div key={li} className="my-2 rounded bg-black/40 border border-[var(--solar-cyan)]/20 overflow-hidden">
-                  <div className="flex items-center justify-between px-2 py-1 border-b border-[var(--solar-cyan)]/10">
-                    <span className="text-[9px] text-[var(--solar-cyan)]/50 tracking-widest">SHELL</span>
-                    <button
-                      onClick={() => onRunCommand(code)}
-                      className="text-[9px] px-2 py-0.5 rounded bg-[var(--solar-cyan)]/10 hover:bg-[var(--solar-cyan)]/20 text-[var(--solar-cyan)] border border-[var(--solar-cyan)]/30 transition-colors font-mono tracking-wider"
-                    >
-                      ▶ RUN
-                    </button>
-                  </div>
-                  <pre className="px-3 py-2 text-[10px] text-[var(--solar-green)] whitespace-pre-wrap break-all">{code}</pre>
-                </div>
-              );
-            }
-            return <span key={li}>{line}{li < rendered.length - 1 ? '\n' : ''}</span>;
-          })}
-        </div>
-        {commands.length > 0 && !isUser && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {commands.map((cmd, ci) => (
-              <button
-                key={ci}
-                onClick={() => onRunCommand(cmd)}
-                className="text-[9px] px-2 py-0.5 rounded bg-[var(--solar-green)]/10 border border-[var(--solar-green)]/30 text-[var(--solar-green)] hover:bg-[var(--solar-green)]/20 transition-colors font-mono"
-              >
-                ▶ {cmd.length > 30 ? cmd.slice(0, 27) + '…' : cmd}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const QUICK_PROMPTS = [
-    'Explain this error',
-    'How do I fix this?',
-    'Show me the fix command',
-    'What does this output mean?',
-  ];
-
-  return (
-    <div
-      className={`absolute top-0 right-0 bottom-0 flex flex-col border-l border-[var(--solar-cyan)]/20 bg-[var(--terminal-chrome)] transition-all duration-300 ease-out z-10 ${
-        visible ? 'w-[340px] opacity-100' : 'w-0 opacity-0 pointer-events-none overflow-hidden'
-      }`}
-      style={{ backdropFilter: 'blur(8px)' }}
-    >
-      {/* AI Panel Header */}
-      <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-[var(--solar-cyan)]/15">
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Bot size={14} className="text-[var(--solar-cyan)]" />
-            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--solar-green)] shadow-[0_0_4px_var(--solar-green)]" />
-          </div>
-          <span className="text-[10px] font-mono font-bold tracking-widest text-[var(--solar-cyan)] uppercase">AI Assist</span>
-          <span className="text-[9px] text-[var(--text-muted)]/50 font-mono">// terminal context</span>
-        </div>
-        <button onClick={onClose} className="p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--solar-red)] transition-colors">
-          <X size={12} />
-        </button>
-      </div>
-
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1 custom-scrollbar">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 py-8">
-            <div className="w-10 h-10 rounded-full border border-[var(--solar-cyan)]/20 flex items-center justify-center">
-              <Bot size={18} className="text-[var(--solar-cyan)]/50" />
-            </div>
-            <p className="text-[10px] text-[var(--text-muted)]/50 font-mono text-center">
-              Ask anything about your terminal.<br/>I have context from your session.
-            </p>
-            <div className="w-full space-y-1.5 mt-2">
-              {QUICK_PROMPTS.map(p => (
-                <button
-                  key={p}
-                  onClick={() => send(p)}
-                  className="w-full text-left text-[10px] font-mono px-3 py-2 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/30 hover:bg-[var(--solar-cyan)]/5 transition-all"
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {messages.map((m, i) => renderMessage(m, i))}
-        {loading && (
-          <div className="flex items-center gap-2 text-[var(--solar-cyan)]/60 text-[10px] font-mono ml-2">
-            <Loader2 size={10} className="animate-spin" />
-            <span>Thinking…</span>
-          </div>
-        )}
-      </div>
-
-      {/* Input */}
-      <div className="shrink-0 border-t border-[var(--solar-cyan)]/15 p-2">
-        <div className="flex items-center gap-1.5 bg-black/30 rounded border border-[var(--solar-cyan)]/20 px-2 py-1.5 focus-within:border-[var(--solar-cyan)]/50 transition-colors">
-          <span className="text-[var(--solar-cyan)]/40 font-mono text-[10px] shrink-0">›</span>
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }}}
-            placeholder="Ask about this terminal…"
-            className="flex-1 bg-transparent text-[11px] font-mono text-[var(--text-main)] placeholder:text-[var(--text-muted)]/30 outline-none"
-          />
-          <button
-            onClick={() => send()}
-            disabled={!input.trim() || loading}
-            className="shrink-0 p-1 rounded text-[var(--solar-cyan)] hover:bg-[var(--solar-cyan)]/10 disabled:opacity-30 transition-colors"
-          >
-            <Send size={11} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
@@ -392,7 +154,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [activeTab, setActiveTab]   = useState<ShellTab>('terminal');
     const [status, setStatus]         = useState<'connecting' | 'online' | 'offline'>('connecting');
-    const [aiOpen, setAiOpen]         = useState(false);
+
     const [restarting, setRestarting] = useState(false);
     const [tunnelHealth, setTunnelHealth] = useState<{ healthy: boolean; connections: number } | null>(null);
     const [sessionId, setSessionId]   = useState<string | null>(null);
@@ -724,23 +486,9 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       fitAddon.fit();
 
       // Intercept `?` → open AI panel instead of sending to PTY
-      term.onData(data => {
-        // Intercept `/agentsam ` command (starts with /a...) or `?` or `Ctrl+A`
-        if (data === '?') { setAiOpen(true); return; }
-        if (data === '\x01') { setAiOpen(v => !v); return; }
-        
-        // Simple buffer for command interception
-        const cmdBuffer = bufferRef.current.split('\r').pop() || '';
-        if (cmdBuffer.endsWith('/agentsam') && (data === ' ' || data === '\r')) {
-           setAiOpen(true);
-           // We don't return here because we might want the /agentsam to appear in the PTY too 
-           // depending on if it's a real tool. For now, let's just trigger the assistant.
-        }
-
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(data);
         }
-      });
 
       xtermRef.current  = term;
       fitAddonRef.current = fitAddon;
@@ -767,35 +515,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       document.addEventListener('mouseup', onUp);
     };
 
-    // ── Quick action run helper (AI panel → terminal) ─────────────────────────
-    const runFromAI = useCallback((cmd: string) => {
-      setIsCollapsed(false); setActiveTab('terminal');
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(cmd + '\r');
-      } else {
-        // Use the exposed ref method via callback
-        xtermRef.current?.writeln(`\r\n\x1b[33m  Running via HTTP: ${cmd}\x1b[0m`);
-        void fetch('/api/agent/terminal/run', {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: cmd, session_id: ptySessionIdRef.current }),
-        }).then(async r => {
-          const j = await r.json().catch(() => ({})) as { output?: string; command?: string; execution_id?: string; error?: string };
-          if (!xtermRef.current) return;
-          const out = j.output ?? '';
-          appendBuffer(out);
-          xtermRef.current.writeln(`\x1b[36m  $ ${j.command ?? cmd}\x1b[0m`);
-          xtermRef.current.writeln(out.trim() || '  (no output)');
-          if (j.execution_id) {
-            void fetch('/api/agent/terminal/complete', {
-              method: 'POST', credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ execution_id: j.execution_id, status: 'completed', output_text: out, exit_code: 0 }),
-            }).catch(() => {});
-          }
-        });
-      }
-    }, [appendBuffer]);
+
 
     // ── Derived UI ────────────────────────────────────────────────────────────
     const errorCount   = problems.filter(p => p.severity === 'error').length;
@@ -980,7 +700,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
           {!isCollapsed && (
             <div className="flex-1 min-h-0 flex overflow-hidden relative">
               {/* Main panel */}
-              <div className={`flex flex-col flex-1 min-h-0 min-w-0 transition-all duration-300 ${aiOpen ? 'mr-[340px]' : ''}`}>
+              <div className="flex flex-col flex-1 min-h-0 min-w-0 transition-all duration-300">
                 {/* Quick actions row */}
                 {activeTab === 'terminal' && showIamWelcomeBar && (
                   <div
@@ -1001,14 +721,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                         <span className="text-[var(--solar-yellow)]">{n}.</span> {label}
                       </button>
                     ))}
-                    {/* Inline AI trigger chip */}
-                    <button
-                      type="button"
-                      onClick={() => setAiOpen(true)}
-                      className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono border border-[var(--solar-cyan)]/20 text-[var(--solar-cyan)]/60 hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/50 hover:bg-[var(--solar-cyan)]/5 transition-all"
-                    >
-                      <Zap size={9} /> type <kbd className="font-bold">?</kbd> or <kbd className="font-bold">Ctrl+A</kbd>
-                    </button>
+
                   </div>
                 )}
 
@@ -1055,14 +768,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                             <div className="text-[11px] font-medium text-[var(--text-main)] font-mono">{p.msg}</div>
                             <div className="text-[10px] text-[var(--text-muted)] font-mono">{p.file}:{p.line}</div>
                           </div>
-                          {/* One-click: ask AI about this problem */}
-                          <button
-                            onClick={() => { setAiOpen(true); }}
-                            className="ml-auto shrink-0 text-[9px] px-1.5 py-0.5 rounded border border-[var(--solar-cyan)]/20 text-[var(--solar-cyan)]/50 hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/40 font-mono transition-colors"
-                            title="Ask AI about this error"
-                          >
-                            <Bot size={9} />
-                          </button>
+
                         </div>
                       ))
                     )}
@@ -1070,13 +776,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                 )}
               </div>
 
-              {/* AI Assist Panel — slides in over the right */}
-              <AIPanel
-                visible={aiOpen}
-                onClose={() => setAiOpen(false)}
-                onRunCommand={runFromAI}
-                terminalBuffer={bufferRef.current}
-              />
+
             </div>
           )}
         </div>

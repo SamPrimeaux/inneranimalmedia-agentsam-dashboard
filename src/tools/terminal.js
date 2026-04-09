@@ -1,33 +1,48 @@
-import { jsonResponse } from '../core/responses.js';
-
 /**
- * Terminal & Shell Tool Implementation (Modular).
- * Interfaces with the PTY / Terminal bridge for live command execution.
+ * Tool: Terminal (term)
+ * Allows the agent to run shell commands in the workspace PTY.
  */
 
-/**
- * Execute a command in the workspace terminal.
- */
-export async function terminalExecute(env, { command, cwd = '.' }) {
-    if (!command) return { error: 'command required' };
-
+export const handlers = {
+  /**
+   * run_command: Execute a single shell command and return the output.
+   */
+  async run_command({ command }, env) {
     try {
-        const response = await fetch(`${env.TERMINAL_API_URL}/terminal/execute`, {
-            method: 'POST',
-            headers: { 
-                'Authorization': `Bearer ${env.TERMINAL_SECRET}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ command, cwd })
-        });
-        
-        const data = await response.json();
-        return { 
-            stdout: data.stdout || '', 
-            stderr: data.stderr || '', 
-            exit_code: data.exit_code 
-        };
+      const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
+      // In CF Workers context, we connect to the PTY bridge via the /api/terminal/run endpoint
+      const res = await fetch(`${origin}/api/agent/terminal/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          command,
+          session_id: env.PTY_SESSION_ID || 'default' 
+        }),
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'PTY Error');
+      
+      return {
+        output: data.output || '(no output)',
+        status: 'success'
+      };
     } catch (e) {
-        return { error: 'Terminal execution failed', detail: e.message };
+      return { error: `Terminal Error: ${e.message}` };
     }
-}
+  },
+};
+
+export const definitions = [
+  {
+    name: 'run_command',
+    description: 'Run a shell command in the terminal and see the results (stdout/stderr)',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The shell command to execute (e.g., ls -la, git status)' },
+      },
+      required: ['command'],
+    },
+  },
+];

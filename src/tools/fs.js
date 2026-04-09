@@ -1,60 +1,96 @@
-import { jsonResponse } from '../core/responses.js';
-
 /**
- * Filesystem Tool Implementation (Modular).
- * These tools interact with the Workspace PTY / Repository.
+ * Tool: FileSystem (fs)
+ * Standardized CRUD operations for local and virtual workspace files.
  */
 
-/**
- * Read a file from the workspace.
- */
-export async function workspaceReadFile(env, { path }) {
-    if (!path) return { error: 'path required' };
-    
-    // In the modular architecture, we proxy this to the PTY/Agent bridge
-    // For now, we utilize the environment bindings for the active workspace
+export const handlers = {
+  /**
+   * list_dir: Recursive directory scanner for workspace mapping.
+   */
+  async list_dir({ path = '.', recursive = false }, env) {
     try {
-        const response = await fetch(`${env.TERMINAL_API_URL}/files/read?path=${encodeURIComponent(path)}`, {
-            headers: { 'Authorization': `Bearer ${env.TERMINAL_SECRET}` }
-        });
-        const data = await response.json();
-        return { content: data.content, path: data.path };
+      // In CF Workers/D1 context, we proxy to the shell or a R2/D1 registry
+      // For this dashboard, we primarily use the /api/fs/list endpoint
+      const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
+      const res = await fetch(`${origin}/api/fs/list`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, recursive }),
+      });
+      return await res.json();
     } catch (e) {
-        return { error: 'Failed to read file', detail: e.message };
+      return { error: `Failed to list directory: ${e.message}` };
     }
-}
+  },
 
-/**
- * List files in the workspace.
- */
-export async function workspaceListFiles(env, { path = '.', recursive = false }) {
+  /**
+   * read_file: Fetch content of a specific file.
+   */
+  async read_file({ path }, env) {
     try {
-        const response = await fetch(`${env.TERMINAL_API_URL}/files/list?path=${encodeURIComponent(path)}&recursive=${recursive}`, {
-            headers: { 'Authorization': `Bearer ${env.TERMINAL_SECRET}` }
-        });
-        const data = await response.json();
-        return { files: data.files || [] };
+      const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
+      const res = await fetch(`${origin}/api/fs/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      return await res.json();
     } catch (e) {
-        return { error: 'Failed to list files', detail: e.message };
+      return { error: `Failed to read file: ${e.message}` };
     }
-}
+  },
 
-/**
- * Search the codebase.
- */
-export async function workspaceSearch(env, { query, includes = [] }) {
+  /**
+   * write_file: Save content to a file.
+   */
+  async write_file({ path, content }, env) {
     try {
-        const response = await fetch(`${env.TERMINAL_API_URL}/files/search`, {
-            method: 'POST',
-            headers: { 
-                'Authorization': `Bearer ${env.TERMINAL_SECRET}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ query, includes })
-        });
-        const data = await response.json();
-        return { matches: data.matches || [] };
+      const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
+      const res = await fetch(`${origin}/api/fs/write`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, content }),
+      });
+      return await res.json();
     } catch (e) {
-        return { error: 'Search failed', detail: e.message };
+      return { error: `Failed to write file: ${e.message}` };
     }
-}
+  },
+};
+
+export const definitions = [
+  {
+    name: 'list_dir',
+    description: 'List contents of a directory (recursive optional)',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Directory path' },
+        recursive: { type: 'boolean', description: 'Whether to scan subdirectories' },
+      },
+    },
+  },
+  {
+    name: 'read_file',
+    description: 'Read the contents of a specific file',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the file' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'write_file',
+    description: 'Write or update a file with new content',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path where the file should be saved' },
+        content: { type: 'string', description: 'The code or text content to write' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+];

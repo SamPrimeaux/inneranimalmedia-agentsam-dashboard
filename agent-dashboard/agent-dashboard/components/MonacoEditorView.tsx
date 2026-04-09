@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 
 import type { ActiveFile } from '../types';
+import { useEditor } from '../src/EditorContext';
+import { X } from 'lucide-react';
 
 type FileData = ActiveFile;
 
@@ -153,8 +155,12 @@ const EDITOR_OPTIONS = {
 };
 
 export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
-  fileData, onChange, onSave, isDirty, onCursorPositionChange, onEditorModelMeta
+  onChange, onSave, onCursorPositionChange, onEditorModelMeta
 }) => {
+  const { tabs, activeTabId, setActiveTab, closeFile, updateActiveContent, discardChanges } = useEditor();
+  const activeFile = tabs.find(t => t.id === activeTabId) || null;
+  const isDirty = activeFile?.isDirty;
+
   const monaco = useMonaco();
   const editorRef = useRef<any>(null);
   const isThemeReady = useRef(false);
@@ -162,7 +168,7 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [gitActionHint, setGitActionHint] = useState<string | null>(null);
 
-  // Custom theme from :root CSS vars (cms_themes / inneranimalmedia.css)
+  // Custom theme from :root CSS vars
   useEffect(() => {
     if (monaco && !isThemeReady.current) {
       monaco.editor.defineTheme('meauxcad-dark', {
@@ -173,6 +179,30 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
       isThemeReady.current = true;
     }
   }, [monaco]);
+
+  // Agent Cmd+I Handler
+  useEffect(() => {
+    if (!monaco || !editorRef.current) return;
+    const editor = editorRef.current;
+    
+    const disposable = editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+      const selection = editor.getSelection();
+      if (!selection || !activeFile) return;
+      const selectedText = editor.getModel()?.getValueInRange(selection);
+      if (!selectedText) return;
+
+      // Dispatch a custom event that ChatAssistant.tsx will listen to
+      window.dispatchEvent(new CustomEvent('iam:agent-refactor', { 
+        detail: { 
+          selection: selectedText,
+          path: activeFile.id,
+          content: activeFile.content 
+        } 
+      }));
+    });
+
+    return () => disposable.dispose();
+  }, [monaco, activeFile]);
 
   const pushModelMeta = useCallback(
     (editor: { getModel: () => { getOptions: () => { tabSize: number; insertSpaces: boolean }; getEOL: () => string } | null }) => {
@@ -201,34 +231,33 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
     return () => window.removeEventListener('iam-format-document', onFormat);
   }, []);
 
-  // Cmd+S / Ctrl+S handler on the window level
+  // Cmd+S / Ctrl+S handler
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
-        if (fileData && onSave) {
-          onSave(fileData.content);
+        if (activeFile && onSave) {
+          onSave(activeFile.content);
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [fileData, onSave]);
+  }, [activeFile, onSave]);
 
-  // When file switches, reset diff view
   useEffect(() => {
     setShowDiff(false);
-  }, [fileData?.name]);
+  }, [activeFile?.name]);
 
   useEffect(() => {
     const ed = editorRef.current;
-    if (ed && fileData) pushModelMeta(ed);
-  }, [fileData?.name, pushModelMeta]);
+    if (ed && activeFile) pushModelMeta(ed);
+  }, [activeFile?.id, pushModelMeta]);
 
-  // Monaco: AI inline completion via worker /api/monaco/complete
+  // Monaco Completions Integration
   useEffect(() => {
-    if (!monaco || !fileData) return;
-    const ext = fileData.name.split('.').pop()?.toLowerCase() || 'txt';
+    if (!monaco || !activeFile) return;
+    const ext = activeFile.name.split('.').pop()?.toLowerCase() || 'txt';
     const lang = LANG_MAP[ext] || 'plaintext';
     const disposable = monaco.languages.registerCompletionItemProvider(lang, {
       triggerCharacters: ['.', '(', '[', '{', ' ', ':', '='],
@@ -252,19 +281,18 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
           if (j.error || !j.text?.trim()) return { suggestions: [] };
           const line = j.text.trim().split('\n')[0] ?? '';
           if (!line) return { suggestions: [] };
-          const insertRange = {
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column,
-          };
           return {
             suggestions: [
               {
                 label: line.length > 72 ? `${line.slice(0, 69)}…` : line,
                 kind: monaco.languages.CompletionItemKind.Text,
                 insertText: line,
-                range: insertRange,
+                range: {
+                  startLineNumber: position.lineNumber,
+                  startColumn: position.column,
+                  endLineNumber: position.lineNumber,
+                  endColumn: position.column,
+                },
               },
             ],
           };
@@ -274,16 +302,15 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
       },
     });
     return () => disposable.dispose();
-  }, [monaco, fileData?.name]);
-
+  }, [monaco, activeFile?.id]);
 
   const handleCopy = useCallback(() => {
-    if (fileData?.content) {
-      navigator.clipboard.writeText(fileData.content);
+    if (activeFile?.content) {
+      navigator.clipboard.writeText(activeFile.content);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }
-  }, [fileData]);
+  }, [activeFile]);
 
   const requestGitSyncProposal = useCallback(async () => {
     setGitActionHint(null);
@@ -299,11 +326,8 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
         proposal_id?: string;
         error?: string;
       };
-      if (res.ok && j.proposal_id) {
-        setGitActionHint(`Sync proposal queued: ${j.proposal_id}`);
-      } else {
-        setGitActionHint(j.error || `Git sync failed (${res.status})`);
-      }
+      if (res.ok && j.proposal_id) setGitActionHint(`Sync proposal queued: ${j.proposal_id}`);
+      else setGitActionHint(j.error || `Git sync failed (${res.status})`);
     } catch (e) {
       setGitActionHint(e instanceof Error ? e.message : 'Git sync request failed');
     }
@@ -331,176 +355,74 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
     window.setTimeout(() => setGitActionHint(null), 10000);
   }, []);
 
-  const hasDiffData = fileData?.originalContent !== undefined && fileData.originalContent !== fileData.content;
-
-  const r2KeyForPreview = fileData?.r2Key ?? '';
-  const r2BucketForPreview = fileData?.r2Bucket ?? '';
-  const imgSrc = fileData?.previewUrl || '';
-  const canPreviewR2Image = !!(imgSrc || (fileData?.r2Key && fileData?.r2Bucket));
-  
-  // If we have R2 key but no previewUrl, build it
-  const finalImgSrc = imgSrc || (fileData?.r2Key && fileData?.r2Bucket
-    ? `/api/r2/get?bucket=${encodeURIComponent(fileData.r2Bucket)}&key=${encodeURIComponent(fileData.r2Key)}`
-    : '');
-
-  if (!fileData) {
+  if (!activeFile) {
     return (
       <div className="flex-1 bg-[var(--scene-bg)] flex items-center justify-center select-none h-full">
         <div className="flex flex-col items-center gap-4 text-[var(--text-muted)] text-center px-8">
           <FileCode2 size={40} className="opacity-20" />
-          <p className="text-[13px] font-medium">No file open</p>
+          <p className="text-[13px] font-medium">No files open</p>
           <p className="text-[11px] opacity-60 max-w-xs leading-relaxed">
-            Open a file from the Explorer panel, click an agent code artifact, or use the File System picker.
+            Open a file from the Explorer panel to begin. Multi-tab editing enabled.
           </p>
         </div>
       </div>
     );
   }
 
-  const ext = fileData.name.split('.').pop()?.toLowerCase() || 'txt';
+  const ext = activeFile.name.split('.').pop()?.toLowerCase() || 'txt';
   const language = LANG_MAP[ext] || 'plaintext';
 
-  if (
-    fileData.isImage === true ||
-    (canPreviewR2Image && (isImageKey(fileData.name) || isImageMime(fileData.contentType ?? '')))
-  ) {
-    return (
-      <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
-        <div className="h-9 flex items-center justify-between px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0 gap-2">
-          <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
-            <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />
-            <span className="text-[var(--text-main)] truncate">{fileData.name}</span>
-            <span className="text-[var(--text-muted)] text-[10px] uppercase tracking-wider shrink-0">image</span>
-          </div>
-        </div>
-        <div className="flex flex-1 items-center justify-center w-full min-h-0 bg-[var(--scene-bg)] p-4 box-border">
-          {finalImgSrc ? (
-            <img
-              src={finalImgSrc}
-              alt={fileData.name}
-              className="max-w-full max-h-full object-contain rounded border border-[var(--border-subtle)] shadow-2xl"
-              onError={(e) => {
-                (e.target as HTMLImageElement).alt = 'Failed to load image';
-              }}
-            />
-          ) : (
-            <p className="text-[var(--text-muted)] text-[13px]">No preview URL for this image.</p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (fileData.isBinary === true) {
-    return (
-      <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
-        <div className="h-9 flex items-center px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0">
-          <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
-            <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />
-            <span className="text-[var(--text-main)] truncate">{fileData.name}</span>
-            <span className="text-[var(--text-muted)] text-[10px] uppercase tracking-wider shrink-0">binary</span>
-          </div>
-        </div>
-        <div className="p-6 text-[var(--text-muted)] font-mono text-[13px]">
-          <p>{fileData.binaryMessage ?? 'Binary file — cannot display as text'}</p>
-          {fileData.contentType != null && fileData.contentType !== '' && (
-            <p className="mt-2 opacity-90">{fileData.contentType}</p>
-          )}
-          {fileData.size != null && fileData.size > 0 && (
-            <p className="mt-2">{(fileData.size / 1024).toFixed(1)} KB</p>
-          )}
-          <p className="mt-4 text-[11px] opacity-60">Cannot display binary content as text.</p>
-        </div>
-      </div>
-    );
-  }
+  const hasDiffData = activeFile?.originalContent !== undefined && activeFile.originalContent !== activeFile.content;
 
   return (
     <div className="flex flex-col h-full w-full bg-[var(--scene-bg)] overflow-hidden">
-      {/* ── File Toolbar ── */}
-      <div className="h-9 flex items-center justify-between px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0 gap-2">
-        {/* File info */}
-        <div className="flex items-center gap-2 text-[12px] font-mono min-w-0">
-          <FileCode2 size={13} className="text-[var(--solar-cyan)] shrink-0" />
-          <span className="text-[var(--text-main)] truncate">{fileData.name}</span>
-          {isDirty && (
-            <span className="text-[var(--solar-yellow)] text-[10px] font-bold shrink-0" title="Unsaved changes">●</span>
-          )}
-          <span className="text-[var(--text-muted)] text-[10px] uppercase tracking-wider shrink-0">{language}</span>
+      {/* ── Tab Header ── */}
+      <div className="h-9 flex items-center border-b border-[var(--border-subtle)] bg-[var(--bg-panel)] shrink-0 overflow-x-auto no-scrollbar">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-2 px-3 h-full border-r border-[var(--border-subtle)] cursor-pointer select-none transition-all group min-w-[120px] max-w-[200px] ${
+              activeTabId === tab.id 
+                ? 'bg-[var(--scene-bg)] text-[var(--solar-cyan)] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--solar-cyan)] relative' 
+                : 'text-[var(--text-muted)] hover:bg-[var(--bg-app)]'
+            }`}
+          >
+            <FileCode2 size={12} className={activeTabId === tab.id ? 'text-[var(--solar-cyan)]' : 'text-inherit'} />
+            <span className="text-[11px] font-mono truncate flex-1">{tab.name}</span>
+            {tab.isDirty && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--solar-yellow)] shrink-0" />
+            )}
+            <X 
+              size={12} 
+              className="text-inherit opacity-0 group-hover:opacity-100 hover:text-[var(--solar-red)] transition-all" 
+              onClick={(e) => { e.stopPropagation(); closeFile(tab.id); }}
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* ── Editor Toolbar (Active Tab Stats) ── */}
+      <div className="h-8 flex items-center justify-between px-3 bg-[var(--scene-bg)] border-b border-[var(--border-subtle)] shrink-0">
+        <div className="flex items-center gap-4 text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-bold">
+           <span>{language}</span>
+           <span className="opacity-50">UTF-8</span>
+           {gitActionHint && <span className="text-[var(--solar-cyan)] animate-pulse">{gitActionHint}</span>}
         </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0">
-          {gitActionHint && (
-            <span className="text-[10px] text-[var(--text-muted)] max-w-[14rem] truncate mr-1" title={gitActionHint}>
-              {gitActionHint}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => void refreshGitStatus()}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/50 transition-all"
-            title="Refresh deploy / git status (D1)"
-          >
-            <GitBranch size={12} />
-            Status
-          </button>
-          <button
-            type="button"
-            onClick={() => void requestGitSyncProposal()}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all"
-            title="Create GitHub sync approval proposal"
-          >
-            Sync
-          </button>
-          {hasDiffData && (
-            <button
-              onClick={() => setShowDiff(!showDiff)}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold transition-all ${
-                showDiff
-                  ? 'bg-[var(--solar-cyan)] text-black'
-                  : 'bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/50'
-              }`}
-              title="Toggle diff view"
-            >
-              <GitCompare size={12} />
-              Diff
-            </button>
-          )}
-
-          <button
-            onClick={handleCopy}
-            className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-all"
-            title="Copy file content"
-          >
-            {copied ? <Check size={12} className="text-[var(--solar-green)]" /> : <Copy size={12} />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-
-          {isDirty && onSave && (
-            <button
-              onClick={() => onSave(fileData.content)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] bg-[var(--solar-cyan)] text-black font-bold shadow-[0_0_10px_rgba(45,212,191,0.3)] hover:brightness-110 transition-all"
-              title="Save file (⌘S)"
-            >
-              <Save size={12} />
-              Save
-            </button>
-          )}
-
-          {isDirty && (
-            <button
-              onClick={() => {
-                if (fileData.originalContent !== undefined && onChange) {
-                  onChange(fileData.originalContent);
-                }
-              }}
-              className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] bg-[var(--bg-app)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--solar-yellow)] hover:border-[var(--solar-yellow)]/50 transition-all"
-              title="Discard changes"
-            >
-              <RotateCcw size={12} />
-            </button>
-          )}
+        <div className="flex items-center gap-2">
+           {hasDiffData && (
+             <button onClick={() => setShowDiff(!showDiff)} className={`px-2 py-0.5 rounded border transition-all ${showDiff ? 'bg-[var(--solar-cyan)] text-black border-[var(--solar-cyan)]' : 'border-[var(--border-subtle)]'}`}>
+               Diff
+             </button>
+           )}
+           {isDirty && (
+             <button 
+                onClick={() => onSave?.(activeFile.content)}
+                className="px-3 py-0.5 bg-[var(--solar-cyan)] text-black rounded font-bold shadow-[0_0_10px_rgba(45,212,191,0.2)]"
+              >
+               Save
+             </button>
+           )}
         </div>
       </div>
 
@@ -511,39 +433,25 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
             height="100%"
             language={language}
             theme="meauxcad-dark"
-            original={fileData.originalContent ?? ''}
-            modified={fileData.content}
-            options={{
-              ...EDITOR_OPTIONS,
-              readOnly: false,
-              renderSideBySide: true,
-            }}
+            original={activeFile.originalContent ?? ''}
+            modified={activeFile.content}
+            options={{ ...EDITOR_OPTIONS, readOnly: false }}
           />
         ) : (
           <Editor
             height="100%"
             language={language}
             theme="meauxcad-dark"
-            value={fileData.content}
-            onChange={onChange}
+            value={activeFile.content}
+            onChange={(v) => updateActiveContent(v ?? '')}
             onMount={(editor) => {
               editorRef.current = editor;
               const push = () => {
                 const p = editor.getPosition();
-                if (p && onCursorPositionChange) {
-                  onCursorPositionChange(p.lineNumber, p.column);
-                }
+                if (p && onCursorPositionChange) onCursorPositionChange(p.lineNumber, p.column);
               };
-              push();
               editor.onDidChangeCursorPosition(() => push());
               pushModelMeta(editor);
-              editor.onDidChangeModel(() => {
-                pushModelMeta(editor);
-                const m = editor.getModel();
-                m?.onDidChangeOptions(() => pushModelMeta(editor));
-              });
-              const m0 = editor.getModel();
-              m0?.onDidChangeOptions(() => pushModelMeta(editor));
             }}
             options={EDITOR_OPTIONS}
           />

@@ -504,11 +504,6 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       term.loadAddon(fitAddon);
       fitAddon.fit();
 
-      // Intercept `?` → open AI panel instead of sending to PTY
-        if (socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(data);
-        }
-
       xtermRef.current  = term;
       fitAddonRef.current = fitAddon;
 

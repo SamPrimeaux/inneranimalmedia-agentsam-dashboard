@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Command, Loader2, Search } from 'lucide-react';
+import { Command, Loader2, Search, KeyRound, Terminal, Globe, HardDrive } from 'lucide-react';
 
 export type UnifiedSearchNavigate =
   | { kind: 'table'; name: string }
@@ -139,8 +138,10 @@ function rowLabel(row: UnifiedRow): string {
 export const UnifiedSearchBar: React.FC<{
   workspaceLabel?: string;
   onNavigate: (nav: UnifiedSearchNavigate, searchQuery: string) => void;
-}> = ({ workspaceLabel, onNavigate }) => {
+  onRunCommand?: (cmd: string) => void;
+}> = ({ workspaceLabel, onNavigate, onRunCommand }) => {
   const [open, setOpen] = useState(false);
+  const [sshOpen, setSshOpen] = useState(false);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<UnifiedRow[]>([]);
@@ -247,9 +248,9 @@ export const UnifiedSearchBar: React.FC<{
         e.preventDefault();
         setOpen((o) => !o);
       }
-      if (e.key === 'Escape' && open) {
-        e.preventDefault();
-        setOpen(false);
+      if (e.key === 'Escape') {
+        if (open) { e.preventDefault(); setOpen(false); }
+        if (sshOpen) { e.preventDefault(); setSshOpen(false); }
       }
     };
     window.addEventListener('keydown', onKey);
@@ -275,24 +276,98 @@ export const UnifiedSearchBar: React.FC<{
 
   return (
     <div className="nav-search-container w-full max-w-lg hidden lg:block">
-      <button
-        type="button"
-        title="Unified search (Cmd+K)"
-        aria-label="Open unified search"
-        onClick={() => setOpen(o => !o)}
-        className="flex flex-col items-stretch w-full px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <Search size={14} className="shrink-0 opacity-70 text-[var(--text-muted)]" />
-          <span className="text-[11px] text-[var(--text-muted)] truncate flex-1">
-            workspace:{' '}
-            <span className="text-[var(--text-main)] font-medium">{workspaceLabel?.trim() || 'dashboard'}</span>
-          </span>
-          <kbd className="hidden xl:inline text-[9px] font-mono px-1 py-px rounded border border-[var(--border-subtle)] text-[var(--text-muted)] shrink-0">
-            {isMac ? 'Cmd' : 'Ctrl'}+K
-          </kbd>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          title="Unified search (Cmd+K)"
+          aria-label="Open unified search"
+          onClick={() => setOpen(o => !o)}
+          className="flex flex-col items-stretch w-full px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Search size={14} className="shrink-0 opacity-70 text-[var(--text-muted)]" />
+            <span className="text-[11px] text-[var(--text-muted)] truncate flex-1">
+              workspace:{' '}
+              <span className="text-[var(--text-main)] font-medium">{workspaceLabel?.trim() || 'dashboard'}</span>
+            </span>
+            <kbd className="hidden xl:inline text-[9px] font-mono px-1 py-px rounded border border-[var(--border-subtle)] text-[var(--text-muted)] shrink-0">
+              {isMac ? 'Cmd' : 'Ctrl'}+K
+            </kbd>
+          </div>
+        </button>
+
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            className={`p-1.5 rounded-md border transition-all ${
+              sshOpen 
+                ? 'bg-[var(--bg-panel)] border-[var(--solar-cyan)] text-[var(--solar-cyan)]' 
+                : 'bg-[var(--bg-app)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--solar-cyan)]/40 hover:text-[var(--text-main)]'
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSshOpen(!sshOpen);
+              if (open) setOpen(false);
+            }}
+            title="Connect Workspace (SSH)"
+          >
+            <KeyRound size={16} />
+          </button>
+
+          {sshOpen && (
+            <div className="absolute top-full right-0 mt-2 z-[110] w-56 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-300">
+              <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] border-b border-[var(--border-subtle)]/40 mb-1">
+                SSH Command Hub
+              </div>
+              <button 
+                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                onClick={() => {
+                  onRunCommand?.('ssh iam-pty');
+                  setSshOpen(false);
+                }}
+              >
+                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                  <Terminal size={14} />
+                </div>
+                <div>
+                  <div className="font-bold">Local PTY</div>
+                  <div className="text-[10px] opacity-60">iam-pty / port 3099</div>
+                </div>
+              </button>
+              <button 
+                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                onClick={() => {
+                  onRunCommand?.('ssh production-iam');
+                  setSshOpen(false);
+                }}
+              >
+                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                  <Globe size={14} />
+                </div>
+                <div>
+                  <div className="font-bold text-[var(--solar-green)]">Production</div>
+                  <div className="text-[10px] opacity-60">mainstage / iam-prod</div>
+                </div>
+              </button>
+              <button 
+                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                onClick={() => {
+                  onRunCommand?.('ssh sandbox-d1');
+                  setSshOpen(false);
+                }}
+              >
+                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                  <HardDrive size={14} />
+                </div>
+                <div>
+                  <div className="font-bold text-[var(--solar-cyan)]">Sandbox</div>
+                  <div className="text-[10px] opacity-60">experiment-d1-ws</div>
+                </div>
+              </button>
+            </div>
+          )}
         </div>
-      </button>
+      </div>
 
       {open && (
         <div className="nav-dropdown rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden flex flex-col max-h-[min(65vh,500px)]">

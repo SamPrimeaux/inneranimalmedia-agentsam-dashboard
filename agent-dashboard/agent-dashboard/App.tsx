@@ -9,6 +9,7 @@ import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
 import { ChatAssistant } from './components/ChatAssistant';
+import { WorkspaceDashboard } from './components/WorkspaceDashboard';
 import { IAM_AGENT_CHAT_CONVERSATION_CHANGE, LS_AGENT_CHAT_CONVERSATION_ID } from './agentChatConstants';
 import { WorkspaceLauncher } from './components/WorkspaceLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
@@ -46,6 +47,7 @@ import {
   type IdeWorkspaceSnapshot,
   type RecentFileEntry,
 } from './src/ideWorkspace';
+import { useEditor } from './src/EditorContext';
 import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2 } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -95,6 +97,7 @@ function buildAgentSamGreeting(workspaceDisplayLine: string): string {
 }
 
 const App: React.FC = () => {
+  const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);
@@ -111,7 +114,7 @@ const App: React.FC = () => {
   const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
 
   // IDE State
-  type TabId = 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
+  type TabId = 'Workspace' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
   const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
@@ -282,8 +285,19 @@ const App: React.FC = () => {
 
   // Tabs: only 'welcome' is open by default. Others open on demand and can be closed.
   const [openTabs, setOpenTabs] = useState<TabId[]>(['welcome']);
-  const [activeTab, setActiveTab] = useState<TabId>('welcome');
-  const [activeFile, setActiveFile] = useState<ActiveFile | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>('Workspace');
+  
+  // Derived from EditorContext to minimize massive refactor breakage
+  const activeFile = tabs.find(t => t.id === activeTabId) || null;
+  const { updateActiveFile } = useEditor();
+  const setActiveFile = useCallback((updates: Partial<ActiveFile> | ((prev: ActiveFile | null) => ActiveFile | null)) => {
+    if (typeof updates === 'object' && updates !== null && 'content' in updates && 'name' in updates) {
+      openFile(updates as ActiveFile);
+    } else {
+      updateActiveFile(updates);
+    }
+  }, [openFile, updateActiveFile]);
+
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');
   /** When set with a blob browser URL, Browser tab shows this label (e.g. r2://binding/key) instead of blob:. */
@@ -441,8 +455,8 @@ const App: React.FC = () => {
 
   const openDashboardFromChat = useCallback(() => {
     narrowBackToCenter();
-    setActiveTab('welcome');
-    setOpenTabs((prev) => (prev.includes('welcome') ? prev : [...prev, 'welcome']));
+    setActiveTab('Workspace');
+    setOpenTabs((prev) => (prev.includes('Workspace') ? prev : [...prev, 'Workspace']));
   }, [narrowBackToCenter]);
 
   /**
@@ -1323,6 +1337,7 @@ const App: React.FC = () => {
               <UnifiedSearchBar
                 workspaceLabel={workspaceDisplayName}
                 onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
+                onRunCommand={(cmd) => terminalRef.current?.runCommand(cmd)}
               />
           </div>
 
@@ -1606,13 +1621,13 @@ const App: React.FC = () => {
           >
               {/* Editor Tabs — lazy, closeable */}
               <div className="h-10 flex items-center shrink-0 pl-0 relative z-10 overflow-x-auto overflow-y-hidden no-scrollbar">
-                  {openTabs.includes('welcome') && (
+                  {openTabs.includes('Workspace') && (
                       <Tab
-                          title="Welcome"
-                          icon={<Sparkles size={13} className="text-[var(--solar-cyan)]"/>}
-                          active={activeTab === 'welcome'}
-                          onClick={() => setActiveTab('welcome')}
-                          onClose={(e) => closeTab('welcome', e)}
+                          title="Workspace"
+                          icon={<Layers size={13} className="text-[var(--solar-cyan)]"/>}
+                          active={activeTab === 'Workspace'}
+                          onClick={() => setActiveTab('Workspace')}
+                          onClose={(e) => closeTab('Workspace', e)}
                       />
                   )}
                   {openTabs.includes('code') && (
@@ -1720,19 +1735,16 @@ const App: React.FC = () => {
                       style={{ background: 'var(--scene-bg)' }}
                   />
                   
-                  {activeTab === 'welcome' && (
+                  {activeTab === 'Workspace' && (
                       <div className="absolute inset-0 z-10">
-                          <WorkspaceLauncher
-                              onSelect={(ws) => {
-                                setActiveActivity('files');
-                                setIdeWorkspace({ 
-                                  source: ws.type as any, 
-                                  name: ws.name, 
-                                  pathHint: ws.metadata?.repo || ws.metadata?.host || '' 
-                                });
-                                setActiveTab('code');
-                              }}
-                              onClose={() => setActiveTab('code')}
+                          <WorkspaceDashboard 
+                            onOpenFolder={() => {
+                              setActiveActivity('files');
+                              setNativeFolderOpenSignal(n => n + 1);
+                            }}
+                            onConnectWorkspace={() => setWorkspaceLauncherOpen(true)}
+                            onGithubSync={() => setActiveActivity('actions')}
+                            recentFiles={recentFiles}
                           />
                       </div>
                   )}
@@ -1788,7 +1800,7 @@ const App: React.FC = () => {
                                 const next = openTabs.filter((t) => t !== 'database');
                                 setOpenTabs(next);
                                 if (activeTab === 'database') {
-                                  setActiveTab(next.length > 0 ? next[next.length - 1] : 'welcome');
+                                  setActiveTab(next.length > 0 ? next[next.length - 1] : 'Workspace');
                                 }
                               }}
                           />

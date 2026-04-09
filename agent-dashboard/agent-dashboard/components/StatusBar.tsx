@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, XCircle, AlertTriangle, Bell, Check } from 'lucide-react';
+import { GitBranch, XCircle, AlertTriangle, Bell, Check, KeyRound, Monitor, Globe, Package, HardDrive, Database, ChevronUp, ChevronDown, User, LogOut } from 'lucide-react';
 import { SHELL_VERSION } from '../src/shellVersion';
 
 /** Cloudflare Worker name for this dashboard host (sandbox vs prod). */
@@ -214,38 +214,77 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       )}
 
-      <div className="h-6 flex items-center justify-between text-[11px] font-mono text-[var(--text-main)]/90 w-full">
-        <div className="flex items-center gap-1 sm:gap-3 h-full px-1 min-w-0">
+      <div className="h-6 flex items-center justify-between text-[10px] font-mono text-[var(--text-main)]/90 w-full px-1">
+        {/* Left Side: Environment Switcher */}
+        <div className="flex items-center h-full relative">
           <button
             type="button"
-            className={`flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full max-w-[min(14rem,42vw)] border-0 bg-transparent ${
-              healthOk === true
-                ? 'bg-[var(--solar-green)]/10'
-                : healthOk === false
-                  ? 'bg-[var(--solar-red)]/15'
-                  : 'bg-[var(--solar-cyan)]/15'
+            className={`flex items-center gap-1.5 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 transition-colors h-full border-0 bg-transparent rounded-sm ${
+              healthOk === true ? 'text-[var(--solar-green)]' : 'text-[var(--solar-cyan)]'
             }`}
-            title={brandTitle || workerDisplayName}
-            onClick={() => onBrandClick?.()}
+            title="Environment & Connections"
+            onClick={() => setEnvOpen(!envOpen)}
           >
-            <span className="font-bold -mt-[1px] tracking-wide truncate font-mono text-[10px] sm:text-[11px]">
-              {workerDisplayName}
-            </span>
+            <KeyRound size={12} strokeWidth={2.5} />
+            <span className="hidden sm:inline font-bold uppercase tracking-tighter">Connect</span>
+            {envOpen ? <ChevronDown size={10} /> : <ChevronUp size={10} />}
           </button>
+
+          {envOpen && (
+            <div className="absolute bottom-full left-0 mb-1 z-[110] w-48 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl overflow-hidden py-1">
+              <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-[var(--text-muted)] border-b border-[var(--border-subtle)]/40 mb-1">
+                Environments
+              </div>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <KeyRound size={12} className="text-[var(--solar-yellow)]" /> SSH Host
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <Monitor size={12} className="text-[var(--solar-green)]" /> Local Env
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <Globe size={12} className="text-[var(--solar-cyan)]" /> Cloudflare Tunnel
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <Package size={12} className="text-[var(--solar-magenta)]" /> MCP Endpoint
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <HardDrive size={12} className="text-[var(--solar-blue)]" /> Google Drive
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
+                <Database size={12} className="text-[var(--solar-orange)]" /> R2 Storage
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Center: Active Workspace Context */}
+        <div className="flex-1 flex justify-center items-center overflow-hidden px-4 select-none">
+          <div 
+            className="flex items-center gap-2 px-3 py-0.5 rounded-full bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40 hover:border-[var(--solar-cyan)]/40 transition-all cursor-pointer truncate"
+            onClick={onWorkspaceClick}
+          >
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--solar-cyan)] shadow-[0_0_5px_var(--solar-cyan)] shrink-0" />
+            <span className="truncate opacity-80 hover:opacity-100 transition-opacity uppercase tracking-widest font-bold text-[9px]">
+              {workspace}
+            </span>
+          </div>
+        </div>
+
+        {/* Right Side: Git & Status */}
+        <div className="flex items-center gap-0.5 h-full">
           <button
             type="button"
-            className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent"
-            title={tunnelLabel ? `Tunnel: ${tunnelLabel}` : 'Open source control'}
+            className="flex items-center gap-1.5 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent"
+            title={tunnelLabel ? `Tunnel: ${tunnelLabel}` : 'Source control'}
             onClick={() => onGitBranchClick?.()}
           >
-            <GitBranch size={12} className="opacity-70" />
-            <span>{branch}</span>
+            <GitBranch size={12} className="opacity-70 text-[var(--solar-cyan)]" />
+            <span className="tracking-tight">{branch}</span>
             {tunnelHealthy !== null && (
               <span
                 className={`ml-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
                   tunnelHealthy ? 'bg-[var(--solar-green)]' : 'bg-[var(--solar-red)]'
                 }`}
-                title={tunnelHealthy ? 'Tunnel healthy' : 'Tunnel issue'}
               />
             )}
           </button>

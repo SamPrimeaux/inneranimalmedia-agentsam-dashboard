@@ -1324,26 +1324,13 @@ const App: React.FC = () => {
                 workspaceLabel={workspaceDisplayName}
                 onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
               />
-              <button
-                  type="button"
-                  title="Knowledge search (RAG)"
-                  aria-label="Open knowledge search"
-                  className={`p-2 rounded-md border transition-colors shrink-0 ${
-                    activeActivity === 'search'
-                      ? 'border-[var(--solar-cyan)] bg-[var(--solar-cyan)]/15 text-[var(--solar-cyan)]'
-                      : 'border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]'
-                  }`}
-                  onClick={() => toggleActivity('search')}
-              >
-                  <Search size={18} strokeWidth={1.75} />
-              </button>
           </div>
 
           {/* Right layout cluster: split | side panel | bottom aux | terminal (IAM shell) */}
           <div className="flex gap-0.5 items-center mr-1 shrink-0">
               <button
                   type="button"
-                  title="More tools (same as activity rail)"
+                  title="More tools (mobile)"
                   className="md:hidden p-1.5 rounded transition-colors text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]"
                   onClick={() => setMobileMoreOpen(true)}
               >
@@ -1359,22 +1346,11 @@ const App: React.FC = () => {
               </button>
               <button
                   type="button"
-                  title="Toggle agent panel (right / left / hidden)"
+                  title="Toggle agent panel"
                   className="p-1.5 text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)] rounded transition-colors"
                   onClick={onChatLayoutToggle}
               >
                   {agentPosition === 'left' ? <PanelLeftClose size={15} strokeWidth={1.75} /> : <PanelRightClose size={15} strokeWidth={1.75} />}
-              </button>
-              <button
-                  type="button"
-                  title="Bottom panel: open Lab shell (Output tab for command log)"
-                  className={`p-1.5 rounded transition-colors ${isTerminalOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => {
-                    setIsTerminalOpen(true);
-                    setTimeout(() => terminalRef.current?.setActiveTab('output'), 50);
-                  }}
-              >
-                  <PanelBottom size={15} strokeWidth={1.75} />
               </button>
               <button
                   type="button"

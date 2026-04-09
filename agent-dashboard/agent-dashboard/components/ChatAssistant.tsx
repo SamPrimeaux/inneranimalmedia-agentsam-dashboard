@@ -636,6 +636,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onOpenChatHistory,
 }) => {
   const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
   const [messageQueue, setMessageQueue] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

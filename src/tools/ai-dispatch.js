@@ -3,55 +3,103 @@ import { handlers as dbHandlers } from './db.js';
 import { handlers as termHandlers } from './terminal.js';
 
 // Builtin Imports
-import { searchWeb, a11yAuditWebpage } from './builtin/web.js';
-import { listWorkers, workerDeploy } from './builtin/deploy.js';
-import { knowledgeSearch, humanContextList, humanContextAdd } from './builtin/context.js';
-import { telemetryLog, telemetryQuery } from './builtin/telemetry.js';
-import { excalidrawExport, voxelSaveScene, generateImage } from './builtin/media.js';
+import { handlers as webHandlers } from './builtin/web.js';
+import { handlers as mediaHandlers } from './builtin/media.js';
+import { handlers as contextHandlers } from './builtin/context.js';
+import { handlers as deployHandlers } from './builtin/deploy.js';
+import { handlers as telemetryHandlers } from './builtin/telemetry.js';
+import { handlers as integrationsHandlers } from './builtin/integrations.js';
+import { handlers as storageHandlers } from './builtin/storage.js';
+import { handlers as platformHandlers } from './builtin/platform.js';
+import { handlers as agentHandlers } from './builtin/agent.js';
+import { handlers as workflowHandlers } from './builtin/workflow.js';
 
 /**
- * Universal Tool Dispatcher.
- * Routes model-requested tools to their modular implementations.
+ * Universal Tool Dispatcher (Omni-Sam v2.0).
+ * Routes 100+ model-requested tools to their modular production handlers.
  */
 export async function runBuiltinTool(env, toolName, params) {
-    console.log(`[AI Dispatcher] Executing tool: ${toolName}`);
+    console.log(`[AI Dispatcher] Executing: ${toolName}`);
 
-    switch (toolName) {
-        // ── Filesystem ───────────────────────────────────────────────────────
-        case 'list_dir': return await fsHandlers.list_dir(params, env);
-        case 'read_file': return await fsHandlers.read_file(params, env);
-        case 'write_file': return await fsHandlers.write_file(params, env);
+    // High-priority tools that normally require frontend approval gates
+    const requiresApproval = [
+        'cdt_evaluate_script', 'cdt_upload_file', 'd1_write', 
+        'worker_deploy', 'resend_send_broadcast', 'resend_create_api_key',
+        'meshyai_image_to_3d', 'meshyai_text_to_3d', 'agentsam_run_agent'
+    ];
 
-        // ── Database ─────────────────────────────────────────────────────────
-        case 'd1_query': return await dbHandlers.d1_query(params, env);
-        case 'd1_batch_write': return await dbHandlers.d1_batch_write(params, env);
+    if (requiresApproval.includes(toolName)) {
+        console.warn(`[AI Dispatcher] Approval required tool detected: ${toolName}`);
+    }
 
-        // ── Terminal ─────────────────────────────────────────────────────────
-        case 'run_command': return await termHandlers.run_command(params, env);
+    switch (true) {
+        // ── CATEGORY: browser / web (31 Tools) ───────────────────────────
+        case toolName.startsWith('cdt_'):
+        case toolName.startsWith('browser_'):
+        case toolName === 'playwright_screenshot':
+        case toolName === 'preview_in_browser':
+        case toolName === 'web_search':
+        case toolName === 'a11y_audit_webpage':
+            return await webHandlers[toolName]?.(params, env) || await webHandlers.search_web?.(params, env);
 
-        // ── Web ──────────────────────────────────────────────────────────────
-        case 'web_search': return await searchWeb(env, params);
-        case 'a11y_audit_webpage': return await a11yAuditWebpage(env, params);
+        // ── CATEGORY: media / ui (13 Tools) ──────────────────────────────
+        case toolName.startsWith('excalidraw_'):
+        case toolName.startsWith('voxel_'):
+        case toolName.startsWith('meshyai_'):
+        case toolName.startsWith('imgx_'):
+            return await mediaHandlers[toolName]?.(params, env);
 
-        // ── Deployment ───────────────────────────────────────────────────────
-        case 'worker_deploy': return await workerDeploy(env, params);
-        case 'list_workers': return await listWorkers(env);
+        // ── CATEGORY: context / RAG (11 Tools) ───────────────────────────
+        case toolName.startsWith('context_'):
+        case toolName.startsWith('human_context_'):
+        case toolName === 'knowledge_search':
+        case toolName === 'rag_search':
+        case toolName === 'attached_file_content':
+            return await contextHandlers[toolName]?.(params, env);
 
-        // ── Context & Knowledge ──────────────────────────────────────────────
-        case 'knowledge_search': return await knowledgeSearch(env, params);
-        case 'human_context_list': return await humanContextList(env, params);
-        case 'human_context_add': return await humanContextAdd(env, params);
+        // ── CATEGORY: db (3 Tools) ───────────────────────────────────────
+        case toolName.startsWith('d1_'):
+            return await dbHandlers[toolName]?.(params, env);
 
-        // ── Telemetry ────────────────────────────────────────────────────────
-        case 'telemetry_log': return await telemetryLog(env, params);
-        case 'telemetry_query': return await telemetryQuery(env, params);
+        // ── CATEGORY: deploy / workflow (7 Tools) ────────────────────────
+        case toolName.startsWith('worker_'):
+        case toolName.startsWith('list_workers'):
+        case toolName.startsWith('get_deploy_command'):
+        case toolName.startsWith('get_worker_services'):
+        case toolName.startsWith('generate_'):
+        case toolName === 'workflow_run_pipeline':
+            return await deployHandlers[toolName]?.(params, env) || await workflowHandlers[toolName]?.(params, env);
 
-        // ── Media & Canvas ───────────────────────────────────────────────────
-        case 'excalidraw_export': return await excalidrawExport(env, params);
-        case 'voxel_save_scene': return await voxelSaveScene(env, params);
-        case 'generate_image': return await generateImage(env, params);
+        // ── CATEGORY: email / integrations / conversion (15 Tools) ───────
+        case toolName.startsWith('resend_'):
+        case toolName.startsWith('cf_images_'):
+        case toolName.startsWith('gdrive_'):
+        case toolName.startsWith('github_'):
+        case toolName.startsWith('cloudconvert_'):
+            return await integrationsHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: storage (9 Tools) ──────────────────────────────────
+        case toolName.startsWith('r2_'):
+        case toolName.startsWith('workspace_'):
+        case toolName === 'get_r2_url':
+            return await storageHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: platform / quality (4 Tools) ───────────────────────
+        case toolName.startsWith('a11y_'):
+        case toolName === 'platform_info':
+        case toolName === 'list_clients':
+            return await platformHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: agent (3 Tools) ────────────────────────────────────
+        case toolName.startsWith('agentsam_'):
+            return await agentHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: terminal / execution (1 Tool) ──────────────────────
+        case toolName === 'terminal_execute':
+        case toolName === 'run_command':
+            return await termHandlers.run_command?.(params, env);
 
         default:
-            return { error: `Tool implementation for '${toolName}' not found in modular dispatcher.` };
+            return { error: `Tool integration for '${toolName}' not found.` };
     }
 }

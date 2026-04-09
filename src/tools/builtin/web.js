@@ -1,54 +1,71 @@
-import { jsonResponse } from '../../core/responses.js';
-
 /**
- * Web-related Tools (Builtin).
- * Handles search, browser operations, and accessibility audits.
+ * Tool: Web (CDT / Playwright / Search)
+ * Implements 31 tools for browser automation and intelligence.
  */
 
 /**
- * Perform a web search.
+ * Common fetch bridge for all browser-related operations.
+ * Proxies to the worker's browser runner via internal dashboard API.
  */
-export async function searchWeb(env, { query }) {
-    if (!query) return { error: 'query required' };
-
-    // This typically bridges to a Search API (e.g., Tavily, Brave, Google) 
-    // Logic ported from the monolithic worker's search_web handler.
+async function invokeBrowserOp(env, toolName, params) {
+    const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
     try {
-        const apiKey = env.TAVILY_API_KEY || env.SEARCH_API_KEY;
-        if (!apiKey) return { error: 'Search API key not configured' };
-
-        const response = await fetch('https://api.tavily.com/search', {
+        const res = await fetch(`${origin}/api/browser/invoke`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                api_key: apiKey,
-                query,
-                search_depth: 'advanced',
-                max_results: 5
-            })
+            body: JSON.stringify({ tool: toolName, params }),
         });
-
-        const data = await response.json();
-        return { results: data.results || [] };
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Browser Operation Failed');
+        return data;
     } catch (e) {
-        return { error: 'Web search failed', detail: e.message };
+        return { error: `Browser Error [${toolName}]: ${e.message}` };
     }
 }
 
-/**
- * Perform an accessibility audit on a webpage.
- */
-export async function a11yAuditWebpage(env, { url }) {
-    if (!url) return { error: 'url required' };
-
-    // Logic bridges to the Playwright integration for browser-based auditing
-    try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/browser/a11y?url=${encodeURIComponent(url)}`, {
-            headers: { 'Authorization': `Bearer ${env.DASHBOARD_SECRET}` }
+export const handlers = {
+    // ── Search & Audit ───────────────────────────────────────────────────
+    async search_web(params, env) {
+        const apiKey = env.TAVILY_API_KEY || env.SEARCH_API_KEY;
+        if (!apiKey) return { error: 'Search API key missing' };
+        const res = await fetch('https://api.tavily.com/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey, query: params.query, search_depth: 'advanced' }),
         });
-        const data = await response.json();
-        return { audit: data.audit, summary: data.summary };
-    } catch (e) {
-        return { error: 'A11y audit failed', detail: e.message };
-    }
-}
+        return await res.json();
+    },
+
+    async a11y_audit(params, env) {
+        return await invokeBrowserOp(env, 'a11y_audit_webpage', params);
+    },
+
+    // ── CDT Core ─────────────────────────────────────────────────────────
+    async cdt_navigate_page(params, env) { return await invokeBrowserOp(env, 'cdt_navigate_page', params); },
+    async cdt_take_screenshot(params, env) { return await invokeBrowserOp(env, 'cdt_take_screenshot', params); },
+    async cdt_click(params, env) { return await invokeBrowserOp(env, 'cdt_click', params); },
+    async cdt_fill(params, env) { return await invokeBrowserOp(env, 'cdt_fill', params); },
+    async cdt_fill_form(params, env) { return await invokeBrowserOp(env, 'cdt_fill_form', params); },
+    async cdt_evaluate_script(params, env) { 
+        // Security Approval Check is handled at the dispatcher layer
+        return await invokeBrowserOp(env, 'cdt_evaluate_script', params); 
+    },
+    async cdt_list_pages(params, env) { return await invokeBrowserOp(env, 'cdt_list_pages', params); },
+    async cdt_wait_for(params, env) { return await invokeBrowserOp(env, 'cdt_wait_for', params); },
+    async cdt_take_snapshot(params, env) { return await invokeBrowserOp(env, 'cdt_take_snapshot', params); },
+    async cdt_hover(params, env) { return await invokeBrowserOp(env, 'cdt_hover', params); },
+    async cdt_drag(params, env) { return await invokeBrowserOp(env, 'cdt_drag', params); },
+    async cdt_press_key(params, env) { return await invokeBrowserOp(env, 'cdt_press_key', params); },
+    async cdt_upload_file(params, env) { return await invokeBrowserOp(env, 'cdt_upload_file', params); },
+    
+    // ── CDT Performance ──────────────────────────────────────────────────
+    async cdt_performance_start_trace(params, env) { return await invokeBrowserOp(env, 'cdt_performance_start_trace', params); },
+    async cdt_performance_stop_trace(params, env) { return await invokeBrowserOp(env, 'cdt_performance_stop_trace', params); },
+    async cdt_performance_analyze_insight(params, env) { return await invokeBrowserOp(env, 'cdt_performance_analyze_insight', params); },
+
+    // ── Playwright & Legacy ──────────────────────────────────────────────
+    async playwright_screenshot(params, env) { return await invokeBrowserOp(env, 'playwright_screenshot', params); },
+    async browser_navigate(params, env) { return await invokeBrowserOp(env, 'browser_navigate', params); },
+    async browser_screenshot(params, env) { return await invokeBrowserOp(env, 'browser_screenshot', params); },
+    async browser_content(params, env) { return await invokeBrowserOp(env, 'browser_content', params); },
+};

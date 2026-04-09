@@ -1,72 +1,41 @@
-import { jsonResponse } from '../../core/responses.js';
-
 /**
- * Context & Knowledge Tools (Builtin).
- * Handles long-term memory, project knowledge, and human context.
+ * Tool: Context (RAG / Knowledge / Memory / Optimization)
+ * Implements 11 tools for semantic awareness and token management.
  */
 
-/**
- * Search the global and project-specific knowledge base.
- */
-export async function knowledgeSearch(env, { query, category = 'all' }) {
-    if (!query) return { error: 'query required' };
-    if (!env.DB) return { error: 'DB not configured' };
-
+async function invokeContextOp(env, endpoint, method = 'POST', body = null) {
+    const origin = env.IAM_ORIGIN || 'https://inneranimalmedia.com';
     try {
-        // SQL Logic ported from monolithic worker.js
-        const sql = `
-            SELECT id, title, content, category, metadata_json 
-            FROM mcp_knowledge 
-            WHERE (title LIKE ? OR content LIKE ?)
-            AND (category = ? OR ? = 'all')
-            AND enabled = 1
-            ORDER BY created_at DESC LIMIT 10
-        `;
-        const pattern = `%${query}%`;
-        const { results } = await env.DB.prepare(sql).bind(pattern, pattern, category, category).all();
-        
-        return { 
-            matches: (results || []).map(r => ({
-                id: r.id,
-                title: r.title,
-                content: r.content,
-                category: r.category
-            }))
-        };
+        const res = await fetch(`${origin}${endpoint}`, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: body ? JSON.stringify(body) : null,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Context Operation Failed');
+        return data;
     } catch (e) {
-        return { error: 'Knowledge search failed', detail: e.message };
+        return { error: `Context Error: ${e.message}` };
     }
 }
 
-/**
- * List human-provided context items.
- */
-export async function humanContextList(env, { user_id }) {
-    if (!env.DB) return { error: 'DB not configured' };
-    
-    try {
-        const { results } = await env.DB.prepare(
-            "SELECT id, context_key, context_value, updated_at FROM human_context WHERE user_id = ? ORDER BY updated_at DESC"
-        ).bind(user_id).all();
-        return { context: results || [] };
-    } catch (e) {
-        return { error: 'Failed to fetch human context', detail: e.message };
-    }
-}
+export const handlers = {
+    // ── Knowledge & RAG ──────────────────────────────────────────────────
+    async knowledge_search(params, env) { return await invokeContextOp(env, '/api/context/knowledge-search', 'POST', params); },
+    async rag_search(params, env) { return await invokeContextOp(env, '/api/context/rag-search', 'POST', params); },
 
-/**
- * Add or update a human context item.
- */
-export async function humanContextAdd(env, { user_id, key, value }) {
-    if (!key || !value) return { error: 'key and value required' };
-    if (!env.DB) return { error: 'DB not configured' };
+    // ── Agent Memory (Human Context) ─────────────────────────────────────
+    async human_context_add(params, env) { return await invokeContextOp(env, '/api/context/memory/add', 'POST', params); },
+    async human_context_list(params, env) { return await invokeContextOp(env, '/api/context/memory/list', 'POST', params); },
 
-    try {
-        await env.DB.prepare(
-            "INSERT INTO human_context (user_id, context_key, context_value, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(user_id, context_key) DO UPDATE SET context_value = EXCLUDED.context_value, updated_at = EXCLUDED.updated_at"
-        ).bind(user_id, key, value).run();
-        return { success: true };
-    } catch (e) {
-        return { error: 'Failed to add context', detail: e.message };
-    }
-}
+    // ── Strategy & Optimization ──────────────────────────────────────────
+    async context_optimize(params, env) { return await invokeContextOp(env, '/api/context/optimize', 'POST', params); },
+    async context_progressive_disclosure(params, env) { return await invokeContextOp(env, '/api/context/progressive', 'POST', params); },
+    async context_chunk(params, env) { return await invokeContextOp(env, '/api/context/chunk', 'POST', params); },
+
+    // ── Extraction & Summarization ───────────────────────────────────────
+    async context_extract_structure(params, env) { return await invokeContextOp(env, '/api/context/extract', 'POST', params); },
+    async context_summarize_code(params, env) { return await invokeContextOp(env, '/api/context/summarize-code', 'POST', params); },
+    async attached_file_content(params, env) { return await invokeContextOp(env, '/api/context/attached-content', 'POST', params); },
+    async context_search(params, env) { return await invokeContextOp(env, '/api/context/progressive-search', 'POST', params); },
+};

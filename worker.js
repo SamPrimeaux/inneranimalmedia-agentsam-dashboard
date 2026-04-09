@@ -3030,7 +3030,7 @@ const worker = {
     if (host === 'inneranimalmedia.meauxbility.workers.dev') {
       return Response.redirect(`https://inneranimalmedia.com${url.pathname}${url.search}`, 301);
     }
-    if (host === 'inneranimal-dashboard.meauxbility.workers.dev') {
+    if (host === 'inneranimal-dashboard.meauxbility.workers.dev' || host === 'sandbox.inneranimalmedia.com') {
       return Response.redirect(`https://sandbox.inneranimalmedia.com${url.pathname}${url.search}`, 301);
     }
 
@@ -4128,10 +4128,10 @@ const worker = {
             const builtins = {
               clear_context: async () => ({ output: 'Context cleared' }),
               runfullaitest: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/benchmark-full.sh sandbox',
+                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox',
               }),
               runtests: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/benchmark-full.sh sandbox --quick',
+                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox --quick',
               }),
               list_tools: async () => {
                 const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
@@ -20910,7 +20910,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ).bind(workerName, deployId, description).run();
     } catch (e) { console.warn('[worker_deploy] tracking insert', e?.message); }
     // Return deploy command for terminal execution + tracking ID
-    const deployCmd = `cd /Users/samprimeaux/Downloads/march1st-inneranimalmedia && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml 2>&1 | tee /tmp/deploy_out.txt && VERSION=$(grep 'Current Version ID:' /tmp/deploy_out.txt | awk '{print $NF}') && curl -s -X POST https://inneranimalmedia.com/api/internal/deploy-complete -H 'Content-Type: application/json' -d "{\"deploy_id\":\"${deployId}\",\"version_id\":\"$VERSION\",\"status\":\"success\"}"`;
+    const deployCmd = `cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml 2>&1 | tee /tmp/deploy_out.txt && VERSION=$(grep 'Current Version ID:' /tmp/deploy_out.txt | awk '{print $NF}') && curl -s -X POST https://inneranimalmedia.com/api/internal/deploy-complete -H 'Content-Type: application/json' -d "{\"deploy_id\":\"${deployId}\",\"version_id\":\"$VERSION\",\"status\":\"success\"}"`;
     const resultText = JSON.stringify({ deploy_id: deployId, command: deployCmd, status: 'pending', message: `Run the deploy command in terminal. Tracking ID: ${deployId}` });
     await rec({ conversationId, toolName: tool_name, toolCategory: 'platform', toolInput: params, result: resultText, error: null, serviceName: 'builtin' });
     return { result: resultText };

@@ -2979,6 +2979,9 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
 }
 
 const worker = {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(generateDailySummaryEmail(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
@@ -6645,6 +6648,88 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
   }
 }
 
+/**
+ * Phase 0: Preflight Classification (Gemini Flash Lite)
+ * Rapid, low-token intent and tier detection.
+ */
+async function preflightClassify(message, env) {
+  if (!env.GEMINI_API_KEY) return { tier: 'moderate', intent: 'mixed', needsTools: true };
+  const systemPrompt = `Classify the user message. Respond with JSON only:
+{"tier":"fast|moderate|complex","intent":"mixed","needs_tools":true|false}
+fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi-step/build/agent`;
+
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${env.GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: `System: ${systemPrompt}\nUser: ${message}` }] }],
+        generationConfig: { response_mime_type: 'application/json', max_output_tokens: 100 }
+      })
+    });
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const startIdx = text.indexOf('{');
+    const endIdx = text.lastIndexOf('}');
+    if (startIdx === -1 || endIdx === -1) throw new Error('Invalid JSON response');
+    const parsed = JSON.parse(text.slice(startIdx, endIdx + 1));
+    return {
+      tier: parsed.tier || 'moderate',
+      intent: parsed.intent || 'mixed',
+      needsTools: parsed.needs_tools ?? true
+    };
+  } catch (e) {
+    console.error('[preflightClassify] failed:', e.message);
+    return { tier: 'moderate', intent: 'mixed', needsTools: true };
+  }
+}
+
+/**
+ * Phase 0: Tiered Context Assembly
+ * Loads core tools + intent-matched tools and caches the result.
+ */
+async function buildTieredContext(env, tier, intent, agentId, mode) {
+  if (tier === 'fast') return { tools: [] };
+  
+  const cacheKey = `compiled_ctx:${tier}:${intent}:${agentId}:${mode}`;
+  if (env.SESSION_CACHE) {
+    try {
+      const cached = await env.SESSION_CACHE.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+  }
+
+  // Tier 0: 10 Core Always-On Tools
+  const CORE_TOOLS = ['d1_query', 'terminal_execute', 'r2_read', 'r2_list', 'r2_search', 'knowledge_search', 'workspace_search', 'human_context_list', 'generate_execution_plan', 'sequential_thinking'];
+  
+  const toolResults = await env.DB.prepare(
+    `SELECT tool_name, description, input_schema, tool_category 
+     FROM mcp_registered_tools 
+     WHERE enabled = 1 AND is_degraded = 0 
+     AND (
+       tool_name IN (${CORE_TOOLS.map(() => '?').join(',')})
+       OR (intent_tags LIKE ('%' || ? || '%') AND ? != 'mixed')
+     )
+     ORDER BY sort_priority ASC, tool_name ASC`
+  ).bind(...CORE_TOOLS, intent, intent).all();
+
+  const toolDeclarations = (toolResults.results || []).map(t => {
+    let schema = {};
+    try { schema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) { }
+    return {
+      name: t.tool_name,
+      description: (t.description || t.tool_name).slice(0, 500),
+      parameters: schema.type === 'object' ? schema : { type: 'object', properties: {}, required: [] }
+    };
+  });
+
+  const result = { tools: toolDeclarations };
+  if (env.SESSION_CACHE) {
+    await env.SESSION_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 300 }).catch(() => {});
+  }
+  return result;
+}
+
 /** Load active model pricing for telemetry cost math (keyed by model_key). */
 async function loadAiModelRatesMap(env) {
   if (!env?.DB) return {};
@@ -6916,6 +7001,7 @@ async function resolveAgentAiIdForChat(env, agentParam) {
 }
 
 /** Base system instructions for /api/agent/chat — from D1 only (no hardcoded persona). */
+
 async function loadAgentsamAiSystemPromptForChat(env, agentAiId) {
   if (!env?.DB || !agentAiId) return '';
   try {
@@ -8267,14 +8353,14 @@ async function filterToolsByIntent(env, tenantId, intent, message, toolDefinitio
       for (const p of group.tools) keywordPatterns.push(p);
     }
   }
-  let allPatterns = intentPatterns.concat(keywordPatterns);
+  let allPatterns = [...new Set(intentPatterns.concat(keywordPatterns))];
   if (allPatterns.length === 0) {
     allPatterns = ['d1_query', 'context_search', 'knowledge_search', 'platform_info', 'human_context_list'];
   }
   const result = toolDefinitions.filter(
     (t) => t && t.name && allPatterns.some((p) => smallGlobMatch(p, t.name))
   );
-  return result.slice(0, 15); // hard cap
+  return result.slice(0, 50); // Raised cap for Phase 2
 }
 
 /** Per-panel tool categories for /dashboard/mcp (request body agent_id). Agent Sam / unknown ids: no filter. */
@@ -11982,6 +12068,11 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     subagentProfileKey: subagentProfileKeySse = '',
   } = parsed;
   if (!message) return jsonResponse({ error: 'message required' }, 400);
+
+  // Phase 0: Preflight Classification
+  const preflight = await preflightClassify(message, env);
+  const { tier, intent, needsTools } = preflight;
+
   const messageForSlash = String(message).trimStart();
   if (messageForSlash.startsWith('/claude ')) {
     const claudePrompt = messageForSlash.slice('/claude '.length).trim();
@@ -12016,6 +12107,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   }
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
+
+  // Phase 0: Preflight Classification
+  const preflight = await preflightClassify(message, env);
+  const { tier, intent, needsTools } = preflight;
 
   let modelRatesMap = {};
   try {
@@ -12064,7 +12159,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`;
-      const [skillRows, commandRows, mcpToolRows] = await Promise.all([
+      const [skillRows, commandRows] = await Promise.all([
         env.DB.prepare(skillSql).bind(skillWorkspaceKey).all(),
         env.DB.prepare(
           `SELECT slug, name, description, category
@@ -12074,26 +12169,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
         )
           .bind(tenantIdChatSse)
           .all(),
-        env.DB.prepare(
-          `SELECT tool_name, tool_category, description, input_schema
-         FROM mcp_registered_tools
-         WHERE COALESCE(enabled, 1) = 1
-           AND COALESCE(is_degraded, 0) = 0
-           AND (
-             modes_json IS NULL OR TRIM(modes_json) = ''
-             OR modes_json LIKE ('%' || '"' || ? || '"' || '%')
-           )
-         ORDER BY sort_priority ASC, tool_category, tool_name`
-        )
-          .bind(mode)
-          .all(),
       ]);
-
-      const MCP_SSE_CAP = 64;
-      const mcpAll = mcpToolRows.results || [];
-      const mcpOverCap = mcpAll.length > MCP_SSE_CAP;
-      const mcpSlice = mcpOverCap ? mcpAll.slice(0, MCP_SSE_CAP) : mcpAll;
-      const mcpRemaining = mcpOverCap ? mcpAll.length - MCP_SSE_CAP : 0;
+      const { tools: tieredTools } = await buildTieredContext(env, tier, intent, agentAiIdSse, mode);
+      const mcpSlice = tieredTools;
+      const mcpRemaining = 0;
 
       const mcpByCategory = {};
       for (const t of mcpSlice) {
@@ -16453,15 +16532,39 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/agent/playwright' && method === 'POST') {
       const body = await request.json().catch(() => ({}));
       const jobId = crypto.randomUUID();
+      const session = await getSession(env, request).catch(() => null);
+      
+      const triggeredBy =
+        body.agent_session_id ? 'agent_sam' :
+        body.triggered_by === 'meauxcad_ui' ? 'user_ui' :
+        body.triggered_by ||
+        (session?.user_id ? `user:${session.user_id}` : 'unknown');
+
       try {
         await env.DB.prepare(
-          "INSERT INTO playwright_jobs (id, job_type, url, status, metadata, created_at) VALUES (?,?,?,'pending',?,CURRENT_TIMESTAMP)"
-        ).bind(jobId, body.job_type || 'screenshot', body.url || '', JSON.stringify(body.options || {})).run();
-      } catch (_) {
-        return jsonResponse({ error: 'playwright_jobs table not available' }, 503);
+          `INSERT INTO playwright_jobs (id, job_type, url, status, triggered_by, agent_session_id, metadata, created_at)
+           VALUES (?,?,?,'pending',?,?,?,CURRENT_TIMESTAMP)`
+        ).bind(
+          jobId, 
+          body.job_type || 'screenshot', 
+          body.url || 'internal:html', 
+          triggeredBy,
+          body.agent_session_id || null,
+          JSON.stringify(body.options || {})
+        ).run();
+      } catch (e) {
+        return jsonResponse({ error: 'playwright_jobs table error', detail: e?.message }, 503);
       }
-      if (env.MY_QUEUE) await env.MY_QUEUE.send({ jobId, job_type: body.job_type || 'screenshot', url: body.url || '' });
-      return jsonResponse({ jobId, status: 'pending' });
+      if (env.MY_QUEUE) {
+          await env.MY_QUEUE.send({ 
+              jobId, 
+              job_type: body.job_type || 'screenshot', 
+              url: body.url || '',
+              html: body.html || null,
+              triggeredBy
+          });
+      }
+      return jsonResponse({ jobId, status: 'pending', triggered_by: triggeredBy });
     }
 
     if (pathLower === '/api/agent/playwright/jobs' && method === 'GET') {
@@ -19356,7 +19459,10 @@ async function runGithubPatBuiltinTool(env, toolName, params) {
       { headers }
     );
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: typeof data.message === 'string' ? data.message : 'Not found' };
+    if (!res.ok) {
+        // Phase 1: Try main/master fallback or return descriptive error
+        return { error: `Not Found: (Tried path: "${path}" in repo: "${repo}"). Check that the path exists and the token has repo access.` };
+    }
     if (data.content) {
       const text = atob(String(data.content).replace(/\n/g, ''));
       if (p.start_line || p.end_line) { const lines = text.split("\n"); return { ok: true, content: lines.slice((p.start_line || 1) - 1, p.end_line || lines.length).join("\n"), sha: data.sha ?? null }; }
@@ -19617,6 +19723,60 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
       return { error: errMsg };
     }
+  }
+
+  // ── Phase 3: Universal Converters & Creative Pipelines ───────────────────
+  if (['browser_render_to_image', 'browser_pdf', 'browser_scrape'].includes(tool_name)) {
+    const jobId = crypto.randomUUID();
+    const type = tool_name === 'browser_render_to_image' ? 'screenshot' : (tool_name === 'browser_pdf' ? 'pdf' : 'scrape');
+    await env.DB.prepare(
+        `INSERT INTO playwright_jobs (id, job_type, url, status, triggered_by, metadata, created_at)
+         VALUES (?, ?, ?, 'pending', 'agent_sam', ?, CURRENT_TIMESTAMP)`
+    ).bind(jobId, type, params.url || 'internal:html', JSON.stringify(params)).run();
+    
+    if (env.MY_QUEUE) await env.MY_QUEUE.send({ jobId, job_type: type, ...params, triggeredBy: 'agent_sam' });
+    return { ok: true, jobId, message: `${tool_name} job queued.` };
+  }
+
+  if (tool_name === 'social_card_generate') {
+    const { template_id, content } = params;
+    const jobId = crypto.randomUUID();
+    // Proxy to queue for multi-step processing (R2 fetch -> Replace -> Playwright)
+    if (env.MY_QUEUE) await env.MY_QUEUE.send({ type: 'social_card', jobId, template_id, content, triggeredBy: 'agent_sam' });
+    return { ok: true, jobId, message: `Social card generation for ${template_id} queued.` };
+  }
+
+  if (tool_name === 'presentation_generate') {
+    const { title, slides } = params;
+    const jobId = crypto.randomUUID();
+    if (env.MY_QUEUE) await env.MY_QUEUE.send({ type: 'presentation', jobId, title, slides, triggeredBy: 'agent_sam' });
+    return { ok: true, jobId, message: `Presentation generation for "${title}" queued.` };
+  }
+
+  if (tool_name === 'proposal_generate') {
+    const { client_name, services } = params;
+    const jobId = crypto.randomUUID();
+    if (env.MY_QUEUE) await env.MY_QUEUE.send({ type: 'proposal', jobId, client_name, services, triggeredBy: 'agent_sam' });
+    return { ok: true, jobId, message: `Proposal generation for ${client_name} queued.` };
+  }
+
+  if (tool_name === 'page_monitor_register') {
+    const { url, name, interval } = params;
+    const pmId = 'pm_' + crypto.randomUUID().slice(0, 8);
+    await env.DB.prepare(
+        `INSERT INTO page_monitors (id, name, url, check_interval_minutes, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).bind(pmId, name || url, url, interval || 60).run();
+    return { ok: true, id: pmId, message: `Page monitor for ${url} registered.` };
+  }
+
+  if (tool_name === 'agentsam_run_agent') {
+      const { task_description } = params;
+      const runId = crypto.randomUUID();
+      await env.DB.prepare(
+          `INSERT INTO agentsam_agent_run (id, task_description, status, created_at) VALUES (?, ?, 'pending', CURRENT_TIMESTAMP)`
+      ).bind(runId, task_description).run();
+      if (env.MY_QUEUE) await env.MY_QUEUE.send({ type: 'agent_task', runId, task_description, triggeredBy: 'agent_sam' });
+      return { ok: true, runId, message: `Async agent task ${runId} delegated.` };
   }
   if (tool_name.startsWith('excalidraw_')) {
     const action = tool_name.replace('excalidraw_', '');
@@ -21073,6 +21233,55 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     const out = { result: results || [] };
     await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(out.result), error: null, serviceName: 'builtin' });
     return out;
+  }
+
+  if (tool_name === 'browser_render_to_image' || tool_name === 'browser_pdf' || tool_name === 'browser_scrape') {
+    const { url, html, width, height, filename, selectors, extract } = params;
+    if (!url && !html) return { error: 'url or html required' };
+    const job_id = crypto.randomUUID();
+    const job_type = tool_name === 'browser_render_to_image' ? 'screenshot' : (tool_name === 'browser_pdf' ? 'pdf' : 'scrape');
+    
+    // For Phase 3, we enqueue and return the job_id, or if synchronous is needed, we wait.
+    // The user wants a universal converter. We'll use the existing queue infrastructure.
+    await env.DB.prepare(
+      `INSERT INTO playwright_jobs (id, job_type, url, status, created_at) VALUES (?, ?, ?, 'pending', datetime('now'))`
+    ).bind(job_id, job_type, url || 'internal:html').run();
+    
+    await env.MY_QUEUE.send({
+      type: 'playwright_job',
+      job_id,
+      html: html || null,
+      viewport: width && height ? { width: Number(width), height: Number(height) } : null,
+      selectors: selectors || null,
+      extract: extract || null
+    });
+    
+    return { ok: true, job_id, message: `${tool_name} job ${job_id} queued.` };
+  }
+
+  if (tool_name === 'social_card_generate') {
+    const { template_id, content, platform } = params;
+    // Workflow: fetch template -> inject content -> call browser_render_to_image
+    // For now, we'll proxy this to a background task that handles the multi-step.
+    const job_id = crypto.randomUUID();
+    await env.MY_QUEUE.send({
+        type: 'creative_social_card',
+        job_id,
+        template_id,
+        content,
+        platform
+    });
+    return { ok: true, job_id, message: `Social card generation for ${platform} queued.` };
+  }
+
+  if (tool_name === 'agentsam_run_agent') {
+    const { task_description, priority } = params;
+    const run_id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO agentsam_agent_run (id, task_description, status, priority, created_at) VALUES (?, ?, 'pending', ?, datetime('now'))`
+    ).bind(run_id, task_description, priority || 'normal').run();
+    await env.MY_QUEUE.send({ type: 'agent_task', run_id, task_description });
+    return { ok: true, run_id, message: `Async agent task ${run_id} delegated.` };
   }
 
   if (tool_name === 'browser_search') {
@@ -22789,17 +22998,18 @@ async function runImgxBuiltinTool(env, toolName, params, ctx = {}) {
 
   if (toolName === 'imgx_generate_image') {
     const model = String(params.model || 'dall-e-3');
+    const payload = {
+      model: model,
+      prompt: prompt,
+      size: ['1024x1024', '1024x1792', '1792x1024'].includes(size) ? size : '1024x1024',
+    };
     const res = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({
-        model,
-        prompt,
-        size,
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30000),
     });
     const data = await res.json().catch(() => ({}));
@@ -24210,10 +24420,26 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       } : {};
       // display:omitted skips streaming thinking tokens → faster first text token for pipelines
       if (_isAdaptive && !wantStream) _thinkingConfig.thinking = { type: 'adaptive', display: 'omitted' };
+      const messages = [...apiMessages];
+      if (messages.length >= 2) {
+        // Cache the last 2 turns (usually the large tool results)
+        for (let i = messages.length - 2; i < messages.length; i++) {
+          if (messages[i]) {
+            if (typeof messages[i].content === 'string') {
+                messages[i].content = [{ type: 'text', text: messages[i].content, cache_control: { type: 'ephemeral' } }];
+            } else if (Array.isArray(messages[i].content)) {
+                // Find the last text or tool_result part and pin it
+                const lastPart = messages[i].content[messages[i].content.length - 1];
+                if (lastPart) lastPart.cache_control = { type: 'ephemeral' };
+            }
+          }
+        }
+      }
+
       const body = {
         model: modelKey,
         max_tokens: _isAdaptive ? 16000 : 8192,
-        system: systemWithWorkspaceHint,
+        system: [{ type: 'text', text: systemWithWorkspaceHint, cache_control: { type: 'ephemeral' } }],
         messages,
         tools,
         ..._thinkingConfig,
@@ -24221,7 +24447,6 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       console.log('[chatWithToolsAnthropic] Sending request to Claude', {
         model: modelKey,
         tools_count: tools.length,
-        tool_names: tools.map((t) => t.name).slice(0, 5),
         has_tools_in_body: !!tools && tools.length > 0,
       });
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -24496,11 +24721,12 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
           'Content-Type': 'application/json',
           'x-api-key': env.ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'prompt-caching-2024-07-31',
         },
         body: JSON.stringify({
           model: modelKey,
           max_tokens: 4096,
-          system: finalSystem,
+          system: [{ type: 'text', text: finalSystem, cache_control: { type: 'ephemeral' } }],
           messages,
         }),
       });

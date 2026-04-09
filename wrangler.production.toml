@@ -133,6 +133,7 @@ crons = [
   "30 13 * * *",  # Daily plan email — real handler exists
   "0 9 * * *",    # FinancialCommand stub — real handler added today
   "*/30 * * * *", # Queue processor + overnight progress — handler exists, was missing
+  "0 12 * * *",   # Daily summary email — Phase 3C active
   "0 0 * * *"     # Daily digest email — handler exists, was missing
 ]
 

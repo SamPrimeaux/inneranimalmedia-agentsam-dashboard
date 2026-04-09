@@ -12,6 +12,7 @@ interface PlaywrightJob {
     completed_at?: string;
     metadata?: string;
     output_type?: string;
+    triggered_by?: string;
 }
 
 export const PlaywrightConsole: React.FC = () => {
@@ -53,6 +54,7 @@ export const PlaywrightConsole: React.FC = () => {
                     completed_at: r.completed_at != null ? String(r.completed_at) : undefined,
                     metadata: r.metadata != null ? String(r.metadata) : undefined,
                     output_type: r.output_type != null ? String(r.output_type) : undefined,
+                    triggered_by: r.triggered_by != null ? String(r.triggered_by) : undefined,
                 };
             });
             setJobs(mapped);
@@ -83,7 +85,7 @@ export const PlaywrightConsole: React.FC = () => {
                 body: JSON.stringify({
                     url: targetUrl,
                     job_type: 'screenshot',
-                    options: { triggered_by: 'meauxcad_ui' }
+                    triggered_by: 'playwright_console' 
                 }),
             });
             const data = await res.json();
@@ -116,6 +118,16 @@ export const PlaywrightConsole: React.FC = () => {
             case 'running': return <RefreshCw size={14} className="text-[var(--solar-blue)] animate-spin" />;
             default: return <Clock size={14} className="text-[var(--solar-yellow)]" />;
         }
+    };
+
+    const triggerLabel: Record<string, string> = {
+        'agent_sam':          'Agent',
+        'browser_search':     'Agent search',
+        'user_ui':            'Manual',
+        'playwright_console': 'Console test',
+        'page_monitor':       'Monitor',
+        'cron':               'Scheduled',
+        'api':                'API',
     };
 
     const filteredJobs = jobs.filter(j => 
@@ -199,6 +211,9 @@ export const PlaywrightConsole: React.FC = () => {
                                          <div className="flex items-center gap-2">
                                              {getStatusIcon(job.status)}
                                              <span className="text-[10px] font-mono opacity-60 uppercase tracking-tighter">{job.job_type}</span>
+                                             <span className="text-[10px] bg-[var(--bg-app)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] font-bold">
+                                                 {triggerLabel[job.triggered_by || ''] || job.triggered_by || 'UNKNOWN'}
+                                             </span>
                                          </div>
                                          <div className="flex items-center gap-2">
                                             <span className="text-[10px] text-[var(--text-muted)]">{new Date(job.created_at).toLocaleString()}</span>

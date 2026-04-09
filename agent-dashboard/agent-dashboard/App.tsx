@@ -10,7 +10,7 @@ import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
 import { ChatAssistant } from './components/ChatAssistant';
 import { IAM_AGENT_CHAT_CONVERSATION_CHANGE, LS_AGENT_CHAT_CONVERSATION_ID } from './agentChatConstants';
-import { WelcomeLauncher } from './components/WelcomeLauncher';
+import { WorkspaceLauncher } from './components/WorkspaceLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { MonacoEditorView, type EditorModelMeta } from './components/MonacoEditorView';
@@ -1722,14 +1722,17 @@ const App: React.FC = () => {
                   
                   {activeTab === 'welcome' && (
                       <div className="absolute inset-0 z-10">
-                          <WelcomeLauncher
-                              onOpenFolder={() => {
+                          <WorkspaceLauncher
+                              onSelect={(ws) => {
                                 setActiveActivity('files');
-                                setNativeFolderOpenSignal((n) => n + 1);
+                                setIdeWorkspace({ 
+                                  source: ws.type as any, 
+                                  name: ws.name, 
+                                  pathHint: ws.metadata?.repo || ws.metadata?.host || '' 
+                                });
+                                setActiveTab('code');
                               }}
-                              onWorkspacePick={({ name, path }) => {
-                                  setIdeWorkspace({ source: 'pinned', name, pathHint: path });
-                              }}
+                              onClose={() => setActiveTab('code')}
                           />
                       </div>
                   )}

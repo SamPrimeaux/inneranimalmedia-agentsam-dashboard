@@ -323,17 +323,28 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             setStatus('online');
 
             if (xtermRef.current) {
-              xtermRef.current.clear();
+              const term = xtermRef.current;
+              term.clear();
               const banner = buildGameBanner(workspaceLabel, productLabel, workspaceId);
-              xtermRef.current.writeln(banner);
+              term.writeln(banner);
+
+              // ── Key input: Send to PTY ─────────────────────────────────────
+              const onDataRaw = term.onData(data => {
+                if (ws.readyState === WebSocket.OPEN) ws.send(data);
+              });
+              const onResizeRaw = term.onResize(({ cols, rows }) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+                }
+              });
 
               const cfgOk = (cfgJson as {terminal_configured?: boolean}).terminal_configured === true;
-              xtermRef.current.writeln(`  ${cfgOk ? '\x1b[38;5;82m◈' : '\x1b[38;5;196m◈'}\x1b[0m Worker config: ${cfgOk ? 'TERMINAL_WS_URL + TERMINAL_SECRET \x1b[38;5;82mOK\x1b[0m' : '\x1b[38;5;196mMISSING\x1b[0m'}`);
+              term.writeln(`  ${cfgOk ? '\x1b[38;5;82m◈' : '\x1b[38;5;196m◈'}\x1b[0m Worker config: ${cfgOk ? 'TERMINAL_WS_URL + TERMINAL_SECRET \x1b[38;5;82mOK\x1b[0m' : '\x1b[38;5;196mMISSING\x1b[0m'}`);
 
               if ((resumeJson as {resumable?: boolean}).resumable === true) {
                 const sid = (resumeJson as {session_id?: string}).session_id ?? '';
                 const turl = (resumeJson as {tunnel_url?: string}).tunnel_url ?? '';
-                xtermRef.current.writeln(`  \x1b[38;5;240m◈ Resume: session ${sid.slice(0, 8)}… (${turl.slice(0, 40)}…)\x1b[0m`);
+                term.writeln(`  \x1b[38;5;240m◈ Resume: session ${sid.slice(0, 8)}… (${turl.slice(0, 40)}…)\x1b[0m`);
               }
 
               fetch('/api/agent/memory/list', { method: 'GET', credentials: 'same-origin' })
@@ -341,12 +352,20 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                 .then((data: unknown) => {
                   const items = Array.isArray(data) ? data as { key?: string; value?: string }[] : [];
                   const greeting = items.find(m => m.key === 'STARTUP_GREETING')?.value;
-                  if (greeting && xtermRef.current) {
-                    xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
+                  if (greeting && term) {
+                    term.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
                   }
                   fetchTunnelStatus();
                 })
                 .catch(() => fetchTunnelStatus());
+
+              // Cleanup listeners on socket close
+              const originalClose = ws.onclose;
+              ws.onclose = (e) => {
+                onDataRaw.dispose();
+                onResizeRaw.dispose();
+                if (originalClose) originalClose.call(ws, e);
+              };
             }
           };
 

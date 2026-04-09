@@ -17,7 +17,7 @@ npx wrangler deploy ./worker.js -c wrangler.jsonc
 NEXT_V=$(cat agent-dashboard/.sandbox-deploy-version 2>/dev/null || echo 0)
 export VITE_SHELL_VERSION=v${NEXT_V}
 echo "=== CF Builds: Vite build ==="
-cd agent-dashboard && npm ci --include=dev && npm run build && cd ..
+cd agent-dashboard && npm ci --include=dev && node scripts/bump-cache.js && npm run build && cd ..
 echo "=== CF Builds: R2 asset sync ==="
 MAX_JOBS=8
 job_count=0

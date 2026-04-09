@@ -16,6 +16,8 @@ interface ThemeSwitcherProps {
   workspaceId?: string | null;
 }
 
+const COLLAB_WORKSPACE_ID = 'global';
+
 export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ workspaceId }) => {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
@@ -39,17 +41,33 @@ export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ workspaceId }) => 
 
   const applyTheme = async (theme: Theme) => {
     try {
-      const res = await fetch('/api/themes/apply', {
+      // Keep backward-compat endpoint for other pages that depend on it
+      await fetch('/api/themes/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({
-          theme_id: String(theme.id),
-        }),
+        body: JSON.stringify({ theme_id: String(theme.id) }),
       });
-      if (!res.ok) return;
-      const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
-      if (payload?.slug) setActiveSlug(payload.slug);
+
+      // New collaborative endpoint — broadcasts to all connected clients
+      const collabRes = await fetch(`/api/collab/canvas/theme?workspace_id=${COLLAB_WORKSPACE_ID}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ theme_slug: theme.slug }),
+      });
+
+      if (collabRes.ok) {
+        const data = await collabRes.json() as { ok: boolean; theme_slug?: string };
+        // Apply cssVars from the canonical theme broadcast (received via WebSocket in App.tsx)
+        // Also fetch and apply locally so this tab updates immediately
+        const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
+        if (payload?.slug) setActiveSlug(payload.slug);
+      } else {
+        // Collab endpoint unavailable — still apply locally via existing mechanism
+        const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
+        if (payload?.slug) setActiveSlug(payload.slug);
+      }
     } catch (e) {
       console.error(e);
     }

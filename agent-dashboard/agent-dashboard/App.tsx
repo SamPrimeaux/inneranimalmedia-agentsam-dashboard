@@ -99,6 +99,7 @@ const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);
+  const collabWsRef = useRef<WebSocket | null>(null);
   
   const [activeProject, setActiveProject] = useState<ProjectType>(ProjectType.SANDBOX);
   const [appState, setAppState] = useState<AppState>(AppState.EDITING);
@@ -164,6 +165,33 @@ const App: React.FC = () => {
     mq.addEventListener('change', fn);
     return () => mq.removeEventListener('change', fn);
   }, []);
+
+  // IAM_COLLAB real-time sync — canvas + theme updates
+  useEffect(() => {
+    const workspaceId = 'global';
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//${window.location.host}/api/collab/room/${workspaceId}`;
+    const ws = new WebSocket(wsUrl);
+    collabWsRef.current = ws;
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'theme_update' && msg.cssVars) {
+          Object.entries(msg.cssVars).forEach(([k, v]) => {
+            document.documentElement.style.setProperty(k, v as string);
+          });
+        }
+        if (msg.type === 'canvas_update') {
+          window.dispatchEvent(new CustomEvent('iam:canvas_update', { detail: msg.elements }));
+        }
+      } catch (_) {}
+    };
+    ws.onerror = () => {}; // suppress unhandled rejection noise
+    return () => {
+      try { ws.close(); } catch (_) {}
+    };
+  }, []);
+
   /** From GET /api/settings/workspaces (`current` = default_workspace_id); drives theme ?workspace= */
   const [authWorkspaceId, setAuthWorkspaceId] = useState<string | null>(null);
   /** Rows from same API — used for human-readable workspace name in chrome + chat. */

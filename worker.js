@@ -701,11 +701,14 @@ export class IAMCollaborationSession extends DurableObject {
     super(state, env);
     /** @type {import('@cloudflare/workers-types').DurableObjectState} */
     this._state = state;
+    this.env = env;
   }
 
   /** @param {Request} request */
   async fetch(request) {
     const url = new URL(request.url);
+
+    // POST /broadcast — send raw text to all connected sockets
     if (request.method === 'POST' && (url.pathname === '/broadcast' || url.pathname.endsWith('/broadcast'))) {
       const text = await request.text();
       const sockets = this.ctx.getWebSockets();
@@ -715,16 +718,56 @@ export class IAMCollaborationSession extends DurableObject {
           console.warn('[IAM_COLLAB] broadcast send', e?.message ?? e);
         }
       }
-
       return new Response(JSON.stringify({ ok: true, delivered, queued: delivered === 0 }), {
         headers: { 'Content-Type': 'application/json' },
       });
     }
+
+    // GET /canvas/state — return persisted canvas elements + active theme
+    if (request.method === 'GET' && url.pathname === '/canvas/state') {
+      const elements = (await this.ctx.storage.get('canvas_elements')) ?? [];
+      const activeTheme = (await this.ctx.storage.get('canvas_active_theme')) ?? null;
+      return new Response(JSON.stringify({ canvasElements: elements, activeTheme }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // POST /canvas/elements — persist elements + broadcast canvas_update
+    if (request.method === 'POST' && url.pathname === '/canvas/elements') {
+      const { elements } = await request.json();
+      await this.ctx.storage.put('canvas_elements', elements);
+      const msg = JSON.stringify({ type: 'canvas_update', elements });
+      for (const ws of this.ctx.getWebSockets()) {
+        try { ws.send(msg); } catch (_) {}
+      }
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // POST /canvas/theme — validate slug against D1, persist, broadcast theme_update
+    if (request.method === 'POST' && url.pathname === '/canvas/theme') {
+      const { theme_slug } = await request.json();
+      const row = await this.env.DB.prepare(
+        'SELECT id, name, slug, config, theme_family, monaco_theme, monaco_bg FROM cms_themes WHERE slug = ?'
+      ).bind(theme_slug).first();
+      if (!row) return new Response(JSON.stringify({ error: 'unknown theme_slug' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      let cssVars = {};
+      try { cssVars = JSON.parse(row.config).cssVars ?? {}; } catch (_) {}
+      await this.ctx.storage.put('canvas_active_theme', theme_slug);
+      const msg = JSON.stringify({ type: 'theme_update', theme_slug, cssVars, monaco_theme: row.monaco_theme, monaco_bg: row.monaco_bg });
+      for (const ws of this.ctx.getWebSockets()) {
+        try { ws.send(msg); } catch (_) {}
+      }
+      return new Response(JSON.stringify({ ok: true, theme_slug }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Non-WebSocket requests fall through here (info endpoint)
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response(JSON.stringify({ do: 'IAMCollaborationSession', ok: true, room: url.pathname }), {
         headers: { 'Content-Type': 'application/json' },
       });
     }
+
+    // WebSocket upgrade
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -736,7 +779,6 @@ export class IAMCollaborationSession extends DurableObject {
   async webSocketMessage(ws, message) {
     try {
       if (typeof message === 'string' && message === 'ping') ws.send('pong');
-
     } catch (_) { }
   }
 
@@ -5797,6 +5839,17 @@ const worker = {
           return Response.json({ success: true });
         }
         return Response.json({ error: 'method not allowed' }, { status: 405 });
+      }
+
+      // ----- API: Collab canvas/theme (workspace-scoped IAM_COLLAB DO) -----
+      {
+        const canvasMatch = pathLower.match(/^\/api\/collab\/canvas(\/.*)?$/);
+        if (canvasMatch && env.IAM_COLLAB) {
+          const workspaceId = url.searchParams.get('workspace_id') || 'global';
+          const id = env.IAM_COLLAB.idFromName(`canvas:${workspaceId}`);
+          const stub = env.IAM_COLLAB.get(id);
+          return stub.fetch(new Request(`https://internal${canvasMatch[0]}`, { method: request.method, body: request.body, headers: request.headers }));
+        }
       }
 
       // ----- API: Collab (IAM_COLLAB Durable Object — WebSocket room + POST .../broadcast) -----
@@ -16241,12 +16294,17 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const body = await request.json().catch(() => ({}));
         const payload = body && typeof body === 'object' && body.state !== undefined ? body.state : body;
         const stateJson = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
-        await env.DB.prepare(
-          `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
-           ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
-        )
-          .bind(rowId, stateJson)
-          .run();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+             ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
+          )
+            .bind(rowId, stateJson)
+            .run();
+        } catch (e) {
+          console.error('[workspace-put] failed', e?.message ?? e, { rowId });
+          return jsonResponse({ error: 'Failed to persist workspace state', details: String(e?.message || e) }, 500);
+        }
         if (env.DASHBOARD) {
           await env.DASHBOARD.put(`sessions/${rowId}/state.json`, stateJson, {
             httpMetadata: { contentType: 'application/json' },
@@ -26391,8 +26449,8 @@ async function userCanAccessAgentWorkspaceConversation(env, conversationId, auth
 }
 
 function agentIdeWorkspaceStorageId(authUser, conversationId) {
-  const t = authUser?.tenant_id != null ? String(authUser.tenant_id).trim() : '_';
-  const u = authUser?.id != null ? String(authUser.id).trim() : '_';
+  const t = (authUser?.tenant_id != null && String(authUser.tenant_id).trim()) ? String(authUser.tenant_id).trim() : 'global';
+  const u = (authUser?.id != null && String(authUser.id).trim()) ? String(authUser.id).trim() : 'global';
   const c = String(conversationId).trim();
   return `ide_ws:${t}:${u}:${c}`;
 }

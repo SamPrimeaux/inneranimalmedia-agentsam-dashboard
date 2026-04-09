@@ -6291,7 +6291,6 @@ function insertAgentCommandAuditLog(env, {
 }) {
   if (!env?.DB || !commandKey) return;
   console.log('[cmd_audit] INSERT attempted', commandKey);
-  const id = 'cmdaudit_' + crypto.randomUUID().replace(/-/g, '').slice(0, 8);
   const targetSlice = String(target ?? '').slice(0, 500);
   const resultStr = success ? 'success' : 'error';
   const resultJson = JSON.stringify({ output_length: output != null ? String(output).length : 0 }).slice(0, 2000);
@@ -6339,7 +6338,8 @@ function appendMcpAuditLogAndStats(env, {
     respLen = 0;
   }
   const argsSlice = JSON.stringify(toolInput ?? {}).slice(0, 500);
-  console.log('[mcp_audit_log] INSERT attempted');
+
+  // 1. Audit Log
   env.DB.prepare(
     `INSERT INTO mcp_audit_log
       (tenant_id, session_id, tool_name, tool_category,
@@ -6358,7 +6358,8 @@ function appendMcpAuditLogAndStats(env, {
     errStr,
     costUsd ?? 0
   ).run().catch((e) => console.warn('[mcp_audit_log] insert failed', e?.message ?? e));
-  console.log('[mcp_tool_call_stats] UPSERT attempted');
+
+  // 2. Tool Stats (Rollup)
   env.DB.prepare(
     `INSERT INTO mcp_tool_call_stats
       (date, tool_name, tool_category, tenant_id,
@@ -6368,14 +6369,141 @@ function appendMcpAuditLogAndStats(env, {
        call_count = call_count + 1,
        success_count = success_count + excluded.success_count,
        failure_count = failure_count + excluded.failure_count,
-       updated_at = datetime('now')`
-  ).bind(
+       updated_at = unixepoch()
+    `).bind(
     toolName,
     toolCategory ?? 'builtin',
     tid,
     ok ? 1 : 0,
     ok ? 0 : 1
   ).run().catch((e) => console.warn('[mcp_tool_call_stats] upsert failed', e?.message ?? e));
+
+  // 3. Phase 3: "Wired" Performance Improvement Loop
+  try {
+    const commandId = getCommandIdFromToolCall(toolName, toolInput);
+    if (commandId) {
+      updateExecutionPerformanceMetrics(env, commandId, ok, durationMs, costUsd).catch((e) => console.warn('[performance_metrics] update failed', e?.message ?? e));
+    }
+  } catch (_) {}
+}
+
+/** 
+ * Maps tool calls to the 106 granular command_id entries in execution_performance_metrics.
+ */
+function getCommandIdFromToolCall(toolName, input) {
+  if (!toolName) return null;
+  const inp = input || {};
+  
+  if (toolName === 'terminal_execute') {
+    const cmd = String(inp.command || '').trim().toLowerCase();
+    if (cmd.startsWith('ls')) return 'cmd-bash-ls';
+    if (cmd.startsWith('cd')) return 'cmd-bash-cd';
+    if (cmd.includes('git')) return 'cmd-bash-git-status';
+    if (cmd.includes('grep')) return 'cmd-bash-grep';
+    if (cmd.includes('deploy')) return 'cmd-deploy-worker';
+    if (cmd.includes('d1 execute')) return 'cmd_d1_query';
+    if (cmd.includes('wrangler')) return 'cmd_worker_audit';
+    if (cmd.includes('tail')) return 'cmd_tail';
+    if (cmd.includes('game') || cmd.includes('terminal_game')) return 'cmd_terminal_game';
+  }
+  
+  if (toolName === 'worker_deploy' || toolName === 'deploy_worker') return 'cmd_deploy_worker';
+  if (toolName === 'd1_query' || toolName === 'd1_write') return 'cmd_d1_query';
+  if (toolName === 'r2_read' || toolName === 'r2_write' || toolName === 'r2_upload') return 'cmd_upload_r2';
+  if (toolName === 'generate_daily_summary_email') return 'cmd_daily_summary';
+  if (toolName === 'social_card_generate') return 'cmd_social_card';
+  
+  // Generic Mapping logic
+  if (toolName.startsWith('cmd_') || toolName.startsWith('cmd-')) return toolName;
+  
+  return null;
+}
+
+/**
+ * Real-time update for the self-improvement loop.
+ * Calculates moving average for latency and increments counts.
+ */
+async function updateExecutionPerformanceMetrics(env, commandId, success, durationMs, costUsd) {
+  if (!env?.DB || !commandId) return;
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const costCents = Math.floor((Number(costUsd) || 0) * 100);
+  const lat = Math.floor(Number(durationMs) || 0);
+
+  try {
+    const row = await env.DB.prepare('SELECT execution_count, avg_duration_ms FROM execution_performance_metrics WHERE command_id = ?').bind(commandId).first();
+    let newAvg = lat;
+    let count = 0;
+    if (row) {
+      count = Number(row.execution_count) || 0;
+      const oldAvg = Number(row.avg_duration_ms) || 0;
+      newAvg = Math.floor((oldAvg * count + lat) / (count + 1));
+    }
+    await env.DB.prepare(`
+      INSERT INTO execution_performance_metrics 
+      (command_id, metric_date, execution_count, success_count, failure_count, avg_duration_ms, total_cost_cents, last_computed_at)
+      VALUES (?, ?, 1, ?, ?, ?, ?, unixepoch())
+      ON CONFLICT(command_id) DO UPDATE SET
+        execution_count = execution_count + 1,
+        success_count = success_count + excluded.success_count,
+        failure_count = failure_count + excluded.failure_count,
+        avg_duration_ms = ?,
+        total_cost_cents = total_cost_cents + excluded.total_cost_cents,
+        last_computed_at = unixepoch()
+    `).bind(commandId, dateStr, success ? 1 : 0, success ? 0 : 1, newAvg, costCents, newAvg).run();
+  } catch (e) {
+    console.warn('[updateExecutionPerformanceMetrics]', e?.message ?? e);
+  }
+}
+
+/**
+ * Resolves the next child steps in a DAG from execution_dependency_graph.
+ * If expression is provided, fulfills it using context values.
+ */
+async function handleExecutionDependencyFlow(env, parentExecutionId, context = {}) {
+  if (!env?.DB || !parentExecutionId) return { nextSteps: [] };
+  try {
+    const results = await env.DB.prepare(`
+      SELECT child_execution_id, condition_expression, compensation_execution_id
+      FROM execution_dependency_graph
+      WHERE parent_execution_id = ?
+    `).bind(parentExecutionId).all();
+    
+    const nextSteps = [];
+    const rows = results.results || [];
+    for (const row of rows) {
+      let conditionMet = true;
+      if (row.condition_expression) {
+        conditionMet = evalDependencyCondition(row.condition_expression, context);
+      }
+      if (conditionMet) {
+        nextSteps.push({
+          id: row.child_execution_id,
+          compensationId: row.compensation_execution_id
+        });
+      }
+    }
+    return { nextSteps };
+  } catch (e) {
+    console.warn('[handleExecutionDependencyFlow]', e?.message ?? e);
+    return { nextSteps: [] };
+  }
+}
+
+function evalDependencyCondition(expression, context) {
+  if (!expression) return true;
+  // Simple "status=success" or "count>0" evaluator
+  try {
+    const [key, op, val] = expression.split(/([=><!])/).filter(s => s.trim());
+    const ctxVal = String(context[key.trim()] ?? '');
+    const checkVal = (val || '').trim();
+    if (op === '=') return ctxVal === checkVal;
+    if (op === '!') return ctxVal !== checkVal;
+    if (op === '>') return Number(ctxVal) > Number(checkVal);
+    if (op === '<') return Number(ctxVal) < Number(checkVal);
+    return true;
+  } catch (_) {
+    return true;
+  }
 }
 
 /** Fire-and-forget skill invocation rows when chat body includes skill_id / skill_ids. */
@@ -12108,9 +12236,6 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
-  // Phase 0: Preflight Classification
-  const preflight = await preflightClassify(message, env);
-  const { tier, intent, needsTools } = preflight;
 
   let modelRatesMap = {};
   try {
@@ -24420,7 +24545,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       } : {};
       // display:omitted skips streaming thinking tokens → faster first text token for pipelines
       if (_isAdaptive && !wantStream) _thinkingConfig.thinking = { type: 'adaptive', display: 'omitted' };
-      const messages = [...apiMessages];
+      let messages = [...apiMessages];
       if (messages.length >= 2) {
         // Cache the last 2 turns (usually the large tool results)
         for (let i = messages.length - 2; i < messages.length; i++) {

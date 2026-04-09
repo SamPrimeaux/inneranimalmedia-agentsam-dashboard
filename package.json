@@ -40,7 +40,7 @@
     "acorn-jsx": "^5.3.2",
     "acorn-walk": "^8.3.5",
     "chrome-devtools-mcp": "^0.21.0",
-    "wrangler": "^4.80.0"
+    "wrangler": "^4.81.0"
   },
   "type": "module"
 }

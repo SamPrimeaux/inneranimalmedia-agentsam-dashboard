@@ -16478,6 +16478,16 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       return jsonResponse(row);
     }
 
+    if (pathLower.startsWith('/api/agent/playwright/jobs/') && method === 'DELETE') {
+      const jobId = pathLower.split('/').pop();
+      const existing = await env.DB.prepare(
+        'SELECT id FROM playwright_jobs WHERE id = ?'
+      ).bind(jobId).first();
+      if (!existing) return jsonResponse({ error: 'Job not found' }, 404);
+      await env.DB.prepare('DELETE FROM playwright_jobs WHERE id = ?').bind(jobId).run();
+      return jsonResponse({ success: true, deleted: jobId });
+    }
+
     if (pathLower === '/api/agent/mcp') {
       const { results } = await env.DB.prepare(
         "SELECT id, service_name, service_type, endpoint_url, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"
@@ -21063,6 +21073,48 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     const out = { result: results || [] };
     await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(out.result), error: null, serviceName: 'builtin' });
     return out;
+  }
+
+  if (tool_name === 'browser_search') {
+    const query = params.query || params.q;
+    if (!query) return { error: 'query parameter required' };
+    const searchUrl = `https://www.perplexity.ai/search?q=${encodeURIComponent(query)}`;
+    const jobId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const metadata = JSON.stringify({
+      triggered_by: 'browser_search',
+      query,
+      search_engine: 'perplexity'
+    });
+    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) || (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'tenant_sam_primeaux';
+    
+    await env.DB.prepare(`
+        INSERT INTO playwright_jobs
+          (id, job_type, url, status, agent_session_id, input_params_json,
+           output_type, metadata, triggered_by, tenant_id, created_at)
+        VALUES (?, 'screenshot', ?, 'pending', ?, '{}', 'image', ?, 'agent_sam', ?, ?)
+      `).bind(
+      jobId,
+      searchUrl,
+      conversationId || null,
+      metadata,
+      tid,
+      now
+    ).run();
+
+    if (env.MY_QUEUE) {
+      await env.MY_QUEUE.send({ jobId, url: searchUrl, jobType: 'screenshot' });
+    }
+
+    const outResult = {
+      job_id: jobId,
+      status: 'pending',
+      query,
+      search_url: searchUrl,
+      message: `Searching for "${query}". Screenshot job queued`
+    };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(outResult), error: null, serviceName: 'builtin' });
+    return { result: outResult };
   }
 
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Globe, Play, RefreshCw, CheckCircle2, Circle, Clock, AlertCircle, ExternalLink, Search, Filter } from 'lucide-react';
-import { DataGrid } from './DataGrid';
+import { Globe, Play, RefreshCw, CheckCircle2, Clock, AlertCircle, ExternalLink, Search, Trash2 } from 'lucide-react';
 
 interface PlaywrightJob {
     id: string;
@@ -12,6 +11,7 @@ interface PlaywrightJob {
     created_at: string;
     completed_at?: string;
     metadata?: string;
+    output_type?: string;
 }
 
 export const PlaywrightConsole: React.FC = () => {
@@ -29,7 +29,7 @@ export const PlaywrightConsole: React.FC = () => {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({
-                    sql: `SELECT id, job_type, url, status, result_url, error, created_at, completed_at
+                    sql: `SELECT id, job_type, url, status, result_url, error, created_at, completed_at, metadata, output_type
                           FROM playwright_jobs ORDER BY rowid DESC LIMIT 50`,
                 }),
             });
@@ -52,6 +52,7 @@ export const PlaywrightConsole: React.FC = () => {
                     created_at: String(r.created_at || new Date().toISOString()),
                     completed_at: r.completed_at != null ? String(r.completed_at) : undefined,
                     metadata: r.metadata != null ? String(r.metadata) : undefined,
+                    output_type: r.output_type != null ? String(r.output_type) : undefined,
                 };
             });
             setJobs(mapped);
@@ -65,7 +66,7 @@ export const PlaywrightConsole: React.FC = () => {
 
     useEffect(() => {
         fetchJobs();
-        const interval = setInterval(fetchJobs, 10000); // Poll every 10s
+        const interval = setInterval(fetchJobs, 10000); 
         return () => clearInterval(interval);
     }, []);
 
@@ -75,18 +76,18 @@ export const PlaywrightConsole: React.FC = () => {
 
         setIsLaunching(true);
         try {
-            const res = await fetch('/api/playwright/screenshot', {
+            const res = await fetch('/api/agent/playwright', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({
                     url: targetUrl,
                     job_type: 'screenshot',
-                    triggered_by: 'meauxcad_ui',
+                    options: { triggered_by: 'meauxcad_ui' }
                 }),
             });
             const data = await res.json();
-            if (res.ok && (data.id || data.status)) {
+            if (res.ok && (data.id || data.jobId)) {
                 setTargetUrl('');
                 fetchJobs();
             }
@@ -94,6 +95,17 @@ export const PlaywrightConsole: React.FC = () => {
             console.error('Failed to launch job:', err);
         } finally {
             setIsLaunching(false);
+        }
+    };
+
+    const handleDeleteJob = async (jobId: string) => {
+        try {
+            const res = await fetch(`/api/agent/playwright/jobs/${jobId}`, { method: 'DELETE' });
+            if (res.ok) {
+                setJobs(prev => prev.filter(j => j.id !== jobId));
+            }
+        } catch (err) {
+            console.error('Delete failed:', err);
         }
     };
 
@@ -188,7 +200,16 @@ export const PlaywrightConsole: React.FC = () => {
                                              {getStatusIcon(job.status)}
                                              <span className="text-[10px] font-mono opacity-60 uppercase tracking-tighter">{job.job_type}</span>
                                          </div>
-                                         <span className="text-[10px] text-[var(--text-muted)]">{new Date(job.created_at).toLocaleString()}</span>
+                                         <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-[var(--text-muted)]">{new Date(job.created_at).toLocaleString()}</span>
+                                            <button
+                                                onClick={() => handleDeleteJob(job.id)}
+                                                title="Delete job"
+                                                className="text-[var(--text-muted)] hover:text-[var(--solar-red)] transition-colors"
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                         </div>
                                      </div>
                                      
                                      <div className="text-[13px] font-medium truncate mb-2 text-[var(--solar-cyan)] flex items-center gap-2">
@@ -197,6 +218,18 @@ export const PlaywrightConsole: React.FC = () => {
                                              <ExternalLink size={12} className="text-[var(--text-muted)]" />
                                          </a>
                                      </div>
+
+                                     {job.status === 'completed' && job.result_url && (job.job_type === 'screenshot' || job.output_type === 'image') && (
+                                        <div className="mt-2 mb-3 overflow-hidden rounded-md border border-[var(--border-subtle)]">
+                                            <img
+                                                src={job.result_url}
+                                                alt={`Screenshot of ${job.target_url}`}
+                                                className="w-full h-auto block"
+                                                loading="lazy"
+                                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                            />
+                                        </div>
+                                     )}
 
                                      {job.error && (
                                          <div className="mt-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-[11px] text-red-400 font-mono italic">
@@ -215,7 +248,7 @@ export const PlaywrightConsole: React.FC = () => {
                                                 rel="noreferrer"
                                                 className="text-[10px] font-bold text-[var(--solar-cyan)] hover:underline flex items-center gap-1"
                                              >
-                                                 VIEW ARTIFACT <ExternalLink size={10} />
+                                                 {job.job_type === 'screenshot' || job.output_type === 'image' ? 'VIEW SCREENSHOT' : 'VIEW ARTIFACT'} <ExternalLink size={10} />
                                              </a>
                                          )}
                                      </div>

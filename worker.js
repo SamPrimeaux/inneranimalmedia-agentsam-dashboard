@@ -16464,6 +16464,20 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       return jsonResponse({ jobId, status: 'pending' });
     }
 
+    if (pathLower === '/api/agent/playwright/jobs' && method === 'GET') {
+      const { results } = await env.DB.prepare(
+        "SELECT * FROM playwright_jobs ORDER BY created_at DESC LIMIT 50"
+      ).all();
+      return jsonResponse(results || []);
+    }
+
+    if (pathLower.startsWith('/api/agent/playwright/jobs/') && method === 'GET') {
+      const jobId = pathLower.split('/').pop();
+      const row = await env.DB.prepare("SELECT * FROM playwright_jobs WHERE id = ?").bind(jobId).first();
+      if (!row) return jsonResponse({ error: 'Job not found' }, 404);
+      return jsonResponse(row);
+    }
+
     if (pathLower === '/api/agent/mcp') {
       const { results } = await env.DB.prepare(
         "SELECT id, service_name, service_type, endpoint_url, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"
@@ -21010,6 +21024,45 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: errMsg, serviceName: 'pty_bridge' });
       return { error: errMsg };
     }
+  }
+
+  if (tool_name === 'playwright_job_create') {
+    const jobId = crypto.randomUUID();
+    const type = params.job_type || 'screenshot';
+    const url = params.url || '';
+    const meta = JSON.stringify(params.options || params.metadata || {});
+    await env.DB.prepare(
+      "INSERT INTO playwright_jobs (id, job_type, url, status, metadata, created_at) VALUES (?,?,?,'pending',?,CURRENT_TIMESTAMP)"
+    ).bind(jobId, type, url, meta).run();
+    if (env.MY_QUEUE) await env.MY_QUEUE.send({ jobId, job_type: type, url });
+    const out = { result: { jobId, status: 'pending' } };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(out.result), error: null, serviceName: 'builtin' });
+    return out;
+  }
+  if (tool_name === 'playwright_job_poll') {
+    const jobId = params.job_id || params.id;
+    if (!jobId) return { error: 'job_id required' };
+    const row = await env.DB.prepare("SELECT * FROM playwright_jobs WHERE id = ?").bind(jobId).first();
+    if (!row) return { error: `Job ${jobId} not found` };
+    const out = { result: row };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(out.result), error: null, serviceName: 'builtin' });
+    return out;
+  }
+  if (tool_name === 'playwright_job_list') {
+    const limit = Math.min(100, Number(params.limit) || 20);
+    const status = params.status;
+    let query = "SELECT * FROM playwright_jobs";
+    let qParams = [];
+    if (status) {
+      query += " WHERE status = ?";
+      qParams.push(status);
+    }
+    query += " ORDER BY created_at DESC LIMIT ?";
+    qParams.push(limit);
+    const { results } = await env.DB.prepare(query).bind(...qParams).all();
+    const out = { result: results || [] };
+    await rec({ conversationId, toolName: tool_name, toolCategory: 'browser', toolInput: params, result: JSON.stringify(out.result), error: null, serviceName: 'builtin' });
+    return out;
   }
 
   const toolRow = await env.DB.prepare('SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1').bind(tool_name).first();

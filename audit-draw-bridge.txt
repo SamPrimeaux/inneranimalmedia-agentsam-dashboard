@@ -1,9 +1,0 @@
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1493:          frame.contentWindow.postMessage(
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1506:    const onIamDrawMessage = (event) => {
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1514:      if (event.data.type === "draw_ready") {
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1519:          const drawFrame = document.getElementById('draw-panel-iframe');
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1522:              drawFrame.contentWindow?.postMessage(cmd, window.location.origin);
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1529:      if (event.data.type !== "iam_draw_request") return;
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1546:    window.addEventListener("message", onIamDrawMessage);
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/AgentDashboard.jsx:1557:      window.removeEventListener("message", onIamDrawMessage);
-/Users/samprimeaux/Downloads/march1st-inneranimalmedia/agent-dashboard/src/FloatingPreviewPanel.jsx:1349:                id="draw-panel-iframe"

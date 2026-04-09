@@ -4,6 +4,9 @@ import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
 
 // Integrations
 import { chatWithToolsAnthropic } from '../integrations/anthropic.js';
+import { chatWithToolsOpenAI } from '../integrations/openai.js';
+import { chatWithToolsGemini } from '../integrations/gemini.js';
+import { chatWithToolsVertex } from '../integrations/vertex.js';
 import { handleCanvasApi } from '../integrations/canvas.js';
 import { handleHyperdriveApi } from '../integrations/hyperdrive.js';
 import { handleBrowserRequest, handlePlaywrightJobApi } from '../integrations/playwright.js';
@@ -160,18 +163,26 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
-    // ── /api/chat (Anthropic Engine) ─────────────────────────────────────────
+    // ── /api/chat (Multi-Model AI Engine) ───────────────────────────────────
     if (pathLower === '/api/chat') {
         try {
             const body = await request.json();
-            return chatWithToolsAnthropic(env, request, {
-                modelKey: body.model || 'claude-3-5-sonnet-20240620',
+            const provider = body.provider || 'anthropic';
+            const params = {
+                modelKey: body.model,
                 systemPrompt: body.system || 'You are Agent Sam.',
                 messages: body.messages || [],
                 tools: body.tools || [],
                 agentId: body.agent_id,
                 conversationId: body.conversation_id
-            });
+            };
+
+            if (provider === 'openai') return chatWithToolsOpenAI(env, request, params);
+            if (provider === 'google' || provider === 'gemini') return chatWithToolsGemini(env, request, params);
+            if (provider === 'vertex') return chatWithToolsVertex(env, request, params);
+            
+            // Default to Anthropic
+            return chatWithToolsAnthropic(env, request, params);
         } catch (e) {
             return jsonResponse({ error: 'Chat failed', detail: e.message }, 500);
         }

@@ -57,3 +57,9 @@ agentsam-clean/
 migrations/._*
 **/.DS_Store
 ._*
+# macOS metadata
+._*
+.DS_Store
+# macOS metadata
+._*
+.DS_Store

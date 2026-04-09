@@ -1,0 +1,2 @@
+# Prevent macOS metadata files from being tracked
+._* export-ignore

@@ -3242,6 +3242,7 @@ const worker = {
         } catch (_) { }
         try {
           const keys = await writeKnowledgePostDeploy(env, body);
+          await env.DB.prepare("DELETE FROM ai_compiled_context_cache WHERE context_type = 'sse_system'").run().catch(() => {});
           return jsonResponse({ ok: true, keys });
         } catch (e) {
           console.error('[post-deploy]', e?.message ?? e);
@@ -11493,7 +11494,7 @@ async function streamGoogle(env, systemWithBlurb, apiMessages, modelRow, images,
  * Cloudflare Workers AI streaming: env.AI.run(model_key, { messages, stream: true }).
  * Same SSE contract; cost_usd: 0 (neurons). Handle all chunk shapes; null-coerce before D1.
  */
-async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, agentsamAgentRunId = null, routingOpts = null) {
+async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conversationId, agent_id, ctx, agentsamAgentRunId = null, routingOpts = null, toolDefinitions = []) {
   const messages = [{ role: 'system', content: systemWithBlurb }, ...apiMessages];
   const modelKey = (modelRow && modelRow.model_key) ? modelRow.model_key : '@cf/meta/llama-3.1-8b-instruct';
   const inputCharCount = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
@@ -11508,9 +11509,21 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
     try {
       const WAI_TIMEOUT_MS = 25000;
       let result;
+      const modelSupportsTools = modelRow?.supports_tools === 1;
+      const toolsToSend = modelSupportsTools && toolDefinitions.length > 0
+        ? toolDefinitions.map(t => ({
+            name: t.tool_name,
+            description: t.description || t.tool_name,
+            parameters: t.input_schema || { type: 'object', properties: {} },
+          }))
+        : [];
+
+      const aiInput = { messages, stream: true };
+      if (toolsToSend.length > 0) aiInput.tools = toolsToSend;
+
       try {
         result = await Promise.race([
-          env.AI.run(modelKey, { messages }),
+          env.AI.run(modelKey, aiInput),
           new Promise((_, rej) => setTimeout(() => rej(new Error('Workers AI timeout after 25s')), WAI_TIMEOUT_MS))
         ]);
       } catch (e) {
@@ -11523,7 +11536,18 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
         return;
       }
 
-      // Non-streaming: result is { response: string } or { text: string }
+      // Handle tool_calls
+      if (result?.tool_calls?.length > 0) {
+        for (const tc of result.tool_calls) {
+          await emit({ type: 'tool_use', name: tc.name, input: tc.arguments || {} });
+          const toolResult = await invokeMcpToolFromChat(env, tc.name, tc.arguments || {}, {
+            agent_id, conversationId, skipApprovalCheck: false, suppressTelemetry: false
+          }).catch(e => ({ error: e?.message || String(e) }));
+          await emit({ type: 'tool_result', name: tc.name, result: toolResult?.result || toolResult?.error || '' });
+        }
+      }
+
+      // If streaming, handled via chunks; otherwise non-streaming
       const fullText = (typeof result.response === 'string' ? result.response : null)
         ?? (typeof result.text === 'string' ? result.text : null)
         ?? (result.choices?.[0]?.message?.content != null ? String(result.choices[0].message.content) : '')
@@ -11767,9 +11791,10 @@ function accumulateUsageFromJson(apiPlatform, j, acc) {
 async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, conversationId, agentsamRunId = null, telemetryTenantId = null, modelRates = null, agent_id = null, ctx = null, routingOpts = null, chatPersistenceUserId = null) {
   const reader = branch2.getReader();
   const dec = new TextDecoder();
-  let buf = '';
-  const acc = { in: 0, out: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
+  let fullText = '';
   try {
+    const reader = branch2.getReader();
+    const dec = new TextDecoder();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -11797,7 +11822,6 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   } finally {
     reader.releaseLock();
   }
-  let fullText = '';
   let inputTok = acc.in;
   let outputTok = acc.out;
   let cacheReadTok = acc.cacheRead || 0;
@@ -12037,13 +12061,13 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
              modes_json IS NULL OR TRIM(modes_json) = ''
              OR modes_json LIKE ('%' || '"' || ? || '"' || '%')
            )
-         ORDER BY tool_category, tool_name`
+         ORDER BY sort_priority ASC, tool_category, tool_name`
         )
           .bind(mode)
           .all(),
       ]);
 
-      const MCP_SSE_CAP = 40;
+      const MCP_SSE_CAP = 64;
       const mcpAll = mcpToolRows.results || [];
       const mcpOverCap = mcpAll.length > MCP_SSE_CAP;
       const mcpSlice = mcpOverCap ? mcpAll.slice(0, MCP_SSE_CAP) : mcpAll;
@@ -12251,13 +12275,17 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         if (ak) {
           toolResp = await chatWithToolsAnthropic(
             env,
+            request,
+            apiPlatform,
+            modelKey,
             chatSseSystemPrompt,
             apiMessagesForTools,
+            lastLoadedToolsSse,
             modelRow,
-            conversationId,
             agentAiIdSse,
+            conversationId,
+            chatAttachments,
             ctx,
-            sseToolOpts,
           );
         }
       } else if (apiPlatform === 'openai') {
@@ -12302,60 +12330,23 @@ You can delegate tasks directly to Claude Code running on the host machine by st
   }
 
   if (apiPlatform === 'anthropic_api') {
-    const key = secretFn('ANTHROPIC_API_KEY') ?? env.ANTHROPIC_API_KEY;
-    if (!key) return jsonResponse({ error: 'ANTHROPIC_API_KEY not configured' }, 503);
-    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelKey,
-        max_tokens: 8192,
-        stream: true,
-        system: chatSseSystemPrompt,
-        tools: (lastLoadedToolsSse || []).map(t => {
-          let rawSchema = {};
-          try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
-          let input_schema;
-          if (rawSchema.type === 'object' && rawSchema.properties !== undefined) {
-            input_schema = rawSchema;
-          } else {
-            const required = Object.entries(rawSchema).filter(([,v]) => v && v.required).map(([k]) => k);
-            input_schema = { type: 'object', properties: rawSchema, required };
-          }
-          return {
-            name: t.tool_name,
-            description: (t.description || t.tool_name).slice(0, 500),
-            input_schema,
-          };
-        }),
-        tool_choice: { type: "auto" },
-        messages: [
-          {
-            role: 'user',
-            content: hasMedia ? buildAnthropicContent(message, jsonImages, chatAttachments) : message,
-          },
-        ],
-      }),
-    });
-    if (!upstream.ok) return mkUpstreamError(upstream, 'anthropic');
-    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
+    return chatWithToolsAnthropic(
+      env,
+      request,
+      apiPlatform,
+      modelKey,
+      chatSseSystemPrompt,
+      parsed.message ? [{ role: 'user', content: parsed.message }] : [], // Use parsed.message if available
+      lastLoadedToolsSse,
+      modelRow,
+      agentAiIdSse,
+      conversationId,
+      chatAttachments,
+      ctx,
     );
-    const [branch1, branch2] = upstream.body.tee();
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap, agentAiIdSse, ctx, { tenantId: tenantIdChatSse }, ingestBypass ? null : chatSseSession?.user_id ?? null));
-    } else {
-      await runSseTelemetrySideBranch('anthropic_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap, agentAiIdSse, ctx, { tenantId: tenantIdChatSse }, ingestBypass ? null : chatSseSession?.user_id ?? null);
-    }
-    return new Response(branch1, { headers: sseResponseHeaders() });
   }
 
-  if (apiPlatform === 'gemini_api') {
+  if (apiPlatform === 'gemini_api' || provider === 'gemini') {
     const key = secretFn('GOOGLE_AI_API_KEY') ?? env.GOOGLE_AI_API_KEY;
     if (!key) return jsonResponse({ error: 'GOOGLE_AI_API_KEY not configured' }, 503);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelKey)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
@@ -12379,9 +12370,9 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     );
     const [branch1, branch2] = upstream.body.tee();
     if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
+      ctx.waitUntil(runSseTelemetrySideBranch(apiPlatform === 'gemini_api' || provider === 'gemini' ? 'gemini_api' : 'google', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
     } else {
-      await runSseTelemetrySideBranch('gemini_api', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
+      await runSseTelemetrySideBranch(apiPlatform === 'gemini_api' || provider === 'gemini' ? 'gemini_api' : 'google', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
     }
     return new Response(branch1, { headers: sseResponseHeaders() });
   }
@@ -15161,7 +15152,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }
       try {
         const wxQ = await env.DB.prepare(
-          `SELECT id, path, method, status_code, error_message, created_at
+          `SELECT rowid as id, path, method, status_code, error_message, created_at
            FROM worker_analytics_errors
            ORDER BY created_at DESC
            LIMIT 20`
@@ -24013,9 +24004,9 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
 }
 
 /** Anthropic chat with tools; runs tool_use loop. When opts.stream is true, returns SSE stream with tool_start/tool_result/text/done. */
-async function chatWithToolsAnthropic(env, systemWithBlurb, apiMessages, model, conversationId, agent_id, ctx, opts = {}, preFilteredTools = null) {
-  const wantStream = opts.stream === true;
-  const mode = opts.mode || 'agent';
+async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest, executionCtx) {
+  const wantStream = true; // Always stream for SSE
+  const mode = 'agent';
 
   let resolvedAllowedToolGlobs = opts.allowed_tool_globs;
   if (

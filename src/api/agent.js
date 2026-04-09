@@ -61,25 +61,72 @@ Context from memory:\n${contextText}\n\nAlways provide efficient, production-rea
   // 2. Initial Chat Request (Streaming)
   try {
     const stream = await chatWithAnthropic({
-      messages: [{ role: 'user', content: message }],
-      tools: [], // Tool discovery logic from monolith can be ported here next
+      messages: body.messages || [{ role: 'user', content: message }],
+      tools: body.tools || [], 
       env,
       options: {
         model: modelKey,
         systemPrompt,
-        thinkingBudget: body.thinkingBudget
+        thinking: body.thinking,
+        thinkingBudget: body.thinkingBudget,
+        tool_choice: body.tool_choice
       }
     });
 
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
+        let lastUsage = null;
+        let lastSignature = null;
+
         for await (const chunk of stream) {
-          if (chunk.type === 'content_block_delta') {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', text: chunk.delta.text })}\n\n`));
+          // Handle standardized content blocks
+          if (chunk.type === 'content_block_start') {
+            const block = chunk.content_block;
+            if (block.type === 'thinking') {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking_start' })}\n\n`));
+            }
           }
+
+          if (chunk.type === 'content_block_delta') {
+            const delta = chunk.delta;
+            if (delta.type === 'text_delta') {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', text: delta.text })}\n\n`));
+            } else if (delta.type === 'thinking_delta') {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'thinking', text: delta.thinking })}\n\n`));
+            } else if (delta.type === 'signature_delta') {
+              lastSignature = delta.signature;
+            }
+          }
+
+          // Handle message-level metadata and usage
+          if (chunk.type === 'message_start') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'id', id: chunk.message.id })}\n\n`));
+          }
+
+          if (chunk.type === 'message_delta') {
+            if (chunk.usage) lastUsage = chunk.usage;
+            if (chunk.delta.stop_reason) {
+               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'stop', reason: chunk.delta.stop_reason })}\n\n`));
+            }
+          }
+
           if (chunk.type === 'message_stop') {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`));
+            // Final usage sync to Telemetry
+            if (lastUsage) {
+              ctx.waitUntil(writeTelemetry(env, {
+                sessionId: body.sessionId || body.conversationId,
+                tenantId: session?.tenant_id,
+                provider: 'anthropic',
+                model: modelKey,
+                inputTokens: lastUsage.input_tokens || 0,
+                outputTokens: lastUsage.output_tokens || 0,
+                cacheReadTokens: lastUsage.cache_read_input_tokens || 0,
+                cacheWriteTokens: lastUsage.cache_creation_input_tokens || 0,
+                success: true
+              }));
+            }
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', signature: lastSignature })}\n\n`));
           }
         }
         controller.close();

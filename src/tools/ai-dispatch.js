@@ -15,6 +15,7 @@ import { handlers as agentHandlers } from './builtin/agent.js';
 import { handlers as workflowHandlers } from './builtin/workflow.js';
 import { handlers as anthropicCliHandlers } from './builtin/anthropic-cli.js';
 import { handlers as anthropicBatchHandlers } from './builtin/anthropic-batch.js';
+import { getComputerUseTools, specializedSchemas } from './builtin/computer-use.js';
 
 /**
  * Universal Tool Dispatcher (Omni-Sam v2.0).
@@ -96,9 +97,10 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName.startsWith('agentsam_'):
             return await agentHandlers[toolName]?.(params, env);
 
-        // ── CATEGORY: terminal / execution (1 Tool) ──────────────────────
+        // ── CATEGORY: terminal / execution (3 Tools) ──────────────────────
         case toolName === 'terminal_execute':
         case toolName === 'run_command':
+        case toolName === 'bash':
             return await termHandlers.run_command?.(params, env);
 
         // ── CATEGORY: intelligence / llm ops (6 Tools) ──────────────────

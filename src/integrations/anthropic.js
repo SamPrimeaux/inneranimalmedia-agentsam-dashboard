@@ -30,6 +30,7 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
   
   if (features.prompt_caching) betas.push('prompt-caching-2024-07-31');
   if (features.thinking) betas.push('thinking-2024-10-22');
+  if (options.thinking?.type === 'enabled' || options.thinkingBudget) betas.push('extended-thinking-2025-01-24');
 
   const streamParams = {
     model: modelKey,
@@ -37,26 +38,32 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
     system: options.systemPrompt || 'You are Agent Sam, a high-performance coding assistant.',
     messages: messages.map(m => ({
       role: m.role,
-      content: m.content
+      content: Array.isArray(m.content) ? m.content : m.content
     })).filter(m => m.role !== 'system'),
     tools: tools.map(t => ({
       name: t.name,
       description: t.description,
-      input_schema: t.parameters
+      input_schema: t.parameters || t.input_schema,
+      cache_control: t.cache_control || undefined,
+      strict: t.strict || undefined
     })),
+    tool_choice: options.tool_choice || undefined,
     stream: true,
     betas: betas.length > 0 ? betas : undefined
   };
 
-  // Extended Thinking Budget (Dynamic for Opus/Sonnet 4.6)
-  if (features.thinking && options.thinkingBudget) {
-    streamParams.thinking = { type: 'enabled', budget_tokens: options.thinkingBudget };
+  // Advanced ThinkingConfigParam (Dynamic logic)
+  if (options.thinking) {
+    streamParams.thinking = options.thinking;
+  } else if (features.thinking && options.thinkingBudget) {
+    streamParams.thinking = { 
+      type: 'enabled', 
+      budget_tokens: Number(options.thinkingBudget) 
+    };
   }
 
   // Use the standard Message creation stream
   const response = await client.messages.create(streamParams);
-
-  // Return the async iterable stream for the Agent Sam Reasoning Loop
   return response;
 }
 

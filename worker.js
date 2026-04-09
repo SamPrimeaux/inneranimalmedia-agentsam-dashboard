@@ -20968,20 +20968,22 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
   }
 
   if (tool_name.startsWith('fs_')) {
-    const ptyToken = (env.PTY_AUTH_TOKEN || env.TERMINAL_SECRET || '').trim();
+    const ptyToken = (env.TERMINAL_SECRET || '').trim();
     if (!ptyToken) {
-      await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: 'PTY_AUTH_TOKEN not configured', serviceName: 'pty_bridge' });
-      return { error: 'PTY_AUTH_TOKEN not configured on worker' };
+      await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: 'TERMINAL_SECRET not configured', serviceName: 'pty_bridge' });
+      return { error: 'TERMINAL_SECRET not configured on worker' };
     }
-    const ptyBase = (env.TERMINAL_WS_URL || 'https://terminal.inneranimalmedia.com').replace(/^ws/, 'http');
-    const bridgeUrl = new URL('/mcp/filesystem', ptyBase).toString();
+    const terminalBase = (env.TERMINAL_WS_URL || '')
+      .replace('wss://', 'https://')
+      .replace('ws://', 'http://');
+    const bridgeUrl = `${terminalBase}/mcp/filesystem`;
 
     try {
       const ptyRest0 = Date.now();
       const res = await fetch(bridgeUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${ptyToken}`,
+          'x-pty-auth': ptyToken,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({

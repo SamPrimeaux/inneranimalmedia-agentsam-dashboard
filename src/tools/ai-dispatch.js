@@ -1,6 +1,6 @@
-import { workspaceReadFile, workspaceListFiles, workspaceSearch } from './fs.js';
-import { d1Query, d1BatchWrite } from './db.js';
-import { terminalExecute } from './terminal.js';
+import { handlers as fsHandlers } from './fs.js';
+import { handlers as dbHandlers } from './db.js';
+import { handlers as termHandlers } from './terminal.js';
 
 // Builtin Imports
 import { searchWeb, a11yAuditWebpage } from './builtin/web.js';
@@ -18,16 +18,16 @@ export async function runBuiltinTool(env, toolName, params) {
 
     switch (toolName) {
         // ── Filesystem ───────────────────────────────────────────────────────
-        case 'workspace_read_file': return await workspaceReadFile(env, params);
-        case 'workspace_list_files': return await workspaceListFiles(env, params);
-        case 'workspace_search': return await workspaceSearch(env, params);
+        case 'list_dir': return await fsHandlers.list_dir(params, env);
+        case 'read_file': return await fsHandlers.read_file(params, env);
+        case 'write_file': return await fsHandlers.write_file(params, env);
 
         // ── Database ─────────────────────────────────────────────────────────
-        case 'd1_query': return await d1Query(env, params);
-        case 'd1_batch_write': return await d1BatchWrite(env, params);
+        case 'd1_query': return await dbHandlers.d1_query(params, env);
+        case 'd1_batch_write': return await dbHandlers.d1_batch_write(params, env);
 
         // ── Terminal ─────────────────────────────────────────────────────────
-        case 'terminal_execute': return await terminalExecute(env, params);
+        case 'run_command': return await termHandlers.run_command(params, env);
 
         // ── Web ──────────────────────────────────────────────────────────────
         case 'web_search': return await searchWeb(env, params);

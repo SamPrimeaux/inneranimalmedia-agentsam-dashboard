@@ -293,6 +293,7 @@ export const LocalExplorer: React.FC<{
             setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: rows }));
             setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: prefs }));
         } catch (e) {
+            console.error('[LocalExplorer] R2 list fetch failed:', e);
             setR2Err(e instanceof Error ? e.message : 'R2 list failed');
             setR2ObjectsByBucket((prev) => ({ ...prev, [bucket]: [] }));
             setR2PrefixesByBucket((prev) => ({ ...prev, [bucket]: [] }));

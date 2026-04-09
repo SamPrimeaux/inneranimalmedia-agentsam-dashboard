@@ -140,7 +140,8 @@
     "GITHUB_CLIENT_ID": "Ov23li6BZYxjVtGUWibX",
     "GOOGLE_CLIENT_ID": "427617292678-gf3u47lpf876q7miq31hel2ms6tcr2f8.apps.googleusercontent.com",
     "TENANT_ID": "tenant_sam_primeaux",
-    "SANDBOX_SIGNIN_FALLBACK_URL": "https://pub-0d103dec19f84813ab2d58b17153a95f.r2.dev/static/auth-signin.html"
+    "SANDBOX_SIGNIN_FALLBACK_URL": "https://pub-0d103dec19f84813ab2d58b17153a95f.r2.dev/static/auth-signin.html",
+    "WORKSPACE_ID": "ws_sandbox"
   },
   "observability": {
     "enabled": true,

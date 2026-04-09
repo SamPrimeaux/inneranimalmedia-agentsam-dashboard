@@ -718,10 +718,10 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         allowTransparency: true, scrollback: 5000,
       });
 
+      term.open(terminalRef.current);
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
-      term.open(terminalRef.current);
-      setTimeout(() => fitAddon.fit(), 150);
+      fitAddon.fit();
 
       // Intercept `?` → open AI panel instead of sending to PTY
       term.onData(data => {

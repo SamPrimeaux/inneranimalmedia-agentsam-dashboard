@@ -274,13 +274,13 @@ export const UnifiedSearchBar: React.FC<{
     typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent || navigator.platform || '');
 
   return (
-    <>
+    <div className="nav-search-container w-full max-w-lg hidden lg:block">
       <button
         type="button"
         title="Unified search (Cmd+K)"
         aria-label="Open unified search"
-        onClick={() => setOpen(true)}
-        className="hidden lg:flex flex-col items-stretch min-w-0 max-w-lg flex-1 px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
+        onClick={() => setOpen(o => !o)}
+        className="flex flex-col items-stretch w-full px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
       >
         <div className="flex items-center gap-2 min-w-0">
           <Search size={14} className="shrink-0 opacity-70 text-[var(--text-muted)]" />
@@ -292,37 +292,11 @@ export const UnifiedSearchBar: React.FC<{
             {isMac ? 'Cmd' : 'Ctrl'}+K
           </kbd>
         </div>
-        <div className="pl-[22px] text-[10px] text-[var(--text-muted)] truncate opacity-90">
-          Tables · SQL history · snippets · chats · deploys · knowledge
-        </div>
       </button>
 
-      <button
-        type="button"
-        title="Unified search"
-        aria-label="Open unified search"
-        onClick={() => setOpen(true)}
-        className="lg:hidden p-2 rounded-md border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
-      >
-        <Command size={18} strokeWidth={1.75} />
-      </button>
-
-      {open ? (
-        <div
-          className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] px-3 bg-black/50 backdrop-blur-sm"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
-        >
-          <div
-            className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden flex flex-col max-h-[min(72vh,560px)]"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+      {open && (
+        <div className="nav-dropdown rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden flex flex-col max-h-[min(65vh,500px)]">
             <div className="px-3 py-2 border-b border-[var(--border-subtle)] space-y-1">
-              <div className="text-[10px] text-[var(--text-muted)] truncate">
-                workspace: <span className="text-[var(--text-main)]">{workspaceLabel?.trim() || 'dashboard'}</span>
-              </div>
               <div className="flex items-center gap-2">
                 <Search size={16} className="text-[var(--text-muted)] shrink-0" />
                 <input
@@ -381,9 +355,8 @@ export const UnifiedSearchBar: React.FC<{
               <span>Enter to open</span>
               <span>Esc to close</span>
             </div>
-          </div>
         </div>
-      ) : null}
-    </>
+      )}
+    </div>
   );
 };

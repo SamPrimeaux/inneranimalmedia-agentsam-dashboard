@@ -3026,6 +3026,13 @@ const worker = {
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const host = request.headers.get('host') || '';
+    if (host === 'inneranimalmedia.meauxbility.workers.dev') {
+      return Response.redirect(`https://inneranimalmedia.com${url.pathname}${url.search}`, 301);
+    }
+    if (host === 'inneranimal-dashboard.meauxbility.workers.dev') {
+      return Response.redirect(`https://sandbox.inneranimalmedia.com${url.pathname}${url.search}`, 301);
+    }
 
     // ── Task 12: MeauxCAD D1 Proxy ─────────────────────────────────────────────
     if (url.pathname.startsWith('/api/meauxcad/d1/')) {
@@ -5936,7 +5943,7 @@ const worker = {
         const pageName = dashboardPagesMatch[1];
         const fragmentKey = `static/dashboard/pages/${pageName}`;
         const obj = await env.DASHBOARD.get(fragmentKey);
-        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true });
+        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
       }
 
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
@@ -5945,7 +5952,7 @@ const worker = {
         const key = `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
-        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true });
+        if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
         return notFound(path);
       }
 
@@ -6097,11 +6104,17 @@ const worker = {
   },
 };
 
-async function respondWithDashboardHtml(obj, url, options = {}) {
+async function respondWithDashboardHtml(obj, url, options = {}, env = {}) {
   const isEmbedded = url.searchParams.get('embedded') === '1';
   let html = await obj.text();
   // Never load shell.css from production host when this page is on sandbox or another origin (CORS blocks stylesheet fetch).
   html = html.replace(/https?:\/\/(?:www\.)?inneranimalmedia\.com(?=\/static\/dashboard\/shell\.css)/gi, '');
+  
+  const workspaceId = env.WORKSPACE_ID || 'ws_sandbox';
+  const injectedCode = `<script>window.__WORKSPACE_ID__ = "${workspaceId}";</script>`;
+
+  html = html.replace(/<head([^>]*)>/i, `<head$1>\n    ${injectedCode}`);
+
   if (!isEmbedded) {
     const headers = new Headers();
     headers.set('Content-Type', 'text/html; charset=utf-8');

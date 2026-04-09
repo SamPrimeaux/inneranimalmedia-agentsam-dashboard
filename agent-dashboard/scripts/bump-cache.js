@@ -4,8 +4,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const htmlPath = path.resolve(root, 'index.html');
-const pkgPath = path.resolve(root, 'package.json');
+const htmlPath = path.resolve(root, 'agent-dashboard', 'index.html');
+const pkgPath = path.resolve(root, 'agent-dashboard', 'package.json');
 
 let html = fs.readFileSync(htmlPath, 'utf-8');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));

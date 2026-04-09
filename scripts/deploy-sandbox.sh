@@ -347,9 +347,9 @@ EOF
 fi
 
 # ── Deploy sandbox worker ─────────────────────────────────────────────────────
-echo "Deploying sandbox worker (inneranimal-dashboard)..."
+echo "Deploying sandbox modular worker (inneranimal-dashboard)..."
 CICD_T_WORKER_START=$(date +%s)
-"${WRANGLER[@]}" deploy ./worker.js -c "$CFG" 2>&1 | tee /tmp/sandbox-deploy-out.txt
+"${WRANGLER[@]}" deploy ./src/index.js -c "$CFG" 2>&1 | tee /tmp/sandbox-deploy-out.txt
 CICD_T_WORKER_END=$(date +%s)
 cat /tmp/sandbox-deploy-out.txt
 

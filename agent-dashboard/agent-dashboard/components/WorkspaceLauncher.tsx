@@ -44,11 +44,25 @@ export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({ onSelect, 
   useEffect(() => {
     const load = async () => {
       try {
-        const r = await fetch('/api/workspaces/list');
-        const data = await r.json();
-        // Transformation logic would go here to map D1 rows to WorkspaceItem
+        const r = await fetch('/api/workspaces/list', { credentials: 'same-origin' });
+        if (!r.ok) throw new Error('Failed to load workspaces');
+        const data = await r.json() as { workspaces: any[] };
+        
+        const mapped: WorkspaceItem[] = (data.workspaces || []).map(ws => ({
+          id: ws.id,
+          name: ws.name || ws.handle || 'Untitled Workspace',
+          type: ws.type || 'local', // Defaulting to local if not specified
+          lastOpenedAt: new Date().toISOString(),
+          metadata: {
+            repo: ws.github_repo || null,
+            host: ws.domain || null,
+          }
+        }));
+
+        setWorkspaces(mapped);
         setLoading(false);
       } catch (e) {
+        console.error('[WorkspaceLauncher] Load error:', e);
         setLoading(false);
       }
     };

@@ -110,6 +110,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       : '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
+  const [envOpen, setEnvOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

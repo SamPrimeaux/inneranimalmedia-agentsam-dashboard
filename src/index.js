@@ -6,6 +6,7 @@
 import { handleAgentRequest } from './api/agent';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
+export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom } from './core/durable_objects';
 
 export default {
   /**

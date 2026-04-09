@@ -3,7 +3,8 @@
  * Handles PTY workshops, WebSocket runs, and workspace path resolution.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, tenantIdFromEnv, notifySam } from './auth';
+import { getAuthUser, tenantIdFromEnv } from './auth';
+import { notifySam } from './notifications';
 
 export const HEADLESS_TERMINAL_SESSION_ID = 'term_headless_sam';
 

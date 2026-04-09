@@ -24015,7 +24015,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
   const systemWithWorkspaceHint = hasWorkspaceTools
     ? `${systemWithBlurb}\n\n## Workspace (PTY host repo)\nUse workspace_read_file to read any file by path when the user references a file not already in context. Use workspace_list_files to explore the repo. Use workspace_search to find symbol definitions, usages, or patterns across the codebase.`
     : systemWithBlurb;
-  const modelKey = resolveAnthropicModelKey(model.model_key);
+  const resolvedModelKey = resolveAnthropicModelKey(model.model_key);
   const allToolCalls = [];
   let messages = apiMessages.map((m) => ({ role: m.role, content: m.content }));
   let iter = 0;
@@ -24097,7 +24097,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       }
       iter++;
       // Adaptive thinking for Opus 4.6 / Sonnet 4.6 (interleaved auto-enabled, no beta header needed)
-      const _isAdaptive = modelKey.includes('opus-4-6') || modelKey.includes('sonnet-4-6');
+      const _isAdaptive = resolvedModelKey.includes('opus-4-6') || resolvedModelKey.includes('sonnet-4-6');
       const _isSimpleIntent = opts._intent === 'sql' || opts._intent === 'question' || opts._intent === 'shell';
       const _thinkingConfig = _isAdaptive ? {
         thinking: { type: 'adaptive' },

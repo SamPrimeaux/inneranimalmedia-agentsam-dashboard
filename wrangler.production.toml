@@ -26,9 +26,9 @@ zone_name = "inneranimalmedia.com"
 [ai]
 binding = "AI"
 
-[[ai_search]]
-binding = "AI_SEARCH"
-instance_name = "iam-autorag"
+# [[ai_search]]
+# binding = "AI_SEARCH"
+# instance_name = "iam-autorag"
 
 [browser]
 binding = "MYBROWSER"

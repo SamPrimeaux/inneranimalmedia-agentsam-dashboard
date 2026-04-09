@@ -12317,16 +12317,19 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         stream: true,
         system: chatSseSystemPrompt,
         tools: (lastLoadedToolsSse || []).map(t => {
-          let props = {};
-          try { props = JSON.parse(t.input_schema || '{}'); } catch (_) {}
+          let rawSchema = {};
+          try { rawSchema = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {}); } catch (_) {}
+          let input_schema;
+          if (rawSchema.type === 'object' && rawSchema.properties !== undefined) {
+            input_schema = rawSchema;
+          } else {
+            const required = Object.entries(rawSchema).filter(([,v]) => v && v.required).map(([k]) => k);
+            input_schema = { type: 'object', properties: rawSchema, required };
+          }
           return {
             name: t.tool_name,
             description: (t.description || t.tool_name).slice(0, 500),
-            input_schema: {
-              type: "object",
-              properties: props,
-              required: Object.entries(props).filter(([,v]) => v && v.required).map(([k]) => k)
-            }
+            input_schema,
           };
         }),
         tool_choice: { type: "auto" },

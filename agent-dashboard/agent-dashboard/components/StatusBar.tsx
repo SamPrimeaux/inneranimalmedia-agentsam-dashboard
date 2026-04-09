@@ -254,6 +254,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px]">
                 <Database size={12} className="text-[var(--solar-orange)]" /> R2 Storage
               </button>
+              <div className="h-[1px] bg-[var(--border-subtle)]/30 my-1" />
+              <button className="w-full text-left px-3 py-1.5 hover:bg-[var(--bg-hover)] flex items-center gap-2 text-[11px] font-semibold text-[var(--solar-cyan)]">
+                <Terminal size={12} /> SSH Host...
+              </button>
             </div>
           )}
         </div>
@@ -261,7 +265,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         {/* Center: Active Workspace Context */}
         <div className="flex-1 flex justify-center items-center overflow-hidden px-4 select-none">
           <div 
-            className="flex items-center gap-2 px-3 py-0.5 rounded-full bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40 hover:border-[var(--solar-cyan)]/40 transition-all cursor-pointer truncate"
+            className="flex items-center gap-2 px-3 py-0.5 rounded-full bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40 hover:border-[var(--solar-cyan)]/40 transition-all cursor-pointer truncate shadow-[0_2px_10px_rgba(0,0,0,0.2)]"
             onClick={onWorkspaceClick}
           >
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--solar-cyan)] shadow-[0_0_5px_var(--solar-cyan)] shrink-0" />
@@ -275,7 +279,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <div className="flex items-center gap-0.5 h-full">
           <button
             type="button"
-            className="flex items-center gap-1.5 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent"
+            className="flex items-center gap-1.5 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent text-[11px]"
             title={tunnelLabel ? `Tunnel: ${tunnelLabel}` : 'Source control'}
             onClick={() => onGitBranchClick?.()}
           >
@@ -288,14 +292,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 }`}
               />
             )}
-          </button>
-          <button
-            type="button"
-            className="hidden md:flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors opacity-90 min-w-0 max-w-[min(420px,45vw)] border-0 bg-transparent"
-            title="Projects / workspaces"
-            onClick={() => onWorkspaceClick?.()}
-          >
-            <span className="truncate">{workspace}</span>
           </button>
           <button
             type="button"

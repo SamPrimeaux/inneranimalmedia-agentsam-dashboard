@@ -82,5 +82,88 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
+    // ── /api/agent/terminal/socket-url ───────────────────────────────────────
+    if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        
+        const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
+        const secret = (env.TERMINAL_SECRET || '').trim();
+        if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
+        
+        let wssUrl = httpsUrl;
+        if (httpsUrl.startsWith('https://')) wssUrl = 'wss://' + httpsUrl.slice(8);
+        else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
+        else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
+        
+        const sep = wssUrl.includes('?') ? '&' : '?';
+        let themeSlug = 'meaux-storm-gray';
+        
+        if (authUser.id && env.DB) {
+            try {
+                const row = await env.DB.prepare('SELECT theme FROM user_settings WHERE user_id = ? LIMIT 1').bind(authUser.id).first();
+                if (row?.theme) themeSlug = normalizeThemeSlug(row.theme);
+            } catch (_) { /* Fallback to default */ }
+        }
+        
+        const socketUrl = `${wssUrl}${sep}token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
+        return jsonResponse({ url: socketUrl });
+    }
+
+    // ── /api/agent/terminal/config-status ────────────────────────────────────
+    if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        
+        const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
+        const secret = (env.TERMINAL_SECRET || '').trim();
+        return jsonResponse({
+            terminal_configured: !!(httpsUrl && secret),
+            direct_wss_available: !!(httpsUrl && secret),
+        });
+    }
+
+    // ── /api/terminal/session/resume ─────────────────────────────────────────
+    if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        
+        if (!env.DB) return jsonResponse({ resumable: false });
+        try {
+            const session = await env.DB.prepare(
+                `SELECT id, tunnel_url, shell, cwd, cols, rows
+                 FROM terminal_sessions
+                 WHERE user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
+                 ORDER BY updated_at DESC LIMIT 1`
+            ).bind(authUser.id).first();
+            
+            if (!session) return jsonResponse({ resumable: false });
+            
+            return jsonResponse({
+                resumable: true,
+                session_id: session.id,
+                tunnel_url: session.tunnel_url,
+                shell: session.shell,
+                cwd: session.cwd,
+                cols: session.cols,
+                rows: session.rows,
+            });
+        } catch (e) {
+            return jsonResponse({ resumable: false });
+        }
+    }
+
     return jsonResponse({ error: 'Dashboard route not found or not yet modularized' }, 404);
+}
+
+/**
+ * Standardizes theme slugs for the terminal renderer.
+ */
+function normalizeThemeSlug(value) {
+    if (!value) return 'meaux-storm-gray';
+    let s = value.toLowerCase().trim();
+    s = s.replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+    if (s === 'dark' || s === 'black') return 'meaux-storm-gray';
+    if (s === 'light' || s === 'white' || s === 'solarized-light') return 'solarized-light';
+    return s;
 }

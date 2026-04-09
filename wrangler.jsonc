@@ -11,7 +11,7 @@
 
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "inneranimalmedia",
+  "name": "inneranimal-dashboard",
   "main": "worker.js",
   "compatibility_date": "2026-01-20",
   "compatibility_flags": ["nodejs_compat"],

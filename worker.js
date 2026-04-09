@@ -3030,30 +3030,30 @@ const worker = {
     if (host === 'inneranimalmedia.meauxbility.workers.dev') {
       return Response.redirect(`https://inneranimalmedia.com${url.pathname}${url.search}`, 301);
     }
-    if (host === 'inneranimal-dashboard.meauxbility.workers.dev' || host === 'sandbox.inneranimalmedia.com') {
+    if (host === 'inneranimal-dashboard.meauxbility.workers.dev') {
       return Response.redirect(`https://sandbox.inneranimalmedia.com${url.pathname}${url.search}`, 301);
     }
 
-    // ── Task 12: MeauxCAD D1 Proxy ─────────────────────────────────────────────
-    if (url.pathname.startsWith('/api/meauxcad/d1/')) {
+    // ── Task 12: Agent Sam D1 Proxy ───────────────────────────────────────────
+    if (url.pathname.startsWith('/api/dashboard/d1/')) {
       const auth = request.headers.get('Authorization');
       if (!auth || auth !== `Bearer ${env.INTERNAL_API_SECRET}`) {
         return new Response('Unauthorized', { status: 401 });
       }
 
       try {
-        if (request.method === 'GET' && url.pathname === '/api/meauxcad/d1/tables') {
+        if (request.method === 'GET' && url.pathname === '/api/dashboard/d1/tables') {
           const { results } = await env.DB.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all();
           return Response.json({ success: true, tables: results.map(r => r.name) });
         }
 
-        if (request.method === 'GET' && url.pathname.startsWith('/api/meauxcad/d1/schema/')) {
+        if (request.method === 'GET' && url.pathname.startsWith('/api/dashboard/d1/schema/')) {
           const table = url.pathname.split('/').pop();
           const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all();
           return Response.json({ success: true, schema: results });
         }
 
-        if (request.method === 'POST' && url.pathname === '/api/meauxcad/d1/query') {
+        if (request.method === 'POST' && url.pathname === '/api/dashboard/d1/query') {
           const { sql, write } = await request.json();
           const isWrite = /INSERT|UPDATE|DELETE|DROP|CREATE|ALTER/i.test(sql);
 
@@ -3169,8 +3169,8 @@ const worker = {
         );
       }
 
-      // ── Task 3: MeauxCAD Integration Proxy ───────────────────────────────────
-      if (pathLower.startsWith('/api/meauxcad/')) {
+      // ── Task 3: Agent Sam Integration Proxy ───────────────────────────────────
+      if (pathLower.startsWith('/api/agent-sam/')) {
         const authHeader = request.headers.get('Authorization') ?? '';
         const internalSecret = secret('INTERNAL_API_SECRET') || env.INTERNAL_API_SECRET;
         const expectedToken = `Bearer ${internalSecret ?? ''}`;
@@ -3178,8 +3178,8 @@ const worker = {
           return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
         }
 
-        // POST /api/meauxcad/agent-runs — create an IAM agent run from MeauxCAD
-        if (pathLower === '/api/meauxcad/agent-runs' && methodUpper === 'POST') {
+        // POST /api/agent-sam/agent-runs — create an IAM agent run
+        if (pathLower === '/api/agent-sam/agent-runs' && methodUpper === 'POST') {
           try {
             const body = await request.json();
             const wsId = body.workspace_id != null && String(body.workspace_id).trim() !== ''
@@ -3200,8 +3200,8 @@ const worker = {
           }
         }
 
-        // POST /api/meauxcad/deployments — log MeauxCAD deploy to shared deployments table
-        if (pathLower === '/api/meauxcad/deployments' && methodUpper === 'POST') {
+        // POST /api/agent-sam/deployments — log deploy to shared deployments table
+        if (pathLower === '/api/agent-sam/deployments' && methodUpper === 'POST') {
           try {
             const body = await request.json();
             const id = crypto.randomUUID();
@@ -3209,7 +3209,7 @@ const worker = {
             // Audit: deployments table has id, timestamp, version, git_hash, status, deployed_by, notes, worker_name
             await env.DB.prepare(
               `INSERT INTO deployments (id, worker_name, version, git_hash, description, status, deployed_by, environment, created_at, timestamp)
-               VALUES (?, 'meauxcad', ?, ?, ?, 'success', 'meauxcad_bot', 'production', ?, ?)`
+               VALUES (?, 'agentsam', ?, ?, ?, 'success', 'agentsam_bot', 'production', ?, ?)`
             ).bind(id, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', now, now).run();
             appendCidiPipelineRunFromDeploy(env, {
               deploymentId: id,
@@ -16732,7 +16732,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       
       const triggeredBy =
         body.agent_session_id ? 'agent_sam' :
-        body.triggered_by === 'meauxcad_ui' ? 'user_ui' :
+        body.triggered_by === 'dashboard_ui' ? 'user_ui' :
         body.triggered_by ||
         (session?.user_id ? `user:${session.user_id}` : 'unknown');
 

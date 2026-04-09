@@ -13,6 +13,8 @@ import {
   Upload,
   ArrowRightLeft,
   FileCode2,
+  Plus,
+  FilePlus,
 } from 'lucide-react';
 import type { ActiveFile } from '../types';
 
@@ -272,6 +274,37 @@ export const R2Explorer: React.FC<{
         }
     };
 
+    const handleCreateR2File = async () => {
+        if (!bucket) {
+            alert('Please select a bucket first. Create new buckets via Cloudflare dashboard.');
+            return;
+        }
+        const keyName = window.prompt('New file key (e.g. folder/file.txt):');
+        if (!keyName) return;
+        const binding = bucketLabelToBinding(bucket);
+        setIsLoading(true);
+        try {
+            const res = await fetch('/api/r2/file', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bucket: binding, key: keyName, content: '' }),
+            });
+            if (res.ok) {
+                await fetchObjects();
+                await fetchStats();
+            } else {
+                const data = await res.json();
+                alert('Create failed: ' + (data.error || res.statusText));
+            }
+        } catch (e) {
+            console.error('R2 create failed:', e);
+            alert('Create failed: ' + (e instanceof Error ? e.message : String(e)));
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const runSync = async () => {
         if (!syncSource || !syncDest) {
             setSyncMsg('Set source and dest buckets');
@@ -457,6 +490,14 @@ export const R2Explorer: React.FC<{
                         title="Refresh"
                     >
                         <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleCreateR2File}
+                        title="New R2 file"
+                        className="p-1 hover:bg-[var(--bg-hover)] rounded"
+                    >
+                        <FilePlus size={12} />
                     </button>
                 </div>
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Buckets</div>

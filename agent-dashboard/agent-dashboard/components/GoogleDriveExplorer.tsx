@@ -215,7 +215,19 @@ export const GoogleDriveExplorer: React.FC<{
   const openDriveFile = async (f: { id: string; name: string; mimeType?: string }) => {
     if (!onOpenInEditor) return;
     const mime = f.mimeType || '';
-    if (!TEXT_MIME_HINT.test(mime) && mime !== '' && !mime.startsWith('text/')) {
+    if (mime.startsWith('image/')) {
+      onOpenInEditor({
+        name: f.name,
+        content: '',
+        originalContent: '',
+        driveFileId: f.id,
+        isImage: true,
+        previewUrl: `/api/integrations/gdrive/raw?fileId=${encodeURIComponent(f.id)}`,
+      });
+      return;
+    }
+    const isText = TEXT_MIME_HINT.test(mime) || mime === '' || mime.startsWith('text/');
+    if (!isText) {
       window.open(`/api/integrations/gdrive/raw?fileId=${encodeURIComponent(f.id)}`, '_blank', 'noopener,noreferrer');
       return;
     }

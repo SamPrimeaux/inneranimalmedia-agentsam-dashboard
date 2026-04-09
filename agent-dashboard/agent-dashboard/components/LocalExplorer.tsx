@@ -14,6 +14,8 @@ import {
     Upload,
     Trash2,
     FolderPlus,
+    FilePlus,
+    Plus,
     Search,
     RefreshCw,
 } from 'lucide-react';
@@ -660,6 +662,40 @@ export const LocalExplorer: React.FC<{
         setRootDir((prev) => (prev ? mapFileNodeInTree(prev, node, (n) => ({ ...n, isOpen: true, children })) : prev));
     };
 
+    const handleCreateLocalFile = async () => {
+        if (!rootDir?.handle) {
+            void handleOpenFolder();
+            return;
+        }
+        const name = window.prompt('File name:');
+        if (!name) return;
+        try {
+            await rootDir.handle.getFileHandle(name, { create: true });
+            const children = await getEntries(rootDir.handle);
+            setRootDir(prev => prev ? { ...prev, children } : null);
+        } catch (e) {
+            console.error('Local file creation failed:', e);
+            alert('Failed to create file: ' + (e instanceof Error ? e.message : String(e)));
+        }
+    };
+
+    const handleCreateLocalFolder = async () => {
+        if (!rootDir?.handle) {
+            void handleOpenFolder();
+            return;
+        }
+        const name = window.prompt('Folder name:');
+        if (!name) return;
+        try {
+            await rootDir.handle.getDirectoryHandle(name, { create: true });
+            const children = await getEntries(rootDir.handle);
+            setRootDir(prev => prev ? { ...prev, children } : null);
+        } catch (e) {
+            console.error('Local folder creation failed:', e);
+            alert('Failed to create folder: ' + (e instanceof Error ? e.message : String(e)));
+        }
+    };
+
     const findNode = (current: FileNode, target: FileNode): FileNode | null => {
         if (current === target) return current;
         if (current.children) {
@@ -711,13 +747,32 @@ export const LocalExplorer: React.FC<{
 
             {/* Section 1: Local Workspace */}
             <div className="flex flex-col border-b border-[var(--border-subtle)]/50 pb-1 pt-1">
-                <div 
-                    onClick={() => toggleSection('local')}
-                    className="flex items-center gap-2 px-4 py-2 hover:bg-[var(--bg-hover)] cursor-pointer group"
-                >
-                    {expandedSections.local ? <ChevronDown size={14} className="text-[var(--text-muted)] group-hover:text-white" /> : <ChevronRight size={14} className="text-[var(--text-muted)] group-hover:text-white" />}
-                    <HardDrive size={14} className="text-[var(--solar-cyan)] group-hover:text-white" />
-                    <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Local Workspace</span>
+                <div className="flex items-center justify-between px-4 py-2 hover:bg-[var(--bg-hover)] cursor-pointer group">
+                    <div className="flex items-center gap-2 flex-1" onClick={() => toggleSection('local')}>
+                        {expandedSections.local ? <ChevronDown size={14} className="text-[var(--text-muted)] group-hover:text-white" /> : <ChevronRight size={14} className="text-[var(--text-muted)] group-hover:text-white" />}
+                        <HardDrive size={14} className="text-[var(--solar-cyan)] group-hover:text-white" />
+                        <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--text-muted)] group-hover:text-white transition-colors">Local Workspace</span>
+                    </div>
+                    {expandedSections.local && (
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); void handleCreateLocalFile(); }}
+                                title="New file"
+                                className="p-1 hover:bg-[var(--bg-app)] rounded text-[var(--text-muted)] hover:text-white"
+                            >
+                                <FilePlus size={12} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); void handleCreateLocalFolder(); }}
+                                title="New folder"
+                                className="p-1 hover:bg-[var(--bg-app)] rounded text-[var(--text-muted)] hover:text-white"
+                            >
+                                <FolderPlus size={12} />
+                            </button>
+                        </div>
+                    )}
                 </div>
                 {expandedSections.local && (
                     <div className="px-2 pb-2">

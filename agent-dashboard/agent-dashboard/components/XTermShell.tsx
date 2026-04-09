@@ -725,9 +725,18 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
       // Intercept `?` → open AI panel instead of sending to PTY
       term.onData(data => {
+        // Intercept `/agentsam ` command (starts with /a...) or `?` or `Ctrl+A`
         if (data === '?') { setAiOpen(true); return; }
-        // Ctrl+A → toggle AI panel
         if (data === '\x01') { setAiOpen(v => !v); return; }
+        
+        // Simple buffer for command interception
+        const cmdBuffer = bufferRef.current.split('\r').pop() || '';
+        if (cmdBuffer.endsWith('/agentsam') && (data === ' ' || data === '\r')) {
+           setAiOpen(true);
+           // We don't return here because we might want the /agentsam to appear in the PTY too 
+           // depending on if it's a real tool. For now, let's just trigger the assistant.
+        }
+
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(data);
         }
@@ -824,14 +833,15 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         `}</style>
 
         <div
-          className={`iam-scanlines fixed left-0 right-0 z-40 flex flex-col border-t shadow-[0_-12px_40px_rgba(0,0,0,0.6)] transition-transform duration-300 ease-out bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] ${
-            isCollapsed ? 'translate-y-[calc(100%-36px)]' : 'translate-y-0'
+          className={`iam-scanlines relative flex flex-col border-t shadow-[0_-4px_20px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out shrink-0 ${
+            isCollapsed ? 'h-[36px]' : ''
           }`}
           style={{
             height: isCollapsed ? '36px' : `${height}px`,
             background: 'var(--terminal-chrome)',
             borderColor: 'var(--solar-cyan, #2aa198)',
             borderTopWidth: '1px',
+            zIndex: 40,
           }}
         >
           {/* Resize handle */}

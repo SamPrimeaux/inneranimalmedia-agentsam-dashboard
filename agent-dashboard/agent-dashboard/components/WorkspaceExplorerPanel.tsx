@@ -11,6 +11,7 @@ import {
   Layers,
   Trash2,
   ExternalLink,
+  Plus,
 } from 'lucide-react';
 import type { IdeWorkspaceSnapshot, RecentFileEntry } from '../src/ideWorkspace';
 import { diffLineStats } from '../src/ideWorkspace';
@@ -49,8 +50,8 @@ export const WorkspaceExplorerPanel: React.FC<{
   onClearRecentFiles: () => void;
   onOpenRecent: (entry: RecentFileEntry) => void | Promise<void>;
   onOpenLocalFolder: () => void;
-  onOpenFilesActivity: () => void;
   onOpenGitHubActivity: () => void;
+  onOpenWorkspace: (name: string, path: string) => void;
 }> = ({
   ideWorkspace,
   workspaceTitle,
@@ -61,8 +62,51 @@ export const WorkspaceExplorerPanel: React.FC<{
   onOpenLocalFolder,
   onOpenFilesActivity,
   onOpenGitHubActivity,
+  onOpenWorkspace,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [wsLoading, setWsLoading] = useState(false);
+
+  const fetchWorkspaces = React.useCallback(() => {
+    setWsLoading(true);
+    fetch('/api/workspaces/list')
+      .then(r => r.json())
+      .then(d => setWorkspaces(d.workspaces || []))
+      .catch(() => {})
+      .finally(() => setWsLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    fetchWorkspaces();
+  }, [fetchWorkspaces]);
+
+  const handleCreateWorkspace = async () => {
+    const name = window.prompt('Workspace Name (e.g. My Project):');
+    if (!name) return;
+    const handle = window.prompt('Base Path / Domain (e.g. /home/project or project.com):', name);
+    if (!handle) return;
+    
+    setWsLoading(true);
+    try {
+      const res = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, handle, status: 'active', category: 'entity' }),
+      });
+      if (res.ok) {
+        fetchWorkspaces();
+      } else {
+        const data = await res.json();
+        alert('Failed to create workspace: ' + (data.error || res.statusText));
+      }
+    } catch (e) {
+      console.error('Workspace creation failed:', e);
+      alert('Workspace creation failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setWsLoading(false);
+    }
+  };
 
   const workspaceLine = useMemo(() => {
     if (ideWorkspace.source === 'none') return 'No folder or pinned workspace yet.';
@@ -229,6 +273,46 @@ export const WorkspaceExplorerPanel: React.FC<{
             })}
           </ul>
         )}
+      </div>
+
+      <div className="flex items-center justify-between px-3 py-1.5 border-t border-b border-[var(--border-subtle)]/40 shrink-0 bg-[var(--bg-app)]/30">
+        <div className="flex items-center gap-1.5">
+          <Layers size={11} className="text-[var(--text-muted)]" />
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Available Workspaces</span>
+        </div>
+        <button
+          type="button"
+          onClick={handleCreateWorkspace}
+          title="Add Workspace"
+          className="p-1 hover:bg-[var(--bg-hover)] rounded text-[var(--text-muted)] hover:text-white"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
+        {wsLoading && workspaces.length === 0 && (
+          <div className="p-4 text-center">
+             <div className="w-4 h-4 border-2 border-[var(--solar-cyan)]/30 border-t-[var(--solar-cyan)] rounded-full animate-spin mx-auto" />
+          </div>
+        )}
+        {!wsLoading && workspaces.length === 0 && (
+          <p className="px-3 py-4 text-[10px] text-[var(--text-muted)] italic text-center">No workspaces found.</p>
+        )}
+        {workspaces.map((ws) => (
+          <button
+            key={ws.id}
+            type="button"
+            onClick={() => onOpenWorkspace(ws.name, ws.handle || ws.domain)}
+            className="w-full text-left p-2 rounded-lg border border-transparent hover:border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] transition-all group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-[var(--text-main)] group-hover:text-[var(--solar-cyan)]">{ws.name}</span>
+              <span className="text-[9px] font-mono text-[var(--text-muted)] uppercase tracking-tighter opacity-40">{ws.status}</span>
+            </div>
+            <p className="text-[9px] text-[var(--text-muted)] font-mono truncate">{ws.handle || ws.domain}</p>
+          </button>
+        ))}
       </div>
     </div>
   );

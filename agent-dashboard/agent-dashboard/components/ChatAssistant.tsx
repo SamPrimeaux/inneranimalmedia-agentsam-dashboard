@@ -635,9 +635,9 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onOpenCodeTab,
   onOpenChatHistory,
 }) => {
-  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [messageQueue, setMessageQueue] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachButtonRef = useRef<HTMLButtonElement>(null);
   const modeButtonRef = useRef<HTMLButtonElement>(null);
@@ -881,7 +881,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, []);
 
   useEffect(() => {
-    fetch('/api/agent/models')
+    fetch('/api/agent/models?show_in_picker=1')
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;
@@ -1159,9 +1159,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     });
   }, [setMessages]);
 
-  const handleSend = async () => {
-    const text = input.trim();
-    if ((!text && attachments.length === 0) || isLoading || !selectedModelKey) return;
+  const handleSend = async (overrideMessage?: string) => {
+    const text = overrideMessage ?? input;
+    if ((!text && attachments.length === 0) || (isLoading && !overrideMessage) || !selectedModelKey) return;
+    
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
     if (totalStagedBytes > CHAT_ATTACH_MAX_TOTAL_BYTES) return;
 
@@ -1296,6 +1300,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               if (t.tool && typeof t.tool.name === 'string') {
                 setPendingToolApproval({ tool: t.tool });
                 setIsLoading(false);
+        abortControllerRef.current = null;
+        if (messageQueue.length > 0) {
+          const next = messageQueue[0];
+          setMessageQueue((prev) => prev.slice(1));
+          handleSend(next);
+        }
               }
               continue;
             }
@@ -1408,6 +1418,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     } finally {
       setIsLoading(false);
       clearAttachments();
+      abortControllerRef.current = null;
+      if (messageQueue.length > 0) {
+        const next = messageQueue[0];
+        setMessageQueue((prev) => prev.slice(1));
+        void handleSend(next);
+      }
     }
   };
 
@@ -1596,7 +1612,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (isLoading) {
+        setMessageQueue((prev) => [...prev, input]);
+        setInput('');
+      } else {
+        handleSend();
+      }
     }
   };
 
@@ -2122,15 +2143,34 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleSend}
-                disabled={!canSend}
-                className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-[0.6875rem] font-bold transition-all ${
-                  canSend
+                onClick={() => {
+                  if (isLoading) {
+                    abortControllerRef.current?.abort();
+                    setIsLoading(false);
+                  } else {
+                    handleSend();
+                  }
+                }}
+                disabled={!isLoading && !canSend}
+                className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-[0.6875rem] font-bold transition-all relative ${
+                  canSend || isLoading
                     ? 'bg-[var(--solar-cyan)] text-[var(--solar-base03)] shadow-[0_0_16px_color-mix(in_srgb,var(--solar-cyan)_25%,transparent)] hover:brightness-110'
                     : 'text-[var(--text-chrome-muted)] bg-[var(--bg-disabled)] cursor-not-allowed'
                 }`}
+                title={isLoading ? 'Stop' : 'Send'}
               >
-                {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                {isLoading ? (
+                  <>
+                    <X size={12} className="text-red-600" />
+                    {messageQueue.length > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold border border-[var(--bg-panel)]">
+                        {messageQueue.length}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <Send size={12} />
+                )}
               </button>
             </div>
           </div>

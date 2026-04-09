@@ -335,12 +335,13 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
 
   const r2KeyForPreview = fileData?.r2Key ?? '';
   const r2BucketForPreview = fileData?.r2Bucket ?? '';
-  const imgSrc =
-    fileData?.previewUrl ||
-    (r2KeyForPreview && r2BucketForPreview
-      ? `/api/r2/get?bucket=${encodeURIComponent(r2BucketForPreview)}&key=${encodeURIComponent(r2KeyForPreview)}`
-      : '');
-  const canPreviewR2Image = !!(fileData?.previewUrl || (r2KeyForPreview && r2BucketForPreview));
+  const imgSrc = fileData?.previewUrl || '';
+  const canPreviewR2Image = !!(imgSrc || (fileData?.r2Key && fileData?.r2Bucket));
+  
+  // If we have R2 key but no previewUrl, build it
+  const finalImgSrc = imgSrc || (fileData?.r2Key && fileData?.r2Bucket
+    ? `/api/r2/get?bucket=${encodeURIComponent(fileData.r2Bucket)}&key=${encodeURIComponent(fileData.r2Key)}`
+    : '');
 
   if (!fileData) {
     return (
@@ -373,9 +374,9 @@ export const MonacoEditorView: React.FC<MonacoEditorViewProps> = ({
           </div>
         </div>
         <div className="flex flex-1 items-center justify-center w-full min-h-0 bg-[var(--scene-bg)] p-4 box-border">
-          {imgSrc ? (
+          {finalImgSrc ? (
             <img
-              src={imgSrc}
+              src={finalImgSrc}
               alt={fileData.name}
               className="max-w-full max-h-full object-contain rounded border border-[var(--border-subtle)] shadow-2xl"
               onError={(e) => {

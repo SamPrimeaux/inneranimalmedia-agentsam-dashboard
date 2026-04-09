@@ -5592,6 +5592,28 @@ const worker = {
       if (pathLower === '/api/settings/workspaces' || pathLower === '/api/workspaces') {
         const method = (request.method || 'GET').toUpperCase();
         if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (method === 'POST') {
+          if (!env.DB) return jsonResponse({ error: 'Database not available' }, 500);
+          const body = await request.json().catch(() => ({}));
+          const { name, handle, status, category, brand } = body;
+          if (!name) return jsonResponse({ error: 'name required' }, 400);
+          const id = `ws_${Date.now()}`;
+          try {
+            await env.DB.prepare(
+              `INSERT INTO workspaces (id, name, handle, status, category, brand, created_at) VALUES (?, ?, ?, ?, ?, ?, unixepoch())`
+            ).bind(id, name, handle || name, status || 'active', category || 'other', brand || null).run();
+            return jsonResponse({ ok: true, id });
+          } catch (e) {
+            // Fallback for missing columns if table schema differs
+            if (String(e?.message || '').includes('no such column')) {
+              await env.DB.prepare(
+                `INSERT INTO workspaces (id, name, handle, status, created_at) VALUES (?, ?, ?, ?, unixepoch())`
+              ).bind(id, name, handle || name, status || 'active').run();
+              return jsonResponse({ ok: true, id });
+            }
+            throw e;
+          }
+        }
         if (method === 'GET') {
           if (!env.DB) {
             return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {} });
@@ -12346,260 +12368,46 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     );
   }
 
-  if (apiPlatform === 'gemini_api' || provider === 'gemini') {
-    const key = secretFn('GOOGLE_AI_API_KEY') ?? env.GOOGLE_AI_API_KEY;
-    if (!key) return jsonResponse({ error: 'GOOGLE_AI_API_KEY not configured' }, 503);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelKey)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: hasMedia ? buildGoogleParts(message, jsonImages, chatAttachments) : [{ text: message }],
-          },
-        ],
-        systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
-      }),
-    });
-    if (!upstream.ok) return mkUpstreamError(upstream, 'google');
-    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
-    );
-    const [branch1, branch2] = upstream.body.tee();
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch(apiPlatform === 'gemini_api' || provider === 'gemini' ? 'gemini_api' : 'google', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
-    } else {
-      await runSseTelemetrySideBranch(apiPlatform === 'gemini_api' || provider === 'gemini' ? 'gemini_api' : 'google', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
-    }
-    return new Response(branch1, { headers: sseResponseHeaders() });
-  }
-
-  if (apiPlatform === 'vertex_ai') {
-    const geminiBody = {
-      contents: [
-        {
-          role: 'user',
-          parts: hasMedia ? buildGoogleParts(message, jsonImages, chatAttachments) : [{ text: message }],
-        },
-      ],
-      systemInstruction: { parts: [{ text: chatSseSystemPrompt }] },
-    };
-    let upstream;
-    if (modelRow.secret_key_name === 'GOOGLE_AI_API_KEY') {
-      const key = secretFn('GOOGLE_AI_API_KEY') ?? env.GOOGLE_AI_API_KEY;
-      if (!key) return jsonResponse({ error: 'GOOGLE_AI_API_KEY not configured' }, 503);
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelKey)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
-      upstream = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(geminiBody),
-      });
-    } else {
-      if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-        return jsonResponse({ error: 'GOOGLE_SERVICE_ACCOUNT_JSON not configured' }, 503);
+  if (apiPlatform === 'gemini_api' || provider === 'gemini' || apiPlatform === 'vertex_ai') {
+    return chatWithToolsGoogle(
+      env,
+      chatSseSystemPrompt,
+      parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
+      modelRow,
+      conversationId,
+      agentAiIdSse,
+      ctx,
+      {
+        mode: sseToolOpts.mode,
+        agentsamAgentRunId: chatSseRunId,
+        routingOpts: { tenantId: tenantIdChatSse },
+        modelRates: modelRatesMap
       }
-      try {
-        upstream = await callVertexAI(env, modelKey, geminiBody, true);
-      } catch (e) {
-        console.error('[agent/chat-sse] vertex_ai', e?.message ?? e);
-        return jsonResponse({ error: 'Vertex auth failed', detail: String(e?.message || e) }, 503);
+    );
+  }
+
+
+  if (apiPlatform === 'openai' || apiPlatform === 'cursor') {
+    return chatWithToolsOpenAI(
+      env,
+      chatSseSystemPrompt,
+      parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
+      modelRow,
+      conversationId,
+      agentAiIdSse,
+      ctx,
+      {
+        mode: sseToolOpts.mode,
+        agentsamAgentRunId: chatSseRunId,
+        routingOpts: { tenantId: tenantIdChatSse },
+        modelRates: modelRatesMap,
+        stream: true
       }
-    }
-    if (!upstream.ok) return mkUpstreamError(upstream, 'google');
-    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
     );
-    const [branch1, branch2] = upstream.body.tee();
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
-    } else {
-      await runSseTelemetrySideBranch('vertex_ai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
-    }
-    return new Response(branch1, { headers: sseResponseHeaders() });
-  }
-
-  if (apiPlatform === 'openai') {
-    const key = secretFn('OPENAI_API_KEY') ?? env.OPENAI_API_KEY;
-    if (!key) return jsonResponse({ error: 'OPENAI_API_KEY not configured' }, 503);
-    const upstream = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelKey,
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [
-          { role: 'system', content: chatSseSystemPrompt },
-          {
-            role: 'user',
-            content: hasMedia ? buildOpenAIContent(message, jsonImages, chatAttachments) : message,
-          },
-        ],
-      }),
-    });
-    if (!upstream.ok) return mkUpstreamError(upstream, 'openai');
-    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
-    );
-    const [branch1, branch2] = upstream.body.tee();
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
-    } else {
-      await runSseTelemetrySideBranch('openai', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
-    }
-    return new Response(branch1, { headers: sseResponseHeaders() });
-  }
-
-  if (apiPlatform === 'cursor') {
-    const ckey = secretFn('CURSOR_API_KEY') ?? env.CURSOR_API_KEY;
-    const ctoken = secretFn('CURSOR_API_TOKEN') ?? env.CURSOR_API_TOKEN;
-    if (!ckey) return jsonResponse({ error: 'CURSOR_API_KEY not configured' }, 503);
-    const upstream = await fetch('https://api2.cursor.sh/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${ckey}`,
-        'Content-Type': 'application/json',
-        ...(ctoken ? { 'x-cursor-token': ctoken } : {}),
-      },
-      body: JSON.stringify({
-        model: modelKey,
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [
-          { role: 'system', content: chatSseSystemPrompt },
-          {
-            role: 'user',
-            content: hasMedia ? buildOpenAIContent(message, jsonImages, chatAttachments) : message,
-          },
-        ],
-      }),
-    });
-    if (upstream.status === 401 || upstream.status === 404) {
-      const body_text = await upstream.text();
-      console.error('[agent/chat-sse] Cursor API endpoint mismatch', upstream.status, body_text.slice(0, 2000));
-      return jsonResponse(
-        { error: 'Cursor API endpoint mismatch', status: upstream.status, model: modelKey, detail: body_text },
-        upstream.status
-      );
-    }
-    if (!upstream.ok) return mkUpstreamError(upstream, 'cursor');
-    if (!upstream.body) return jsonResponse({ error: 'Empty upstream body' }, 502);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
-    );
-    const [branch1, branch2] = upstream.body.tee();
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap));
-    } else {
-      await runSseTelemetrySideBranch('cursor', branch2, modelRow, env, conversationId, chatSseRunId, tenantIdChatSse, modelRatesMap);
-    }
-    return new Response(branch1, { headers: sseResponseHeaders() });
   }
 
   if (apiPlatform === 'workers_ai') {
-    if (!env.AI) return jsonResponse({ error: 'Workers AI binding not configured' }, 503);
-    await insertChatSseAgentRun(env, chatSseRunId, conversationId, modelRow.id, chatSseSession, agentAiIdSse).catch((e) =>
-      console.warn('[agent/chat-sse] agentsam_agent_run insert', e?.message ?? e)
-    );
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const enc = new TextEncoder();
-    const writeSse = (obj) => writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
-
-    const runWai = async () => {
-      let usageAcc = null;
-      try {
-        let streamOrResult;
-        try {
-          streamOrResult = await env.AI.run(modelKey, {
-            stream: true,
-            messages: [
-              { role: 'system', content: chatSseSystemPrompt },
-              {
-                role: 'user',
-                content: flattenUserContentForWorkersAi(message, jsonImages, chatAttachments),
-              },
-            ],
-          });
-        } catch (e) {
-          console.error('[agent/chat-sse] Workers AI', e?.message ?? e);
-          await writeSse({ error: 'Provider error', detail: String(e?.message || e), provider: 'workers_ai', model: modelKey });
-          await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse, null, modelRatesMap, {
-            success: false,
-            errorMessage: String(e?.message || e),
-          });
-          return;
-        }
-
-        if (streamOrResult && typeof streamOrResult.getReader === 'function') {
-          const r = streamOrResult.getReader();
-          const dec = new TextDecoder();
-          let pending = '';
-          try {
-            while (true) {
-              const { done, value } = await r.read();
-              if (done) break;
-              pending += dec.decode(value, { stream: true });
-              const parts = pending.split('\n');
-              pending = parts.pop() || '';
-              for (const line of parts) {
-                const t = line.trim();
-                if (!t) continue;
-                let j;
-                try {
-                  j = JSON.parse(t);
-                } catch (_) {
-                  continue;
-                }
-                const uLine = extractWorkersAiUsageFromJson(j);
-                if (uLine) usageAcc = uLine;
-                const piece =
-                  (typeof j.response === 'string' ? j.response : null) ??
-                  (typeof j.token === 'string' ? j.token : null) ??
-                  (typeof j.text === 'string' ? j.text : null) ??
-                  '';
-                if (piece) await writeSse({ choices: [{ delta: { content: piece } }] });
-              }
-            }
-          } finally {
-            r.releaseLock();
-          }
-        } else {
-          const uObj = extractWorkersAiUsageFromJson(streamOrResult);
-          if (uObj) usageAcc = uObj;
-          const full =
-            (typeof streamOrResult?.response === 'string' ? streamOrResult.response : null) ??
-            (typeof streamOrResult?.text === 'string' ? streamOrResult.text : null) ??
-            '';
-          if (full) await writeSse({ choices: [{ delta: { content: full } }] });
-        }
-
-        await writeSse({
-          choices: [],
-          usage: usageAcc || { prompt_tokens: 0, completion_tokens: 0 },
-        });
-        await writer.write(enc.encode('data: [DONE]\n\n'));
-      } finally {
-        await writer.close().catch(() => { });
-      }
-      await insertWorkersAiChatTelemetry(env, modelRow, conversationId, chatSseRunId, tenantIdChatSse, usageAcc, modelRatesMap);
-    };
-
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(runWai());
-    } else {
-      void runWai();
-    }
-
-    return new Response(readable, { headers: sseResponseHeaders() });
+    return streamObserversWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 
@@ -16250,13 +16058,16 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
 
     if (pathLower === '/api/agent/models') {
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const url = new URL(request.url);
+      const showInPicker = url.searchParams.get('show_in_picker') === '1';
       try {
         const { results } = await env.DB.prepare(
-          `SELECT id, display_name AS name, provider, model_key, api_platform
+          `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
              AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
              AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor')
+             ${showInPicker ? 'AND show_in_picker = 1' : ''}
            ORDER BY provider, display_name`
         ).all();
         return jsonResponse(results || []);
@@ -24003,12 +23814,15 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
   });
 }
 
-/** Anthropic chat with tools; runs tool_use loop. When opts.stream is true, returns SSE stream with tool_start/tool_result/text/done. */
 async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWithBlurb, apiMessages, toolDefinitions, modelRow, agent_id, conversationId, attachedFilesFromRequest, executionCtx) {
-  const wantStream = true; // Always stream for SSE
+  const wantStream = true; 
   const mode = 'agent';
+  const opts = { routingOpts: { tenantId: resolveTenantIdForWorker({}, env) } }; // Minimal shim
+  const preFilteredTools = toolDefinitions;
+  const ctx = executionCtx;
+  const model = modelRow;
 
-  let resolvedAllowedToolGlobs = opts.allowed_tool_globs;
+  let resolvedAllowedToolGlobs = null;
   if (
     (resolvedAllowedToolGlobs == null || String(resolvedAllowedToolGlobs).trim() === '') &&
     opts.oauthUserId
@@ -24217,7 +24031,25 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
 
   // Run loop in background IIFE when streaming so response is returned immediately
   const _runLoop = async () => {
-    while (iter < maxToolLoopResolved) {
+    const MAX_TOOL_ITERATIONS = 10;
+    let toolIterations = 0;
+    const REQUEST_WALL_START = Date.now();
+
+    while (toolIterations < MAX_TOOL_ITERATIONS) {
+      if (toolIterations++ >= MAX_TOOL_ITERATIONS) {
+        if (_streamWriter) {
+          await _streamWriter.write(_streamEnc.encode(`data: ${JSON.stringify({ type: 'text', text: '\n\n[Agent stopped: max tool calls reached]' })}\n\n`));
+          await _streamWriter.write(_streamEnc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: 0, output_tokens: 0, cost_usd: 0 })}\n\n`));
+        }
+        break;
+      }
+      if (Date.now() - REQUEST_WALL_START > 90_000) {
+        if (_streamWriter) {
+          await _streamWriter.write(_streamEnc.encode(`data: ${JSON.stringify({ type: 'text', text: '\n\n[Agent stopped: 90s timeout]' })}\n\n`));
+          await _streamWriter.write(_streamEnc.encode(`data: ${JSON.stringify({ type: 'done', input_tokens: 0, output_tokens: 0, cost_usd: 0 })}\n\n`));
+        }
+        break;
+      }
       iter++;
       // Adaptive thinking for Opus 4.6 / Sonnet 4.6 (interleaved auto-enabled, no beta header needed)
       const _isAdaptive = modelKey.includes('opus-4-6') || modelKey.includes('sonnet-4-6');

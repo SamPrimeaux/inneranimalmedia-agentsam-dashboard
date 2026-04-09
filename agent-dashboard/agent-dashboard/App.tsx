@@ -992,8 +992,10 @@ const App: React.FC = () => {
             ? { ...prev, content, originalContent: content, githubSha: newSha || prev.githubSha }
             : null,
         );
+        setToastMsg('Saved to GitHub');
       } catch (e) {
         console.error(e);
+        setToastMsg('GitHub save failed');
       }
       return;
     }
@@ -1577,6 +1579,9 @@ const App: React.FC = () => {
                         }}
                         onOpenFilesActivity={() => setActiveActivity('files')}
                         onOpenGitHubActivity={() => setActiveActivity('actions')}
+                        onOpenWorkspace={(name, path) => {
+                          setIdeWorkspace({ source: 'pinned', name, pathHint: path });
+                        }}
                       />
                   ) : (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>

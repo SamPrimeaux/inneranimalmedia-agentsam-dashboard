@@ -15,7 +15,7 @@ echo "=== CF Builds PROD: worker deploy ==="
 npx wrangler deploy ./worker.js -c wrangler.production.toml
 
 echo "=== CF Builds PROD: Vite build ==="
-cd agent-dashboard && npm ci --include=dev && node scripts/bump-cache.js && npm run build && cd ..
+cd agent-dashboard && npm ci --include=dev && npm run build && node scripts/bump-cache.js && cd ..
 
 echo "=== CF Builds PROD: prune old R2 assets ==="
 OLD_KEYS=$(npx wrangler r2 object list "${BUCKET}" \

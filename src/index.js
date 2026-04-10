@@ -6,6 +6,7 @@
 import { handleAgentRequest } from './api/agent';
 import { handleAgentSamRegistryRequest } from './api/agentsam';
 import { handleTimeDispatch } from './tools/time';
+import { handleR2Api } from './api/r2-api';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
@@ -68,6 +69,11 @@ export default {
 
       if (pathLower.startsWith('/api/agentsam')) {
         return handleAgentSamRegistryRequest(request, env, ctx, authUser);
+      }
+
+      // ----- API: R2 storage (buckets, objects, search, sync, CRUD) -----
+      if (pathLower.startsWith('/api/r2/')) {
+        return handleR2Api(request, url, env);
       }
 
       if (pathLower.startsWith('/api/integrations') || 

@@ -378,7 +378,59 @@ export async function getAuthUser(request, env) {
   let email = session._session_user_id || session.user_id;
   const tenantId = resolveTenantIdForWorker(session, env);
 
-  // If we only have a usr_ style ID, resolve the canonical email from the 'users' table
+  // Resolve role and superadmin status via the correct join chain:
+  //   auth_sessions.user_id ('usr_*')
+  //     → users WHERE id = 'usr_*'         → email
+  //     → auth_users WHERE email = ?        → is_superadmin
+  //
+  // NOTE: auth_users uses 'au_*' IDs — never look up auth_users by the usr_* user_id directly.
+  // NOTE: Do NOT use auth_users.tenant_id for resolution (au_sam_inneranimalmedia has null).
+  let role = 'user';
+  let is_superadmin = 0;
+
+  if (env.DB && userId) {
+    try {
+      // Step 1: Resolve canonical email from users table (works for both usr_* and email-keyed sessions)
+      let resolvedEmail = null;
+      if (userId.startsWith('usr_')) {
+        const userRow = await env.DB.prepare(
+          `SELECT email, tenant_id FROM users WHERE id = ? LIMIT 1`
+        ).bind(userId).first();
+        if (userRow) {
+          resolvedEmail = userRow.email || null;
+          if (resolvedEmail && (!email || email === userId)) email = resolvedEmail;
+          // Prefer users.tenant_id over session tenant_id (auth_users.tenant_id may be null)
+          if (userRow.tenant_id && !tenantId) {
+            // Note: tenantId is const from above; rebuild below if needed
+          }
+        }
+      } else {
+        // Session user_id is already an email or au_* format — use directly
+        resolvedEmail = email && email !== userId ? email : userId;
+      }
+
+      // Step 2: Look up auth_users by email to get is_superadmin
+      const lookupEmail = resolvedEmail || String(email || userId);
+      if (lookupEmail) {
+        const authRow = await env.DB.prepare(
+          `SELECT email, COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users
+           WHERE LOWER(email) = LOWER(?) LIMIT 1`
+        ).bind(lookupEmail).first();
+
+        if (authRow && authRow.is_superadmin) {
+          is_superadmin = 1;
+          role = 'superadmin';
+          if (authRow.email && (!email || email === userId)) email = authRow.email;
+          // Superadmins bypass all workspace membership checks — universal access
+          return { id: userId, email, tenant_id: tenantId, role, is_superadmin };
+        }
+      }
+    } catch (e) {
+      console.warn('[getAuthUser Superadmin Resolve Error]', e.message);
+    }
+  }
+
+  // Non-superadmin: resolve canonical email from the 'users' table for usr_-style IDs
   if (env.DB && userId && userId.startsWith('usr_') && (!email || email === userId)) {
     try {
       const u = await env.DB.prepare(
@@ -390,7 +442,7 @@ export async function getAuthUser(request, env) {
     }
   }
 
-  return { id: userId, email: email, tenant_id: tenantId };
+  return { id: userId, email, tenant_id: tenantId, role, is_superadmin };
 }
 
 

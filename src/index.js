@@ -49,7 +49,7 @@ export default {
     // be appended directly. Must construct a new Response with a mutable Headers copy.
     const withSessionHealing = (res) => {
       if (!res) return res;
-      if (sessionCount > 1 || pathLower.startsWith('/dashboard')) {
+      if (true) { // always expire the wildcard .inneranimalmedia.com cookie on every response
         const mutableHeaders = new Headers(res.headers);
         mutableHeaders.append('Set-Cookie', 'session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
         mutableHeaders.append('Set-Cookie', 'session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');

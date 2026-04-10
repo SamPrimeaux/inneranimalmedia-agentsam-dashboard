@@ -219,12 +219,13 @@ export function getApexDomain(hostname) {
   const parts = hostname.split('.');
   if (parts.length >= 2) {
     // Basic logic for inneranimalmedia.com ecosystem
-    if (hostname.endsWith('inneranimalmedia.com')) return '.inneranimalmedia.com';
+    if (hostname.endsWith('inneranimalmedia.com')) return 'inneranimalmedia.com';
     
     // Safety check for public suffixes like .workers.dev where Domain cookies fail
     if (hostname.endsWith('.workers.dev') || hostname.endsWith('.pages.dev')) return '';
     
-    return '.' + parts.slice(-2).join('.');
+    // Return the apex domain (e.g., example.com) without a leading dot.
+    return parts.slice(-2).join('.');
   }
   return hostname;
 }

@@ -29770,16 +29770,27 @@ async function handleEmailPasswordLogin(request, url, env) {
     ).bind(sessionId, userId, expiresAt, ip, ua).run();
     const tidLogin = await resolveTenantAtLogin(env, userId);
     await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
-    const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
-    const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
+    const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
       ? String(redirectPath)
       : '/dashboard/overview';
+
+    const headers = new Headers();
     if (wantsJson) {
-      return loginJson(true, { redirect: next, _setCookie: cookie }, 200);
+      headers.set('Content-Type', 'application/json');
+    } else {
+      headers.set('Location', `${origin(url)}${next}`);
     }
-    const headers = new Headers({ Location: `${origin(url)}${next}` });
+
+    // Host-only cookie
     headers.append('Set-Cookie', cookie);
+    // Legacy clearing
+    headers.append('Set-Cookie', `session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+    headers.append('Set-Cookie', `session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
+    if (wantsJson) {
+      return new Response(JSON.stringify({ ok: true, redirect: next }), { status: 200, headers });
+    }
     return new Response(null, { status: 302, headers });
   }
 
@@ -29893,10 +29904,15 @@ async function handleBackupCodeLogin(request, url, env) {
   ).bind(sessionId, email, expiresAt, ip, ua).run();
   const tidMfa = await resolveTenantAtLogin(env, email);
   await writeIamSessionToKv(env, sessionId, email, tidMfa, expiresAt);
-  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
   const headers = new Headers({ 'Content-Type': 'application/json' });
-  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
+  
+  // Host-only
+  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
+  // Legacy clearing
+  headers.append('Set-Cookie', `session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  headers.append('Set-Cookie', `session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
   return new Response(JSON.stringify({ ok: true, redirect: redirectUrl }), { status: 200, headers });
 }
 
@@ -29910,9 +29926,14 @@ async function handleLogout(request, url, env) {
       await env.SESSION_CACHE.delete(IAM_KV_SESSION_KEY_PREFIX + sid);
     } catch (_) { }
   }
-  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   const headers = new Headers({ Location: `${origin(url)}/auth/signin` });
-  headers.append('Set-Cookie', `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0; Domain=${domain}`);
+  
+  // Host-only clearing
+  headers.append('Set-Cookie', `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  // Legacy domain clearing
+  headers.append('Set-Cookie', `session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  headers.append('Set-Cookie', `session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
   return new Response(null, { status: 302, headers });
 }
 
@@ -30410,9 +30431,14 @@ async function handleGoogleOAuthCallback(request, url, env) {
   // when the signin page didn't handle the globe_exit param. Go direct instead.
   const safeDest = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':'))
     ? returnTo : '/dashboard/overview';
-  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   const headers = new Headers({ Location: `${origin(url)}${safeDest}` });
-  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
+
+  // Host-only
+  headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
+  // Legacy clearing
+  headers.append('Set-Cookie', `session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  headers.append('Set-Cookie', `session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
   return new Response(null, { status: 302, headers });
 }
 
@@ -30557,8 +30583,13 @@ async function handleGitHubOAuthCallback(request, url, env) {
     }
   }
   const loginHeaders = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
-  const d = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
-  loginHeaders.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${d}`);
+  
+  // Host-only
+  loginHeaders.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
+  // Legacy clearing
+  loginHeaders.append('Set-Cookie', `session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  loginHeaders.append('Set-Cookie', `session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
   return new Response(null, { status: 302, headers: loginHeaders });
 }
 

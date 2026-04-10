@@ -8,7 +8,6 @@ import {
   writeIamSessionToKv, 
   resolveTenantAtLogin,
   AUTH_COOKIE_NAME,
-  getApexDomain,
   getAuthUser
 } from '../core/auth';
 
@@ -146,14 +145,20 @@ async function handleLogout(request, url, env) {
     }
   }
 
-  const domain = getApexDomain(url.hostname);
-  return new Response(JSON.stringify({ ok: true }), {
+  const responseBody = JSON.stringify({ ok: true });
+  const response = new Response(responseBody, {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Set-Cookie': `${AUTH_COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0; Domain=${domain}`
-    }
+    headers: { 'Content-Type': 'application/json' }
   });
+
+  // Host-only session cookie clearing
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  
+  // Legacy domain clearing
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
+  return response;
 }
 
 /**
@@ -176,18 +181,21 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   const tenantId = await resolveTenantAtLogin(env, userId);
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 
-  // 3. Response: Ensure cross-subdomain compatibility (Apex domain)
-  const domain = getApexDomain(url.hostname);
-  const cookie = `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
+  // 3. Response: Construct host-only session cookie (removed Domain attribute)
   const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/agent';
-
-  return new Response(JSON.stringify({ ok: true, redirect: next }), {
+  const response = new Response(JSON.stringify({ ok: true, redirect: next }), {
     status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Set-Cookie': cookie
-    }
+    headers: { 'Content-Type': 'application/json' }
   });
+
+  // Set the fresh host-only session
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
+
+  // Explicitly kill the stale legacy wildcard cookies to prevent browser selection conflicts
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+  response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
+
+  return response;
 }
 
 /**

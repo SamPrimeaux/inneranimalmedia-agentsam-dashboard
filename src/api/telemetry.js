@@ -135,6 +135,26 @@ export async function writeTelemetry(env, data, modelRates) {
       'chat', success ? 'info' : 'warning'
     ).run();
 
+    // PHASE 4B — ai_provider_usage rollup (Fires even if cost is 0)
+    if (mid) {
+      const spFixed = spendLedgerProvider(String(provider || 'unknown'));
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const rollupId = `${spFixed}-${modelKey}-${dateStr}-${mid}`;
+      await env.DB.prepare(`
+        INSERT INTO ai_provider_usage (id, provider, model, date, total_requests, total_tokens_in, total_tokens_out, total_cost_usd, tenant_id)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          total_requests = total_requests + 1,
+          total_tokens_in = total_tokens_in + excluded.total_tokens_in,
+          total_tokens_out = total_tokens_out + excluded.total_tokens_out,
+          total_cost_usd = total_cost_usd + excluded.total_cost_usd,
+          tenant_id = excluded.tenant_id
+      `).bind(rollupId, spFixed, modelKey, dateStr, 
+              Math.floor(inputTokens || 0) + Math.floor(cacheReadTokens || 0), 
+              Math.floor(outputTokens || 0), 
+              estimatedCost || 0, mid).run().catch(e => console.warn('[ai_provider_usage] rollup failed:', e.message));
+    }
+
     if (mid && (estimatedCost ?? 0) > 0) {
       const spFixed = spendLedgerProvider(String(provider || 'unknown'));
       const lid = 'sl_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16).toLowerCase();
@@ -147,18 +167,6 @@ export async function writeTelemetry(env, data, modelRates) {
         sid || 'unknown', 'proj_inneranimalmedia_main_prod_013',
         'agent_telemetry', telemetryId
       ).run();
-
-      // PHASE 4B — ai_provider_usage rollup
-      const dateStr = new Date().toISOString().slice(0, 10);
-      await env.DB.prepare(`
-        INSERT INTO ai_provider_usage (id, provider, model, date, total_requests, total_tokens_in, total_tokens_out, total_cost_usd, tenant_id)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
-        ON CONFLICT(provider, model, date, tenant_id) DO UPDATE SET
-          total_requests = total_requests + 1,
-          total_tokens_in = total_tokens_in + excluded.total_tokens_in,
-          total_tokens_out = total_tokens_out + excluded.total_tokens_out,
-          total_cost_usd = total_cost_usd + excluded.total_cost_usd
-      `).bind(`${spFixed}-${modelKey}-${dateStr}-${mid}`, spFixed, modelKey, dateStr, inputTokens, outputTokens, estimatedCost, mid).run();
     }
   } catch (e) {
     console.error('[writeTelemetry] failed:', e.message);
@@ -185,8 +193,9 @@ export async function insertAiGenerationLog(env, opts) {
         input_tokens, output_tokens, computed_cost_usd, status, created_by, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-       opts.inputTokens, opts.outputTokens, opts.computedCostUsd, opts.status || 'completed',
-      opts.createdBy || 'worker', now
+       id, tid, opts.generationType, opts.prompt || '', opts.model || 'unknown', opts.responseText || '',
+       opts.inputTokens || 0, opts.outputTokens || 0, opts.computedCostUsd || 0, opts.status || 'completed',
+       opts.createdBy || 'worker', now
     ).run();
 
     // PHASE 4D — Snapshot context if requested
@@ -196,7 +205,7 @@ export async function insertAiGenerationLog(env, opts) {
         INSERT INTO ai_context_versions (id, slug, content_hash, version_data, created_at, tenant_id)
         VALUES (?, ?, ?, ?, ?, ?)
       `).bind(snapId, opts.contextSlug, opts.contextHash || 'none', 
-              JSON.stringify(opts.contextToSnap), now, tid).run();
+              JSON.stringify(opts.contextToSnap), now, tid).run().catch(() => {});
     }
   } catch (e) {
     console.warn('[insertAiGenerationLog] failed:', e.message);

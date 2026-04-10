@@ -179,7 +179,7 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   // 3. Response: Ensure cross-subdomain compatibility (Apex domain)
   const domain = getApexDomain(url.hostname);
   const cookie = `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
-  const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/overview';
+  const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/agent';
 
   return new Response(JSON.stringify({ ok: true, redirect: next }), {
     status: 200,

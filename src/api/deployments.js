@@ -39,12 +39,18 @@ export async function runPostDeployQualityChecks(env, deploymentId) {
   }
 }
 
+import { handleGitStatusRequest } from './git-status.js';
+
 /**
  * Main dispatcher for Deployment-related API routes (/api/deployments/*, /api/internal/*).
  */
 export async function handleDeploymentsApi(request, url, env, ctx) {
     const pathLower = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
     const method = request.method.toUpperCase();
+
+    if (pathLower === '/api/internal/git-status' && method === 'GET') {
+      return handleGitStatusRequest(request, env, ctx);
+    }
 
     // ── /api/deployments/recent ──
     if (pathLower === '/api/deployments/recent' && method === 'GET') {

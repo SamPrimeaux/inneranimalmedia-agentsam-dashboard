@@ -110,9 +110,18 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       : '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
+  const [sshOpen, setSshOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const sshRef = useRef<HTMLDivElement>(null);
 
-
+  const QUICK_COMMANDS = [
+    { icon: Monitor, label: 'Local PTY', cmd: 'ssh iam-pty', desc: 'Inner Animal PTY' },
+    { icon: Globe, label: 'Production SSH', cmd: 'ssh production-iam', desc: 'Mainstage Access' },
+    { icon: HardDrive, label: 'Sandbox SSH', cmd: 'ssh sandbox-d1', desc: 'Experiment D1' },
+    { icon: MessageSquare, label: 'Clear Chat', cmd: 'clear', desc: 'Reset Agent Session' },
+    { icon: Package, label: 'Build Project', cmd: 'npm run build', desc: 'Production Bundle' },
+    { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
+  ];
 
   useEffect(() => {
     const onMode = (ev: Event) => {
@@ -131,6 +140,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (panelRef.current && !panelRef.current.contains(t)) setNotifOpen(false);
+      if (sshRef.current && !sshRef.current.contains(t)) setSshOpen(false);
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousedown', onDown);
@@ -216,7 +226,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       )}
 
-      <div className="h-6 flex items-center justify-between text-[10px] font-mono text-[var(--text-main)]/90 w-full px-1">
+      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" style={{ fontFamily: "'Menlo', 'Monaco', 'Courier New', monospace" }}>
         {/* Left Side: Environment Switcher */}
         {/* Left Side: Environment Status Dot */}
         <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative">
@@ -228,7 +238,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               className="flex items-center gap-1.5 px-1 opacity-80"
               title={brandTitle}
             >
-              <span className="text-[9px] uppercase tracking-widest font-bold">
+              <span className="uppercase tracking-tight font-bold">
                 {healthOk === true ? 'IAM-OK' : 'Standby'}
               </span>
             </div>
@@ -335,10 +345,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               className="hidden sm:flex items-center gap-1 hover:text-[var(--text-main)] cursor-pointer px-2 py-0.5 transition-colors border-0 bg-transparent rounded-sm bg-[var(--bg-hover)]/80"
               title="Format document (Monaco)"
               onClick={() => onFormatClick?.()}
+              style={{ fontSize: '11px' }}
             >
               <Check size={12} className="text-[var(--solar-green)]" /> Prettier
             </button>
           )}
+
           <button
             type="button"
             className="relative flex items-center justify-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-3 h-full transition-colors border-0 bg-transparent"
@@ -354,6 +366,52 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               </span>
             )}
           </button>
+
+          <div className="relative h-full flex items-center" ref={sshRef}>
+            <button
+              type="button"
+              className={`flex items-center justify-center cursor-pointer px-2 h-full transition-colors border-0 bg-transparent ${
+                sshOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]'
+              }`}
+              title="Command Hub (SSH & Tools)"
+              onClick={() => setSshOpen(!sshOpen)}
+            >
+              <KeyRound size={13} className="opacity-70" />
+            </button>
+
+            {sshOpen && (
+              <div
+                className="absolute bottom-full right-0 mb-1 z-[110] w-[240px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded shadow-xl overflow-hidden"
+                onMouseDown={stop}
+              >
+                <div className="px-3 py-1.5 border-b border-[var(--border-subtle)] text-[9px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
+                  Command Hub
+                </div>
+                <div className="max-h-[300px] overflow-y-auto">
+                  {QUICK_COMMANDS.map((c) => (
+                    <button
+                      key={c.label}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-hover)] text-left group transition-colors border-0 bg-transparent"
+                      onClick={() => {
+                        window.dispatchEvent(
+                          new CustomEvent('iam-agent-external-send', { detail: { message: c.cmd } })
+                        );
+                        setSshOpen(false);
+                      }}
+                    >
+                      <c.icon size={12} className="text-[var(--solar-cyan)] opacity-70 group-hover:opacity-100" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-medium text-[var(--text-main)] group-hover:text-[var(--solar-cyan)] truncate">
+                          {c.label}
+                        </div>
+                        <div className="text-[9px] text-[var(--text-muted)] truncate">{c.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

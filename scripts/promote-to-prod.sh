@@ -335,6 +335,14 @@ TRIGGERED_ESC=$(printf '%s' "$TRIGGERED_BY" | sed "s/'/''/g")
 
 # ── D1 Logging via cicd-event ──
 echo "Logging promotion event to centralized D1 registry..."
+
+# Capture git changes relative to HEAD~1
+GIT_CHANGES_JSON=$(git diff --name-status HEAD~1 HEAD 2>/dev/null | awk '{type=$1; path=$2; printf "{\"type\":\"%s\",\"path\":\"%s\"},", type, path}' | sed 's/,$//')
+[ -n "$GIT_CHANGES_JSON" ] && GIT_CHANGES_JSON="[${GIT_CHANGES_JSON}]" || GIT_CHANGES_JSON="[]"
+
+CHG_COUNT=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | wc -l | tr -d ' ')
+SUMMARY="Production Promote: v${CURRENT_V:-0} deployed. Includes ${CHG_COUNT:-0} change(s). Git: ${PROMOTE_GIT_HASH:0:7}"
+
 PROMOTE_JSON=$(cat <<EOF
 {
   "event": "post_promote",
@@ -349,7 +357,9 @@ PROMOTE_JSON=$(cat <<EOF
     "r2_files": ${R2_LINE_COUNT:-0},
     "r2_bytes": ${CICD_R2_BUNDLE_BYTES:-0},
     "ms_push": ${CICD_MS_PUSH:-0},
-    "ms_pull": ${CICD_MS_PULL:-0}
+    "ms_pull": ${CICD_MS_PULL:-0},
+    "summary": "${SUMMARY}",
+    "changes": ${GIT_CHANGES_JSON}
   }
 }
 EOF

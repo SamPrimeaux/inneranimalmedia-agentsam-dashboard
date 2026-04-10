@@ -376,6 +376,14 @@ printf '%s\n' "$SANDBOX_VERSION" > "${REPO_ROOT}/agent-dashboard/.last-sandbox-w
 
 # ── D1 Logging via cicd-event ──
 echo "Logging event to centralized D1 registry..."
+
+# Capture git changes relative to HEAD~1
+GIT_CHANGES_JSON=$(git diff --name-status HEAD~1 HEAD 2>/dev/null | awk '{type=$1; path=$2; printf "{\"type\":\"%s\",\"path\":\"%s\"},", type, path}' | sed 's/,$//')
+[ -n "$GIT_CHANGES_JSON" ] && GIT_CHANGES_JSON="[${GIT_CHANGES_JSON}]" || GIT_CHANGES_JSON="[]"
+
+CHG_COUNT=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | wc -l | tr -d ' ')
+SUMMARY="Sandbox Deploy: v${NEXT_V:-0} pushed. ${CHG_COUNT:-0} change(s). Git: ${SANDBOX_GIT_HASH:0:7}"
+
 PROMOTE_JSON=$(cat <<EOF
 {
   "event": "post_sandbox",
@@ -386,7 +394,9 @@ PROMOTE_JSON=$(cat <<EOF
     "r2_bytes": ${R2_BYTE_EST:-0},
     "ms_build": ${CICD_MS_BUILD:-0},
     "ms_r2": ${CICD_MS_R2:-0},
-    "ms_worker": ${CICD_MS_WORKER:-0}
+    "ms_worker": ${CICD_MS_WORKER:-0},
+    "summary": "${SUMMARY}",
+    "changes": ${GIT_CHANGES_JSON}
   }
 }
 EOF

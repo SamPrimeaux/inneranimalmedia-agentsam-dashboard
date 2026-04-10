@@ -75,10 +75,33 @@ async function handlePostPromote(p, env) {
               p.git_hash, p.worker_version_id, ts)
   ));
 
-  // 4. agentsam_hook_execution — fire post_deploy hooks
-  await fireHooks('post_deploy', p, env);
+  // 4. deployment_changes (batch)
+  if (p.changes && Array.isArray(p.changes) && p.changes.length > 0) {
+    const chgStmt = db.prepare(`
+      INSERT INTO deployment_changes (id, deployment_id, file_path, change_type, created_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+    `);
+    await db.batch(p.changes.map(c => 
+      chgStmt.bind(`dc-${p.worker_version_id}-${c.path}`, p.worker_version_id, c.path, c.type)
+    )).catch(e => console.warn('[post_promote] changes failed:', e.message));
+  }
 
-  return Response.json({ ok: true, event: 'post_promote', tables_written: 4 });
+  // 5. project_storage
+  if (p.r2_pruned_files != null) {
+    await db.prepare(`
+      INSERT INTO project_storage (id, project_id, resource_id, resource_type, storage_bytes, file_count, metadata_json, created_at)
+      VALUES (?, 'inneranimalmedia', 'r2-production', 'r2_bucket', ?, ?, ?, datetime('now'))
+    `).bind(`ps-prod-${ts}`, p.r2_bytes || 0, p.r2_files || 0, JSON.stringify({
+      pruned_files: p.r2_pruned_files,
+      pruned_bytes: p.r2_pruned_bytes
+    })).run().catch(() => {});
+  }
+
+  // 6. fire hooks (including e2e-hook-1)
+  await fireHooks('post_deploy', p, env);
+  await fireHooks('e2e-hook-1', p, env, true); // Explicitly fire e2e-hook-1
+
+  return Response.json({ ok: true, event: 'post_promote', tables_written: 6 });
 }
 
 async function handlePostSandbox(p, env) {
@@ -93,7 +116,36 @@ async function handlePostSandbox(p, env) {
     VALUES (?, datetime('now'), 'success', 'sam_primeaux', 'sandbox', 'inneranimal-dashboard', ?, ?, datetime('now'))
   `).bind(`sandbox-${ts}`, p.git_hash, p.dashboard_version).run();
 
-  return Response.json({ ok: true, event: 'post_sandbox' });
+  // 2. tracking_metrics
+  const metrics = [
+    ['r2_files_uploaded', 'r2', p.r2_files, 'files'],
+    ['r2_bytes_uploaded', 'r2', p.r2_bytes, 'bytes'],
+    ['r2_pruned_files', 'cleanup', p.r2_pruned_files || 0, 'files']
+  ];
+  const stmt = db.prepare(`
+    INSERT INTO tracking_metrics
+      (id, metric_name, metric_type, metric_value, metric_unit, environment, source, commit_sha, recorded_at)
+    VALUES (?, ?, ?, ?, ?, 'sandbox', 'deploy_sandbox', ?, ?)
+  `);
+  await db.batch(metrics.map(([name, type, val, unit]) =>
+    stmt.bind(`tm-sandbox-${ts}-${name}`, name, type, val, unit, p.git_hash, ts)
+  )).catch(() => {});
+
+  // 3. project_storage
+  if (p.r2_pruned_files != null) {
+    await db.prepare(`
+      INSERT INTO project_storage (id, project_id, resource_id, resource_type, storage_bytes, file_count, metadata_json, created_at)
+      VALUES (?, 'inneranimalmedia', 'r2-sandbox', 'r2_bucket', ?, ?, ?, datetime('now'))
+    `).bind(`ps-sandbox-${ts}`, p.r2_bytes || 0, p.r2_files || 0, JSON.stringify({
+      pruned_files: p.r2_pruned_files
+    })).run().catch(() => {});
+  }
+
+  // 4. fire hooks (including e2e-hook-1)
+  await fireHooks('post_sandbox', p, env);
+  await fireHooks('e2e-hook-1', p, env, true); // Explicitly fire e2e-hook-1
+
+  return Response.json({ ok: true, event: 'post_sandbox', tables_written: 4 });
 }
 
 async function handleSessionStart(p, env) {
@@ -122,16 +174,23 @@ async function handleSessionEnd(p, env) {
   return Response.json({ ok: true, hours });
 }
 
-async function fireHooks(trigger, payload, env) {
-  const hooks = await env.DB.prepare(
-    `SELECT id, command FROM agentsam_hook WHERE trigger = ? AND is_active = 1`
-  ).bind(trigger).all();
+async function fireHooks(trigger, payload, env, isExplicitId = false) {
+  let query = `SELECT id, command FROM agentsam_hook WHERE trigger = ? AND is_active = 1`;
+  if (isExplicitId) {
+    query = `SELECT id, command FROM agentsam_hook WHERE id = ? AND is_active = 1`;
+  }
+
+  const hooks = await env.DB.prepare(query).bind(trigger).all();
 
   for (const hook of hooks.results) {
     const start = Date.now();
     let status = 'success', error = null, output = null;
+    const summary = payload.summary || `Deployment ${payload.worker_version_id || ''} completed.`;
+
     try {
-      output = `Hook queued: ${hook.command.slice(0, 120)}`;
+      // Simulate hook execution via command processing (Placeholder for actual PTY/Shell trigger)
+      output = `Trigger: ${trigger} | Summary: ${summary} | Command: ${hook.command.slice(0, 100)}`;
+      console.log(`[Hook] Firing ${hook.id}: ${output}`);
     } catch (e) {
       status = 'error';
       error = e.message;
@@ -152,6 +211,6 @@ async function fireHooks(trigger, payload, env) {
           total_succeeded = total_succeeded + CASE WHEN ? = 'success' THEN 1 ELSE 0 END,
           total_failed = total_failed + CASE WHEN ? != 'success' THEN 1 ELSE 0 END
       WHERE id = ?
-    `).bind(status, status, hook.id).run();
+    `).bind(status, status, hook.id).run().catch(() => {});
   }
 }

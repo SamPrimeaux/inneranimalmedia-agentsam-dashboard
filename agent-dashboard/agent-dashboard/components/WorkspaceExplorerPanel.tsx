@@ -50,6 +50,7 @@ export const WorkspaceExplorerPanel: React.FC<{
   onClearRecentFiles: () => void;
   onOpenRecent: (entry: RecentFileEntry) => void | Promise<void>;
   onOpenLocalFolder: () => void;
+  onOpenFilesActivity: () => void;
   onOpenGitHubActivity: () => void;
   onOpenWorkspace: (name: string, path: string) => void;
 }> = ({

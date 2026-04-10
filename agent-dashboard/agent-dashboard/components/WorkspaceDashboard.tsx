@@ -12,7 +12,12 @@ import {
   Sparkles,
   ChevronDown,
   Monitor,
-  Database
+  Database,
+  Plus,
+  Zap,
+  Layers,
+  Globe,
+  History as HistoryIcon
 } from 'lucide-react';
 import { useEditor } from '../src/EditorContext';
 import type { RecentFileEntry } from '../src/ideWorkspace';
@@ -206,7 +211,7 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
                         { icon: FileText, label: 'Plan', slug: 'plan' },
                         { icon: Bug, label: 'Debug', slug: 'debug' },
                         { icon: Target, label: 'Ask', slug: 'ask' },
-                        { icon: TermIcon, label: 'Image', action: () => fileInputRef.current?.click() },
+                        { icon: Terminal, label: 'Image', action: () => fileInputRef.current?.click() },
                         { icon: Zap, label: 'Skills', action: () => window.dispatchEvent(new CustomEvent('iam-sidebar-toggle', { detail: { activity: 'mcps' } })) },
                         { icon: Layers, label: 'MCP Servers', action: () => window.dispatchEvent(new CustomEvent('iam-sidebar-toggle', { detail: { activity: 'mcps' } })) },
                       ].map((item, i) => {
@@ -358,7 +363,7 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
       {/* ── Recent Projects (Preserved) ── */}
       <div className="w-full max-w-3xl animate-in fade-in slide-in-from-bottom-10 duration-1000 delay-300">
         <div className="flex items-center gap-2 mb-4 px-2">
-            <History size={14} className="text-[var(--text-muted)]" />
+            <HistoryIcon size={14} className="text-[var(--text-muted)]" />
             <h2 className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Recently Opened</h2>
         </div>
         

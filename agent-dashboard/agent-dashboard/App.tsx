@@ -10,6 +10,7 @@ import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
 import { ChatAssistant } from './components/ChatAssistant';
 import { WorkspaceDashboard } from './components/WorkspaceDashboard';
+import { MCPPanel } from './components/MCPPanel';
 import { IAM_AGENT_CHAT_CONVERSATION_CHANGE, LS_AGENT_CHAT_CONVERSATION_ID } from './agentChatConstants';
 import { WorkspaceLauncher } from './components/WorkspaceLauncher';
 import { XTermShell, XTermShellHandle } from './components/XTermShell';
@@ -114,7 +115,7 @@ const App: React.FC = () => {
   const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
 
   // IDE State
-  type TabId = 'Workspace' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
+  type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
   const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
@@ -153,6 +154,7 @@ const App: React.FC = () => {
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
   /** ≤768px: secondary rail actions (sheet above bottom tab bar). */
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [isWorkspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false);
 
   const [isNarrowViewport, setIsNarrowViewport] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 768,
@@ -282,6 +284,14 @@ const App: React.FC = () => {
     }, 650);
     return () => clearTimeout(t);
   }, [agentChatConversationId, ideWorkspace, gitBranch, recentFiles]);
+  
+  const mappedRecentFiles = useMemo(() => {
+    return recentFiles.map(f => ({
+      name: f.name,
+      path: f.workspacePath || f.githubPath || f.r2Key || f.id,
+      label: f.label
+    }));
+  }, [recentFiles]);
 
   // Tabs: only 'welcome' is open by default. Others open on demand and can be closed.
   const [openTabs, setOpenTabs] = useState<TabId[]>(['welcome']);
@@ -1377,7 +1387,7 @@ const App: React.FC = () => {
           <div className="flex-1 flex justify-center items-center min-w-0 px-2 gap-2">
               <UnifiedSearchBar
                 workspaceLabel={workspaceDisplayName}
-                recentFiles={recentFiles}
+                recentFiles={mappedRecentFiles}
                 onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
                 onRunCommand={(cmd) => terminalRef.current?.runCommand(cmd)}
               />
@@ -1787,6 +1797,9 @@ const App: React.FC = () => {
                             onConnectWorkspace={() => setWorkspaceLauncherOpen(true)}
                             onGithubSync={() => setActiveActivity('actions')}
                             recentFiles={recentFiles}
+                            workspaceRows={workspaceRows}
+                            authWorkspaceId={authWorkspaceId}
+                            onSwitchWorkspace={(id) => setAuthWorkspaceId(id)}
                           />
                       </div>
                   )}
@@ -2080,6 +2093,18 @@ const App: React.FC = () => {
           window.dispatchEvent(new CustomEvent('iam-format-document'));
         }}
       />
+
+      {isWorkspaceLauncherOpen && (
+        <WorkspaceLauncher
+          onClose={() => setWorkspaceLauncherOpen(false)}
+          onOpenLocalFolder={() => {
+            setWorkspaceLauncherOpen(false);
+            setActiveActivity('files');
+            setNativeFolderOpenSignal(n => n + 1);
+          }}
+          onConnectWorkspace={() => setWorkspaceLauncherOpen(false)}
+        />
+      )}
     </div>
   );
 };

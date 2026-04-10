@@ -9,10 +9,6 @@ import { handleTimeDispatch } from './tools/time';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
-export { 
-  IAMCollaborationSession, AgentChatSqlV1, ChessRoom, 
-  IAMSession, IAMAgentSession, MeauxSession 
-} from './core/durable_objects';
 
 // --- Durable Objects ---
 export { IAMCollaborationSession } from './do/Collaboration.js';

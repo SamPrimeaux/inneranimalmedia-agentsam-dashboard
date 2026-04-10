@@ -8,6 +8,11 @@
 let SUPERADMIN_IDS_CACHE = null;
 let SUPERADMIN_IDS_CACHE_TIME = 0;
 
+/** SESSION_CACHE (production-KV_SESSIONS): fast edge session blob; D1 auth_sessions remains source of truth for expiry audit. */
+export const IAM_KV_SESSION_KEY_PREFIX = 'iam_sess_v1:';
+export const AUTH_COOKIE_NAME = 'session';
+export const AUTH_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+
 export function invalidateSuperadminIdentifiersCache() {
   SUPERADMIN_IDS_CACHE = null;
   SUPERADMIN_IDS_CACHE_TIME = 0;
@@ -212,15 +217,93 @@ export function resolveTenantIdForWorker(session, env) {
 export async function getSession(env, request) {
   if (!env.SESSION_CACHE) return null;
   const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(/auth_session=([^;]+)/);
+  const match = cookie.match(new RegExp(`${AUTH_COOKIE_NAME}=([^;]+)`));
   if (!match) return null;
   const sessionId = match[1];
   try {
-    const data = await env.SESSION_CACHE.get(`session:${sessionId}`);
+    const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
     return data ? JSON.parse(data) : null;
   } catch (e) {
     return null;
   }
+}
+
+export async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {
+  if (!env.SESSION_CACHE || !sessionId || !userId) return;
+  const tid = tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
+  const payload = { v: 1, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
+  try {
+    await env.SESSION_CACHE.put(IAM_KV_SESSION_KEY_PREFIX + sessionId, JSON.stringify(payload), {
+      expirationTtl: ttlSecondsFromExpiresAtIso(expiresAtIso),
+    });
+  } catch (e) {
+    console.warn('[writeIamSessionToKv]', e?.message ?? e);
+  }
+}
+
+export function ttlSecondsFromExpiresAtIso(expiresAtIso) {
+  if (!expiresAtIso) return AUTH_SESSION_TTL_SECONDS;
+  const ms = new Date(expiresAtIso).getTime() - Date.now();
+  return Math.max(300, Math.min(AUTH_SESSION_TTL_SECONDS, Math.floor(ms / 1000)));
+}
+
+export async function fetchAuthUserTenantId(env, userKey) {
+  if (!env?.DB || userKey == null || String(userKey).trim() === '') return null;
+  const k = String(userKey).trim();
+  try {
+    const u = await env.DB.prepare(
+      `SELECT tenant_id FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`
+    ).bind(k, k).first();
+    if (u && u.tenant_id != null && String(u.tenant_id).trim() !== '') return String(u.tenant_id).trim();
+  } catch (e) {
+    console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
+  }
+  return null;
+}
+
+export async function resolveTenantAtLogin(env, userId) {
+  const fromUser = await fetchAuthUserTenantId(env, userId);
+  if (fromUser) return fromUser;
+  return resolveTenantIdForWorker(null, env);
+}
+
+/** Hex string to Uint8Array for PBKDF2 salt. */
+function hexToBytes(hex) {
+  const arr = [];
+  for (let i = 0; i < hex.length; i += 2) arr.push(parseInt(hex.slice(i, i + 2), 16));
+  return new Uint8Array(arr);
+}
+
+/** Verify password against PBKDF2-SHA256 stored hash (hex) and salt (hex). Returns true if match. */
+export async function verifyPassword(password, saltHex, hashHex) {
+  const salt = hexToBytes(saltHex);
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    key,
+    256
+  );
+  const derivedHex = Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return derivedHex === hashHex.toLowerCase();
+}
+
+/** Generate new salt (32 bytes hex) and PBKDF2-SHA256 hash for change-password. Returns { saltHex, hashHex }. */
+export async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    key,
+    256
+  );
+  const hashHex = Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { saltHex, hashHex };
+}
+
+export async function writeIamSessionToKv_old(env, sessionId, userId, tenantId, expiresAtIso) {
+    // Legacy mapping (superseded by writeIamSessionToKv)
+    return writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 }
 
 export async function getAuthUser(request, env) {

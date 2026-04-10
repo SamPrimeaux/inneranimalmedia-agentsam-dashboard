@@ -20,6 +20,7 @@ import { handleDrawApi } from './api/draw';
 import { handleThemesApi } from './api/themes';
 import { handleHubApi } from './api/hub';
 import { handleOverviewApi } from './api/overview';
+import { handleAuthApi } from './api/auth';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects ---
@@ -136,6 +137,10 @@ export default {
 
       if (pathLower.startsWith('/api/overview')) {
         return handleOverviewApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/auth')) {
+        return handleAuthApi(request, url, env);
       }
 
 

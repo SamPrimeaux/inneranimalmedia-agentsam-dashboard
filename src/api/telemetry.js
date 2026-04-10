@@ -135,24 +135,28 @@ export async function writeTelemetry(env, data, modelRates) {
       'chat', success ? 'info' : 'warning'
     ).run();
 
-    // PHASE 4B — ai_provider_usage rollup (Fires even if cost is 0)
-    if (mid) {
+    // PHASE 4B — ai_provider_usage rollup (correct schema: tokens_input/tokens_output/cost_usd/requests)
+    // SCHEMA FIX: actual table has NO model or tenant_id column. UNIQUE(provider, date) declared inline.
+    // Previous upsert used wrong column names (total_requests, total_tokens_in, etc.) and
+    // conflict target (id) — it was silently failing on every call after the first row.
+    {
       const spFixed = spendLedgerProvider(String(provider || 'unknown'));
       const dateStr = new Date().toISOString().slice(0, 10);
-      const rollupId = `${spFixed}-${modelKey}-${dateStr}-${mid}`;
+      const rowId = `${spFixed}-${dateStr}`;
       await env.DB.prepare(`
-        INSERT INTO ai_provider_usage (id, provider, model, date, total_requests, total_tokens_in, total_tokens_out, total_cost_usd, tenant_id)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          total_requests = total_requests + 1,
-          total_tokens_in = total_tokens_in + excluded.total_tokens_in,
-          total_tokens_out = total_tokens_out + excluded.total_tokens_out,
-          total_cost_usd = total_cost_usd + excluded.total_cost_usd,
-          tenant_id = excluded.tenant_id
-      `).bind(rollupId, spFixed, modelKey, dateStr, 
-              Math.floor(inputTokens || 0) + Math.floor(cacheReadTokens || 0), 
-              Math.floor(outputTokens || 0), 
-              estimatedCost || 0, mid).run().catch(e => console.warn('[ai_provider_usage] rollup failed:', e.message));
+        INSERT INTO ai_provider_usage (id, provider, date, requests, tokens_input, tokens_output, cost_usd)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(provider, date) DO UPDATE SET
+          requests      = requests + 1,
+          tokens_input  = tokens_input  + excluded.tokens_input,
+          tokens_output = tokens_output + excluded.tokens_output,
+          cost_usd      = cost_usd + excluded.cost_usd
+      `).bind(
+        rowId, spFixed, dateStr,
+        Math.floor((inputTokens || 0) + (cacheReadTokens || 0)),
+        Math.floor(outputTokens || 0),
+        estimatedCost || 0
+      ).run().catch(e => console.warn('[ai_provider_usage] rollup failed:', e.message));
     }
 
     if (mid && (estimatedCost ?? 0) > 0) {
@@ -199,13 +203,26 @@ export async function insertAiGenerationLog(env, opts) {
     ).run();
 
     // PHASE 4D — Snapshot context if requested
-    if (opts.contextToSnap && opts.contextSlug) {
-      const snapId = `ctx-${opts.contextSlug}-${now}`;
+    // SCHEMA FIX: actual ai_context_versions columns are (context_id, version_number, value_before,
+    // value_after, change_reason, changed_by) — not (slug, content_hash, version_data, tenant_id).
+    if (opts.contextToSnap && opts.contextId) {
+      const snapId = `ctxv_${crypto.randomUUID().replace(/-/g,'').slice(0,12)}`;
+      // Get current max version number for this context_id
+      const verRow = await env.DB.prepare(
+        `SELECT COALESCE(MAX(version_number), 0) as max_v FROM ai_context_versions WHERE context_id = ?`
+      ).bind(opts.contextId).first().catch(() => null);
+      const nextVer = (verRow?.max_v ?? 0) + 1;
       await env.DB.prepare(`
-        INSERT INTO ai_context_versions (id, slug, content_hash, version_data, created_at, tenant_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(snapId, opts.contextSlug, opts.contextHash || 'none', 
-              JSON.stringify(opts.contextToSnap), now, tid).run().catch(() => {});
+        INSERT INTO ai_context_versions
+          (id, context_id, version_number, value_before, value_after, change_reason, changed_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        snapId, opts.contextId, nextVer,
+        opts.valueBefore ?? null,
+        JSON.stringify(opts.contextToSnap),
+        opts.changeReason || 'generation_log',
+        opts.changedBy || 'worker'
+      ).run().catch(() => {});
     }
   } catch (e) {
     console.warn('[insertAiGenerationLog] failed:', e.message);

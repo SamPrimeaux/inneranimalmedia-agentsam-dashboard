@@ -105,22 +105,45 @@ async function handlePostPromote(p, env) {
 }
 
 async function handlePostSandbox(p, env) {
-  // Logic for post_sandbox (deployments, tracking_metrics, project_storage as specified in Phase 4A)
-  // Implementation inferred from post_promote logic
   const db = env.DB;
   const ts = Math.floor(Date.now() / 1000);
-  
-  await db.prepare(`
-    INSERT INTO deployments
-      (id, timestamp, status, deployed_by, environment, worker_name, git_hash, version, created_at)
-    VALUES (?, datetime('now'), 'success', 'sam_primeaux', 'sandbox', 'inneranimal-dashboard', ?, ?, datetime('now'))
-  `).bind(`sandbox-${ts}`, p.git_hash, p.dashboard_version).run();
+  // Use worker_version_id as the deployment id when available (matches post_promote pattern)
+  const deployId = p.worker_version_id || `sandbox-${ts}`;
 
-  // 2. tracking_metrics
+  // 1. deployments
+  await db.prepare(`
+    INSERT OR IGNORE INTO deployments
+      (id, timestamp, status, deployed_by, environment, worker_name, git_hash, version, created_at)
+    VALUES (?, datetime('now'), 'success', 'sam_primeaux', 'sandbox',
+            'inneranimal-dashboard', ?, ?, datetime('now'))
+  `).bind(deployId, p.git_hash, p.dashboard_version).run();
+
+  // 2. deployment_health_checks (was missing from post_sandbox — now wired)
+  const hcStatus = parseInt(p.health_status || '0', 10);
+  const hcLabel = hcStatus >= 200 && hcStatus < 300 ? 'healthy'
+    : hcStatus >= 300 && hcStatus < 500 ? 'degraded' : 'down';
+  if (hcStatus > 0) {
+    await db.prepare(`
+      INSERT INTO deployment_health_checks
+        (deployment_id, check_type, check_url, status_code, status,
+         response_time_ms, checked_at)
+      VALUES (?, 'http', ?, ?, ?, ?, datetime('now'))
+    `).bind(
+      deployId,
+      'https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent',
+      hcStatus, hcLabel, p.health_ms || 0
+    ).run().catch(e => console.warn('[post_sandbox] health_checks failed:', e.message));
+  }
+
+  // 3. tracking_metrics
   const metrics = [
     ['r2_files_uploaded', 'r2', p.r2_files, 'files'],
     ['r2_bytes_uploaded', 'r2', p.r2_bytes, 'bytes'],
-    ['r2_pruned_files', 'cleanup', p.r2_pruned_files || 0, 'files']
+    ['r2_pruned', 'cleanup', p.r2_pruned || p.r2_pruned_files || 0, 'files'],
+    ['ms_build', 'deploy', p.ms_build || 0, 'ms'],
+    ['ms_r2', 'deploy', p.ms_r2 || 0, 'ms'],
+    ['ms_worker', 'deploy', p.ms_worker || 0, 'ms'],
+    ['ms_wall', 'deploy', p.ms_wall || 0, 'ms'],
   ];
   const stmt = db.prepare(`
     INSERT INTO tracking_metrics
@@ -131,21 +154,38 @@ async function handlePostSandbox(p, env) {
     stmt.bind(`tm-sandbox-${ts}-${name}`, name, type, val, unit, p.git_hash, ts)
   )).catch(() => {});
 
-  // 3. project_storage
-  if (p.r2_pruned_files != null) {
-    await db.prepare(`
-      INSERT INTO project_storage (id, project_id, resource_id, resource_type, storage_bytes, file_count, metadata_json, created_at)
-      VALUES (?, 'inneranimalmedia', 'r2-sandbox', 'r2_bucket', ?, ?, ?, datetime('now'))
-    `).bind(`ps-sandbox-${ts}`, p.r2_bytes || 0, p.r2_files || 0, JSON.stringify({
-      pruned_files: p.r2_pruned_files
-    })).run().catch(() => {});
-  }
+  // 4. project_storage — R2 bucket prune snapshot
+  // NOTE: project_storage is also written by _r2_prune_sandbox() in the shell script.
+  // This write uses the cicd-event payload so both records exist (shell writes before worker deploy,
+  // cicd-event writes after, with confirmed worker_version_id as the deployment anchor).
+  await db.prepare(`
+    INSERT OR IGNORE INTO project_storage
+      (id, storage_id, storage_name, storage_type, storage_url,
+       tenant_id, status, metadata_json, created_at, updated_at)
+    VALUES (
+      ?, ?, 'Sandbox CICD Bucket', 'r2',
+      'https://dash.cloudflare.com/r2/agent-sam-sandbox-cicd',
+      'tenant_sam_primeaux', 'active', ?, unixepoch(), unixepoch()
+    )
+  `).bind(
+    `ps-cicd-event-${deployId}`,
+    'agent-sam-sandbox-cicd',
+    JSON.stringify({
+      r2_files: p.r2_files || 0,
+      r2_bytes: p.r2_bytes || 0,
+      r2_objects_before: p.r2_objects_before || 0,
+      r2_objects_after: p.r2_objects_after || 0,
+      r2_pruned: p.r2_pruned || 0,
+      change_count: p.change_count || 0,
+      deploy_version: p.dashboard_version,
+      worker_version_id: deployId
+    })
+  ).run().catch(() => {});
 
-  // 4. fire hooks (including e2e-hook-1)
-  await fireHooks('post_sandbox', p, env);
-  await fireHooks('e2e-hook-1', p, env, true); // Explicitly fire e2e-hook-1
+  // 5. fire hooks
+  await fireHooks('post_deploy', p, env);
 
-  return Response.json({ ok: true, event: 'post_sandbox', tables_written: 4 });
+  return Response.json({ ok: true, event: 'post_sandbox', tables_written: 5 });
 }
 
 async function handleSessionStart(p, env) {

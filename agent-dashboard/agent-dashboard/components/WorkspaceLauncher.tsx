@@ -26,15 +26,17 @@ interface WorkspaceItem {
 }
 
 interface WorkspaceLauncherProps {
-  onSelect: (ws: WorkspaceItem) => void;
+  onSelect?: (ws: WorkspaceItem) => void;
   onClose: () => void;
+  onOpenLocalFolder?: () => void;
+  onConnectWorkspace?: () => void;
 }
 
 /**
  * WorkspaceLauncher: The central switchboard for Agent Sam projects.
  * Replaces legacy WelcomeLauncher with a production-grade context selector.
  */
-export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({ onSelect, onClose }) => {
+export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({ onSelect, onClose, onOpenLocalFolder, onConnectWorkspace }) => {
   const [activeFilter, setActiveFilter] = useState<'all' | 'local' | 'github' | 'r2' | 'ssh'>('all');
   const [search, setSearch] = useState('');
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
@@ -120,7 +122,10 @@ export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({ onSelect, 
             
             <div className="pt-8 px-3">
               <p className="text-[10px] uppercase tracking-widest font-bold text-[var(--text-muted)] mb-4">Operations</p>
-              <button className="w-full flex items-center gap-3 text-sm text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors py-2">
+              <button 
+                onClick={onOpenLocalFolder}
+                className="w-full flex items-center gap-3 text-sm text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors py-2"
+              >
                 <Plus size={14} /> New Workspace
               </button>
               <button className="w-full flex items-center gap-3 text-sm text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors py-2">

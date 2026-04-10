@@ -12,6 +12,7 @@ import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
 import { handleSettingsRequest } from './api/settings';
 import { handleWorkspaceApi } from './api/workspace';
+import { handleCicdEvent } from './api/cicd-event';
 import { handleCidiApi } from './api/cicd';
 import { handleDeploymentsApi } from './api/deployments';
 import { handleFinanceApi } from './api/finance';
@@ -108,6 +109,10 @@ export default {
 
       if (pathLower.startsWith('/api/cicd')) {
         return handleCidiApi(request, url, env, ctx);
+      }
+
+      if (pathLower === '/api/internal/cicd-event') {
+        return handleCicdEvent(request, env, ctx);
       }
 
       if (pathLower.startsWith('/api/deployments') || pathLower.startsWith('/api/internal/')) {

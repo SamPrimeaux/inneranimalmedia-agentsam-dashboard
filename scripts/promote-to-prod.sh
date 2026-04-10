@@ -333,28 +333,34 @@ NOTES_ESC=$(printf '%s' "$NOTES" | sed "s/'/''/g")
 GH_ESC=$(printf '%s' "$PROMOTE_GIT_HASH" | sed "s/'/''/g")
 TRIGGERED_ESC=$(printf '%s' "$TRIGGERED_BY" | sed "s/'/''/g")
 
-"${WRANGLER[@]}" d1 execute inneranimalmedia-business \
-  --remote -c "$PROD_CFG" \
-  --command="INSERT OR IGNORE INTO deployments (id, timestamp, status, deployed_by, environment, worker_name, triggered_by, notes, created_at, git_hash, version, description) VALUES ('${PROD_VERSION}', datetime('now'), 'success', 'sam_primeaux', 'production', 'inneranimalmedia', '${TRIGGERED_ESC}', '${NOTES_ESC}', datetime('now'), '${GH_ESC}', 'v${CURRENT_V:-0}', '')" \
-  2>/dev/null || echo "  WARN: deployments D1 record failed (non-fatal)"
+# ── D1 Logging via cicd-event ──
+echo "Logging promotion event to centralized D1 registry..."
+PROMOTE_JSON=$(cat <<EOF
+{
+  "event": "post_promote",
+  "payload": {
+    "worker_version_id": "${PROD_VERSION}",
+    "triggered_by": "${TRIGGERED_BY:-promote}",
+    "git_hash": "${PROMOTE_GIT_HASH}",
+    "dashboard_version": "${CURRENT_V:-0}",
+    "ms_worker": ${CICD_MS_WORKER:-0},
+    "health_status": "${PROD_HC:-200}",
+    "health_ms": ${CICD_CF_HEALTH_RESPONSE_MS:-0},
+    "r2_files": ${R2_LINE_COUNT:-0},
+    "r2_bytes": ${CICD_R2_BUNDLE_BYTES:-0},
+    "ms_push": ${CICD_MS_PUSH:-0},
+    "ms_pull": ${CICD_MS_PULL:-0}
+  }
+}
+EOF
+)
 
-cicd_crosslink_deployment_after_worker "$PROD_VERSION" "$PROMOTE_GIT_HASH" "${CICD_PHASE_PROMOTE_DURATION_MS:-0}"
+curl -s -X POST "https://inneranimalmedia.com/api/internal/cicd-event" \
+  -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" \
+  -H "Content-Type: application/json" \
+  -d "$PROMOTE_JSON" > /dev/null || echo "  WARN: D1 cicd-event log failed (non-fatal)"
 
-echo ""
-echo "=== PRODUCTION PROMOTE COMPLETE ==="
-echo "  Worker:  inneranimalmedia @ ${PROD_VERSION}"
-echo "  URL:     https://inneranimalmedia.com/dashboard/agent"
-echo "  Bucket:  ${PROD_BUCKET}"
-echo "  Version: v=${CURRENT_V:-n/a}"
-
-NEXT_VERSION="${NEXT_VERSION:-${CURRENT_V:-0}}"
-DEPLOY_DESC="${DEPLOY_DESC:-prod promote $(date +%Y-%m-%d)}"
-DEPLOY_DESC_ESC=$(printf '%s' "$DEPLOY_DESC" | sed "s/'/''/g")
-"${WRANGLER[@]}" d1 execute inneranimalmedia-business \
-  --remote --config wrangler.production.toml \
-  --command="UPDATE deployments SET version='v${NEXT_VERSION}', description='${DEPLOY_DESC_ESC}' WHERE id=(SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1);" \
-  2>/dev/null || echo "  WARN: deployments D1 version/description update failed (non-fatal)"
-echo "[promote-to-prod] D1 deployment row updated"
+echo "[promote-to-prod] D1 promotion recorded via cicd-event"
 
 CICD_MS_PULL=$(( (CICD_T_PULL_END - CICD_T_PULL_START) * 1000 ))
 CICD_MS_PUSH=$(( (CICD_T_PUSH_END - CICD_T_PUSH_START) * 1000 ))

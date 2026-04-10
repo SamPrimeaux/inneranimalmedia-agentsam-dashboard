@@ -49,7 +49,7 @@ import {
   type RecentFileEntry,
 } from './src/ideWorkspace';
 import { useEditor } from './src/EditorContext';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2 } from 'lucide-react';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, KeyRound, HardDrive, Package } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -96,6 +96,15 @@ function buildAgentSamGreeting(workspaceDisplayLine: string): string {
   }
   return `Hi! I'm ${PRODUCT_NAME}. Current workspace: ${w}. What should we work on?`;
 }
+
+const QUICK_COMMANDS = [
+  { icon: Monitor, label: 'Local PTY', cmd: 'ssh iam-pty', desc: 'Inner Animal PTY' },
+  { icon: Globe, label: 'Production SSH', cmd: 'ssh production-iam', desc: 'Mainstage Access' },
+  { icon: HardDrive, label: 'Sandbox SSH', cmd: 'ssh sandbox-d1', desc: 'Experiment D1' },
+  { icon: MessageSquare, label: 'Clear Chat', cmd: 'clear', desc: 'Reset Agent Session' },
+  { icon: Package, label: 'Build Project', cmd: 'npm run build', desc: 'Production Bundle' },
+  { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
+];
 
 const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
@@ -317,6 +326,19 @@ const App: React.FC = () => {
     'https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/6454d6fa-d4f1-43ec-33fd-628d0e7cdb00/public'
   );
   const [glbViewerFilename, setGlbViewerFilename] = useState('Meshy_AI_Jet.glb');
+  const [cmdHubOpen, setCmdHubOpen] = useState(false);
+  const [cmdSearch, setCmdSearch] = useState('');
+
+  const handleCommandExecution = useCallback((cmdText: string) => {
+    terminalRef.current?.runCommand(cmdText);
+    setCmdHubOpen(false);
+  }, []);
+
+  const handleSendMessage = useCallback((msg: string) => {
+    if (!msg.trim()) return;
+    if (agentPosition === 'off') setAgentPosition('right');
+    window.dispatchEvent(new CustomEvent('iam-agent-external-send', { detail: { message: msg } }));
+  }, [agentPosition]);
 
   const lastPersistedTabRef = useRef<TabId | null>(null);
   useEffect(() => {
@@ -1419,6 +1441,57 @@ const App: React.FC = () => {
               >
                   {agentPosition === 'left' ? <PanelLeftClose size={15} strokeWidth={1.75} /> : <PanelRightClose size={15} strokeWidth={1.75} />}
               </button>
+
+              {/* ── COMMAND HUB (RELOCATED FROM STATUSBAR) ── */}
+              <div className="relative" ref={null /* handle via specific ref if needed or global listener */}>
+                <button
+                    type="button"
+                    title="Command Hub (SSH & Keys)"
+                    className={`p-1.5 rounded transition-colors ${cmdHubOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
+                    onClick={() => setCmdHubOpen(!cmdHubOpen)}
+                >
+                    <KeyRound size={15} strokeWidth={1.75} />
+                </button>
+
+                {cmdHubOpen && (
+                  <div className="absolute top-[calc(100%+8px)] right-0 w-72 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-lg shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in duration-200">
+                    <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/50">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Search connections..."
+                          className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-md py-1.5 pl-8 pr-3 text-xs focus:outline-none focus:border-[var(--solar-cyan)]"
+                          value={cmdSearch}
+                          onChange={(e) => setCmdSearch(e.target.value)}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto p-1.5">
+                      {QUICK_COMMANDS.filter(c => 
+                        c.label.toLowerCase().includes(cmdSearch.toLowerCase()) || 
+                        c.desc.toLowerCase().includes(cmdSearch.toLowerCase())
+                      ).map((cmd, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleCommandExecution(cmd.cmd)}
+                          className="w-full flex items-center gap-3 p-2.5 rounded-md hover:bg-[var(--bg-hover)] text-left group transition-all"
+                        >
+                          <div className="w-8 h-8 rounded bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                            <cmd.icon size={16} strokeWidth={1.5} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[13px] font-medium text-[var(--text-main)]">{cmd.label}</div>
+                            <div className="text-[11px] text-[var(--text-muted)] truncate">{cmd.desc}</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                   type="button"
                   title="Terminal (Cmd+J)"
@@ -1800,6 +1873,7 @@ const App: React.FC = () => {
                             workspaceRows={workspaceRows}
                             authWorkspaceId={authWorkspaceId}
                             onSwitchWorkspace={(id) => setAuthWorkspaceId(id)}
+                            onSendMessage={handleSendMessage}
                           />
                       </div>
                   )}

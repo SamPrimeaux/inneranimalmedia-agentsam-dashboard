@@ -43,7 +43,6 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName === 'playwright_screenshot':
         case toolName === 'preview_in_browser':
         case toolName === 'web_search':
-        case toolName === 'a11y_audit_webpage':
             return await webHandlers[toolName]?.(params, env) || await webHandlers.search_web?.(params, env);
 
         // ── CATEGORY: media / ui (13 Tools) ──────────────────────────────
@@ -65,14 +64,18 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName.startsWith('d1_'):
             return await dbHandlers[toolName]?.(params, env);
 
-        // ── CATEGORY: deploy / workflow (7 Tools) ────────────────────────
+        // ── CATEGORY: deploy (5 Tools) ───────────────────────────────────────────────
         case toolName.startsWith('worker_'):
-        case toolName.startsWith('list_workers'):
-        case toolName.startsWith('get_deploy_command'):
-        case toolName.startsWith('get_worker_services'):
-        case toolName.startsWith('generate_'):
+        case toolName === 'list_workers':
+        case toolName === 'get_deploy_command':
+        case toolName === 'get_worker_services':
+            return await deployHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: workflow (2 Tools) ─────────────────────────────────────────────
         case toolName === 'workflow_run_pipeline':
-            return await deployHandlers[toolName]?.(params, env) || await workflowHandlers[toolName]?.(params, env);
+        case toolName === 'generate_daily_summary_email':
+        case toolName === 'generate_execution_plan':
+            return await workflowHandlers[toolName]?.(params, env);
 
         // ── CATEGORY: email / imessage / integrations / conversion (18 Tools) ──
         case toolName.startsWith('resend_'):
@@ -94,6 +97,10 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName === 'platform_info':
         case toolName === 'list_clients':
             return await platformHandlers[toolName]?.(params, env);
+
+        // ── CATEGORY: telemetry (3 Tools) ────────────────────────────────────────────
+        case toolName.startsWith('telemetry_'):
+            return await telemetryHandlers[toolName]?.(params, env);
 
         // ── CATEGORY: agent (3 Tools) ────────────────────────────────────
         case toolName.startsWith('agentsam_'):

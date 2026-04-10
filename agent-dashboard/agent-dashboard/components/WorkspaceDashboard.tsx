@@ -30,6 +30,7 @@ interface WorkspaceDashboardProps {
   workspaceRows: Array<{ id: string; name: string }>;
   authWorkspaceId: string | null;
   onSwitchWorkspace: (id: string) => void;
+  onSendMessage: (message: string) => void;
 }
 
 interface AIModel {
@@ -50,7 +51,8 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
   recentFiles,
   workspaceRows,
   authWorkspaceId,
-  onSwitchWorkspace
+  onSwitchWorkspace,
+  onSendMessage
 }) => {
   const [chatInput, setChatInput] = useState('');
   const [models, setModels] = useState<AIModel[]>([]);
@@ -105,13 +107,8 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
 
   const handleSendMessage = () => {
     if (!chatInput.trim()) return;
-    setIsAgentRunning(true);
-    // Simulate agent task
-    console.log('Sending message:', chatInput, 'with model:', selectedModel?.model_key);
-    setTimeout(() => {
-      setIsAgentRunning(false);
-      setChatInput('');
-    }, 2000);
+    onSendMessage(chatInput);
+    setChatInput('');
   };
 
   const handleStopAgent = () => {
@@ -174,7 +171,7 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
       {/* ── Centered Chat Interaction (HEAVILY REVISED) ── */}
       <div className="w-full max-w-2xl mb-8 animate-in fade-in slide-in-from-bottom-6 duration-1000">
         <div className="relative group p-[1px] rounded-3xl bg-gradient-to-br from-[var(--border-subtle)]/40 to-transparent hover:from-[var(--border-subtle)] transition-all duration-500 shadow-2xl">
-          <div className="relative bg-[#111] rounded-[22px] overflow-hidden border border-white/5">
+          <div className="relative bg-[#111] rounded-[22px] border border-white/5">
             
             {/* Input Row */}
             <div className="flex items-start p-5 pb-2 gap-4">
@@ -205,7 +202,7 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
                     <Plus size={16} />
                   </button>
                   {isPlusOpen && (
-                    <div className="absolute left-0 bottom-full mb-3 w-56 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-xl shadow-2xl z-[70] overflow-hidden py-1 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="absolute left-0 bottom-full mb-3 w-56 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-xl shadow-2xl z-50 overflow-hidden py-1 animate-in fade-in slide-in-from-bottom-2">
                       <div className="px-3 py-2 text-[10px] text-[var(--text-muted)] font-medium opacity-60">Add agents, context, tools...</div>
                       {[
                         { icon: FileText, label: 'Plan', slug: 'plan' },

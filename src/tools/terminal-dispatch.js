@@ -3,7 +3,7 @@
  * Handles HTTP routes for terminal execution, auditing, and AI assistance.
  */
 
-import { runTerminalCommand, invokeTerminalAssistCompletion } from '../core/terminal-utils.js';
+import { runTerminalCommand, resolveIamWorkspaceRoot } from '../core/terminal.js';
 
 export async function handleTerminalRequest(path, method, body, env, request, ctx) {
   const pathLower = path.toLowerCase();

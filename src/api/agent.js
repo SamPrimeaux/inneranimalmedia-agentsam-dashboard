@@ -37,6 +37,10 @@ export async function handleAgentRequest(request, env, ctx) {
     return jsonResponse(out);
   }
 
+  if (pathLower === '/api/agent/bootstrap' && method === 'GET') {
+    return handleAgentBootstrapRequest(request, env, ctx, session);
+  }
+
   return jsonResponse({ error: 'Agent route not found' }, 404);
 }
 
@@ -122,7 +126,7 @@ Always provide efficient, production-ready code.`;
           }
 
           // Handle message-level metadata and usage
-          if (chunk.type === 'message_start') {
+          if (chunk.type === 'message_start' && chunk.message?.id) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'id', id: chunk.message.id })}\n\n`));
           }
 
@@ -167,5 +171,71 @@ Always provide efficient, production-ready code.`;
   } catch (e) {
     console.error('[agentChatSseHandler] Error:', e.message);
     return jsonResponse({ error: 'Stream failed', detail: e.message }, 500);
+  }
+}
+
+/**
+ * Handles the dashboard bootstrap sequence (context, todo, memory).
+ */
+async function handleAgentBootstrapRequest(request, env, ctx, session) {
+  try {
+    const userId = session?.user_id || 'system';
+    const cacheKey = 'bootstrap_' + userId;
+
+    if (env.DB) {
+      const cached = await env.DB.prepare(
+        `SELECT compiled_context FROM ai_compiled_context_cache WHERE context_hash = ? AND (expires_at IS NULL OR expires_at > unixepoch())`
+      ).bind(cacheKey).first();
+      if (cached?.compiled_context) {
+        return new Response(cached.compiled_context, {
+          headers: { 'Content-Type': 'application/json', 'X-Cache': 'HIT' }
+        });
+      }
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const prefix = 'memory/daily/';
+    let dailyLog = '', yesterdayLog = '', schemaMemory = '', todayTodo = '';
+
+    if (env.R2) {
+      const fetchR2 = async (k) => {
+        const o = await env.R2.get(k);
+        return o ? await o.text() : '';
+      };
+      [dailyLog, yesterdayLog, schemaMemory, todayTodo] = await Promise.all([
+        fetchR2(prefix + today + '.md'),
+        fetchR2(prefix + yesterday + '.md'),
+        fetchR2('memory/schema-and-records.md'),
+        fetchR2('memory/today-todo.md')
+      ]);
+    }
+
+    if (!todayTodo && env.DB) {
+       const row = await env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'today_todo' AND tenant_id = ?").bind(session?.tenant_id || 'system').first();
+       if (row?.value) todayTodo = String(row.value);
+    }
+
+    const context = {
+      daily_log: dailyLog || null,
+      yesterday_log: yesterdayLog || null,
+      schema_and_records_memory: schemaMemory || null,
+      today_todo: todayTodo || null,
+      date: today,
+    };
+
+    if (env.DB && ctx?.waitUntil) {
+      ctx.waitUntil(
+        env.DB.prepare(
+          `INSERT INTO ai_compiled_context_cache (id, context_hash, context_type, compiled_context, source_context_ids_json, token_count, tenant_id, created_at, last_accessed_at, expires_at)
+           VALUES (?, ?, 'bootstrap', ?, '[]', 0, ?, unixepoch(), unixepoch(), unixepoch()+1800)
+           ON CONFLICT(context_hash) DO UPDATE SET compiled_context=excluded.compiled_context, expires_at=excluded.expires_at, last_accessed_at=unixepoch()`
+        ).bind(cacheKey, cacheKey, JSON.stringify(context), session?.tenant_id || 'system').run().catch(() => {})
+      );
+    }
+
+    return jsonResponse(context);
+  } catch (e) {
+    return jsonResponse({ error: String(e.message || e) }, 500);
   }
 }

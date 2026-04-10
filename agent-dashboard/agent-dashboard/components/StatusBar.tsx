@@ -110,24 +110,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       : '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
-  const [sshOpen, setSshOpen] = useState(false);
-  const [sshSearch, setSshSearch] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
-  const sshRef = useRef<HTMLDivElement>(null);
 
-  const QUICK_COMMANDS = [
-    { icon: Monitor, label: 'Local PTY', cmd: 'ssh iam-pty', desc: 'Inner Animal PTY' },
-    { icon: Globe, label: 'Production SSH', cmd: 'ssh production-iam', desc: 'Mainstage Access' },
-    { icon: HardDrive, label: 'Sandbox SSH', cmd: 'ssh sandbox-d1', desc: 'Experiment D1' },
-    { icon: MessageSquare, label: 'Clear Chat', cmd: 'clear', desc: 'Reset Agent Session' },
-    { icon: Package, label: 'Build Project', cmd: 'npm run build', desc: 'Production Bundle' },
-    { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
-  ];
 
-  const filteredCommands = QUICK_COMMANDS.filter(c => 
-    c.label.toLowerCase().includes(sshSearch.toLowerCase()) || 
-    c.desc.toLowerCase().includes(sshSearch.toLowerCase())
-  );
 
   useEffect(() => {
     const onMode = (ev: Event) => {
@@ -146,7 +131,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (panelRef.current && !panelRef.current.contains(t)) setNotifOpen(false);
-      if (sshRef.current && !sshRef.current.contains(t)) setSshOpen(false);
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousedown', onDown);
@@ -154,7 +138,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousedown', onDown);
     };
-  }, [notifOpen, sshOpen]);
+  }, [notifOpen]);
 
   const workerDisplayName = useMemo(() => resolveWorkerDisplayName(), []);
 
@@ -239,73 +223,15 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             healthOk === true ? 'bg-[var(--solar-green)] shadow-[0_0_5px_var(--solar-green)]' : 'bg-[var(--solar-cyan)]'
           }`} />
-          
-          <div className="relative flex items-center h-full">
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 px-1 rounded hover:bg-[var(--bg-hover)] transition-colors opacity-80 hover:opacity-100 ${sshOpen ? 'text-[var(--solar-cyan)]' : ''}`}
-              title="SSH Command Hub"
-              onClick={() => setSshOpen(!sshOpen)}
+                    <div className="relative flex items-center h-full">
+            <div
+              className="flex items-center gap-1.5 px-1 opacity-80"
+              title={brandTitle}
             >
-              <KeyRound size={12} className={sshOpen ? 'text-[var(--solar-cyan)]' : 'opacity-60'} />
               <span className="text-[9px] uppercase tracking-widest font-bold">
                 {healthOk === true ? 'IAM-OK' : 'Standby'}
               </span>
-            </button>
-            {sshOpen && (
-              <div 
-                ref={sshRef}
-                className="absolute bottom-full left-0 mb-2 z-[110] w-64 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden py-1 animate-in fade-in slide-in-from-bottom-2 duration-300"
-              >
-                <div className="px-3 py-2 border-b border-[var(--border-subtle)]/40 mb-1">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={sshSearch}
-                    onChange={(e) => setSshSearch(e.target.value)}
-                    placeholder="Search commands..."
-                    className="w-full bg-transparent border-none outline-none text-[11px] text-[var(--text-main)] placeholder:text-[var(--text-muted)]"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && filteredCommands.length > 0) {
-                        window.dispatchEvent(new CustomEvent('iam-run-command', { detail: { cmd: filteredCommands[0].cmd } }));
-                        setSshOpen(false);
-                        setSshSearch('');
-                      }
-                    }}
-                  />
-                </div>
-                <div className="max-h-[280px] overflow-y-auto no-scrollbar">
-                  {filteredCommands.map((c, i) => {
-                    const Icon = c.icon;
-                    return (
-                      <button 
-                        key={i}
-                        className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent('iam-run-command', { detail: { cmd: c.cmd } }));
-                          setSshOpen(false);
-                          setSshSearch('');
-                        }}
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
-                          <Icon size={14} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-bold truncate">{c.label}</div>
-                          <div className="text-[9px] opacity-40 uppercase tracking-widest truncate">{c.desc}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                  {filteredCommands.length === 0 && (
-                    <div className="px-3 py-4 text-center text-[10px] text-[var(--text-muted)] italic">
-                      No commands found
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
+            </div>
           </div>
         </div>
 

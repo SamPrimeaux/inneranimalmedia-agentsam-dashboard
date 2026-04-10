@@ -792,8 +792,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       }
     };
     window.addEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onExternal);
-    return () => window.removeEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onExternal);
-  }, []);
+    
+    const onExternalSend = (e: Event) => {
+      const msg = (e as CustomEvent<{ message?: string }>).detail?.message;
+      if (msg) handleSend(msg);
+    };
+    window.addEventListener('iam-agent-external-send', onExternalSend);
+
+    return () => {
+      window.removeEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onExternal);
+      window.removeEventListener('iam-agent-external-send', onExternalSend);
+    };
+  }, [handleSend]);
 
   const [pendingToolApproval, setPendingToolApproval] = useState<{
     tool: ToolApprovalPayload;

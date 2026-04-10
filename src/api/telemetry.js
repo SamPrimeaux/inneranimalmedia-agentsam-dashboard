@@ -142,11 +142,23 @@ export async function writeTelemetry(env, data, modelRates) {
         `INSERT INTO spend_ledger (id, tenant_id, workspace_id, brand_id, provider, source, occurred_at, amount_usd, model_key, tokens_in, tokens_out, session_tag, project_id, ref_table, ref_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       ).bind(
-        lid, mid, 'default', 'inneranimalmedia', spFixed, 'api_direct',
+         lid, mid, 'default', 'inneranimalmedia', spFixed, 'api_direct',
         Math.floor(Date.now() / 1000), estimatedCost, modelKey, inputTokens, outputTokens,
         sid || 'unknown', 'proj_inneranimalmedia_main_prod_013',
         'agent_telemetry', telemetryId
       ).run();
+
+      // PHASE 4B — ai_provider_usage rollup
+      const dateStr = new Date().toISOString().slice(0, 10);
+      await env.DB.prepare(`
+        INSERT INTO ai_provider_usage (id, provider, model, date, total_requests, total_tokens_in, total_tokens_out, total_cost_usd, tenant_id)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(provider, model, date, tenant_id) DO UPDATE SET
+          total_requests = total_requests + 1,
+          total_tokens_in = total_tokens_in + excluded.total_tokens_in,
+          total_tokens_out = total_tokens_out + excluded.total_tokens_out,
+          total_cost_usd = total_cost_usd + excluded.total_cost_usd
+      `).bind(`${spFixed}-${modelKey}-${dateStr}-${mid}`, spFixed, modelKey, dateStr, inputTokens, outputTokens, estimatedCost, mid).run();
     }
   } catch (e) {
     console.error('[writeTelemetry] failed:', e.message);
@@ -173,10 +185,19 @@ export async function insertAiGenerationLog(env, opts) {
         input_tokens, output_tokens, computed_cost_usd, status, created_by, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      id, tid, opts.generationType, opts.prompt, opts.model, opts.responseText,
-      opts.inputTokens, opts.outputTokens, opts.computedCostUsd, opts.status || 'completed',
+       opts.inputTokens, opts.outputTokens, opts.computedCostUsd, opts.status || 'completed',
       opts.createdBy || 'worker', now
     ).run();
+
+    // PHASE 4D — Snapshot context if requested
+    if (opts.contextToSnap && opts.contextSlug) {
+      const snapId = `ctx-${opts.contextSlug}-${now}`;
+      await env.DB.prepare(`
+        INSERT INTO ai_context_versions (id, slug, content_hash, version_data, created_at, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(snapId, opts.contextSlug, opts.contextHash || 'none', 
+              JSON.stringify(opts.contextToSnap), now, tid).run();
+    }
   } catch (e) {
     console.warn('[insertAiGenerationLog] failed:', e.message);
   }

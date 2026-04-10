@@ -2,6 +2,8 @@
  * High-performance Agent Chat storage using the native Worker SQL API.
  * Stores session messages and RAG context cache.
  */
+import { DurableObject } from "cloudflare:workers";
+
 export class AgentChatSqlV1 extends DurableObject {
   /**
    * @param {import('@cloudflare/workers-types').DurableObjectState} state

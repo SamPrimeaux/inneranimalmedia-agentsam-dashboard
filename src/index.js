@@ -9,6 +9,7 @@ import { handleTimeDispatch } from './tools/time';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
+import { handleHealthCheck } from './api/health.js';
 
 // --- Durable Objects ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
@@ -28,11 +29,7 @@ export default {
     try {
       // 1. Health Checks
       if (pathLower === '/api/health' || pathLower === '/health') {
-        return jsonResponse({ 
-          status: 'ok', 
-          worker: 'agentsam-modular',
-          version: env.CF_VERSION_METADATA?.id ?? 'v2.0-modular'
-        });
+        return handleHealthCheck(request, env);
       }
 
       // 2. Global Request Context

@@ -2,6 +2,8 @@
  * Realtime broadcast room for workflow step events.
  * Handles WebSocket clients and POST /broadcast from Worker.
  */
+import { DurableObject } from "cloudflare:workers";
+
 export class IAMCollaborationSession extends DurableObject {
   /**
    * @param {import('@cloudflare/workers-types').DurableObjectState} state

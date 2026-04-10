@@ -1,3 +1,5 @@
+import { DurableObject } from "cloudflare:workers";
+
 /** Legacy KV-backed stub (migration v3). */
 export class IAMSession extends DurableObject {
   async fetch(request) {

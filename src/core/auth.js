@@ -234,7 +234,6 @@ export function getApexDomain(hostname) {
  * Global Session Retrieval (KV + Context)
  */
 export async function getSession(env, request) {
-  if (!env.SESSION_CACHE) return null;
   const cookieHeader = request.headers.get('Cookie') || '';
   
   // Find all occurrences of the session cookie
@@ -247,16 +246,46 @@ export async function getSession(env, request) {
 
   if (sessionCandidates.length === 0) return null;
 
-  // Try the most specific ones first (browsers usually put them first, but it varies)
-  // We'll iterate through all of them until we find one that's valid in KV.
+  // 1. Try KV for speed
   for (const sessionId of sessionCandidates) {
-    try {
-      const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
-      if (data) {
-        return JSON.parse(data);
+    if (env.SESSION_CACHE) {
+      try {
+        const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
+        if (data) return JSON.parse(data);
+      } catch (e) { }
+    }
+  }
+
+  // 2. Try D1 Fallback (P0 fix for auth loops)
+  if (env.DB) {
+    for (const sessionId of sessionCandidates) {
+      try {
+        const row = await env.DB.prepare(
+          `SELECT id, user_id, expires_at, tenant_id FROM auth_sessions 
+           WHERE id = ? AND datetime(expires_at) > datetime('now') 
+           LIMIT 1`
+        ).bind(sessionId).first();
+
+        if (row) {
+          // Success: Repopulate KV so cache is warm for next request
+          const payload = { 
+            v: 1, 
+            user_id: row.user_id, 
+            tenant_id: row.tenant_id, 
+            expires_at: row.expires_at 
+          };
+          if (env.SESSION_CACHE) {
+            await env.SESSION_CACHE.put(
+              IAM_KV_SESSION_KEY_PREFIX + sessionId, 
+              JSON.stringify(payload), 
+              { expirationTtl: 3600 }
+            );
+          }
+          return payload;
+        }
+      } catch (e) {
+        console.warn('[getSession D1 Fallback Error]', e.message);
       }
-    } catch (e) {
-      // Continue to next candidate
     }
   }
 
@@ -344,9 +373,24 @@ export async function writeIamSessionToKv_old(env, sessionId, userId, tenantId, 
 export async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
-  const sessionUserId = session._session_user_id || session.user_id;
+
+  let userId = session.user_id;
+  let email = session._session_user_id || session.user_id;
   const tenantId = resolveTenantIdForWorker(session, env);
-  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
+
+  // If we only have a usr_ style ID, resolve the canonical email from the 'users' table
+  if (env.DB && userId && userId.startsWith('usr_') && (!email || email === userId)) {
+    try {
+      const u = await env.DB.prepare(
+        `SELECT email FROM users WHERE id = ? LIMIT 1`
+      ).bind(userId).first();
+      if (u && u.email) email = u.email;
+    } catch (e) {
+      console.warn('[getAuthUser User Lookup Error]', e.message);
+    }
+  }
+
+  return { id: userId, email: email, tenant_id: tenantId };
 }
 
 

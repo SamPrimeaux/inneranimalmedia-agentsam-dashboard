@@ -182,7 +182,7 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 
   // 3. Response: Construct host-only session cookie (removed Domain attribute)
-  const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/agent';
+  const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/overview';
   const response = new Response(JSON.stringify({ ok: true, redirect: next }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' }

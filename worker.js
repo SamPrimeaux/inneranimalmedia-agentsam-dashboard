@@ -5681,7 +5681,7 @@ const worker = {
       }
 
       // Auth sign-in / login / signup (DASHBOARD) -- same page for all
-      if (pathLower === '/auth/signin' || pathLower === '/auth/login' || pathLower === '/auth/signup') {
+      if (pathLower === '/auth/login' || pathLower === '/auth/login' || pathLower === '/auth/signup') {
         const obj =
           (await env.DASHBOARD.get('static/auth-signin.html')) ??
           (await env.DASHBOARD.get('static/static_auth-signin.html'));
@@ -5701,7 +5701,7 @@ const worker = {
           const dashSession = await getSession(env, request);
           if (!dashSession?.user_id) {
             const nextParam = encodeURIComponent(request.url);
-            return Response.redirect(`${url.origin}/auth/signin?next=${nextParam}`, 302);
+            return Response.redirect(`${url.origin}/auth/login?next=${nextParam}`, 302);
           }
         }
       }
@@ -15349,7 +15349,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         ).run();
         notifySam(env, {
           subject: `Git sync proposal pending (${risk})`,
-          body: `Proposal ID: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+          body: `Proposal ID: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/overview?proposal=${proposalId}`,
           category: 'proposal',
         }, ctx);
         return jsonResponse({ ok: true, proposal_id: proposalId, risk_level: risk });
@@ -16321,7 +16321,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         ).run();
         notifySam(env, {
           subject: `Proposal pending approval: ${commandText.slice(0, 80)} (${risk})`,
-          body: `Risk: ${risk}\nProposal ID: ${proposalId}\n\nCommand:\n${commandText.slice(0, 2000)}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+          body: `Risk: ${risk}\nProposal ID: ${proposalId}\n\nCommand:\n${commandText.slice(0, 2000)}\n\nApprove: https://inneranimalmedia.com/dashboard/overview?proposal=${proposalId}`,
           category: 'proposal',
         }, ctx);
         return jsonResponse({ ok: true, proposal_id: proposalId, risk_level: risk });
@@ -22030,7 +22030,7 @@ async function executeAgentWorkflowSteps(env, ctx, workflowRunId, workflowId, wo
           env,
           {
             subject: `Workflow approval: ${workflowName} step ${stepNum}`,
-            body: `Run: ${workflowRunId}\nStep: ${stepName}\nProposal: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/agent?proposal=${proposalId}`,
+            body: `Run: ${workflowRunId}\nStep: ${stepName}\nProposal: ${proposalId}\n\nApprove: https://inneranimalmedia.com/dashboard/overview?proposal=${proposalId}`,
             category: 'workflow',
           },
           ctx
@@ -29796,20 +29796,20 @@ async function handleEmailPasswordLogin(request, url, env) {
 
   if (!env.DB) {
     if (wantsJson) return loginJson(false, { error: 'Service unavailable' }, 503);
-    return Response.redirect(`${origin(url)}/auth/signin?error=unavailable`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=unavailable`, 302);
   }
   let body;
   try {
     body = await request.json();
   } catch (_) {
     if (wantsJson) return loginJson(false, { error: 'Invalid JSON' }, 400);
-    return Response.redirect(`${origin(url)}/auth/signin?error=invalid_body`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_body`, 302);
   }
   const email = (body.email || '').toString().toLowerCase().trim();
   const password = (body.password || '').toString();
   if (!email || !password) {
     if (wantsJson) return loginJson(false, { error: 'Email and password required' }, 400);
-    return Response.redirect(`${origin(url)}/auth/signin?error=missing`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=missing`, 302);
   }
 
   const host = url.hostname || '';
@@ -29841,7 +29841,7 @@ async function handleEmailPasswordLogin(request, url, env) {
             401
           );
         }
-        return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
+        return Response.redirect(`${origin(url)}/auth/login?error=invalid_credentials`, 302);
       }
       return finishLogin(row.id, body.next);
     }
@@ -29852,16 +29852,16 @@ async function handleEmailPasswordLogin(request, url, env) {
   ).bind(email, email).first();
   if (!user || !user.password_hash || !user.salt) {
     if (wantsJson) return loginJson(false, { error: 'Invalid email or password' }, 401);
-    return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_credentials`, 302);
   }
   if (user.password_hash === 'oauth' || user.salt === 'oauth') {
     if (wantsJson) return loginJson(false, { error: 'This account uses Google or GitHub sign-in.' }, 400);
-    return Response.redirect(`${origin(url)}/auth/signin?error=use_oauth`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=use_oauth`, 302);
   }
   const ok = await verifyPassword(password, user.salt, user.password_hash);
   if (!ok) {
     if (wantsJson) return loginJson(false, { error: 'Invalid email or password' }, 401);
-    return Response.redirect(`${origin(url)}/auth/signin?error=invalid_credentials`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_credentials`, 302);
   }
   return finishLogin(user.id, body.next);
 }
@@ -29926,7 +29926,7 @@ async function handleLogout(request, url, env) {
       await env.SESSION_CACHE.delete(IAM_KV_SESSION_KEY_PREFIX + sid);
     } catch (_) { }
   }
-  const headers = new Headers({ Location: `${origin(url)}/auth/signin` });
+  const headers = new Headers({ Location: `${origin(url)}/auth/login` });
   
   // Host-only clearing
   headers.append('Set-Cookie', `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
@@ -30287,7 +30287,7 @@ function oauthPostLoginGlobeRedirectUrl(originBase, returnToFullUrl) {
     path = u.pathname + (u.search || '');
   } catch (_) { }
   if (!path.startsWith('/') || path.startsWith('//')) path = '/dashboard/overview';
-  return `${originBase}/auth/signin?globe_exit=1&next=${encodeURIComponent(path)}`;
+  return `${originBase}/auth/login?globe_exit=1&next=${encodeURIComponent(path)}`;
 }
 
 async function handleGoogleOAuthStart(request, url, env) {
@@ -30325,12 +30325,12 @@ async function handleGoogleOAuthCallback(request, url, env) {
   const state = searchParams.get('state');
   const code = searchParams.get('code');
   if (!state || !code || !env.SESSION_CACHE || !env.DB) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=missing`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=missing`, 302);
   }
   const cachedRedirect = await env.SESSION_CACHE.get(`oauth_state_${state}`);
   await env.SESSION_CACHE.delete(`oauth_state_${state}`);
   if (!cachedRedirect) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=invalid_state`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_state`, 302);
   }
   let redirectUri = cachedRedirect;
   let returnTo = `${origin(url)}/dashboard/overview`;
@@ -30345,7 +30345,7 @@ async function handleGoogleOAuthCallback(request, url, env) {
   }
   // Use the exact redirect_uri from the start request (avoids www vs non-www mismatch)
   if (!env.GOOGLE_OAUTH_CLIENT_SECRET || !env.GOOGLE_CLIENT_ID) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=token_failed&reason=invalid_client&hint=secret_or_id_not_configured`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=token_failed&reason=invalid_client&hint=secret_or_id_not_configured`, 302);
   }
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -30367,20 +30367,20 @@ async function handleGoogleOAuthCallback(request, url, env) {
       const allowed = ['invalid_grant', 'invalid_client', 'invalid_request', 'unauthorized_client', 'unsupported_grant_type', 'invalid_scope'];
       if (allowed.includes(code)) reason = code;
     } catch (_) { }
-    return Response.redirect(`${origin(url)}/auth/signin?error=token_failed&reason=${encodeURIComponent(reason)}`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=token_failed&reason=${encodeURIComponent(reason)}`, 302);
   }
   const tokens = await tokenRes.json();
   const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   });
   if (!userRes.ok) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=userinfo_failed`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=userinfo_failed`, 302);
   }
   const userInfo = await userRes.json();
   const email = (userInfo.email || '').toLowerCase();
   const name = userInfo.name || email || 'User';
   if (!email) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=no_email`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=no_email`, 302);
   }
   let userId = email;
   try {
@@ -30393,7 +30393,7 @@ async function handleGoogleOAuthCallback(request, url, env) {
   if (connectDrive) {
     const sessionUser = await getAuthUser(request, env);
     if (!sessionUser) {
-      return Response.redirect(`${origin(url)}/auth/signin?error=session_required`, 302);
+      return Response.redirect(`${origin(url)}/auth/login?error=session_required`, 302);
     }
     const driveUserId = sessionUser.email || sessionUser.id;
     await env.DB.prepare(
@@ -30427,7 +30427,7 @@ async function handleGoogleOAuthCallback(request, url, env) {
   await writeIamSessionToKv(env, sessionId, userId, tidOauth, expiresAt);
 
   // FIX: Skip globe_exit redirect — oauthPostLoginGlobeRedirectUrl sends to
-  // /auth/signin?globe_exit=1&next=... which was dropping users on the homepage
+  // /auth/login?globe_exit=1&next=... which was dropping users on the homepage
   // when the signin page didn't handle the globe_exit param. Go direct instead.
   const safeDest = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':'))
     ? returnTo : '/dashboard/overview';
@@ -30470,12 +30470,12 @@ async function handleGitHubOAuthCallback(request, url, env) {
   const state = searchParams.get('state');
   const code = searchParams.get('code');
   if (!state || !code || !env.SESSION_CACHE || !env.DB) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=missing`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=missing`, 302);
   }
   const cachedRedirect = await env.SESSION_CACHE.get(`oauth_state_github_${state}`);
   await env.SESSION_CACHE.delete(`oauth_state_github_${state}`);
   if (!cachedRedirect) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=invalid_state`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_state`, 302);
   }
   let redirectUri = cachedRedirect;
   let returnTo = `${origin(url)}/dashboard/overview`;
@@ -30497,11 +30497,11 @@ async function handleGitHubOAuthCallback(request, url, env) {
     }),
   });
   if (!tokenRes.ok) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=token_failed`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=token_failed`, 302);
   }
   const tokens = await tokenRes.json();
   if (tokens.error) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=token_failed`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=token_failed`, 302);
   }
   const userRes = await fetch('https://api.github.com/user', {
     headers: {
@@ -30510,7 +30510,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
     },
   });
   if (!userRes.ok) {
-    return Response.redirect(`${origin(url)}/auth/signin?error=userinfo_failed`, 302);
+    return Response.redirect(`${origin(url)}/auth/login?error=userinfo_failed`, 302);
   }
   const userInfo = await userRes.json();
   let email = userInfo.email;
@@ -30534,7 +30534,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
   if (connectGitHub) {
     const sessionUser = await getAuthUser(request, env);
     if (!sessionUser) {
-      return Response.redirect(`${url.origin}/auth/signin?error=session_required`, 302);
+      return Response.redirect(`${url.origin}/auth/login?error=session_required`, 302);
     }
     const ghUserId = sessionUser.email || sessionUser.id;
     const ghLogin = (userInfo.login || '').toString() || 'github';

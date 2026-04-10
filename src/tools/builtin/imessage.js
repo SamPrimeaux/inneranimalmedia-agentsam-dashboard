@@ -10,20 +10,32 @@ export const imessageTools = {
    * imessage.send: Sends a text message to a chat GUID.
    */
   "imessage.send": async ({ env }, args) => {
-    if (!args.chatGuid || !args.text) {
-      throw new Error("Missing chatGuid or text for imessage.send");
+    let { chatGuid, phone, text } = args;
+    if (!text) throw new Error("Missing text for imessage.send");
+    if (!chatGuid && phone) {
+      // Auto-format for US numbers if no chatGuid is provided
+      const cleanPhone = phone.replace(/\D/g, '');
+      chatGuid = `iMessage;-;${cleanPhone.length === 10 ? '+1' + cleanPhone : '+' + cleanPhone}`;
     }
-    return bb.sendMessage(env, args);
+    if (!chatGuid) throw new Error("Missing chatGuid or phone for imessage.send");
+    
+    return bb.sendMessage(env, { chatGuid, text });
   },
 
   /**
    * imessage.send_and_wait: Sends a message and registers a hook for a reply.
    */
   "imessage.send_and_wait": async ({ env, session }, args) => {
-    const { chatGuid, text, conversationId } = args;
-    if (!chatGuid || !text || !conversationId) {
-      throw new Error("Missing chatGuid, text, or conversationId for imessage.send_and_wait");
+    let { chatGuid, phone, text, conversationId } = args;
+    if (!text || !conversationId) {
+      throw new Error("Missing text or conversationId for imessage.send_and_wait");
     }
+
+    if (!chatGuid && phone) {
+      const cleanPhone = phone.replace(/\D/g, '');
+      chatGuid = `iMessage;-;${cleanPhone.length === 10 ? '+1' + cleanPhone : '+' + cleanPhone}`;
+    }
+    if (!chatGuid) throw new Error("Missing chatGuid or phone for imessage.send_and_wait");
 
     // 1. Send the message
     const res = await bb.sendMessage(env, { chatGuid, text });

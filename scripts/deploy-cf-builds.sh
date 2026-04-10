@@ -12,7 +12,7 @@ BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
 R2_PREFIX="static/dashboard/agent"
 
 echo "=== CF Builds: worker deploy ==="
-npx wrangler deploy ./worker.js -c wrangler.jsonc
+npx wrangler deploy ./src/index.js -c wrangler.jsonc
 
 # Increment version
 CUR_V=$(cat agent-dashboard/.sandbox-deploy-version 2>/dev/null || echo 99)

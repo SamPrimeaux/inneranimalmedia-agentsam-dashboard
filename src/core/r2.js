@@ -155,11 +155,46 @@ export async function r2PutViaBindingOrS3(env, binding, s3BucketName, key, body,
   return res.ok;
 }
 
+export async function r2DeleteViaBindingOrS3(env, binding, s3BucketName, key) {
+  if (binding && binding.delete) {
+    await binding.delete(key);
+    return true;
+  }
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return false;
+  const path = r2ObjectPathForS3(key);
+  const signed = await signR2Request('DELETE', s3BucketName, path, '', env);
+  if (!signed) return false;
+  const res = await fetch(signed.endpoint, { method: 'DELETE', headers: signed.headers });
+  return res.ok;
+}
+
 export async function r2ListViaBindingOrS3(env, binding, s3BucketName, prefix, limit) {
   const lim = Math.max(1, Number(limit) || 100);
   if (binding && binding.list) {
     const list = await binding.list({ prefix, limit: lim });
-    return list.objects.map(o => ({ key: o.key, size: o.size }));
+    return (list.objects || []).map(o => ({ key: o.key, size: o.size, last_modified: o.uploaded }));
   }
-  return null; // Simplified S3 list for now; full XML parser in worker.js can be added if needed
+
+  // S3 Dynamic List (XML Parsing)
+  if (!s3BucketName || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) return [];
+  const query = `prefix=${encodeURIComponent(prefix || '')}&max-keys=${lim}`;
+  const signed = await signR2Request('GET', s3BucketName, '/', query, env);
+  if (!signed) return [];
+  
+  const res = await fetch(signed.endpoint, { method: 'GET', headers: signed.headers });
+  if (!res.ok) return [];
+
+  const xml = await res.text();
+  const objects = [];
+  const contents = xml.split('<Contents>');
+  contents.shift(); // Remove header
+  
+  for (const item of contents) {
+    const key = item.match(/<Key>(.*?)<\/Key>/)?.[1];
+    const size = parseInt(item.match(/<Size>(.*?)<\/Size>/)?.[1] || '0', 10);
+    const lastModified = item.match(/<LastModified>(.*?)<\/LastModified>/)?.[1];
+    if (key) objects.push({ key, size, last_modified: lastModified });
+  }
+
+  return objects;
 }

@@ -45,7 +45,9 @@ export default {
         return handleAgentSamRegistryRequest(request, env, ctx, authUser);
       }
 
-      if (pathLower.startsWith('/api/integrations')) {
+      if (pathLower.startsWith('/api/integrations') || 
+          pathLower === '/api/webhooks/resend' || 
+          pathLower === '/api/email/inbound') {
         return handleIntegrationsRequest(request, env, ctx, authUser);
       }
 

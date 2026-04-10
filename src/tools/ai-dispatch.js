@@ -15,6 +15,7 @@ import { handlers as agentHandlers } from './builtin/agent.js';
 import { handlers as workflowHandlers } from './builtin/workflow.js';
 import { handlers as anthropicCliHandlers } from './builtin/anthropic-cli.js';
 import { handlers as anthropicBatchHandlers } from './builtin/anthropic-batch.js';
+import { imessageTools } from './builtin/imessage.js';
 import { getComputerUseTools, specializedSchemas } from './builtin/computer-use.js';
 
 /**
@@ -73,13 +74,14 @@ export async function runBuiltinTool(env, toolName, params) {
         case toolName === 'workflow_run_pipeline':
             return await deployHandlers[toolName]?.(params, env) || await workflowHandlers[toolName]?.(params, env);
 
-        // ── CATEGORY: email / integrations / conversion (15 Tools) ───────
+        // ── CATEGORY: email / imessage / integrations / conversion (18 Tools) ──
         case toolName.startsWith('resend_'):
+        case toolName.startsWith('imessage.'):
         case toolName.startsWith('cf_images_'):
         case toolName.startsWith('gdrive_'):
         case toolName.startsWith('github_'):
         case toolName.startsWith('cloudconvert_'):
-            return await integrationsHandlers[toolName]?.(params, env);
+            return await integrationsHandlers[toolName]?.(params, env) || await imessageTools[toolName]?.({ env, session: params.session }, params);
 
         // ── CATEGORY: storage (9 Tools) ──────────────────────────────────
         case toolName.startsWith('r2_'):

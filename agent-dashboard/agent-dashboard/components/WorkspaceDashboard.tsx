@@ -114,7 +114,7 @@ export const WorkspaceDashboard: React.FC<WorkspaceDashboardProps> = ({
     console.log('Stopping agent...');
   };
 
-  const activeWorkspace = workspaceRows.find(w => w.id === authWorkspaceId) || { name: 'Home', id: 'default' };
+  const activeWorkspace = (workspaceRows || []).find(w => w.id === authWorkspaceId) || { name: 'Home', id: 'default' };
 
   return (
     <div className="flex-1 flex flex-col items-center justify-start bg-[var(--scene-bg)] overflow-y-auto py-12 px-6 no-scrollbar h-full">

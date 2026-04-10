@@ -1,20 +1,25 @@
-import { jsonResponse } from '../core/responses.js';
-import { getAuthUser } from '../core/auth.js';
+/**
+ * API Service: Workspace Operations
+ * Handles ephemeral workspace states, file explorer root resolution, and workspace creation.
+ * Deconstructed from legacy worker.js.
+ */
+import { jsonResponse } from '../core/auth.js';
 
 const IAM_EXPLORER_WS_SANDBOX = 'ws_inneranimalmedia';
 
 /**
  * Main dispatcher for Workspace-related API routes (/api/workspaces/*, /api/workspace/*).
  */
-export async function handleWorkspaceApi(request, url, env, ctx) {
-    const pathLower = url.pathname.toLowerCase();
+export async function handleWorkspaceApi(request, env, ctx, authUser) {
+    const url = new URL(request.url);
+    const pathLower = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
     const method = request.method.toUpperCase();
+
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
     // ── /api/workspaces/list ────────────────────────────────────────────────
     if (pathLower === '/api/workspaces/list' && method === 'GET') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
             const { results } = await env.DB.prepare(
                 `SELECT w.id, w.name, w.domain, w.status, w.theme_id, w.handle,
@@ -30,10 +35,6 @@ export async function handleWorkspaceApi(request, url, env, ctx) {
 
     // ── /api/workspace/create (Ephemeral User State) ───────────────────────
     if (pathLower === '/api/workspace/create' && method === 'POST') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-        
         const body = await request.json().catch(() => ({}));
         const t = body?.type;
         const type = t === 'github' || t === 'r2' ? t : 'local';
@@ -67,8 +68,6 @@ export async function handleWorkspaceApi(request, url, env, ctx) {
     // ── /api/workspace/:id (Ephemeral User State Fetch/Update) ─────────────
     const userWsMatch = pathLower.match(/^\/api\/workspace\/([^/]+)$/);
     if (userWsMatch && userWsMatch[1] !== 'create') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const wsUuid = userWsMatch[1];
         const rowId = `uws:${String(authUser.tenant_id ?? '').trim()}:${String(authUser.id ?? '').trim()}:${wsUuid}`;
 

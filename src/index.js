@@ -10,9 +10,16 @@ import { handleR2Api } from './api/r2-api';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
-import { handleHealthCheck } from './api/health.js';
-import { handleVaultApi } from './api/vault.js';
-import { runIntegritySnapshot } from './api/integrity.js';
+import { handleSettingsRequest } from './api/settings';
+import { handleWorkspaceApi } from './api/workspace';
+import { handleCidiApi } from './api/cicd';
+import { handleDeploymentsApi } from './api/deployments';
+import { handleFinanceApi } from './api/finance';
+import { handleMcpApi } from './api/mcp';
+import { handleDrawApi } from './api/draw';
+import { handleThemesApi } from './api/themes';
+import { handleHubApi } from './api/hub';
+import { handleOverviewApi } from './api/overview';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects ---
@@ -90,16 +97,62 @@ export default {
         return handleAgentRequest(request, env, ctx, authUser);
       }
 
+      if (pathLower.startsWith('/api/settings')) {
+        return handleSettingsRequest(request, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/workspaces') || pathLower.startsWith('/api/workspace')) {
+        return handleWorkspaceApi(request, url, env, ctx, authUser);
+      }
+
+      if (pathLower.startsWith('/api/cicd')) {
+        return handleCidiApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/deployments') || pathLower.startsWith('/api/internal/')) {
+        return handleDeploymentsApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/finance') || pathLower.startsWith('/api/clients') || 
+          pathLower.startsWith('/api/projects') || pathLower.startsWith('/api/billing')) {
+        return handleFinanceApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/mcp')) {
+        return handleMcpApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/draw')) {
+        return handleDrawApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/themes')) {
+        return handleThemesApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/hub')) {
+        return handleHubApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/overview')) {
+        return handleOverviewApi(request, url, env, ctx);
+      }
+
 
       // 4. Static Assets & SPA Fallback (Dashboard UI)
       if (!pathLower.startsWith('/api/')) {
         // A. Root Route (Landing Page Priority)
         if (pathLower === '/') {
           if (env.ASSETS) {
-            const obj = await env.ASSETS.get('index.html');
+            // Priority: New Landing Page (index-v3.html)
+            const obj = await env.ASSETS.get('index-v3.html') || await env.ASSETS.get('index.html');
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': 'text/html' } });
           }
           if (env.STATIC_ASSETS) {
+            // Fallback to static assets (sandbox/dev)
+            const objV3 = await env.STATIC_ASSETS.fetch(new Request(new URL('/index-v3.html', url.origin), request)).catch(() => null);
+            if (objV3 && objV3.status === 200) return objV3;
+            
             const assetRes = await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
             if (assetRes.status !== 404) return assetRes;
           }

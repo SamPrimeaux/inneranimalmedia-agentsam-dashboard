@@ -14,7 +14,13 @@ export {
   IAMSession, IAMAgentSession, MeauxSession 
 } from './core/durable_objects';
 
+// --- Durable Objects ---
+export { IAMCollaborationSession } from './do/Collaboration.js';
+export { AgentChatSqlV1 } from './do/AgentChat.js';
+export { IAMSession, IAMAgentSession, MeauxSession, ChessRoom } from './do/Legacy.js';
+
 export default {
+
   /**
    * Primary Request Handler
    */

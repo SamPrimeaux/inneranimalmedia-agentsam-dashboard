@@ -31,6 +31,14 @@ fi
 RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
 RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
 
+# INTERNAL_API_SECRET must be in .env.cloudflare for cicd-event + knowledge sync to work.
+# It is NOT auto-loaded from wrangler secrets (those are write-only via wrangler secret put).
+# If missing: add INTERNAL_API_SECRET=<your-value> to .env.cloudflare.
+if [ -z "${INTERNAL_API_SECRET:-}" ]; then
+  echo "  WARN: INTERNAL_API_SECRET not set locally — cicd-event and knowledge sync will return 401."
+  echo "  Fix: add INTERNAL_API_SECRET=<value> to .env.cloudflare (same value as set via wrangler secret put)"
+fi
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 CFG="wrangler.jsonc"
 PROD_CFG="wrangler.production.toml"
@@ -129,8 +137,24 @@ _r2_prune_sandbox() {
         --prefix "${prefix}/" \
         --remote -c "$PROD_CFG" 2>/dev/null || echo '{}')
     fi
-    echo "$page_json" | grep -oP '(?<="key":")[^"]+' >> "$live_keys_file" || true
-    cursor=$(echo "$page_json" | grep -oP '(?<="cursor":")[^"]+' | tail -1 || true)
+    echo "$page_json" | python3 -c "
+import sys, json
+try:
+  d = json.load(sys.stdin)
+  objs = d.get('objects', d.get('keys', d.get('result', [])))
+  if isinstance(objs, list):
+    for o in objs:
+      k = o.get('key', o.get('name', ''))
+      if k: print(k)
+except: pass
+" >> "$live_keys_file" 2>/dev/null || true
+    cursor=$(echo "$page_json" | python3 -c "
+import sys, json
+try:
+  d = json.load(sys.stdin)
+  print(d.get('cursor', d.get('truncated_cursor', '')))
+except: pass
+" 2>/dev/null | tail -1 || true)
     [ -z "$cursor" ] && break
   done
 
@@ -354,11 +378,8 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
 
   # Compute sizes
   R2_BYTE_EST=$(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1*1024}' || echo 0)
-  if CICD_R2_BUNDLE_BYTES=$(du -sb "$DIST_DIR" 2>/dev/null | awk '{print $1}'); then
-    export CICD_R2_BUNDLE_BYTES
-  else
-    export CICD_R2_BUNDLE_BYTES=$(($(du -sk "$DIST_DIR" 2>/dev/null | awk '{print $1}') * 1024))
-  fi
+  # macOS du does not support -b; use -sk * 1024 as approximation on both platforms
+  export CICD_R2_BUNDLE_BYTES="$R2_BYTE_EST"
   R2_FILES_UPDATED=$((R2_LINE_COUNT + 4))
 
   # dashboard_versions D1 log

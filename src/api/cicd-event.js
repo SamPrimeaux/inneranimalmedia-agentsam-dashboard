@@ -225,16 +225,67 @@ async function fireHooks(trigger, payload, env, isExplicitId = false) {
   for (const hook of hooks.results) {
     const start = Date.now();
     let status = 'success', error = null, output = null;
-    const summary = payload.summary || `Deployment ${payload.worker_version_id || ''} completed.`;
+
+    // Build human-readable deploy summary from payload
+    const env_label = (payload.environment || 'sandbox').toUpperCase();
+    const ver = payload.dashboard_version || payload.worker_version_id || 'unknown';
+    const health = payload.health_status || payload.health_ms ? `HTTP ${payload.health_status} in ${payload.health_ms}ms` : 'skipped';
+    const wall = payload.ms_wall ? `${Math.round(payload.ms_wall / 1000)}s` : '?';
+    const r2 = `${payload.r2_objects_before ?? '?'} → ${payload.r2_objects_after ?? '?'} objects (${payload.r2_pruned ?? 0} pruned)`;
+    const git = payload.git_hash ? payload.git_hash.slice(0, 8) : 'unknown';
+    const changes = payload.change_count != null ? `${payload.change_count} file(s) changed` : '';
+    const summaryText = [
+      `IAM ${env_label} DEPLOY — ${ver}`,
+      `Health: ${health}`,
+      `Wall time: ${wall}`,
+      `R2: ${r2}`,
+      `Git: ${git}${changes ? ' · ' + changes : ''}`,
+    ].join('\n');
 
     try {
-      // Simulate hook execution via command processing (Placeholder for actual PTY/Shell trigger)
-      output = `Trigger: ${trigger} | Summary: ${summary} | Command: ${hook.command.slice(0, 100)}`;
-      console.log(`[Hook] Firing ${hook.id}: ${output}`);
+      const cmd = (hook.command || '').trim();
+
+      if (cmd === 'notify:imessage' || cmd === 'notify:email') {
+        // Deliver via Resend → your email (which forwards to iMessage via email-to-SMS bridge)
+        const resendKey = env.RESEND_API_KEY;
+        const to = env.RESEND_TO || 'meauxbility@gmail.com';
+        const from = env.RESEND_FROM || 'sam@inneranimalmedia.com';
+        if (resendKey) {
+          const subject = `[IAM] ${env_label} ${ver} — ${health}`;
+          const html = `<pre style="font-family:monospace;background:#0f1117;color:#e2e8f0;padding:16px;border-radius:6px;white-space:pre-wrap">${summaryText}</pre>`;
+          const resp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from, to: [to], subject, html }),
+          });
+          output = `notify:imessage → Resend ${resp.status} (${to})`;
+          if (!resp.ok) { status = 'fail'; error = `Resend HTTP ${resp.status}`; }
+        } else {
+          output = 'notify:imessage — RESEND_API_KEY not set, skipped';
+        }
+
+      } else if (cmd.startsWith('notify:webhook:')) {
+        // POST summary to a webhook URL
+        const webhookUrl = cmd.slice('notify:webhook:'.length);
+        const resp = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: summaryText, payload }),
+        });
+        output = `notify:webhook → ${webhookUrl} HTTP ${resp.status}`;
+        if (!resp.ok) { status = 'fail'; error = `webhook HTTP ${resp.status}`; }
+
+      } else {
+        // Generic command — log it
+        output = `Trigger: ${trigger} | ${summaryText} | cmd: ${cmd.slice(0, 80)}`;
+        console.log(`[Hook] Firing ${hook.id}: ${output}`);
+      }
+
     } catch (e) {
-      status = 'error';
+      status = 'fail';
       error = e.message;
     }
+
     const executionId = `hke-${hook.id}-${Date.now()}`;
     await env.DB.prepare(`
       INSERT INTO agentsam_hook_execution
@@ -243,7 +294,7 @@ async function fireHooks(trigger, payload, env, isExplicitId = false) {
     `).bind(executionId, hook.id, status,
             Date.now() - start, output, error).run();
 
-    // PHASE 3D — hook_subscriptions counter fix
+    // Update hook_subscriptions counters
     await env.DB.prepare(`
       UPDATE hook_subscriptions
       SET total_fired = total_fired + 1,
@@ -252,5 +303,7 @@ async function fireHooks(trigger, payload, env, isExplicitId = false) {
           total_failed = total_failed + CASE WHEN ? != 'success' THEN 1 ELSE 0 END
       WHERE id = ?
     `).bind(status, status, hook.id).run().catch(() => {});
+
+    console.log(`[Hook] ${hook.id} (${trigger}): ${status} — ${output || error || 'no output'}`);
   }
 }

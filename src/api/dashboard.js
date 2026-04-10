@@ -1,5 +1,6 @@
 import { jsonResponse } from '../core/responses.js';
-import { getAuthUser, getIntegrationToken } from '../core/auth.js';
+import { getAuthUser } from '../core/auth.js';
+import { getIntegrationToken } from '../integrations/tokens.js';
 import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
 
 // Integrations

@@ -1,5 +1,6 @@
 import { jsonResponse } from '../core/responses.js';
-import { getAuthUser, getIntegrationToken } from '../core/auth.js';
+import { getAuthUser } from '../core/auth.js';
+import { getIntegrationToken } from './tokens.js';
 
 /**
  * GitHub Service Integration.
@@ -18,7 +19,7 @@ export async function handleGitHubApi(request, env) {
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     // Retrieve the GitHub token from Secret/Vault/KV
-    const token = await getIntegrationToken(env, authUser.id, 'github');
+    const token = await getIntegrationToken(env.DB, authUser.id, 'github');
     if (!token) return jsonResponse({ error: 'GitHub account not linked' }, 403);
 
     // ── GET /api/agent/github/repos ──────────────────────────────────────────

@@ -212,6 +212,20 @@ export function resolveTenantIdForWorker(session, env) {
 }
 
 /**
+ * Returns the apex domain for cookie setting (e.g. inneranimalmedia.com).
+ */
+export function getApexDomain(hostname) {
+  if (!hostname) return '';
+  const parts = hostname.split('.');
+  if (parts.length >= 2) {
+    // Basic logic for inneranimalmedia.com ecosystem
+    if (hostname.endsWith('inneranimalmedia.com')) return 'inneranimalmedia.com';
+    return parts.slice(-2).join('.');
+  }
+  return hostname;
+}
+
+/**
  * Global Session Retrieval (KV + Context)
  */
 export async function getSession(env, request) {

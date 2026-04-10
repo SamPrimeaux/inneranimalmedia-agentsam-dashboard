@@ -139,7 +139,7 @@ export default {
         return handleOverviewApi(request, url, env, ctx);
       }
 
-      if (pathLower.startsWith('/api/auth')) {
+      if (pathLower.startsWith('/api/auth') || pathLower === '/api/settings/profile') {
         return handleAuthApi(request, url, env);
       }
 

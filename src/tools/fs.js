@@ -17,7 +17,13 @@ export const handlers = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, recursive }),
       });
-      return await res.json();
+      const data = await res.json();
+      
+      // If backend returns flat rows (e.g. from R2/S3), normalize to nested tree
+      if (Array.isArray(data) && !data.some(d => d.children)) {
+        return buildTree(data, path);
+      }
+      return data;
     } catch (e) {
       return { error: `Failed to list directory: ${e.message}` };
     }
@@ -57,6 +63,41 @@ export const handlers = {
     }
   },
 };
+
+/** Normalizes a flat list of paths into a nested tree structure. */
+function buildTree(files, rootPath) {
+  const root = { name: rootPath.split('/').pop() || '.', path: rootPath, kind: 'directory', children: [] };
+  const map = { [rootPath]: root };
+
+  files.forEach(f => {
+    const parts = f.path.split('/');
+    let currentPath = '';
+    
+    parts.forEach((part, i) => {
+      const parentPath = currentPath;
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      
+      if (!map[currentPath]) {
+        const isFile = i === parts.length - 1 && !f.kind?.includes('directory');
+        const node = {
+          name: part,
+          path: currentPath,
+          kind: isFile ? 'file' : 'directory',
+          size: isFile ? f.size : undefined,
+          mtime: f.mtime,
+          children: isFile ? undefined : []
+        };
+        map[currentPath] = node;
+        if (map[parentPath]) {
+          map[parentPath].children.push(node);
+        } else if (parentPath === '' || parentPath === '.') {
+             root.children.push(node);
+        }
+      }
+    });
+  });
+  return root.children;
+}
 
 export const definitions = [
   {

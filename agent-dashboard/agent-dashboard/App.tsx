@@ -48,7 +48,7 @@ import {
   type RecentFileEntry,
 } from './src/ideWorkspace';
 import { useEditor } from './src/EditorContext';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2 } from 'lucide-react';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2 } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -354,7 +354,7 @@ const App: React.FC = () => {
     const next = openTabs.filter(t => t !== tab);
     setOpenTabs(next);
     if (activeTab === tab) {
-      setActiveTab(next.length > 0 ? next[next.length - 1] : 'welcome');
+      setActiveTab(next.length > 0 ? next[next.length - 1] : 'Workspace');
     }
   };
 
@@ -899,7 +899,7 @@ const App: React.FC = () => {
     } else if (/\.md$/i.test(name)) {
       const doc = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escapeHtmlForPreview(
         name
-      )}</title><style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:1rem auto;padding:0 1rem;line-height:1.5;color:var(--text-main, #111)}</style></head><body><pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:13px">${escapeHtmlForPreview(
+      )}</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:52rem;margin:1rem auto;padding:0 1rem;line-height:1.5;color:var(--text-main, #111)}</style></head><body><pre style="white-space:pre-wrap;font-family:Menlo,Monaco,'Courier New',monospace;font-size:13px">${escapeHtmlForPreview(
         activeFile.content
       )}</pre></body></html>`;
       blob = new Blob([doc], { type: 'text/html; charset=utf-8' });
@@ -908,7 +908,7 @@ const App: React.FC = () => {
       const srcEsc = escapeHtmlForPreview(activeFile.content.slice(0, 12000));
       const doc = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escapeHtmlForPreview(
         name
-      )}</title><style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:1rem;line-height:1.5;color:var(--text-main, #111)}.note{margin-bottom:1rem;padding:0.75rem;border:1px solid #ccc;border-radius:6px;background:#f5f5f5}</style></head><body><p class="note"><strong>React preview requires a build step.</strong> ${isTsx ? 'TSX' : 'JSX'} must be compiled (Vite, webpack, etc.). Use your dev server URL for the real preview.</p><p style="font-size:12px;color:#555">Source (truncated)</p><pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px">${srcEsc}</pre></body></html>`;
+      )}</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:52rem;margin:2rem auto;padding:1rem;line-height:1.5;color:var(--text-main, #111)}.note{margin-bottom:1rem;padding:0.75rem;border:1px solid #ccc;border-radius:6px;background:#f5f5f5}</style></head><body><p class="note"><strong>React preview requires a build step.</strong> ${isTsx ? 'TSX' : 'JSX'} must be compiled (Vite, webpack, etc.). Use your dev server URL for the real preview.</p><p style="font-size:12px;color:#555">Source (truncated)</p><pre style="white-space:pre-wrap;font-family:Menlo,Monaco,'Courier New',monospace;font-size:12px">${srcEsc}</pre></body></html>`;
       blob = new Blob([doc], { type: 'text/html; charset=utf-8' });
     } else {
       return;
@@ -1327,15 +1327,25 @@ const App: React.FC = () => {
               <img
                 src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail"
                 alt=""
-                className="w-7 h-7 object-contain drop-shadow shrink-0"
+                className="w-7 h-7 object-contain drop-shadow shrink-0 cursor-pointer"
                 title={workspaceDisplayName}
+                onClick={() => setActiveTab('Workspace')}
               />
+              <button
+                type="button"
+                onClick={() => toggleActivity(activeActivity ? activeActivity : 'files')}
+                className="shrink-0 p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors ml-1"
+                title={activeActivity ? "Close sidebar" : "Open sidebar"}
+              >
+                {activeActivity ? <PanelLeftClose size={18} strokeWidth={1.75} /> : <PanelLeft size={18} strokeWidth={1.75} />}
+              </button>
           </div>
 
           {/* Unified search (Cmd+K) + Knowledge panel (RAG / chats list) */}
           <div className="flex-1 flex justify-center items-center min-w-0 px-2 gap-2">
               <UnifiedSearchBar
                 workspaceLabel={workspaceDisplayName}
+                recentFiles={recentFiles}
                 onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
                 onRunCommand={(cmd) => terminalRef.current?.runCommand(cmd)}
               />

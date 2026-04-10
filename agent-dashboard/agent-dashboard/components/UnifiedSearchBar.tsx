@@ -7,7 +7,8 @@ export type UnifiedSearchNavigate =
   | { kind: 'knowledge'; url: string | null; label: string }
   | { kind: 'sql'; sql: string }
   | { kind: 'deployment'; summary: string }
-  | { kind: 'column'; sql: string };
+  | { kind: 'column'; sql: string }
+  | { kind: 'file'; path: string };
 
 type DeployRow = {
   type: 'deployment';
@@ -29,8 +30,16 @@ type KnowRow = {
   url?: string | null;
   score?: number | null;
 };
+type CommandRow = { type: 'command'; id: string; title: string; subtitle?: string; cmd: string };
+type RecentFileRow = { type: 'file'; id: string; title: string; subtitle?: string; path: string };
 
-type UnifiedRow = DeployRow | SnippetRow | QueryRow | TableRow | ColumnRow | ConvRow | KnowRow;
+type UnifiedRow = DeployRow | SnippetRow | QueryRow | TableRow | ColumnRow | ConvRow | KnowRow | CommandRow | RecentFileRow;
+
+const IDE_COMMANDS: CommandRow[] = [
+  { type: 'command', id: 'fmt', title: 'Format Document', subtitle: 'Run Prettier on active file', cmd: 'editor.format' },
+  { type: 'command', id: 'debug', title: 'Start Debugging', subtitle: 'Attach debugger to local process', cmd: 'debug.start' },
+  { type: 'command', id: 'clear', title: 'Clear Console', subtitle: 'Reset terminal buffers', cmd: 'terminal.clear' },
+];
 
 function flattenResults(data: {
   deployments?: DeployRow[];
@@ -52,7 +61,6 @@ function flattenResults(data: {
   return out;
 }
 
-/** Prefer ranked `results` from worker (template-style); else legacy buckets. */
 function normalizeSearchRows(data: Record<string, unknown>): UnifiedRow[] {
   const ranked = data.results;
   if (Array.isArray(ranked) && ranked.length > 0) {
@@ -65,47 +73,19 @@ function normalizeSearchRows(data: Record<string, unknown>): UnifiedRow[] {
       const title = String(r.title ?? '');
       const subtitle = r.subtitle != null ? String(r.subtitle) : undefined;
       if (type === 'deployment') {
-        out.push({
-          type: 'deployment',
-          id,
-          title,
-          subtitle,
-          summary: r.summary != null ? String(r.summary) : undefined,
-        });
+        out.push({ type: 'deployment', id, title, subtitle, summary: r.summary != null ? String(r.summary) : undefined });
         continue;
       }
-      if (type === 'snippet') {
-        const sql = r.sql_text != null ? String(r.sql_text) : '';
-        out.push({ type: 'snippet', id, title, subtitle, sql_text: sql });
+      if (type === 'snippet' || type === 'query' || type === 'column') {
+        out.push({ type: type as any, id, title, subtitle, sql_text: String(r.sql_text ?? '') });
         continue;
       }
-      if (type === 'query') {
-        const sql = r.sql_text != null ? String(r.sql_text) : '';
-        out.push({ type: 'query', id, title, subtitle, sql_text: sql });
-        continue;
-      }
-      if (type === 'table') {
-        out.push({ type: 'table', id, title, subtitle });
-        continue;
-      }
-      if (type === 'column') {
-        const sql = r.sql_text != null ? String(r.sql_text) : '';
-        out.push({ type: 'column', id, title, subtitle, sql_text: sql });
-        continue;
-      }
-      if (type === 'conversation') {
-        out.push({ type: 'conversation', id, title, subtitle });
+      if (type === 'table' || type === 'conversation') {
+        out.push({ type: type as any, id, title, subtitle });
         continue;
       }
       if (type === 'knowledge') {
-        out.push({
-          type: 'knowledge',
-          id,
-          title,
-          subtitle,
-          url: r.url != null ? String(r.url) : null,
-          score: typeof r.score === 'number' ? r.score : null,
-        });
+        out.push({ type: 'knowledge', id, title, subtitle, url: r.url != null ? String(r.url) : null, score: typeof r.score === 'number' ? r.score : null });
       }
     }
     return out;
@@ -115,58 +95,49 @@ function normalizeSearchRows(data: Record<string, unknown>): UnifiedRow[] {
 
 function rowLabel(row: UnifiedRow): string {
   switch (row.type) {
-    case 'deployment':
-      return 'Deploy';
-    case 'snippet':
-      return 'Snippet';
-    case 'query':
-      return 'Query';
-    case 'table':
-      return 'Table';
-    case 'column':
-      return 'Column';
-    case 'conversation':
-      return 'Chat';
-    default:
-      return 'Knowledge';
+    case 'deployment': return 'Deploy';
+    case 'snippet': return 'Snippet';
+    case 'query': return 'Query';
+    case 'table': return 'Table';
+    case 'column': return 'Column';
+    case 'conversation': return 'Chat';
+    case 'command': return 'Cmd';
+    case 'file': return 'File';
+    default: return 'Knowledge';
   }
 }
 
-/**
- * Cursor-style command palette: deployments, snippets, SQL history, D1 tables, chats, RAG.
- * Global shortcut: Cmd+K / Ctrl+K.
- */
 export const UnifiedSearchBar: React.FC<{
   workspaceLabel?: string;
+  recentFiles?: { name: string; path: string; label?: string }[];
   onNavigate: (nav: UnifiedSearchNavigate, searchQuery: string) => void;
   onRunCommand?: (cmd: string) => void;
-}> = ({ workspaceLabel, onNavigate, onRunCommand }) => {
+}> = ({ workspaceLabel, recentFiles = [], onNavigate, onRunCommand }) => {
   const [open, setOpen] = useState(false);
-  const [sshOpen, setSshOpen] = useState(false);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<UnifiedRow[]>([]);
-  const [recent, setRecent] = useState<{ query?: string; result_kind?: string; opened_id?: string }[]>([]);
+  const [recentSearches, setRecentSearches] = useState<{ query?: string; result_kind?: string; opened_id?: string }[]>([]);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadRecent = useCallback(async () => {
+  const loadRecentSearches = useCallback(async () => {
     try {
       const r = await fetch('/api/unified-search/recent', { credentials: 'same-origin' });
       const j = r.ok ? await r.json() : { items: [] };
-      setRecent(Array.isArray(j.items) ? j.items : []);
+      setRecentSearches(Array.isArray(j.items) ? j.items : []);
     } catch {
-      setRecent([]);
+      setRecentSearches([]);
     }
   }, []);
 
   useEffect(() => {
     if (!open) return;
-    void loadRecent();
+    void loadRecentSearches();
     setActive(0);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [open, loadRecent]);
+  }, [open, loadRecentSearches]);
 
   const runSearch = useCallback(async (query: string) => {
     const t = query.trim();
@@ -201,35 +172,36 @@ export const UnifiedSearchBar: React.FC<{
     };
   }, [q, open, runSearch]);
 
-  const track = useCallback((searchQuery: string, row: UnifiedRow) => {
-    void fetch('/api/unified-search/track', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        query: searchQuery,
-        result_kind: row.type,
-        opened_id: row.id,
-      }),
-    }).catch(() => {});
-  }, []);
-
   const applyRow = useCallback(
     (row: UnifiedRow, searchQuery: string) => {
-      track(searchQuery, row);
+      if (row.type === 'command') {
+        onRunCommand?.(row.cmd);
+        setOpen(false);
+        return;
+      }
+      if (row.type === 'file') {
+        onNavigate({ kind: 'knowledge', url: row.path, label: row.title } as any, searchQuery);
+        setOpen(false);
+        return;
+      }
+      
+      void fetch('/api/unified-search/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ query: searchQuery, result_kind: row.type, opened_id: row.id }),
+      }).catch(() => {});
+
       if (row.type === 'table') {
         onNavigate({ kind: 'table', name: row.id }, searchQuery);
       } else if (row.type === 'conversation') {
         onNavigate({ kind: 'conversation', id: row.id }, searchQuery);
       } else if (row.type === 'column') {
-        const sql = row.sql_text?.trim();
-        if (sql) onNavigate({ kind: 'column', sql }, searchQuery);
+        if (row.sql_text) onNavigate({ kind: 'column', sql: row.sql_text }, searchQuery);
       } else if (row.type === 'snippet' || row.type === 'query') {
-        const sql = row.sql_text?.trim();
-        if (sql) onNavigate({ kind: 'sql', sql }, searchQuery);
+        if (row.sql_text) onNavigate({ kind: 'sql', sql: row.sql_text }, searchQuery);
       } else if (row.type === 'deployment') {
-        const summary = row.summary || row.subtitle || row.title;
-        onNavigate({ kind: 'deployment', summary }, searchQuery);
+        onNavigate({ kind: 'deployment', summary: row.summary || row.subtitle || row.title }, searchQuery);
       } else {
         onNavigate({ kind: 'knowledge', url: row.url ?? null, label: row.title || row.subtitle || 'Result' }, searchQuery);
       }
@@ -237,10 +209,18 @@ export const UnifiedSearchBar: React.FC<{
       setQ('');
       setRows([]);
     },
-    [onNavigate, track],
+    [onNavigate, onRunCommand],
   );
 
-  const flatList = useMemo(() => rows, [rows]);
+  const flatList = useMemo(() => {
+    if (q.trim().length >= 2) return rows;
+    const palette: UnifiedRow[] = [];
+    recentFiles.slice(0, 5).forEach(f => {
+      palette.push({ type: 'file', id: f.path, title: f.name, subtitle: f.label || f.path, path: f.path });
+    });
+    IDE_COMMANDS.forEach(c => palette.push(c));
+    return palette;
+  }, [q, rows, recentFiles]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -249,14 +229,11 @@ export const UnifiedSearchBar: React.FC<{
         e.preventDefault();
         setOpen((o) => !o);
       }
-      if (e.key === 'Escape') {
-        if (open) { e.preventDefault(); setOpen(false); }
-        if (sshOpen) { e.preventDefault(); setSshOpen(false); }
-      }
+      if (e.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -272,103 +249,25 @@ export const UnifiedSearchBar: React.FC<{
     }
   };
 
-  const isMac =
-    typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent || navigator.platform || '');
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 
   return (
     <div className="nav-search-container w-full max-w-lg hidden lg:block">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          title="Unified search (Cmd+K)"
-          aria-label="Open unified search"
-          onClick={() => setOpen(o => !o)}
-          className="flex flex-col items-stretch w-full px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <Search size={14} className="shrink-0 opacity-70 text-[var(--text-muted)]" />
-            <span className="text-[11px] text-[var(--text-muted)] truncate flex-1">
-              workspace:{' '}
-              <span className="text-[var(--text-main)] font-medium">{workspaceLabel?.trim() || 'dashboard'}</span>
-            </span>
-            <kbd className="hidden xl:inline text-[9px] font-mono px-1 py-px rounded border border-[var(--border-subtle)] text-[var(--text-muted)] shrink-0">
-              {isMac ? 'Cmd' : 'Ctrl'}+K
-            </kbd>
-          </div>
-        </button>
-
-        <div className="relative shrink-0">
-          <button
-            type="button"
-            className={`p-1.5 rounded-md border transition-all ${
-              sshOpen 
-                ? 'bg-[var(--bg-panel)] border-[var(--solar-cyan)] text-[var(--solar-cyan)]' 
-                : 'bg-[var(--bg-app)] border-[var(--border-subtle)] text-[var(--text-muted)] hover:border-[var(--solar-cyan)]/40 hover:text-[var(--text-main)]'
-            }`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSshOpen(!sshOpen);
-              if (open) setOpen(false);
-            }}
-            title="Connect Workspace (SSH)"
-          >
-            <KeyRound size={16} />
-          </button>
-
-          {sshOpen && (
-            <div className="absolute top-full right-0 mt-2 z-[110] w-56 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden py-1 animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] border-b border-[var(--border-subtle)]/40 mb-1">
-                SSH Command Hub
-              </div>
-              <button 
-                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
-                onClick={() => {
-                  onRunCommand?.('ssh iam-pty');
-                  setSshOpen(false);
-                }}
-              >
-                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
-                  <Terminal size={14} />
-                </div>
-                <div>
-                  <div className="font-bold">Local PTY</div>
-                  <div className="text-[10px] opacity-60">iam-pty / port 3099</div>
-                </div>
-              </button>
-              <button 
-                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
-                onClick={() => {
-                  onRunCommand?.('ssh production-iam');
-                  setSshOpen(false);
-                }}
-              >
-                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
-                  <Globe size={14} />
-                </div>
-                <div>
-                  <div className="font-bold text-[var(--solar-green)]">Production</div>
-                  <div className="text-[10px] opacity-60">mainstage / iam-prod</div>
-                </div>
-              </button>
-              <button 
-                className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
-                onClick={() => {
-                  onRunCommand?.('ssh sandbox-d1');
-                  setSshOpen(false);
-                }}
-              >
-                <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
-                  <HardDrive size={14} />
-                </div>
-                <div>
-                  <div className="font-bold text-[var(--solar-cyan)]">Sandbox</div>
-                  <div className="text-[10px] opacity-60">experiment-d1-ws</div>
-                </div>
-              </button>
-            </div>
-          )}
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex flex-col items-stretch w-full px-3 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-app)] text-left hover:border-[var(--solar-cyan)]/40 transition-colors gap-0.5"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Search size={14} className="shrink-0 opacity-70 text-[var(--text-muted)]" />
+          <span className="text-[11px] text-[var(--text-muted)] truncate flex-1">
+            workspace: <span className="text-[var(--text-main)] font-medium">{workspaceLabel?.trim() || 'dashboard'}</span>
+          </span>
+          <kbd className="hidden xl:inline text-[9px] font-mono px-1 py-px rounded border border-[var(--border-subtle)] text-[var(--text-muted)] shrink-0">
+            {isMac ? 'Cmd' : 'Ctrl'}+K
+          </kbd>
         </div>
-      </div>
+      </button>
 
       {open && (
         <div className="nav-dropdown rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden flex flex-col max-h-[min(65vh,500px)]">
@@ -380,7 +279,7 @@ export const UnifiedSearchBar: React.FC<{
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   onKeyDown={onKeyDown}
-                  placeholder="Search deploys, SQL, tables, chats, knowledge…"
+                  placeholder="Search files, commands, deploys, chats…"
                   className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[13px] text-[var(--text-main)] placeholder:text-[var(--text-muted)]"
                 />
                 {loading ? <Loader2 size={16} className="animate-spin text-[var(--solar-cyan)] shrink-0" /> : null}
@@ -388,23 +287,6 @@ export const UnifiedSearchBar: React.FC<{
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto chat-hide-scroll">
-              {q.trim().length < 2 && recent.length > 0 ? (
-                <div className="px-3 py-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mb-2">
-                    Recent searches
-                  </div>
-                  {recent.slice(0, 8).map((r, i) => (
-                    <div key={`${r.query}-${i}`} className="text-[11px] text-[var(--text-muted)] py-1 font-mono truncate">
-                      {r.query || '(empty)'}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {flatList.length === 0 && q.trim().length >= 2 && !loading ? (
-                <div className="px-4 py-8 text-center text-[12px] text-[var(--text-muted)]">No matches</div>
-              ) : null}
-
               {flatList.map((row, i) => (
                 <button
                   key={`${row.type}-${row.id}-${i}`}
@@ -425,11 +307,6 @@ export const UnifiedSearchBar: React.FC<{
                   ) : null}
                 </button>
               ))}
-            </div>
-
-            <div className="px-3 py-2 border-t border-[var(--border-subtle)] text-[10px] text-[var(--text-muted)] flex justify-between">
-              <span>Enter to open</span>
-              <span>Esc to close</span>
             </div>
         </div>
       )}

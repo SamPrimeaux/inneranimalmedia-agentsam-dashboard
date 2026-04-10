@@ -12,6 +12,7 @@ import { getAuthUser, jsonResponse } from './core/auth';
 import { handleHealthCheck } from './api/health.js';
 import { handleVaultApi } from './api/vault.js';
 import { runIntegritySnapshot } from './api/integrity.js';
+import legacyWorker from '../worker.js';
 
 // --- Durable Objects ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
@@ -32,6 +33,11 @@ export default {
       // 1. Health Checks
       if (pathLower === '/api/health' || pathLower === '/health') {
         return handleHealthCheck(request, env);
+      }
+      
+      // 1c. OAuth & Auth Passthrough (Legacy Monolith)
+      if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
+        return legacyWorker.fetch(request, env, ctx);
       }
 
       // 1b. System Health Snapshot
@@ -81,7 +87,19 @@ export default {
 
       // 4. Static Assets & SPA Fallback (Dashboard UI)
       if (!pathLower.startsWith('/api/')) {
-        // A. Sandbox (Workers Assets)
+        // A. Root Route (Landing Page Priority)
+        if (pathLower === '/') {
+          if (env.ASSETS) {
+            const obj = await env.ASSETS.get('index.html');
+            if (obj) return new Response(obj.body, { headers: { 'Content-Type': 'text/html' } });
+          }
+          if (env.STATIC_ASSETS) {
+            const assetRes = await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
+            if (assetRes.status !== 404) return assetRes;
+          }
+        }
+
+        // B. Sandbox (Workers Assets)
         if (env.STATIC_ASSETS) {
           const assetRes = await env.STATIC_ASSETS.fetch(request.clone());
           if (assetRes.status !== 404) return assetRes;

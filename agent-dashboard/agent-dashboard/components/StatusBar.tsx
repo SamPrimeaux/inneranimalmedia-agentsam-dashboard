@@ -110,6 +110,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       : '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
+  const [sshOpen, setSshOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -217,13 +218,78 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <div className="h-6 flex items-center justify-between text-[10px] font-mono text-[var(--text-main)]/90 w-full px-1">
         {/* Left Side: Environment Switcher */}
         {/* Left Side: Environment Status Dot */}
-        <div className="flex items-center gap-1.5 px-2 h-full py-0.5">
+        <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative">
           <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             healthOk === true ? 'bg-[var(--solar-green)] shadow-[0_0_5px_var(--solar-green)]' : 'bg-[var(--solar-cyan)]'
           }`} />
-          <span className="text-[9px] uppercase tracking-widest font-bold opacity-60">
-            {healthOk === true ? 'IAM-OK' : 'Standby'}
-          </span>
+          
+          <div className="relative flex items-center h-full">
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 px-1 rounded hover:bg-[var(--bg-hover)] transition-colors opacity-80 hover:opacity-100 ${sshOpen ? 'text-[var(--solar-cyan)]' : ''}`}
+              title="SSH Command Hub"
+              onClick={() => setSshOpen(!sshOpen)}
+            >
+              <KeyRound size={12} className={sshOpen ? 'text-[var(--solar-cyan)]' : 'opacity-60'} />
+              <span className="text-[9px] uppercase tracking-widest font-bold">
+                {healthOk === true ? 'IAM-OK' : 'Standby'}
+              </span>
+            </button>
+
+            {sshOpen && (
+              <div className="absolute bottom-full left-0 mb-2 z-[110] w-56 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden py-1 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] border-b border-[var(--border-subtle)]/40 mb-1">
+                  SSH Command Hub
+                </div>
+                <button 
+                  className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                  onClick={() => {
+                    // Logic to be wired via prop or custom event if needed
+                    window.dispatchEvent(new CustomEvent('iam-run-command', { detail: { cmd: 'ssh iam-pty' } }));
+                    setSshOpen(false);
+                  }}
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                    <Terminal size={14} />
+                  </div>
+                  <div>
+                    <div className="font-bold">Local PTY</div>
+                    <div className="text-[10px] opacity-60">iam-pty / port 3099</div>
+                  </div>
+                </button>
+                <button 
+                  className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('iam-run-command', { detail: { cmd: 'ssh production-iam' } }));
+                    setSshOpen(false);
+                  }}
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                    <Globe size={14} />
+                  </div>
+                  <div>
+                    <div className="font-bold text-[var(--solar-green)]">Production</div>
+                    <div className="text-[10px] opacity-60">mainstage / iam-prod</div>
+                  </div>
+                </button>
+                <button 
+                  className="w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] flex items-center gap-3 text-[12px] group"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('iam-run-command', { detail: { cmd: 'ssh sandbox-d1' } }));
+                    setSshOpen(false);
+                  }}
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[var(--bg-app)] flex items-center justify-center text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)] transition-colors">
+                    <HardDrive size={14} />
+                  </div>
+                  <div>
+                    <div className="font-bold text-[var(--solar-cyan)]">Sandbox</div>
+                    <div className="text-[10px] opacity-60">experiment-d1-ws</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Center: Active Workspace Context */}

@@ -71,7 +71,7 @@ body {
   color: var(--text-main);
   margin: 0;
   overflow: hidden;
-  font-family: 'Nunito', system-ui, sans-serif;
+  font-family: system-ui, -apple-system, sans-serif;
 }
 
 ::selection {

@@ -5,6 +5,7 @@
  */
 import { handleAgentRequest } from './api/agent';
 import { handleAgentSamRegistryRequest } from './api/agentsam';
+import { handleTimeDispatch } from './tools/time';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
@@ -36,6 +37,10 @@ export default {
       const authUser = await getAuthUser(request, env);
 
       // 3. Domain Dispatching (Surgical Delegation)
+      if (pathLower.startsWith('/api/agentsam/time')) {
+        return handleTimeDispatch(request, env, ctx, authUser);
+      }
+
       if (pathLower.startsWith('/api/agentsam')) {
         return handleAgentSamRegistryRequest(request, env, ctx, authUser);
       }

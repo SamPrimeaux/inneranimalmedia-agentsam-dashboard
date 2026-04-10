@@ -141,7 +141,7 @@ async function handleLogout(request, url, env) {
     }
   }
 
-  const domain = url.hostname;
+  const domain = url.hostname.startsWith('www.') ? url.hostname.slice(4) : url.hostname;
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
@@ -172,7 +172,8 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 
   // 3. Response
-  const domain = url.hostname;
+  // 3. Response: Ensure cross-subdomain compatibility (strip www)
+  const domain = url.hostname.startsWith('www.') ? url.hostname.slice(4) : url.hostname;
   const cookie = `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
   const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/overview';
 

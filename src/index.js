@@ -243,5 +243,14 @@ export default {
     ctx.waitUntil(
       runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
     );
+  },
+
+  /**
+   * Queue Handler
+   */
+  async queue(batch, env, ctx) {
+    console.log(`[Queue] Received batch of ${batch.messages.length} messages`);
+    // Delegate to legacy worker for background processing (Indexing, etc.)
+    return legacyWorker.queue(batch, env, ctx);
   }
 };

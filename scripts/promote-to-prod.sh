@@ -314,7 +314,7 @@ NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
 
 CICD_T_WORKER_START=$(date +%s)
-"${WRANGLER[@]}" deploy ./worker.js \
+"${WRANGLER[@]}" deploy \
   -c "$PROD_CFG" 2>&1 | tee /tmp/prod-deploy-out.txt
 CICD_T_WORKER_END=$(date +%s)
 cat /tmp/prod-deploy-out.txt

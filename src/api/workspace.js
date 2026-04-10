@@ -10,8 +10,7 @@ const IAM_EXPLORER_WS_SANDBOX = 'ws_inneranimalmedia';
 /**
  * Main dispatcher for Workspace-related API routes (/api/workspaces/*, /api/workspace/*).
  */
-export async function handleWorkspaceApi(request, env, ctx, authUser) {
-    const url = new URL(request.url);
+export async function handleWorkspaceApi(request, url, env, ctx, authUser) {
     const pathLower = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
     const method = request.method.toUpperCase();
 

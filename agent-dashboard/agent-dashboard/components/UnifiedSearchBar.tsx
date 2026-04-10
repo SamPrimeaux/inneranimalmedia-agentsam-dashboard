@@ -1,3 +1,4 @@
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Command, Loader2, Search, KeyRound, Terminal, Globe, HardDrive } from 'lucide-react';
 
 export type UnifiedSearchNavigate =

@@ -41,17 +41,23 @@ export default {
     const pathLower = path.toLowerCase();
 
     // 0. Session Self-Healing Middleware
-    // Detect multiple 'session' cookies (likely stale wildcard vs new host-only).
+    // Detect multiple 'session' cookies (stale wildcard vs new host-only).
     const cookieHeader = request.headers.get('Cookie') || '';
     const sessionCount = (cookieHeader.match(new RegExp(`(?:^|;\\s*)session=`, 'g')) || []).length;
-    
-    // Helper to inject clearing headers into any response
+
+    // FIX: Responses from fetch() and STATIC_ASSETS are immutable — headers cannot
+    // be appended directly. Must construct a new Response with a mutable Headers copy.
     const withSessionHealing = (res) => {
       if (!res) return res;
-      // If we detect a collision, or if we are on a dashboard route, force-clear legacy domains.
       if (sessionCount > 1 || pathLower.startsWith('/dashboard')) {
-        res.headers.append('Set-Cookie', 'session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
-        res.headers.append('Set-Cookie', 'session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
+        const mutableHeaders = new Headers(res.headers);
+        mutableHeaders.append('Set-Cookie', 'session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
+        mutableHeaders.append('Set-Cookie', 'session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
+        return new Response(res.body, {
+          status: res.status,
+          statusText: res.statusText,
+          headers: mutableHeaders,
+        });
       }
       return res;
     };
@@ -61,7 +67,7 @@ export default {
       if (pathLower === '/api/health' || pathLower === '/health') {
         return handleHealthCheck(request, env);
       }
-      
+
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
       if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
         return withSessionHealing(await legacyWorker.fetch(request, env, ctx));
@@ -97,13 +103,12 @@ export default {
         return handleAgentSamRegistryRequest(request, env, ctx, authUser);
       }
 
-      // ----- API: R2 storage (buckets, objects, search, sync, CRUD) -----
       if (pathLower.startsWith('/api/r2/')) {
         return handleR2Api(request, url, env);
       }
 
-      if (pathLower.startsWith('/api/integrations') || 
-          pathLower === '/api/webhooks/resend' || 
+      if (pathLower.startsWith('/api/integrations') ||
+          pathLower === '/api/webhooks/resend' ||
           pathLower === '/api/email/inbound') {
         return handleIntegrationsRequest(request, env, ctx, authUser);
       }
@@ -140,7 +145,7 @@ export default {
         return handleDeploymentsApi(request, url, env, ctx);
       }
 
-      if (pathLower.startsWith('/api/finance') || pathLower.startsWith('/api/clients') || 
+      if (pathLower.startsWith('/api/finance') || pathLower.startsWith('/api/clients') ||
           pathLower.startsWith('/api/projects') || pathLower.startsWith('/api/billing')) {
         return handleFinanceApi(request, url, env, ctx);
       }
@@ -169,21 +174,17 @@ export default {
         return handleAuthApi(request, url, env);
       }
 
-
       // 4. Static Assets & SPA Fallback (Dashboard UI)
       if (!pathLower.startsWith('/api/')) {
         // A. Root Route (Landing Page Priority)
         if (pathLower === '/') {
           if (env.ASSETS) {
-            // Priority: New Landing Page (index-v3.html)
             const obj = await env.ASSETS.get('index-v3.html') || await env.ASSETS.get('index.html');
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': 'text/html' } });
           }
           if (env.STATIC_ASSETS) {
-            // Fallback to static assets (sandbox/dev)
             const objV3 = await env.STATIC_ASSETS.fetch(new Request(new URL('/index-v3.html', url.origin), request)).catch(() => null);
             if (objV3 && objV3.status === 200) return objV3;
-            
             const assetRes = await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
             if (assetRes.status !== 404) return assetRes;
           }
@@ -194,33 +195,29 @@ export default {
           const assetRes = await env.STATIC_ASSETS.fetch(request.clone());
           if (assetRes.status !== 404) return assetRes;
 
-          // SPA Fallback: If /dashboard/any-route is not found, serve index.html
+          // SPA Fallback: serve index.html for any unmatched /dashboard/* route
           if (pathLower.startsWith('/dashboard/')) {
             return withSessionHealing(await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request)));
           }
         }
 
-        // B. Production (R2 Fallback)
+        // C. Production (R2 Fallback)
         if (env.ASSETS || env.DASHBOARD) {
-          // Redirect base dashboard to overview
           if (pathLower === '/dashboard' || pathLower === '/dashboard/') {
             return withSessionHealing(Response.redirect(`${url.origin}/dashboard/overview`, 302));
           }
 
           const assetKey = path.slice(1) || 'index.html';
-          
-          // Try ASSETS bucket (landing/public)
+
           if (env.ASSETS) {
             const obj = await env.ASSETS.get(assetKey);
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream' } });
           }
 
-          // Try DASHBOARD bucket (UI/SPA)
           if (env.DASHBOARD) {
             const obj = await env.DASHBOARD.get(assetKey) || await env.DASHBOARD.get(`static/${assetKey}`);
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream' } });
-            
-            // SPA Fallback for production
+
             if (pathLower.startsWith('/dashboard/')) {
               const index = await env.DASHBOARD.get('static/dashboard/overview.html') || await env.DASHBOARD.get('index.html');
               if (index) return new Response(index.body, { headers: { 'Content-Type': 'text/html' } });
@@ -231,20 +228,18 @@ export default {
 
       // 5. Fallback: API Route Not Found
       if (pathLower.startsWith('/api/')) {
-        return jsonResponse({ 
-          error: 'Route not found in modular router', 
+        return jsonResponse({
+          error: 'Route not found in modular router',
           path: pathLower,
           instruction: 'Please verify the api/ route is defined in src/api/'
         }, 404);
       }
 
-      // Default fallthrough (should be handled by STATIC_ASSETS above)
       return new Response('Not Found', { status: 404 });
 
     } catch (e) {
       console.error('[Worker Error]', e.message);
-      
-      // Async Error Telemetry
+
       ctx.waitUntil(recordWorkerAnalyticsError(env, {
         path: pathLower,
         method: request.method,
@@ -261,10 +256,8 @@ export default {
    */
   async scheduled(event, env, ctx) {
     console.log('[Cron] Execution starting:', event.cron);
-    
-    // Delegation to background services can be added here
     if (event.cron === '0 0 * * *') {
-       // Daily cleanup task...
+      // Daily cleanup task
     }
     ctx.waitUntil(
       runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
@@ -276,7 +269,6 @@ export default {
    */
   async queue(batch, env, ctx) {
     console.log(`[Queue] Received batch of ${batch.messages.length} messages`);
-    // Delegate to legacy worker for background processing (Indexing, etc.)
     return legacyWorker.queue(batch, env, ctx);
   }
 };

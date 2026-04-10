@@ -30399,8 +30399,19 @@ async function handleGoogleOAuthCallback(request, url, env) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).bind(sessionId, userId, expiresAt, ip, ua).run();
-  const headers = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
+
+  // FIX: writeIamSessionToKv was missing — getSession() reads ONLY from KV,
+  // so without this the session cookie was set but never resolvable → redirect loop.
+  const tidOauth = await resolveTenantAtLogin(env, userId).catch(() => null);
+  await writeIamSessionToKv(env, sessionId, userId, tidOauth, expiresAt);
+
+  // FIX: Skip globe_exit redirect — oauthPostLoginGlobeRedirectUrl sends to
+  // /auth/signin?globe_exit=1&next=... which was dropping users on the homepage
+  // when the signin page didn't handle the globe_exit param. Go direct instead.
+  const safeDest = (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes(':'))
+    ? returnTo : '/dashboard/overview';
   const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
+  const headers = new Headers({ Location: `${origin(url)}${safeDest}` });
   headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
   return new Response(null, { status: 302, headers });
 }

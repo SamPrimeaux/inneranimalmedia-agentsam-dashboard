@@ -13,6 +13,7 @@ import { getAuthUser, jsonResponse } from './core/auth';
 import { handleSettingsRequest } from './api/settings';
 import { handleWorkspaceApi } from './api/workspace';
 import { handleCicdEvent } from './api/cicd-event';
+import { handlePostDeploy } from './api/post-deploy';
 import { handleCidiApi } from './api/cicd';
 import { handleDeploymentsApi } from './api/deployments';
 import { handleFinanceApi } from './api/finance';
@@ -113,6 +114,10 @@ export default {
 
       if (pathLower === '/api/internal/cicd-event') {
         return handleCicdEvent(request, env, ctx);
+      }
+
+      if (pathLower === '/api/internal/post-deploy' && request.method === 'POST') {
+        return handlePostDeploy(request, env, ctx);
       }
 
       if (pathLower.startsWith('/api/deployments') || pathLower.startsWith('/api/internal/')) {

@@ -38,6 +38,8 @@ FORCE_NO_STREAM=false
 TENANT_ID="tenant_sam_primeaux"
 WORKSPACE_ID="ws_inneranimalmedia"
 TEST_PROMPT="Reply with exactly one word: OK"
+PROMPT_ID=""              # Link to agentsam_prompt
+EXPERIMENT_ID=""          # For split testing tracking
 MAX_TOKENS=16
 TIMEOUT=45    # seconds per request
 
@@ -82,6 +84,8 @@ while [[ $# -gt 0 ]]; do
     --cookie)     SESSION_COOKIE="$2"; shift 2 ;;
     --suite)      TEST_SUITE="$2"; shift 2 ;;
     --models)     MODELS_FILTER="$2"; shift 2 ;;
+    --prompt-id)  PROMPT_ID="$2"; shift 2 ;;
+    --experiment-id) EXPERIMENT_ID="$2"; shift 2 ;;
     --no-stream)  FORCE_NO_STREAM=true; shift ;;
     --dry-run)    DRY_RUN=true; shift ;;
     -h|--help)
@@ -325,6 +329,8 @@ d1_insert_test_run() {
     --arg errcode "${ERRORS[$idx]:-}" \
     --arg req "$req_payload" \
     --arg resp "$resp_text" \
+    --arg pid "$PROMPT_ID" \
+    --arg eid "$EXPERIMENT_ID" \
     --argjson in_t "$in_t" \
     --argjson out_t "$out_t" \
     --argjson total_t "$((in_t + out_t))" \
@@ -336,7 +342,7 @@ d1_insert_test_run() {
     --arg ws "$WORKSPACE_ID" \
     --arg tid "$TENANT_ID" \
     '[$id,$rg,$ts,$tn,"normal",$prov,$model,$status,$http,$succ,
-      $errcode,"",$resp,$req,
+      $errcode,"",$resp,$req,$pid,$eid,
       $in_t,$out_t,$total_t,
       0,0,$cost,
       $lat,$ttft,$sa,$ca,$ws,$tid]')
@@ -345,11 +351,12 @@ d1_insert_test_run() {
     id, run_group_id, test_suite, test_name, mode, provider, model,
     status, http_status, success,
     error_code, error_message, response_text, request_payload_json,
+    prompt_id, experiment_id,
     input_tokens, output_tokens, total_tokens,
     input_cost_usd, output_cost_usd, total_cost_usd,
     latency_ms, time_to_first_token_ms,
     started_at, completed_at, workspace_id, tenant_id
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" "$params" &>/dev/null &
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" "$params" &>/dev/null &
 }
 
 # ── SSE streaming test ────────────────────────────────────────────────────────

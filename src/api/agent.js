@@ -40,25 +40,47 @@ export async function handleAgentRequest(request, env, ctx) {
   return jsonResponse({ error: 'Agent route not found' }, 404);
 }
 
+import { getAgentMetadata, logSkillInvocation, getActivePromptByWeight, getPromptMetadata } from './agentsam';
+
 /**
  * Production SSE Handler for Agent Sam Chat.
- * Fully integrated with Anthropic SDK and modular Telemetry.
+ * Fully integrated with Anthropic SDK and the agentsam_ai/agentsam_prompt registries.
  */
 export async function agentChatSseHandler(env, request, ctx, session) {
   const body = await request.json().catch(() => ({}));
   const message = (body.message || '').trim();
-  const modelKey = body.model || 'claude-3-5-sonnet-20241022';
   
+  // 1. Registry-Driven Agent Lookup (SOTA)
+  const agentRole = body.role || 'orchestrator';
+  const agentId = body.agentId || `agent_sam_${agentRole}`;
+  const agent = await getAgentMetadata(env, agentId);
+  
+  // 2. SOTA Prompt Registry Lookup (A/B Testing Tier)
+  let activePrompt = null;
+  const promptHandle = body.promptHandle || body.promptGroup;
+  
+  if (body.promptId) {
+    activePrompt = await getPromptMetadata(env, body.promptId);
+  } else if (promptHandle) {
+    activePrompt = await getActivePromptByWeight(env, promptHandle);
+  }
+
+  const modelKey = activePrompt?.model_hint || agent.model_policy?.model_key || body.model || 'claude-3-7-sonnet-20250219';
+  const thinkingMode = agent.thinking_mode || 'adaptive';
+  const effort = agent.effort || body.effort || 'medium';
+
   if (!message) return jsonResponse({ error: 'message required' }, 400);
 
-  // 1. RAG Context Injection
+  // 3. RAG Context Injection
   const rag = await unifiedRagSearch(env, message, { topK: 5, conversation_id: body.conversationId });
   const contextText = rag.matches.join('\n\n');
   
-  const systemPrompt = `You are Agent Sam, a powerful AI coding assistant. 
-Context from memory:\n${contextText}\n\nAlways provide efficient, production-ready code.`;
+  // Registry Prompt Inheritance Logic
+  const basePrompt = activePrompt?.prompt_template || agent.system_prompt || `You are Agent Sam, a powerful AI coding assistant.
+Always provide efficient, production-ready code.`;
+  const systemPrompt = basePrompt + `\n\nContext from memory:\n${contextText}`;
 
-  // 2. Initial Chat Request (Streaming)
+  // 4. Initial Chat Request (SOTA Streaming)
   try {
     const stream = await chatWithAnthropic({
       messages: body.messages || [{ role: 'user', content: message }],
@@ -67,8 +89,8 @@ Context from memory:\n${contextText}\n\nAlways provide efficient, production-rea
       options: {
         model: modelKey,
         systemPrompt,
-        thinking: body.thinking,
-        thinkingBudget: body.thinkingBudget,
+        thinking: { type: thinkingMode, effort },
+        inference_geo: body.inference_geo || agent.model_policy?.inference_geo,
         tool_choice: body.tool_choice
       }
     });

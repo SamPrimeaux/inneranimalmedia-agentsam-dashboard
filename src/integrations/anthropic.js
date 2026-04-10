@@ -26,11 +26,19 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
   
   const modelData = modelInfo.results?.[0] || {};
   const features = JSON.parse(modelData.features_json || '{}');
-  const betas = [];
+  const betas = options.betas || [];
   
-  if (features.prompt_caching) betas.push('prompt-caching-2024-07-31');
-  if (features.thinking) betas.push('thinking-2024-10-22');
-  if (options.thinking?.type === 'enabled' || options.thinkingBudget) betas.push('extended-thinking-2025-01-24');
+  // 1. SOTA Beta Headers (v4.6+)
+  const isSotaModel = modelKey.includes('4-6') || modelKey.includes('4-5');
+  if (isSotaModel) {
+    betas.push('compaction-2026-03-24'); // Infinite conversation / server-side summarization
+    if (modelKey.includes('opus')) betas.push('fast-mode-2026-02-01'); // 2.5x speed for Opus
+  } else {
+    // Legacy Betas
+    if (features.prompt_caching) betas.push('prompt-caching-2024-07-31');
+    if (features.thinking) betas.push('thinking-2024-10-22');
+    if (options.thinking?.type === 'enabled' || options.thinkingBudget) betas.push('extended-thinking-2025-01-24');
+  }
 
   const streamParams = {
     model: modelKey,
@@ -49,11 +57,16 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
     })),
     tool_choice: options.tool_choice || undefined,
     stream: true,
-    betas: betas.length > 0 ? betas : undefined
+    betas: betas.length > 0 ? [...new Set(betas)] : undefined // De-duplicate headers
   };
 
-  // Advanced ThinkingConfigParam (Dynamic logic)
-  if (options.thinking) {
+  // 2. Adaptive Thinking & Effort (v4.6 GA Path)
+  if (isSotaModel) {
+    streamParams.thinking = { type: 'adaptive' };
+    if (options.effort) {
+      streamParams.thinking.effort = options.effort; // 'high', 'medium', 'low'
+    }
+  } else if (options.thinking) {
     streamParams.thinking = options.thinking;
   } else if (features.thinking && options.thinkingBudget) {
     streamParams.thinking = { 
@@ -62,7 +75,16 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
     };
   }
 
-  // Use the standard Message creation stream
+  // 3. Structured Output Config (GA moving from legacy output_format)
+  if (options.jsonSchema) {
+    streamParams.output_config = { format: { type: 'json_schema', schema: options.jsonSchema } };
+  }
+
+  // 4. Data Residency
+  if (options.inference_geo) {
+    streamParams.inference_geo = options.inference_geo; // 'us' or 'global'
+  }
+
   const response = await client.messages.create(streamParams);
   return response;
 }

@@ -10,6 +10,8 @@ import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
 import { handleHealthCheck } from './api/health.js';
+import { handleVaultApi } from './api/vault.js';
+import { runIntegritySnapshot } from './api/integrity.js';
 
 // --- Durable Objects ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
@@ -32,6 +34,24 @@ export default {
         return handleHealthCheck(request, env);
       }
 
+      // 1b. System Health Snapshot
+      if (pathLower === '/api/system/health' && request.method === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        const refresh = new URL(request.url).searchParams.get('refresh') === 'true';
+        try {
+          let snapshot = refresh
+            ? await runIntegritySnapshot(env, 'manual')
+            : await env.DB.prepare('SELECT * FROM system_health_snapshots ORDER BY snapshot_at DESC LIMIT 1').first();
+          const now = Math.floor(Date.now() / 1000);
+          const snapTs = snapshot ? Number(snapshot.snapshot_at) || 0 : 0;
+          const is_fresh = snapTs > 0 && now - snapTs < 300;
+          const triggered_by = snapshot?.triggered_by != null ? String(snapshot.triggered_by) : refresh ? 'manual' : 'none';
+          return jsonResponse({ snapshot, is_fresh, triggered_by });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       // 2. Global Request Context
       const authUser = await getAuthUser(request, env);
 
@@ -48,6 +68,10 @@ export default {
           pathLower === '/api/webhooks/resend' || 
           pathLower === '/api/email/inbound') {
         return handleIntegrationsRequest(request, env, ctx, authUser);
+      }
+
+      if (pathLower.startsWith('/api/vault')) {
+        return handleVaultApi(request, env);
       }
 
       if (pathLower.startsWith('/api/agent')) {
@@ -134,5 +158,8 @@ export default {
     if (event.cron === '0 0 * * *') {
        // Daily cleanup task...
     }
+    ctx.waitUntil(
+      runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
+    );
   }
 };

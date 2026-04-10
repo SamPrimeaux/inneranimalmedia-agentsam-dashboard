@@ -27,6 +27,12 @@ import {
   Zap,
   ExternalLink,
   FolderGit2,
+  PenTool,
+  Bug,
+  Target,
+  Sparkles,
+  Layers,
+  Cpu
 } from 'lucide-react';
 import { ProjectType } from '../types';
 import type { ActiveFile } from '../types';
@@ -2304,9 +2310,34 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             style={attachMenuStyle}
             role="menu"
           >
+            {[
+              { icon: FileText, label: 'Plan', slug: 'plan' },
+              { icon: Bug, label: 'Debug', slug: 'debug' },
+              { icon: Target, label: 'Ask', slug: 'ask' },
+              { icon: ImageIconLucide, label: 'Image', action: () => imageInputRef.current?.click() },
+              { icon: Zap, label: 'Skills', action: () => window.dispatchEvent(new CustomEvent('iam-sidebar-toggle', { detail: { activity: 'mcps' } })) },
+              { icon: Layers, label: 'MCP Servers', action: () => window.dispatchEvent(new CustomEvent('iam-sidebar-toggle', { detail: { activity: 'mcps' } })) },
+            ].map((item, i) => {
+              const Icon = item.icon || Paperclip;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  className="flex items-center gap-3 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)] transition-colors"
+                  onClick={() => {
+                    setAttachMenuOpen(false);
+                    if ('action' in item) item.action?.();
+                  }}
+                >
+                  <Icon size={14} className="text-[var(--text-muted)] shrink-0" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+            <div className="border-t border-[var(--border-subtle)] my-1 mx-2" role="separator" />
             <button
               type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
+              className="flex items-center gap-3 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)] transition-colors"
               onClick={() => {
                 setAttachMenuOpen(false);
                 fileInputRef.current?.click();
@@ -2314,17 +2345,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             >
               <Paperclip size={14} className="text-[var(--text-muted)] shrink-0" />
               <span>Upload File</span>
-            </button>
-            <button
-              type="button"
-              className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] text-[var(--text-main)]"
-              onClick={() => {
-                setAttachMenuOpen(false);
-                imageInputRef.current?.click();
-              }}
-            >
-              <ImageIconLucide size={14} className="text-[var(--text-muted)] shrink-0" />
-              <span>Upload Image</span>
             </button>
             <button
               type="button"
@@ -2377,14 +2397,14 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
               if (!list.length) return null;
               return (
                 <div key={plat} className="pb-1">
-                  <div className="px-3 py-0.5 text-[0.625rem] text-[var(--text-muted)] opacity-90">
+                  <div className="px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] opacity-60">
                     {MODEL_PLATFORM_LABEL[plat] || plat}
                   </div>
                   {list.map((m) => (
                     <button
                       key={m.id}
                       type="button"
-                      className={`w-full min-w-0 flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 ${
+                      className={`w-full min-w-0 flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 transition-all ${
                         selectedModelKey === m.model_key
                           ? 'text-[var(--solar-cyan)] bg-[var(--bg-panel)]/80'
                           : 'text-[var(--text-main)]'
@@ -2394,7 +2414,11 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                         setAttachMenuOpen(false);
                       }}
                     >
-                      <span className="min-w-0 flex-1 text-left truncate text-[0.6875rem]">{m.name}</span>
+                      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                        <span className="truncate text-[11px] font-bold tracking-tight">{m.name}</span>
+                        {m.provider && <span className="text-[9px] opacity-40 uppercase tracking-widest">{m.provider}</span>}
+                      </div>
+                      {selectedModelKey === m.model_key && <Sparkles size={10} className="animate-pulse" />}
                     </button>
                   ))}
                 </div>

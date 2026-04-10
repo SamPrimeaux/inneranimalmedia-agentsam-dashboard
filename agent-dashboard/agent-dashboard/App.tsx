@@ -598,6 +598,38 @@ const App: React.FC = () => {
     [revealMainWorkspaceIfNarrow],
   );
 
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const d = (e as CustomEvent<{ cmd: string }>).detail;
+      if (!d?.cmd) return;
+      
+      setIsTerminalOpen(true);
+      // Give terminal a frame to mount if it's currently closed
+      requestAnimationFrame(() => {
+        if (terminalRef.current) {
+          terminalRef.current.runCommand(d.cmd);
+        }
+      });
+    };
+    
+    const onToggle = (e: Event) => {
+      const d = (e as CustomEvent<{ open?: boolean }>).detail;
+      if (d && typeof d.open === 'boolean') {
+        setIsTerminalOpen(d.open);
+      } else {
+        setIsTerminalOpen(o => !o);
+      }
+    };
+
+    window.addEventListener('iam-run-command', onRun as EventListener);
+    window.addEventListener('iam-terminal-toggle', onToggle as EventListener);
+    
+    return () => {
+      window.removeEventListener('iam-run-command', onRun as EventListener);
+      window.removeEventListener('iam-terminal-toggle', onToggle as EventListener);
+    };
+  }, []);
+
   const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright') => {
     setActiveActivity((prev) => {
       if (prev === activity) return null;

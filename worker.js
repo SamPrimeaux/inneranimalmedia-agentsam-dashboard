@@ -29770,7 +29770,7 @@ async function handleEmailPasswordLogin(request, url, env) {
     ).bind(sessionId, userId, expiresAt, ip, ua).run();
     const tidLogin = await resolveTenantAtLogin(env, userId);
     await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
-    const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+    const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
     const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
       ? String(redirectPath)
@@ -29893,7 +29893,7 @@ async function handleBackupCodeLogin(request, url, env) {
   ).bind(sessionId, email, expiresAt, ip, ua).run();
   const tidMfa = await resolveTenantAtLogin(env, email);
   await writeIamSessionToKv(env, sessionId, email, tidMfa, expiresAt);
-  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
   const headers = new Headers({ 'Content-Type': 'application/json' });
   headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
@@ -29910,7 +29910,7 @@ async function handleLogout(request, url, env) {
       await env.SESSION_CACHE.delete(IAM_KV_SESSION_KEY_PREFIX + sid);
     } catch (_) { }
   }
-  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   const headers = new Headers({ Location: `${origin(url)}/auth/signin` });
   headers.append('Set-Cookie', `session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0; Domain=${domain}`);
   return new Response(null, { status: 302, headers });
@@ -30400,7 +30400,7 @@ async function handleGoogleOAuthCallback(request, url, env) {
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).bind(sessionId, userId, expiresAt, ip, ua).run();
   const headers = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
-  const domain = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const domain = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   headers.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${domain}`);
   return new Response(null, { status: 302, headers });
 }
@@ -30546,7 +30546,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
     }
   }
   const loginHeaders = new Headers({ Location: oauthPostLoginGlobeRedirectUrl(origin(url), returnTo) });
-  const d = url.hostname === 'www.inneranimalmedia.com' ? 'inneranimalmedia.com' : url.hostname;
+  const d = url.hostname.endsWith('.inneranimalmedia.com') ? '.inneranimalmedia.com' : url.hostname;
   loginHeaders.append('Set-Cookie', `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000; Domain=${d}`);
   return new Response(null, { status: 302, headers: loginHeaders });
 }

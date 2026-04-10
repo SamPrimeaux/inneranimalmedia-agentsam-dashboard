@@ -40,6 +40,22 @@ export default {
     const path = url.pathname.replace(/\/$/, '') || '/';
     const pathLower = path.toLowerCase();
 
+    // 0. Session Self-Healing Middleware
+    // Detect multiple 'session' cookies (likely stale wildcard vs new host-only).
+    const cookieHeader = request.headers.get('Cookie') || '';
+    const sessionCount = (cookieHeader.match(new RegExp(`(?:^|;\\s*)session=`, 'g')) || []).length;
+    
+    // Helper to inject clearing headers into any response
+    const withSessionHealing = (res) => {
+      if (!res) return res;
+      // If we detect a collision, or if we are on a dashboard route, force-clear legacy domains.
+      if (sessionCount > 1 || pathLower.startsWith('/dashboard')) {
+        res.headers.append('Set-Cookie', 'session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
+        res.headers.append('Set-Cookie', 'session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
+      }
+      return res;
+    };
+
     try {
       // 1. Health Checks
       if (pathLower === '/api/health' || pathLower === '/health') {
@@ -48,7 +64,7 @@ export default {
       
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
       if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
-        return legacyWorker.fetch(request, env, ctx);
+        return withSessionHealing(await legacyWorker.fetch(request, env, ctx));
       }
 
       // 1b. System Health Snapshot
@@ -180,7 +196,7 @@ export default {
 
           // SPA Fallback: If /dashboard/any-route is not found, serve index.html
           if (pathLower.startsWith('/dashboard/')) {
-            return await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
+            return withSessionHealing(await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request)));
           }
         }
 
@@ -188,7 +204,7 @@ export default {
         if (env.ASSETS || env.DASHBOARD) {
           // Redirect base dashboard to overview
           if (pathLower === '/dashboard' || pathLower === '/dashboard/') {
-            return Response.redirect(`${url.origin}/dashboard/overview`, 302);
+            return withSessionHealing(Response.redirect(`${url.origin}/dashboard/overview`, 302));
           }
 
           const assetKey = path.slice(1) || 'index.html';

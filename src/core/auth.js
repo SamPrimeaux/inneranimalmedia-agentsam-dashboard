@@ -235,16 +235,32 @@ export function getApexDomain(hostname) {
  */
 export async function getSession(env, request) {
   if (!env.SESSION_CACHE) return null;
-  const cookie = request.headers.get('Cookie') || '';
-  const match = cookie.match(new RegExp(`${AUTH_COOKIE_NAME}=([^;]+)`));
-  if (!match) return null;
-  const sessionId = match[1];
-  try {
-    const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
-    return data ? JSON.parse(data) : null;
-  } catch (e) {
-    return null;
+  const cookieHeader = request.headers.get('Cookie') || '';
+  
+  // Find all occurrences of the session cookie
+  const sessionCandidates = [];
+  const regex = new RegExp(`(?:^|;\\s*)${AUTH_COOKIE_NAME}=([^;]+)`, 'g');
+  let match;
+  while ((match = regex.exec(cookieHeader)) !== null) {
+    sessionCandidates.push(match[1]);
   }
+
+  if (sessionCandidates.length === 0) return null;
+
+  // Try the most specific ones first (browsers usually put them first, but it varies)
+  // We'll iterate through all of them until we find one that's valid in KV.
+  for (const sessionId of sessionCandidates) {
+    try {
+      const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
+      if (data) {
+        return JSON.parse(data);
+      }
+    } catch (e) {
+      // Continue to next candidate
+    }
+  }
+
+  return null;
 }
 
 export async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {

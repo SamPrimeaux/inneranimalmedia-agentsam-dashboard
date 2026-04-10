@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, XCircle, AlertTriangle, Bell, Check, KeyRound, Monitor, Globe, Package, HardDrive, Database, ChevronUp, ChevronDown, User, LogOut } from 'lucide-react';
+import { GitBranch, XCircle, AlertTriangle, Bell, Check, KeyRound, Monitor, Globe, Package, HardDrive, Database, ChevronUp, ChevronDown, User, LogOut, MessageSquare } from 'lucide-react';
 import { SHELL_VERSION } from '../src/shellVersion';
 
 /** Cloudflare Worker name for this dashboard host (sandbox vs prod). */

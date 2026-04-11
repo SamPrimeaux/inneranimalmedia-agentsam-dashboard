@@ -4,7 +4,7 @@ import { getIntegrationToken } from '../integrations/tokens.js';
 import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
 
 // Integrations
-import { chatWithToolsAnthropic } from '../integrations/anthropic.js';
+import { chatWithAnthropic } from '../integrations/anthropic.js';
 import { chatWithToolsOpenAI } from '../integrations/openai.js';
 import { chatWithToolsGemini } from '../integrations/gemini.js';
 import { chatWithToolsVertex } from '../integrations/vertex.js';
@@ -30,7 +30,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         try {
             const row = await env.DB.prepare(
                 `SELECT d.git_hash, d.version, d.timestamp, g.repo_full_name, g.default_branch
-                 FROM cloudflare_deployments d
+                 FROM deployments d
                  LEFT JOIN github_repositories g ON g.cloudflare_worker_name = ?
                  WHERE d.worker_name = ? AND d.status = 'success'
                  ORDER BY d.timestamp DESC
@@ -76,9 +76,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
             const batch = await env.DB.batch([
-                env.DB.prepare("SELECT id, name, role_name, mode FROM agentsam_ai WHERE status='active' ORDER BY CASE id WHEN 'ai_sam_v1' THEN 0 ELSE 1 END, name"),
+                env.DB.prepare("SELECT id, name, role_name, mode, thinking_mode, effort FROM agentsam_ai WHERE status='active' ORDER BY sort_order, name"),
                 env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
-                env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'anthropic' THEN 1 WHEN 'google' THEN 2 WHEN 'openai' THEN 3 WHEN 'workers_ai' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
+                env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens, supports_tools, supports_web_search, supports_vision, size_class FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'anthropic' THEN 1 WHEN 'google' THEN 2 WHEN 'openai' THEN 3 WHEN 'workers_ai' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
                 env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
             ]);
             
@@ -183,7 +183,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
             if (provider === 'vertex') return chatWithToolsVertex(env, request, params);
             
             // Default to Anthropic
-            return chatWithToolsAnthropic(env, request, params);
+            return chatWithAnthropic({ messages: params.messages, tools: params.tools, env, options: { model: params.modelKey, systemPrompt: params.systemPrompt } });
         } catch (e) {
             return jsonResponse({ error: 'Chat failed', detail: e.message }, 500);
         }

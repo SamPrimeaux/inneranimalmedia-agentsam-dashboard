@@ -37,7 +37,7 @@ export async function handleIntegrationsRequest(request, env, ctx) {
         return handleResendWebhook(request, env, ctx);
     }
 
-    return jsonResponse({ error: 'Integration route not found' }, 404);
+    return null;
 }
 
 /**

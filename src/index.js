@@ -112,7 +112,8 @@ export default {
       }
 
       if (pathLower.startsWith('/api/agentsam')) {
-        return handleAgentSamRegistryRequest(request, env, ctx, authUser);
+        const res = await handleAgentSamRegistryRequest(request, env, ctx, authUser);
+        if (res && res.status !== 404) return res;
       }
 
       if (pathLower.startsWith('/api/r2/')) {
@@ -122,7 +123,8 @@ export default {
       if (pathLower.startsWith('/api/integrations') ||
           pathLower === '/api/webhooks/resend' ||
           pathLower === '/api/email/inbound') {
-        return handleIntegrationsRequest(request, env, ctx, authUser);
+        const res = await handleIntegrationsRequest(request, env, ctx, authUser);
+        if (res && res.status !== 404) return res;
       }
 
       if (pathLower.startsWith('/api/vault')) {

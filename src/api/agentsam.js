@@ -51,7 +51,7 @@ export async function handleAgentSamRegistryRequest(request, env, ctx, authUser)
         return jsonResponse(prompt);
     }
 
-    return jsonResponse({ error: 'Registry route not found' }, 404);
+    return null;
 }
 
 /**

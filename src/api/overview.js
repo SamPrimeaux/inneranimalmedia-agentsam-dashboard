@@ -75,7 +75,7 @@ async function handleOverviewActivityStrip(authUser, env) {
 
 async function handleOverviewDeployments(env) {
     const { results: deployments } = await env.DB.prepare(
-        `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes FROM cloudflare_deployments ORDER BY timestamp DESC LIMIT 20`
+        `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes FROM deployments ORDER BY timestamp DESC LIMIT 20`
     ).all();
     const { results: cicd } = await env.DB.prepare(
         `SELECT run_id, workflow_name, status, conclusion, started_at FROM cicd_runs ORDER BY started_at DESC LIMIT 10`
@@ -85,8 +85,8 @@ async function handleOverviewDeployments(env) {
 
 async function handleOverviewStats(env) {
     const [tasks, deploys] = await Promise.all([
-        env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE status = 'completed'`).first(),
-        env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE status = 'success'`).first(),
+        env.DB.prepare(`SELECT COUNT(*) as c FROM cicd_pipeline_runs WHERE status = 'success'`).first(),
+        env.DB.prepare(`SELECT COUNT(*) as c FROM deployments WHERE status = 'success'`).first(),
     ]);
     return jsonResponse({
         tasks_completed: tasks?.c || 0,

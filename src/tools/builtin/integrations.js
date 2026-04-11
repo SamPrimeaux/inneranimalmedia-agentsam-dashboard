@@ -1,3 +1,4 @@
+/**
  * Implements 13 tools for third-party service connectivity.
  */
 import { sendEmail } from '../../integrations/resend.js';

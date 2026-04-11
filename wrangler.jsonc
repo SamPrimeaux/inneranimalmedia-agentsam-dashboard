@@ -20,11 +20,6 @@
   "no_bundle": false,
   // Vite SPA bundle (must not use binding name "ASSETS" — that is the R2 bucket below).
   // run_worker_first: so GET / hits worker.js and serves R2 ASSETS index-v3.html (landing) instead of dist/index.html (IAM Explorer).
-  "assets": {
-    "directory": "agent-dashboard/agent-dashboard/dist",
-    "binding": "STATIC_ASSETS",
-    "run_worker_first": true
-  },
   "build": {
     "command": ""
   },

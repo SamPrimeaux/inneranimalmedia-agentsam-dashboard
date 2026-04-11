@@ -45,21 +45,29 @@ export default {
     const cookieHeader = request.headers.get('Cookie') || '';
     const sessionCount = (cookieHeader.match(new RegExp(`(?:^|;\\s*)session=`, 'g')) || []).length;
 
-    // FIX: Responses from fetch() and STATIC_ASSETS are immutable — headers cannot
+    // FIX: Responses from fetch() are immutable — headers cannot
     // be appended directly. Must construct a new Response with a mutable Headers copy.
     const withSessionHealing = (res) => {
       if (!res) return res;
-      if (true) { // always expire the wildcard .inneranimalmedia.com cookie on every response
-        const mutableHeaders = new Headers(res.headers);
+      const mutableHeaders = new Headers(res.headers);
+      
+      // Never clear cookies on a response that is setting a new session —
+      // doing so kills the session before the post-login redirect lands.
+      const setCookies = mutableHeaders.getAll('set-cookie');
+      const isSettingSession = setCookies.some(
+        v => v.startsWith('session=') && !v.includes('Expires=Thu, 01 Jan 1970')
+      );
+
+      if (!isSettingSession) {
         mutableHeaders.append('Set-Cookie', 'session=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
         mutableHeaders.append('Set-Cookie', 'session=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax');
-        return new Response(res.body, {
-          status: res.status,
-          statusText: res.statusText,
-          headers: mutableHeaders,
-        });
       }
-      return res;
+
+      return new Response(res.body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: mutableHeaders,
+      });
     };
 
     try {
@@ -70,7 +78,7 @@ export default {
 
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
       if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
-        return withSessionHealing(await legacyWorker.fetch(request, env, ctx));
+        return await legacyWorker.fetch(request, env, ctx);
       }
 
       // 1b. System Health Snapshot
@@ -182,25 +190,9 @@ export default {
             const obj = await env.ASSETS.get('index-v3.html') || await env.ASSETS.get('index.html');
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': 'text/html' } });
           }
-          if (env.STATIC_ASSETS) {
-            const objV3 = await env.STATIC_ASSETS.fetch(new Request(new URL('/index-v3.html', url.origin), request)).catch(() => null);
-            if (objV3 && objV3.status === 200) return objV3;
-            const assetRes = await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
-            if (assetRes.status !== 404) return assetRes;
-          }
         }
 
-        // B. Sandbox (Workers Assets)
-        if (env.STATIC_ASSETS) {
-          const assetRes = await env.STATIC_ASSETS.fetch(request.clone());
-          if (assetRes.status !== 404) return assetRes;
-
-          // SPA Fallback: serve index.html for any unmatched /dashboard/* route
-          if (pathLower.startsWith('/dashboard/')) {
-            return withSessionHealing(await env.STATIC_ASSETS.fetch(new Request(new URL('/index.html', url.origin), request)));
-          }
-        }
-
+        // B. Sandbox (Workers Assets) - DEPRECATED (Moved to R2 Fallback)
         // C. Production (R2 Fallback)
         if (env.ASSETS || env.DASHBOARD) {
           if (pathLower === '/dashboard' || pathLower === '/dashboard/') {
@@ -215,12 +207,14 @@ export default {
           }
 
           if (env.DASHBOARD) {
-            const obj = await env.DASHBOARD.get(assetKey) || await env.DASHBOARD.get(`static/${assetKey}`);
+            const obj = await env.DASHBOARD.get(assetKey)
+                     || await env.DASHBOARD.get(`static/${assetKey}`)
+                     || await env.DASHBOARD.get(`static/dashboard/agent/${assetKey}`);
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream' } });
 
             if (pathLower.startsWith('/dashboard/')) {
-              const index = await env.DASHBOARD.get('static/dashboard/overview.html') || await env.DASHBOARD.get('index.html');
-              if (index) return new Response(index.body, { headers: { 'Content-Type': 'text/html' } });
+              const index = await env.DASHBOARD.get('static/dashboard/agent.html') || await env.DASHBOARD.get('index.html');
+              if (index) return withSessionHealing(new Response(index.body, { headers: { 'Content-Type': 'text/html' } }));
             }
           }
         }

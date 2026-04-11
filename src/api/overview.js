@@ -46,7 +46,7 @@ async function handleOverviewActivityStrip(authUser, env) {
         timeWeekRow, timeTodayRow, dailyRows,
         projectsActiveRow, projectsTopRows
     ] = await Promise.all([
-        safe(env.DB.prepare(`SELECT COUNT(*) as c FROM deployments WHERE date(timestamp) >= date(?) AND status = 'success'`).bind(sevenDaysAgo).first()),
+        safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE date(timestamp) >= date(?) AND status = 'success'`).bind(sevenDaysAgo).first()),
         safe(env.DB.prepare(`SELECT COUNT(*) as c FROM agent_telemetry WHERE created_at >= unixepoch(?)`).bind(sevenDaysAgo).first()),
         safe(env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE created_at >= unixepoch(?) AND status = 'completed'`).bind(sevenDaysAgo).first()),
         safe(env.DB.prepare(`SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE start_time >= date('now','weekday 1') AND user_id IN (${userList}) AND is_active = 0`).bind(...userIdVariants).first()),
@@ -75,7 +75,7 @@ async function handleOverviewActivityStrip(authUser, env) {
 
 async function handleOverviewDeployments(env) {
     const { results: deployments } = await env.DB.prepare(
-        `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes FROM deployments ORDER BY timestamp DESC LIMIT 20`
+        `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes FROM cloudflare_deployments ORDER BY timestamp DESC LIMIT 20`
     ).all();
     const { results: cicd } = await env.DB.prepare(
         `SELECT run_id, workflow_name, status, conclusion, started_at FROM cicd_runs ORDER BY started_at DESC LIMIT 10`
@@ -86,7 +86,7 @@ async function handleOverviewDeployments(env) {
 async function handleOverviewStats(env) {
     const [tasks, deploys] = await Promise.all([
         env.DB.prepare(`SELECT COUNT(*) as c FROM cursor_tasks WHERE status = 'completed'`).first(),
-        env.DB.prepare(`SELECT COUNT(*) as c FROM deployments WHERE status = 'success'`).first(),
+        env.DB.prepare(`SELECT COUNT(*) as c FROM cloudflare_deployments WHERE status = 'success'`).first(),
     ]);
     return jsonResponse({
         tasks_completed: tasks?.c || 0,

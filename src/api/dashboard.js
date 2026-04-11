@@ -30,7 +30,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         try {
             const row = await env.DB.prepare(
                 `SELECT d.git_hash, d.version, d.timestamp, g.repo_full_name, g.default_branch
-                 FROM deployments d
+                 FROM cloudflare_deployments d
                  LEFT JOIN github_repositories g ON g.cloudflare_worker_name = ?
                  WHERE d.worker_name = ? AND d.status = 'success'
                  ORDER BY d.timestamp DESC

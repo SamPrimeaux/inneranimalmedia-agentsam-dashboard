@@ -23,6 +23,10 @@ import { handleThemesApi } from './api/themes';
 import { handleHubApi } from './api/hub';
 import { handleOverviewApi } from './api/overview';
 import { handleAuthApi } from './api/auth';
+import { handleHealthCheck } from './api/health';
+import { handleVaultApi } from './api/vault';
+import { runIntegritySnapshot } from './api/integrity';
+import { handleDashboardApi } from './api/dashboard';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects ---
@@ -125,8 +129,14 @@ export default {
         return handleVaultApi(request, env);
       }
 
+      if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/chat') || pathLower.startsWith('/api/playwright')) {
+        const dashRes = await handleDashboardApi(request, url, env, ctx);
+        if (dashRes.status !== 404) return dashRes;
+      }
+
       if (pathLower.startsWith('/api/agent')) {
-        return handleAgentRequest(request, env, ctx, authUser);
+        const agentRes = await handleAgentRequest(request, env, ctx, authUser);
+        if (agentRes.status !== 404) return agentRes;
       }
 
       if (pathLower.startsWith('/api/settings')) {
@@ -220,13 +230,17 @@ export default {
         }
       }
 
-      // 5. Fallback: API Route Not Found
+      // 5. Fallback: API Route Not Found (Delegate to Legacy Monolith)
       if (pathLower.startsWith('/api/')) {
-        return jsonResponse({
-          error: 'Route not found in modular router',
-          path: pathLower,
-          instruction: 'Please verify the api/ route is defined in src/api/'
-        }, 404);
+        const legacyRes = await legacyWorker.fetch(request, env, ctx);
+        if (legacyRes.status === 404) {
+          return jsonResponse({
+            error: 'Route not found in modular router or legacy worker',
+            path: pathLower,
+            instruction: 'Please verify the api/ route is defined in src/api/'
+          }, 404);
+        }
+        return legacyRes;
       }
 
       return new Response('Not Found', { status: 404 });

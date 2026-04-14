@@ -24380,8 +24380,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       const _isAdaptive = resolvedModelKey.includes('opus-4-6') || resolvedModelKey.includes('sonnet-4-6');
       const _isSimpleIntent = opts._intent === 'sql' || opts._intent === 'question' || opts._intent === 'shell';
       const _thinkingConfig = _isAdaptive ? {
-        thinking: { type: 'adaptive' },
-        output_config: { effort: _isSimpleIntent ? 'low' : 'medium' },
+        thinking: { type: 'adaptive', effort: _isSimpleIntent ? 'low' : 'medium' },
       } : {};
       // display:omitted skips streaming thinking tokens → faster first text token for pipelines
       if (_isAdaptive && !wantStream) _thinkingConfig.thinking = { type: 'adaptive', display: 'omitted' };

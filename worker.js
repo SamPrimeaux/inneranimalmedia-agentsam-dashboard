@@ -12119,7 +12119,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`
-        : `SELECT name, description, slash_trigger
+        : `SELECT name, description, content_markdown, slash_trigger
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`;
@@ -12157,7 +12157,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
           const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
           const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
           let line = `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
-          if (message.includes('/') && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
+          if ((s.sort_order <= -10 || message.includes("/")) && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
             line += `\n  ${String(s.content_markdown).trim()}`;
           }
           return line;
@@ -20934,7 +20934,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_sprint1_agent_sam_2026' ORDER BY order_index`
+          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v2' ORDER BY order_index`
         ).all()
       ),
     ]);

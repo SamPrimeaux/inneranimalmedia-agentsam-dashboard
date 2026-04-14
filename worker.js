@@ -12089,6 +12089,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const apiPlatform = String(modelRow.api_platform || '').trim();
   const modelKey = String(modelRow.model_key || modelParam);
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
+  const provider = modelRow.provider || apiPlatform || 'unknown';
 
   const sseSupportedPlatforms = new Set(['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'cursor', 'workers_ai']);
   if (!sseSupportedPlatforms.has(apiPlatform)) {

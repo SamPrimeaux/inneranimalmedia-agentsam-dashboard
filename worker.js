@@ -6622,7 +6622,7 @@ async function preflightClassify(message, env) {
 fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi-step/build/agent`;
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${env.GEMINI_API_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -12447,7 +12447,8 @@ You can delegate tasks directly to Claude Code running on the host machine by st
   }
 
   if (apiPlatform === 'workers_ai') {
-    return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
+    const messages = [{ role: 'user', content: hasMedia ? flattenUserContentForWorkersAi(message, jsonImages, chatAttachments) : message }];
+  return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 

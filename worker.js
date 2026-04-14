@@ -440,7 +440,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
     (userProfile && userProfile.display_name) || authRow.name || 'User';
   const role = (userProfile && userProfile.role) || 'superadmin';
   const workspaceId =
-    (userProfile && userProfile.default_workspace_id) || 'ws_default';
+    (userProfile && userProfile.default_workspace_id) || 'ws_inneranimalmedia';
   return {
     id: sessionId,
     email: loginEmail,

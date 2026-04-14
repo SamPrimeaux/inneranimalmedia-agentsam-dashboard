@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-DIST_DIR="agent-dashboard/agent-dashboard/dist"
+DIST_DIR="agent-dashboard/dist"
 BUCKET="agent-sam"
 R2_PREFIX="static/dashboard/agent"
 

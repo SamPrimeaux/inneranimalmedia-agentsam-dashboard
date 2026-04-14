@@ -11625,7 +11625,10 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
         ?? '';
 
       if (fullText) {
-        await emit({ type: 'text', text: fullText });
+        const chunkSize = 1000;
+      for (let i = 0; i < fullText.length; i += chunkSize) {
+        await emit({ type: 'content_block_delta', delta: { type: 'text_delta', text: fullText.slice(i, i + chunkSize) } });
+      }
       }
 
       const inputTokens = Math.round(inputCharCount / 4);

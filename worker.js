@@ -5339,7 +5339,7 @@ const worker = {
         };
         const stateJson = JSON.stringify(record);
         await env.DB.prepare(
-          `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+          `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, updated_at) VALUES (?, '', 'ide', ?, unixepoch())
            ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
         )
           .bind(rowId, stateJson)
@@ -16078,7 +16078,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const stateJson = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
         try {
           await env.DB.prepare(
-            `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+            `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, updated_at) VALUES (?, '', 'ide', ?, unixepoch())
              ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
           )
             .bind(rowId, stateJson)
@@ -24425,6 +24425,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       console.log('[chatWithToolsAnthropic] Claude API response', { status: res.status, ok: res.ok });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        console.error('[chatWithToolsAnthropic] Anthropic error', JSON.stringify(err));
         return jsonResponse({ error: err.error?.message || res.statusText, stream: false }, res.status);
       }
       const data = await res.json();

@@ -12447,7 +12447,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
   }
 
   if (apiPlatform === 'workers_ai') {
-    return streamObserversWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
+    return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 

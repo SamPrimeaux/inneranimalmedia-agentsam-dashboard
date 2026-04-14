@@ -53,7 +53,6 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
       description: t.description,
       input_schema: t.parameters || t.input_schema,
       cache_control: t.cache_control || undefined,
-      strict: t.strict || undefined
     })),
     tool_choice: options.tool_choice || undefined,
     stream: true,

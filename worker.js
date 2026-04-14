@@ -11589,7 +11589,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           }))
         : [];
 
-      const aiInput = { messages, stream: true };
+      const aiInput = { messages, stream: false };
       if (toolsToSend.length > 0) aiInput.tools = toolsToSend;
 
       try {

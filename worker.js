@@ -6622,7 +6622,7 @@ async function preflightClassify(message, env) {
 fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi-step/build/agent`;
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8543,7 +8543,7 @@ async function classifyIntent(env, lastMessageText) {
     try {
       const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
       const classifyRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

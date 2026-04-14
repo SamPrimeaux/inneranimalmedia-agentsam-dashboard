@@ -23725,7 +23725,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
         },
         body: JSON.stringify({
           model: model.model_key,
-          max_tokens: 8192,
+          ...(model.model_key.startsWith("gpt-5") || model.model_key.startsWith("o") ? { max_completion_tokens: 8192 } : { max_tokens: 8192 }),
           messages,
           tools: openaiTools,
           tool_choice: 'auto',

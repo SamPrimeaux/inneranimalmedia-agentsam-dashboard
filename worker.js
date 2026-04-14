@@ -5339,7 +5339,7 @@ const worker = {
         };
         const stateJson = JSON.stringify(record);
         await env.DB.prepare(
-          `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, updated_at) VALUES (?, '', 'ide', ?, unixepoch())
+          `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, created_at, updated_at) VALUES (?, '', 'ide', ?, unixepoch(), unixepoch())
            ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
         )
           .bind(rowId, stateJson)
@@ -11578,7 +11578,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
   // Fire the AI call in background — return stream immediately to avoid runtime hang
   (async () => {
     try {
-      const WAI_TIMEOUT_MS = 25000;
+      const WAI_TIMEOUT_MS = 60000;
       let result;
       const modelSupportsTools = modelRow?.supports_tools === 1;
       const toolsToSend = modelSupportsTools && toolDefinitions.length > 0
@@ -16080,7 +16080,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const stateJson = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
         try {
           await env.DB.prepare(
-            `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, updated_at) VALUES (?, '', 'ide', ?, unixepoch())
+            `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, created_at, updated_at) VALUES (?, '', 'ide', ?, unixepoch(), unixepoch())
              ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
           )
             .bind(rowId, stateJson)

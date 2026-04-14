@@ -30612,4 +30612,4 @@ async function emitSessionEvent(env, sessionId, event) {
 }
 // Build Trigger: 2026-04-09-00-43
 
-export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom } from './src/core/durable_objects.js';
+export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom, IAMSession } from './src/core/durable_objects.js';

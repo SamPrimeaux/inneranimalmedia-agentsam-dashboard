@@ -102,7 +102,7 @@ new_classes = ["ChessRoom"]
 
 [[migrations]]
 tag = "v4"
-new_sqlite_classes = ["IAMAgentSession"]
+
 
 [[migrations]]
 tag = "v5"

@@ -71,15 +71,7 @@ id = "08183bb9d2914e87ac8395d7e4ecff60"
 
 [[vectorize]]
 binding = "VECTORIZE"
-index_name = "ai-search-inneranimalmedia-aisearch"
-
-[[vectorize]]
-binding = "VECTORIZE_INDEX"
-index_name = "ai-search-iam-autorag"
-
-[[vectorize]]
-binding = "VECTORIZE_DOCS"
-index_name = "ai-search-iam-docs-search"
+index_name = "ai-search-inneranimalmedia-autorag"
 
 [[kv_namespaces]]
 binding = "KV"

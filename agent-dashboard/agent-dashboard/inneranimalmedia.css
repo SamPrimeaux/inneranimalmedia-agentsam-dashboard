@@ -61,6 +61,7 @@
   --monaco-scrollbar-hover:  color-mix(in srgb, var(--solar-cyan) 25%, transparent);
 
   --accent-primary:   var(--solar-blue);
+  --color-primary:    var(--solar-blue);
   --accent-secondary: var(--solar-cyan);
   --accent-warning:   var(--solar-yellow);
   --accent-danger:    var(--solar-red);

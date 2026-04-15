@@ -93,8 +93,25 @@ async function handleOverviewDeployments(env) {
      FROM deployments ORDER BY timestamp DESC LIMIT 20`
   ).all();
   const { results: cicd } = await env.DB.prepare(
-    `SELECT id, worker_name, environment, status, conclusion, queued_at AS started_at
-     FROM cicd_runs ORDER BY queued_at DESC LIMIT 10`
+    `SELECT
+       p.run_id AS id,
+       p.env AS environment,
+       p.status,
+       p.branch,
+       p.triggered_at AS started_at,
+       p.completed_at,
+       p.notes,
+       g.workflow_name,
+       g.commit_message,
+       g.duration_ms,
+       COUNT(CASE WHEN s.status = 'pass' THEN 1 END) AS steps_passed,
+       COUNT(CASE WHEN s.status = 'fail' THEN 1 END) AS steps_failed,
+       COUNT(s.id) AS steps_total
+     FROM cicd_pipeline_runs p
+     LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(p.run_id, 6)
+     LEFT JOIN cicd_run_steps s ON s.run_id = p.run_id
+     GROUP BY p.run_id
+     ORDER BY p.rowid DESC LIMIT 10`
   ).all();
   return jsonResponse({ deployments: deployments || [], cicd_runs: cicd || [] });
 }

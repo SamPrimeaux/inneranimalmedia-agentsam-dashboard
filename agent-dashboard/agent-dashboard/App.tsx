@@ -113,7 +113,6 @@ const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
   const navigate = useNavigate();
-  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);

@@ -131,7 +131,7 @@ export const OverviewPage: React.FC = () => {
                           </span>
                         </td>
                         <td className="px-4 py-2 text-[var(--text-muted)] text-[11px]">
-                          {d.deployed_at ? new Date(d.deployed_at).toLocaleDateString() : '—'}
+                          {d.deployed_at ? new Date(d.deployed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
                         </td>
                       </tr>
                     ))}

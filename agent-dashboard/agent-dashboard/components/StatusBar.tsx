@@ -102,12 +102,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onFormatClick,
 }) => {
   const cursorText = showCursor ? `Ln ${line}, Col ${col}` : 'Ln --, Col --';
-  const versionDisplay =
-    version && String(version).trim() !== ''
-      ? String(version).startsWith('v')
-        ? version
-        : `v${version}`
-      : '';
+  const versionDisplay = '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
   const [sshOpen, setSshOpen] = useState(false);

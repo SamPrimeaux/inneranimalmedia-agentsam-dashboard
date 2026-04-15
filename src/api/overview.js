@@ -54,14 +54,23 @@ async function handleOverviewActivityStrip(authUser, env) {
       `SELECT COUNT(*) as c FROM cicd_pipeline_runs WHERE created_at >= unixepoch(?) AND status = 'success'`
     ).bind(sevenDaysAgo).first()),
     safe(env.DB.prepare(
-      `SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE start_time >= date('now','weekday 1') AND user_id IN (${userList}) AND is_active = 0`
-    ).bind(...userIdVariants).first()),
+      `SELECT (COUNT(DISTINCT strftime('%Y-%m-%d %H', datetime(created_at, 'unixepoch'))) +
+               COALESCE((SELECT SUM(total_active_seconds)/3600.0 FROM work_sessions WHERE started_at >= date('now','weekday 1')), 0)
+              ) as h FROM agent_telemetry WHERE created_at >= unixepoch(date('now','weekday 1'))`
+    ).first()),
     safe(env.DB.prepare(
-      `SELECT COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE date(start_time) = date('now') AND user_id IN (${userList}) AND is_active = 0`
-    ).bind(...userIdVariants).first()),
+      `SELECT (COUNT(DISTINCT strftime('%Y-%m-%d %H', datetime(created_at, 'unixepoch'))) +
+               COALESCE((SELECT SUM(total_active_seconds)/3600.0 FROM work_sessions WHERE date(started_at) = date('now')), 0)
+              ) as h FROM agent_telemetry WHERE date(datetime(created_at, 'unixepoch')) = date('now')`
+    ).first()),
     safe(env.DB.prepare(
-      `SELECT date(start_time) as d, COALESCE(SUM(duration_seconds),0)/3600.0 as h FROM project_time_entries WHERE start_time >= date('now','weekday 1') AND user_id IN (${userList}) AND is_active = 0 GROUP BY date(start_time) ORDER BY d ASC`
-    ).bind(...userIdVariants).all()),
+      `SELECT date(datetime(created_at, 'unixepoch')) as d,
+              COUNT(DISTINCT strftime('%Y-%m-%d %H', datetime(created_at, 'unixepoch'))) as h
+       FROM agent_telemetry
+       WHERE created_at >= unixepoch(date('now','weekday 1'))
+       GROUP BY date(datetime(created_at, 'unixepoch'))
+       ORDER BY d ASC`
+    ).all()),
     safe(env.DB.prepare(
       `SELECT COUNT(*) as c FROM projects WHERE status NOT IN ('archived','maintenance')`
     ).first()),

@@ -1768,7 +1768,7 @@ async function runWriteD1MapInsert(env, cfg, ctx) {
   if (!map) return { ok: false, error: 'write_d1: map required for table insert' };
   let parsed = {};
   try {
-    parsed = JSON.parse(ctx.rawBody || '{}');
+    parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
   } catch {
     parsed = {};
   }
@@ -1820,7 +1820,7 @@ async function runWriteD1GithubRaw(env, cfg, ctx) {
   if (table !== 'github_webhook_events') return { ok: false, error: 'write_d1: raw only supported for github_webhook_events' };
   let parsed = {};
   try {
-    parsed = JSON.parse(ctx.rawBody || '{}');
+    parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
   } catch {
     parsed = {};
   }
@@ -1828,7 +1828,7 @@ async function runWriteD1GithubRaw(env, cfg, ctx) {
   try {
     await env.DB.prepare(
       `INSERT INTO github_webhook_events (event_type, repo_full_name, payload_json) VALUES (?, ?, ?)`
-    ).bind(ctx.eventType, repo, ctx.rawBody).run();
+    ).bind(ctx.eventType || ctx.webhookEventType || "unknown", repo, ctx.rawBody || ctx.webhookBody || ctx.body || "{}").run();
     return { ok: true, result: { inserted: true } };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
@@ -1908,7 +1908,7 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
     if (field && cfg.value !== undefined && matchBy && fromPath && CIDI_MATCH_COLUMNS.has(matchBy) && CIDI_WEBHOOK_PATCH_KEYS.has(field)) {
       let parsed = {};
       try {
-        parsed = JSON.parse(ctx.rawBody || '{}');
+        parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
       } catch {
         parsed = {};
       }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Home, Zap, Cloud, GitBranch, Clock, Layers, TrendingUp, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { Zap, Cloud, GitBranch, Clock, Layers, TrendingUp, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
 
 interface StatCard { label: string; value: string; sub?: string; color?: string; icon?: React.ReactNode; }
 interface Deploy { worker_name: string; environment: string; status: string; deployed_at: string; deployment_notes?: string; }
@@ -79,23 +79,14 @@ export const OverviewPage: React.FC = () => {
       <div className="p-4 md:p-6 flex flex-col gap-5 min-w-0">
 
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Home size={16} className="text-[var(--solar-cyan)]" />
-            <span className="text-[15px] font-semibold text-[var(--text-main)]">Overview</span>
-            <div className="flex items-center gap-1.5 ml-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-[var(--solar-green)] animate-pulse" />
-              <span className="text-[11px] text-[var(--text-muted)] uppercase tracking-widest">Live</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-[13px] font-mono text-[var(--text-muted)]">
-              {time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-            <button onClick={load} className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors">
-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-3">
+          <span className="text-[12px] text-[var(--text-muted)]">
+            {time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+          <div className="w-1.5 h-1.5 rounded-full bg-[var(--solar-green)] animate-pulse" />
+          <button onClick={load} className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors">
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          </button>
         </div>
 
         {/* Stat Cards */}
@@ -132,14 +123,14 @@ export const OverviewPage: React.FC = () => {
                   <tbody>
                     {deploys.slice(0, 10).map((d, i) => (
                       <tr key={i} className="border-b border-[var(--border-subtle)]/30 hover:bg-[var(--bg-hover)] transition-colors">
-                        <td className="px-4 py-2 text-[var(--text-main)] font-mono truncate max-w-[140px]">{d.worker_name}</td>
+                        <td className="px-4 py-2 text-[var(--text-main)] truncate max-w-[140px]">{d.worker_name}</td>
                         <td className="px-4 py-2 text-[var(--text-muted)]">{d.environment}</td>
                         <td className="px-4 py-2">
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase" style={{ color: statusColor(d.status), background: statusColor(d.status) + '20' }}>
                             {d.status}
                           </span>
                         </td>
-                        <td className="px-4 py-2 text-[var(--text-muted)] font-mono text-[11px]">
+                        <td className="px-4 py-2 text-[var(--text-muted)] text-[11px]">
                           {d.deployed_at ? new Date(d.deployed_at).toLocaleDateString() : '—'}
                         </td>
                       </tr>

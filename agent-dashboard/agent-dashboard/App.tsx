@@ -53,7 +53,7 @@ import {
 import { useEditor } from './src/EditorContext';
 import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
+import { Bot, Home, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -1495,7 +1495,8 @@ const App: React.FC = () => {
       <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
           {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
           <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-4 border-r border-[var(--border-subtle)] shrink-0 z-50">
-              <ActivityIcon icon={Sparkles} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
+              <ActivityIcon icon={Home} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
+              <ActivityIcon icon={Bot} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
               <div className="w-6 h-px bg-[var(--border-subtle)] my-1" />
               <ActivityIcon icon={PenTool} title="Draw" active={openTabs.includes('excalidraw')} onClick={() => openTab('excalidraw')} />
               <ActivityIcon icon={Search} title="Search" active={activeActivity === 'search'} onClick={() => toggleActivity('search')} />

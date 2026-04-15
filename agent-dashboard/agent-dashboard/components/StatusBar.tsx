@@ -226,7 +226,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       )}
 
-      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" style={{ fontFamily: "'Menlo', 'Monaco', 'Courier New', monospace" }}>
+      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" >
         {/* Left Side: Environment Switcher */}
         {/* Left Side: Environment Status Dot */}
         <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative" />

@@ -1494,11 +1494,13 @@ const App: React.FC = () => {
       <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
           {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
           <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-4 border-r border-[var(--border-subtle)] shrink-0 z-50">
+              <ActivityIcon icon={Sparkles} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
+              <div className="w-6 h-px bg-[var(--border-subtle)] my-1" />
               <ActivityIcon icon={PenTool} title="Draw" active={openTabs.includes('excalidraw')} onClick={() => openTab('excalidraw')} />
               <ActivityIcon icon={Search} title="Search" active={activeActivity === 'search'} onClick={() => toggleActivity('search')} />
               <ActivityIcon icon={GitBranch} title="Source Control" active={activeActivity === 'git'} onClick={() => toggleActivity('git')} />
               <ActivityIcon icon={Network} title="Remote Explorers" active={activeActivity === 'remote'} onClick={() => toggleActivity('remote')} />
-              <ActivityIcon icon={Layers} title="Tools & MCP" active={activeActivity === 'mcps'} onClick={() => toggleActivity('mcps')} />
+              <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
               <ActivityIcon icon={Github} title="GitHub Actions" active={activeActivity === 'actions'} onClick={() => toggleActivity('actions')} />
               <ActivityIcon
                   icon={Database}

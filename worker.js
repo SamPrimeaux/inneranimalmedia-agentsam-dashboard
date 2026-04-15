@@ -5718,7 +5718,7 @@ const worker = {
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
       if (pathLower.startsWith('/dashboard/')) {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
-        const SPA_ROUTES = new Set(["calendar"]);
+        const SPA_ROUTES = new Set(["calendar", "mcp"]);
         const key = SPA_ROUTES.has(segment) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);

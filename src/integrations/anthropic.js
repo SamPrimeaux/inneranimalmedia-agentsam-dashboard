@@ -29,7 +29,7 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
   const betas = options.betas || [];
   
   // 1. SOTA Beta Headers (v4.6+)
-  const isSotaModel = modelKey.includes('4-6') || modelKey.includes('4-5');
+  const isSotaModel = (modelKey.includes('4-6') || modelKey.includes('4-5')) && !modelKey.includes('haiku');
   if (isSotaModel) {
     betas.push('compaction-2026-03-24'); // Infinite conversation / server-side summarization
     if (modelKey.includes('opus')) betas.push('fast-mode-2026-02-01'); // 2.5x speed for Opus
@@ -53,7 +53,6 @@ export async function chatWithAnthropic({ messages, tools, env, options = {} }) 
       description: t.description,
       input_schema: t.parameters || t.input_schema,
       cache_control: t.cache_control || undefined,
-      strict: t.strict || undefined
     })),
     tool_choice: options.tool_choice || undefined,
     stream: true,

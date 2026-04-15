@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-DIST_DIR="agent-dashboard/agent-dashboard/dist"
+DIST_DIR="agent-dashboard/dist"
 BUCKET="agent-sam"
 R2_PREFIX="static/dashboard/agent"
 
@@ -34,17 +34,17 @@ fi
 echo "=== CF Builds PROD: R2 asset sync ==="
 MAX_JOBS=8
 job_count=0
-if [ -d "$DIST_DIR/assets" ]; then
+if [ -d "$DIST_DIR" ]; then
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    key="${R2_PREFIX}/assets/$(basename "$file")"
+    key="${R2_PREFIX}/$(basename "$file")"
     npx wrangler r2 object put "${BUCKET}/${key}" \
       --file "$file" \
       --remote \
       -c wrangler.production.toml &
     job_count=$((job_count + 1))
     if [ "$job_count" -ge "$MAX_JOBS" ]; then wait; job_count=0; fi
-  done < <(find "$DIST_DIR/assets" -type f ! -name '._*' ! -name '.DS_Store')
+  done < <(find "$DIST_DIR" -type f ! -name '._*' ! -name '.DS_Store')
   wait
 fi
 

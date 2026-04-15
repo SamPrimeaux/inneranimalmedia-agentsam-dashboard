@@ -1255,6 +1255,8 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     form.append('message', messageForApi);
     form.append('mode', mode);
     form.append('model', selectedModelKey);
+    const selectedModelProvider = chatModels.find((m) => m.model_key === selectedModelKey)?.provider || 'anthropic';
+    form.append('provider', selectedModelProvider);
     form.append('conversationId', effectiveConvId);
     form.append('contextMode', String(activeProject));
     attachments.forEach((a) => form.append('files', a.file));

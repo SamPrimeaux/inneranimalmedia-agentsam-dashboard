@@ -440,7 +440,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
     (userProfile && userProfile.display_name) || authRow.name || 'User';
   const role = (userProfile && userProfile.role) || 'superadmin';
   const workspaceId =
-    (userProfile && userProfile.default_workspace_id) || 'ws_default';
+    (userProfile && userProfile.default_workspace_id) || 'ws_inneranimalmedia';
   return {
     id: sessionId,
     email: loginEmail,
@@ -1768,7 +1768,7 @@ async function runWriteD1MapInsert(env, cfg, ctx) {
   if (!map) return { ok: false, error: 'write_d1: map required for table insert' };
   let parsed = {};
   try {
-    parsed = JSON.parse(ctx.rawBody || '{}');
+    parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
   } catch {
     parsed = {};
   }
@@ -1820,7 +1820,7 @@ async function runWriteD1GithubRaw(env, cfg, ctx) {
   if (table !== 'github_webhook_events') return { ok: false, error: 'write_d1: raw only supported for github_webhook_events' };
   let parsed = {};
   try {
-    parsed = JSON.parse(ctx.rawBody || '{}');
+    parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
   } catch {
     parsed = {};
   }
@@ -1828,7 +1828,7 @@ async function runWriteD1GithubRaw(env, cfg, ctx) {
   try {
     await env.DB.prepare(
       `INSERT INTO github_webhook_events (event_type, repo_full_name, payload_json) VALUES (?, ?, ?)`
-    ).bind(ctx.eventType, repo, ctx.rawBody).run();
+    ).bind(ctx.eventType || ctx.webhookEventType || "unknown", repo, ctx.rawBody || ctx.webhookBody || ctx.body || "{}").run();
     return { ok: true, result: { inserted: true } };
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
@@ -1908,7 +1908,7 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
     if (field && cfg.value !== undefined && matchBy && fromPath && CIDI_MATCH_COLUMNS.has(matchBy) && CIDI_WEBHOOK_PATCH_KEYS.has(field)) {
       let parsed = {};
       try {
-        parsed = JSON.parse(ctx.rawBody || '{}');
+        parsed = JSON.parse((ctx.rawBody || ctx.webhookBody || ctx.body || "{}"));
       } catch {
         parsed = {};
       }
@@ -5339,7 +5339,7 @@ const worker = {
         };
         const stateJson = JSON.stringify(record);
         await env.DB.prepare(
-          `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+          `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, created_at, updated_at) VALUES (?, '', 'ide', ?, unixepoch(), unixepoch())
            ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
         )
           .bind(rowId, stateJson)
@@ -6622,7 +6622,7 @@ async function preflightClassify(message, env) {
 fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi-step/build/agent`;
 
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key=${env.GEMINI_API_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8543,7 +8543,7 @@ async function classifyIntent(env, lastMessageText) {
     try {
       const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
       const classifyRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -11578,7 +11578,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
   // Fire the AI call in background — return stream immediately to avoid runtime hang
   (async () => {
     try {
-      const WAI_TIMEOUT_MS = 25000;
+      const WAI_TIMEOUT_MS = 60000;
       let result;
       const modelSupportsTools = modelRow?.supports_tools === 1;
       const toolsToSend = modelSupportsTools && toolDefinitions.length > 0
@@ -11589,7 +11589,7 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           }))
         : [];
 
-      const aiInput = { messages, stream: true };
+      const aiInput = { messages, stream: false };
       if (toolsToSend.length > 0) aiInput.tools = toolsToSend;
 
       try {
@@ -11625,7 +11625,10 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
         ?? '';
 
       if (fullText) {
-        await emit({ type: 'text', text: fullText });
+        const chunkSize = 1000;
+      for (let i = 0; i < fullText.length; i += chunkSize) {
+        await emit({ type: 'content_block_delta', delta: { type: 'text_delta', text: fullText.slice(i, i + chunkSize) } });
+      }
       }
 
       const inputTokens = Math.round(inputCharCount / 4);
@@ -12089,6 +12092,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const apiPlatform = String(modelRow.api_platform || '').trim();
   const modelKey = String(modelRow.model_key || modelParam);
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
+  const provider = modelRow.provider || apiPlatform || 'unknown';
 
   const sseSupportedPlatforms = new Set(['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'cursor', 'workers_ai']);
   if (!sseSupportedPlatforms.has(apiPlatform)) {
@@ -12115,7 +12119,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`
-        : `SELECT name, description, slash_trigger
+        : `SELECT name, description, content_markdown, slash_trigger
          FROM agentsam_skill
          WHERE is_active = 1 AND scope = 'workspace' AND workspace_id = ?
          ORDER BY sort_order`;
@@ -12153,7 +12157,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
           const trigRaw = s.slash_trigger != null ? String(s.slash_trigger).replace(/^\//, '') : '';
           const trigPart = trigRaw ? ` (\`/${promptLine(trigRaw)}\`)` : '';
           let line = `- **${promptLine(s.name)}**${trigPart}: ${promptLine(s.description)}`;
-          if (message.includes('/') && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
+          if ((s.sort_order <= -10 || message.includes("/")) && s.content_markdown != null && String(s.content_markdown).trim() !== '') {
             line += `\n  ${String(s.content_markdown).trim()}`;
           }
           return line;
@@ -12446,7 +12450,8 @@ You can delegate tasks directly to Claude Code running on the host machine by st
   }
 
   if (apiPlatform === 'workers_ai') {
-    return streamObserversWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
+    const messages = [{ role: 'user', content: hasMedia ? flattenUserContentForWorkersAi(message, jsonImages, chatAttachments) : message }];
+  return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 
@@ -16078,7 +16083,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const stateJson = typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
         try {
           await env.DB.prepare(
-            `INSERT INTO agent_workspace_state (id, state_json, updated_at) VALUES (?, ?, unixepoch())
+            `INSERT INTO agent_workspace_state (id, conversation_id, workspace_type, state_json, created_at, updated_at) VALUES (?, '', 'ide', ?, unixepoch(), unixepoch())
              ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = unixepoch()`
           )
             .bind(rowId, stateJson)
@@ -20929,7 +20934,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_sprint1_agent_sam_2026' ORDER BY order_index`
+          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v2' ORDER BY order_index`
         ).all()
       ),
     ]);
@@ -23720,7 +23725,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
         },
         body: JSON.stringify({
           model: model.model_key,
-          max_tokens: 8192,
+          ...(model.model_key.startsWith("gpt-5") || model.model_key.startsWith("o") ? { max_completion_tokens: 8192 } : { max_tokens: 8192 }),
           messages,
           tools: openaiTools,
           tool_choice: 'auto',
@@ -24380,8 +24385,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       const _isAdaptive = resolvedModelKey.includes('opus-4-6') || resolvedModelKey.includes('sonnet-4-6');
       const _isSimpleIntent = opts._intent === 'sql' || opts._intent === 'question' || opts._intent === 'shell';
       const _thinkingConfig = _isAdaptive ? {
-        thinking: { type: 'adaptive' },
-        output_config: { effort: _isSimpleIntent ? 'low' : 'medium' },
+        thinking: { type: 'adaptive', effort: _isSimpleIntent ? 'low' : 'medium' },
       } : {};
       // display:omitted skips streaming thinking tokens → faster first text token for pipelines
       if (_isAdaptive && !wantStream) _thinkingConfig.thinking = { type: 'adaptive', display: 'omitted' };
@@ -24426,6 +24430,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       console.log('[chatWithToolsAnthropic] Claude API response', { status: res.status, ok: res.ok });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        console.error('[chatWithToolsAnthropic] Anthropic error', JSON.stringify(err));
         return jsonResponse({ error: err.error?.message || res.statusText, stream: false }, res.status);
       }
       const data = await res.json();
@@ -30611,3 +30616,6 @@ async function emitSessionEvent(env, sessionId, event) {
   } catch (e) { console.warn('[emitSessionEvent]', e?.message); }
 }
 // Build Trigger: 2026-04-09-00-43
+
+export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom, IAMSession, IAMAgentSession, MeauxSession } from "./src/core/durable_objects.js";
+// build trigger Tue Apr 14 11:21:16 CDT 2026

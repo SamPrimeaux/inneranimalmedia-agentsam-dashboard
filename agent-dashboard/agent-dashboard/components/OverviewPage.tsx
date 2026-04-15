@@ -58,9 +58,9 @@ export const OverviewPage: React.FC = () => {
 
   useEffect(() => { load(); }, [load]);
 
-  const monthlyBurn = spend?.monthly_burn ?? spend?.total ?? 943.78;
-  const aiSpend = spend?.ai_spend ?? spend?.ai_total ?? 227.20;
-  const infraBills = spend?.infra ?? spend?.infra_total ?? 659.26;
+  const monthlyBurn = Number(spend?.monthly_burn ?? spend?.total ?? 943.78) || 943.78;
+  const aiSpend = Number(spend?.ai_spend ?? spend?.ai_total ?? 227.20) || 227.20;
+  const infraBills = Number(spend?.infra ?? spend?.infra_total ?? 659.26) || 659.26;
   const deploys = deployments?.deployments || [];
   const cicd = deployments?.cicd_runs || [];
   const projects = activity?.projects?.top || [];

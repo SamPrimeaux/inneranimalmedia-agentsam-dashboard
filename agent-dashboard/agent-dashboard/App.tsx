@@ -5,7 +5,7 @@
 */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { useLocation, Routes, Route, Navigate } from 'react-router-dom';
+import { useLocation, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
@@ -112,6 +112,8 @@ const QUICK_COMMANDS = [
 const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
+  const navigate = useNavigate();
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);
@@ -1524,6 +1526,9 @@ const App: React.FC = () => {
                 }} 
               />
               <ActivityIcon icon={Settings} title="Settings" active={activeActivity === 'settings'} onClick={() => toggleActivity('settings')} />
+              <div className="w-full h-px bg-[var(--border-subtle)] my-1" />
+              <ActivityIcon icon={Monitor} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
+              <ActivityIcon icon={LayoutTemplate} title="Calendar" active={location.pathname === '/dashboard/calendar'} onClick={() => navigate('/dashboard/calendar')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1732,20 +1737,20 @@ const App: React.FC = () => {
           )}
 
           {/* 4. MAIN EDITOR AREA */}
-              {/* Dashboard page routes rendered in center slot */}
-              {location.pathname !== '/dashboard/agent' && (
-                <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-                  <Routes>
-                    <Route path="/dashboard/calendar" element={<CalendarPage />} />
-                    <Route path="/dashboard/agent" element={<></>} />
-                  </Routes>
-                </div>
-              )}
           <main 
               className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative ${narrowBlocksCenter ? 'max-md:hidden' : ''}`}
               onDrop={handleFileDrop}
               onDragOver={handleDragOver}
           >
+              {/* Dashboard page routes — non-agent pages render here */}
+              {location.pathname !== '/dashboard/agent' ? (
+                <div className="flex-1 min-h-0 overflow-hidden bg-[var(--bg-app)]">
+                  <Routes>
+                    <Route path="/dashboard/calendar" element={<CalendarPage />} />
+                  </Routes>
+                </div>
+              ) : (
+              <>
               {/* Editor Tabs — lazy, closeable */}
               <div className="h-10 flex items-center shrink-0 pl-0 relative z-10 overflow-x-auto overflow-y-hidden no-scrollbar">
                   {openTabs.includes('Workspace') && (
@@ -1850,7 +1855,7 @@ const App: React.FC = () => {
                       style={{ background: 'var(--scene-bg)' }}
                   />
                   
-                  {activeTab === 'Workspace' && (
+                  {location.pathname === '/dashboard/agent' && activeTab === 'Workspace' && (
                       <div className="absolute inset-0 z-10">
                           <WorkspaceDashboard 
                             onOpenFolder={() => {
@@ -1929,6 +1934,8 @@ const App: React.FC = () => {
                       />
                   )}
               </div>
+          </>
+              )}
           </main>
 
           {/* 6. Optional Right Agent Panel */}

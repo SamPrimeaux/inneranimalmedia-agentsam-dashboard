@@ -5,6 +5,7 @@
 */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import { VoxelEngine } from './services/VoxelEngine';
 import { StudioSidebar } from './components/StudioSidebar';
 import { UIOverlay } from './components/UIOverlay';
@@ -27,7 +28,7 @@ import { UnifiedSearchBar, type UnifiedSearchNavigate } from './components/Unifi
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
 import { GitHubExplorer } from './components/GitHubExplorer';
 import { KnowledgeSearchPanel } from './components/KnowledgeSearchPanel';
-import { ProblemsDebugPanel } from './components/ProblemsDebugPanel';
+// import { ProblemsDebugPanel } from './components/ProblemsDebugPanel';
 import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
@@ -50,7 +51,8 @@ import {
   type RecentFileEntry,
 } from './src/ideWorkspace';
 import { useEditor } from './src/EditorContext';
-import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package } from 'lucide-react';
+import { CalendarPage } from './components/CalendarPage';
+import { Sparkles, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -109,6 +111,7 @@ const QUICK_COMMANDS = [
 
 const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
+  const location = useLocation();
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);
@@ -125,7 +128,7 @@ const App: React.FC = () => {
   const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
 
   // IDE State
-  type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw' | 'database';
+  type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
   const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
@@ -147,6 +150,7 @@ const App: React.FC = () => {
   const [dbExplorerJump, setDbExplorerJump] = useState<DatabaseExplorerJump | null>(null);
   const [errorCount, setErrorCount] = useState(0);
   const [warningCount, setWarningCount] = useState(0);
+  const [systemProblems, setSystemProblems] = useState<any>([]);
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
   const [tunnelHealthy, setTunnelHealthy] = useState<boolean | null>(null);
   const [tunnelLabel, setTunnelLabel] = useState<string | null>(null);
@@ -376,6 +380,9 @@ const App: React.FC = () => {
   const openTab = (tab: TabId) => {
     setOpenTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
     setActiveTab(tab);
+    if (tab === 'engine' && activeActivity !== 'cad') {
+      setActiveActivity('cad');
+    }
   };
 
   const closeTab = (tab: TabId, e: React.MouseEvent) => {
@@ -663,9 +670,17 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright') => {
+  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database') => {
     setActiveActivity((prev) => {
       if (prev === activity) return null;
+      if (activity === 'debug') {
+        setIsTerminalOpen(true);
+        setTimeout(() => terminalRef.current?.setActiveTab('problems'), 50);
+        return null; // Don't open a sidebar for debug anymore
+      }
+      if (activity === 'cad') {
+        openTab('engine');
+      }
       return activity;
     });
   };
@@ -686,9 +701,8 @@ const App: React.FC = () => {
   const handleUnifiedNavigate = useCallback(
     (nav: UnifiedSearchNavigate) => {
       if (nav.kind === 'table') {
-        setOpenTabs((prev) => (prev.includes('database') ? prev : [...prev, 'database']));
-        setActiveTab('database');
         setDbExplorerJump({ token: Date.now(), table: nav.name, dbTarget: 'd1' });
+        setActiveActivity('database');
         return;
       }
       if (nav.kind === 'conversation') {
@@ -712,9 +726,8 @@ const App: React.FC = () => {
       if (nav.kind === 'sql' || nav.kind === 'column') {
         const sql = nav.sql?.trim();
         if (!sql) return;
-        setOpenTabs((prev) => (prev.includes('database') ? prev : [...prev, 'database']));
-        setActiveTab('database');
         setDbExplorerJump({ token: Date.now(), querySql: sql, dbTarget: 'd1' });
+        setActiveActivity('database');
         return;
       }
       if (nav.kind === 'deployment') {
@@ -751,6 +764,7 @@ const App: React.FC = () => {
       const probRes = await fetch('/api/agent/problems', cred);
       const probData = await probRes.json().catch(() => ({}));
       if (probRes.ok && probData && typeof probData === 'object') {
+        setSystemProblems([]);
         const mcp = Array.isArray(probData.mcp_tool_errors) ? probData.mcp_tool_errors.length : 0;
         const audits = Array.isArray(probData.audit_failures) ? probData.audit_failures : [];
         const wx = Array.isArray(probData.worker_errors) ? probData.worker_errors.length : 0;
@@ -1233,7 +1247,8 @@ const App: React.FC = () => {
   };
 
   const handleSpawnModel = (name: string, url: string, scale: number) => {
-    const entity: GameEntity = {
+    if (activeTab !== 'engine') openTab('engine');
+    engineRef.current?.spawnEntity({
       id: `asset_${Date.now()}`,
       name: name,
       type: 'prop',
@@ -1241,10 +1256,21 @@ const App: React.FC = () => {
       scale: scale,
       position: { x: (Math.random() - 0.5) * 10, y: 10, z: (Math.random() - 0.5) * 10 },
       behavior: { type: 'dynamic', mass: 10, restitution: 0.2 }
-    };
-    engineRef.current?.spawnEntity(entity);
-    setUndoStack(prev => [...prev, entity]);
-    setRedoStack([]);
+    });
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    const glb = files.find(f => f.name.toLowerCase().endsWith('.glb'));
+    if (glb) {
+      const url = URL.createObjectURL(glb);
+      handleSpawnModel(glb.name, url, 1);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
   };
 
   const handleAddCustomAsset = (name: string, url: string) => {
@@ -1437,7 +1463,7 @@ const App: React.FC = () => {
               <button
                   type="button"
                   title="Toggle agent panel"
-                  className="p-1.5 text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)] rounded transition-colors"
+                  className={`p-1.5 rounded transition-colors ${agentPosition !== 'off' ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
                   onClick={onChatLayoutToggle}
               >
                   {agentPosition === 'left' ? <PanelLeftClose size={15} strokeWidth={1.75} /> : <PanelRightClose size={15} strokeWidth={1.75} />}
@@ -1470,25 +1496,33 @@ const App: React.FC = () => {
               <ActivityIcon icon={PenTool} title="Draw" active={openTabs.includes('excalidraw')} onClick={() => openTab('excalidraw')} />
               <ActivityIcon icon={Search} title="Search" active={activeActivity === 'search'} onClick={() => toggleActivity('search')} />
               <ActivityIcon icon={GitBranch} title="Source Control" active={activeActivity === 'git'} onClick={() => toggleActivity('git')} />
-              <ActivityIcon icon={Bug} title="Run & Debug" active={activeActivity === 'debug'} onClick={() => toggleActivity('debug')} />
               <ActivityIcon icon={Network} title="Remote Explorers" active={activeActivity === 'remote'} onClick={() => toggleActivity('remote')} />
               <ActivityIcon icon={Layers} title="Tools & MCP" active={activeActivity === 'mcps'} onClick={() => toggleActivity('mcps')} />
               <ActivityIcon icon={Github} title="GitHub Actions" active={activeActivity === 'actions'} onClick={() => toggleActivity('actions')} />
               <ActivityIcon
                   icon={Database}
                   title="D1 Explorer"
-                  active={openTabs.includes('database')}
-                  onClick={() => {
-                    openTab('database');
-                    setActiveActivity(null);
-                  }}
+                  active={activeActivity === 'database'}
+                  onClick={() => toggleActivity('database')}
               />
               <ActivityIcon icon={Cloud} title="Cloud Sync" active={activeActivity === 'drive'} onClick={() => toggleActivity('drive')} />
               <ActivityIcon icon={Monitor} title="Playwright Jobs" active={activeActivity === 'playwright'} onClick={() => toggleActivity('playwright')} />
               
               <div className="flex-1" />
               <ActivityIcon icon={FolderOpen} title="Projects" active={activeActivity === 'projects'} onClick={() => toggleActivity('projects')} />
-              <ActivityIcon icon={Monitor} title="Engine View" active={activeActivity === 'cad'} onClick={() => toggleActivity('cad')} />
+              <ActivityIcon 
+                icon={Plane} 
+                title="Studio Engine" 
+                active={activeActivity === 'cad'} 
+                onClick={() => {
+                  if (activeActivity === 'cad') {
+                    setActiveActivity(null);
+                  } else {
+                    toggleActivity('cad');
+                    openTab('engine');
+                  }
+                }} 
+              />
               <ActivityIcon icon={Settings} title="Settings" active={activeActivity === 'settings'} onClick={() => toggleActivity('settings')} />
           </div>
 
@@ -1641,11 +1675,7 @@ const App: React.FC = () => {
                   ) : activeActivity === 'playwright' ? (
                       <PlaywrightConsole />
                   ) : activeActivity === 'debug' ? (
-                      <ProblemsDebugPanel
-                        onClose={() => setActiveActivity(null)}
-                        onNavigateToAgentThread={openAgentThreadFromProblems}
-                        onOpenMcpPanel={() => setActiveActivity('mcps')}
-                      />
+                      <div className="p-4 text-xs text-[var(--text-muted)]">Redirecting to terminal problems...</div>
                   ) : activeActivity === 'git' ? (
                       <SourcePanel />
                   ) : activeActivity === 'projects' ? (
@@ -1681,6 +1711,12 @@ const App: React.FC = () => {
                           setIdeWorkspace({ source: 'pinned', name, pathHint: path });
                         }}
                       />
+                  ) : activeActivity === 'database' ? (
+                      <DatabaseBrowser
+                          explorerJump={dbExplorerJump}
+                          onExplorerJumpConsumed={() => setDbExplorerJump(null)}
+                          onClose={() => setActiveActivity(null)}
+                      />
                   ) : (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>
                   )}
@@ -1696,8 +1732,19 @@ const App: React.FC = () => {
           )}
 
           {/* 4. MAIN EDITOR AREA */}
-          <div
+              {/* Dashboard page routes rendered in center slot */}
+              {location.pathname !== '/dashboard/agent' && (
+                <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+                  <Routes>
+                    <Route path="/dashboard/calendar" element={<CalendarPage />} />
+                    <Route path="/dashboard/agent" element={<></>} />
+                  </Routes>
+                </div>
+              )}
+          <main 
               className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative ${narrowBlocksCenter ? 'max-md:hidden' : ''}`}
+              onDrop={handleFileDrop}
+              onDragOver={handleDragOver}
           >
               {/* Editor Tabs — lazy, closeable */}
               <div className="h-10 flex items-center shrink-0 pl-0 relative z-10 overflow-x-auto overflow-y-hidden no-scrollbar">
@@ -1783,22 +1830,10 @@ const App: React.FC = () => {
                           onClose={(e) => closeTab('excalidraw', e)}
                       />
                   )}
-                  {openTabs.includes('database') && (
-                      <Tab
-                          title="Database"
-                          icon={<Database size={13} className="text-[var(--solar-blue)]"/>}
-                          active={activeTab === 'database'}
-                          onClick={() => setActiveTab('database')}
-                          onClose={(e) => closeTab('database', e)}
-                      />
-                  )}
 
                   {/* Quick-open buttons for closed panels */}
                   <div className="ml-auto flex items-center gap-0.5 pr-2 shrink-0">
-                      {!openTabs.includes('engine') && <QuickOpen label="Voxel" onClick={() => openTab('engine')} />}
                       {!openTabs.includes('browser') && <QuickOpen label="Browser" onClick={() => openTab('browser')} />}
-                      {!openTabs.includes('excalidraw') && <QuickOpen label="Draw" onClick={() => openTab('excalidraw')} />}
-                      {!openTabs.includes('database') && <QuickOpen label="Database" onClick={() => openTab('database')} />}
                   </div>
 
                   {/* Decorative line below tabs */}
@@ -1875,29 +1910,15 @@ const App: React.FC = () => {
                           <ExcalidrawView />
                       </div>
                   )}
-                  {activeTab === 'database' && (
-                      <div className="absolute inset-0 z-10 flex flex-col min-h-0 overflow-hidden bg-[var(--bg-app)]">
-                          <DatabaseBrowser
-                              explorerJump={dbExplorerJump}
-                              onExplorerJumpConsumed={() => setDbExplorerJump(null)}
-                              onClose={() => {
-                                const next = openTabs.filter((t) => t !== 'database');
-                                setOpenTabs(next);
-                                if (activeTab === 'database') {
-                                  setActiveTab(next.length > 0 ? next[next.length - 1] : 'Workspace');
-                                }
-                              }}
-                          />
-                      </div>
-                  )}
                   </div>
 
                   {isTerminalOpen && (
                       <XTermShell
                           ref={terminalRef}
                           onClose={() => setIsTerminalOpen(false)}
+                          problems={systemProblems ?? []}
                           iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
-                          workspaceCdCommand="cd ~/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard"
+                          workspaceCdCommand="cd /Users/samprimeaux/inneranimalmedia"
                           workspaceLabel={workspaceDisplayName}
                           workspaceId={authWorkspaceId || undefined}
                           productLabel={PRODUCT_NAME}
@@ -1908,7 +1929,7 @@ const App: React.FC = () => {
                       />
                   )}
               </div>
-          </div>
+          </main>
 
           {/* 6. Optional Right Agent Panel */}
           {agentPosition === 'right' && (
@@ -2001,11 +2022,8 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${openTabs.includes('database') ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => {
-            openTab('database');
-            setActiveActivity(null);
-          }}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'database' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => toggleActivity('database')}
         >
           <Database size={24} strokeWidth={1.5} aria-hidden />
           <span>Database</span>
@@ -2060,18 +2078,6 @@ const App: React.FC = () => {
               </button>
             </div>
             <div className="overflow-y-auto p-2 flex flex-col gap-0.5">
-              <MobileMoreRow
-                  icon={PenTool}
-                  label="Draw"
-                  onClick={() => {
-                    setMobileMoreOpen(false);
-                    if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                      setActiveActivity(null);
-                      setAgentPosition('off');
-                    }
-                    openTab('excalidraw');
-                  }}
-              />
               <MobileMoreRow icon={Search} label="Search" onClick={() => { setMobileMoreOpen(false); toggleActivity('search'); }} />
               <MobileMoreRow icon={GitBranch} label="Source Control" onClick={() => { setMobileMoreOpen(false); toggleActivity('git'); }} />
               <MobileMoreRow icon={Bug} label="Run & Debug" onClick={() => { setMobileMoreOpen(false); toggleActivity('debug'); }} />

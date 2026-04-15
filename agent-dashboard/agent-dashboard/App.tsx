@@ -204,6 +204,9 @@ const App: React.FC = () => {
         if (msg.type === 'canvas_update') {
           window.dispatchEvent(new CustomEvent('iam:canvas_update', { detail: msg.elements }));
         }
+        if (msg.type === 'iam_excalidraw') {
+          window.dispatchEvent(new CustomEvent('iam:excalidraw_action', { detail: { action: msg.action, params: msg.params } }));
+        }
       } catch (_) {}
     };
     ws.onerror = () => {}; // suppress unhandled rejection noise

@@ -27,6 +27,30 @@ export const ExcalidrawView: React.FC = () => {
             .finally(() => setInitialDataLoaded(true));
     }, []);
 
+    // Listen for agent-driven tool calls (excalidraw_open, excalidraw_add_elements, excalidraw_clear, excalidraw_export)
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const { action, params } = (e as CustomEvent).detail || {};
+            const api = excalidrawApiRef.current;
+            if (!api) return;
+            if (action === 'open' || action === 'clear') {
+                api.updateScene({ elements: [] });
+            } else if (action === 'add_elements' && Array.isArray(params?.elements)) {
+                const existing = api.getSceneElements();
+                api.updateScene({ elements: [...existing, ...params.elements] });
+            } else if (action === 'export') {
+                api.exportToBlob({ mimeType: 'image/png' }).then((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'excalidraw-export.png'; a.click();
+                    URL.revokeObjectURL(url);
+                });
+            }
+        };
+        window.addEventListener('iam:excalidraw_action', handler);
+        return () => window.removeEventListener('iam:excalidraw_action', handler);
+    }, []);
+
     // Listen for canvas_update broadcast from other clients via App.tsx WebSocket
     useEffect(() => {
         const handler = (e: Event) => {

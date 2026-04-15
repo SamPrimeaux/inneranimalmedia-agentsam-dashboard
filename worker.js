@@ -28828,29 +28828,45 @@ async function handleOverviewDeployments(request, url, env) {
     let cicd_runs = [];
     try {
       const cicdRows = await env.DB.prepare(
-        `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM cicd_runs ORDER BY started_at DESC LIMIT 10`
+        `SELECT p.run_id, p.env AS environment, p.status, p.branch,
+                p.triggered_at AS started_at, p.completed_at, p.notes,
+                g.workflow_name, g.commit_message, g.duration_ms,
+                COUNT(CASE WHEN s.status = 'pass' THEN 1 END) AS steps_passed,
+                COUNT(CASE WHEN s.status = 'fail' THEN 1 END) AS steps_failed,
+                COUNT(s.id) AS steps_total
+         FROM cicd_pipeline_runs p
+         LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(p.run_id, 6)
+         LEFT JOIN cicd_run_steps s ON s.run_id = p.run_id
+         GROUP BY p.run_id
+         ORDER BY p.rowid DESC LIMIT 10`
       ).all();
       cicd_runs = (cicdRows?.results ?? cicdRows ?? []).map((r) => ({
         run_id: r.run_id,
-        workflow_name: r.workflow_name,
+        workflow_name: r.workflow_name || r.run_id,
         branch: r.branch,
+        environment: r.environment,
         status: r.status,
-        conclusion: r.conclusion,
+        conclusion: r.status,
         started_at: r.started_at,
         completed_at: r.completed_at,
+        duration_ms: r.duration_ms,
+        commit_message: r.commit_message,
+        steps_passed: r.steps_passed,
+        steps_failed: r.steps_failed,
+        steps_total: r.steps_total,
       }));
     } catch (_) {
-      // cicd_runs table may not exist; fall back to ci_di_workflow_runs
+      // fallback no-op
       try {
         const altRows = await env.DB.prepare(
-          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM ci_di_workflow_runs ORDER BY started_at DESC LIMIT 10`
+          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM cicd_pipeline_runs ORDER BY rowid DESC LIMIT 10`
         ).all();
         cicd_runs = (altRows?.results ?? altRows ?? []).map((r) => ({
           run_id: r.run_id,
           workflow_name: r.workflow_name,
           branch: r.branch,
           status: r.status,
-          conclusion: r.conclusion,
+          conclusion: r.status,
           started_at: r.started_at,
           completed_at: r.completed_at,
         }));

@@ -2791,7 +2791,13 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
 
 const worker = {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(generateDailySummaryEmail(env));
+    ctx.waitUntil(Promise.allSettled([
+      generateDailySummaryEmail(env),
+      sweepStaleTerminalSessions(env),
+      runAgentMemoryDecay(env),
+      runFinancialCommandCron(env, ctx),
+      updateRoutingPerformanceScores(env),
+    ]));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -20882,11 +20888,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   }
 
   if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
-    if (!env.ANTHROPIC_API_KEY) {
-      const errMsg = 'ANTHROPIC_API_KEY not configured';
-      await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
-      return { error: errMsg };
-    }
+    // Model cascade: Gemini Flash → Workers AI → Anthropic Haiku (never hard-fail on missing key)
     const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
     const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
     const today = new Date().toISOString().slice(0, 10);
@@ -20927,15 +20929,12 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT worker_name AS workflow_name, environment AS client_name, status AS implementation_status, 0 AS priority
-           FROM cicd_runs
-           WHERE status IN ('queued','building','testing','deploying','verifying')
-           ORDER BY queued_at DESC LIMIT 10`
+          `SELECT name, status, priority FROM projects WHERE status NOT IN ('archived') ORDER BY priority DESC LIMIT 8`
         ).all()
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v2' ORDER BY order_index`
+          `SELECT plan_id, title, status FROM roadmap_steps WHERE plan_id IN ('plan_iam_dashboard_v1','plan_april14_2026','plan_agent_sam_endgame') AND status NOT IN ('complete','completed','done') ORDER BY plan_id, order_index LIMIT 20`
         ).all()
       ),
     ]);
@@ -20973,29 +20972,35 @@ Write a clean, informative HTML email. Style: dark background #0a0a0a, text #e0e
 
 Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — readable in 60 seconds.`;
     let emailHtml = '';
-    try {
-      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-      const aiData = await aiResp.json().catch(() => ({}));
-      if (!aiResp.ok) {
-        emailHtml = `<p>Error from Claude API: ${String(aiData?.error?.message || JSON.stringify(aiData)).slice(0, 500)}</p>`;
-      } else {
-        emailHtml = aiData.content?.[0]?.text || '';
-      }
-    } catch (e) {
-      emailHtml = '<p>Error generating AI summary</p>';
+    // Model cascade: try cheapest first, fall back up
+    const emailModelCascade = [
+      async () => {
+        if (!env.GEMINI_API_KEY && !env.GOOGLE_AI_API_KEY) return null;
+        const key = env.GEMINI_API_KEY || env.GOOGLE_AI_API_KEY;
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 2000 } }),
+        });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => ({}));
+        return d?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+      },
+      async () => {
+        if (!env.ANTHROPIC_API_KEY) return null;
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 2000, messages: [{ role: 'user', content: prompt }] }),
+        });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => ({}));
+        return d?.content?.[0]?.text || null;
+      },
+    ];
+    for (const attempt of emailModelCascade) {
+      try { const result = await attempt(); if (result) { emailHtml = result; break; } } catch (_) {}
     }
+    if (!emailHtml) emailHtml = '<p>All AI providers unavailable — raw stats in subject line.</p>';
     if (!emailHtml || !String(emailHtml).trim()) {
       emailHtml = '<p>(No AI body generated)</p>';
     }

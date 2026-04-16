@@ -321,11 +321,24 @@ const App: React.FC = () => {
   const { updateActiveFile } = useEditor();
   const setActiveFile = useCallback((updates: Partial<ActiveFile> | ((prev: ActiveFile | null) => ActiveFile | null)) => {
     if (typeof updates === 'object' && updates !== null && 'content' in updates && 'name' in updates) {
-      openFile(updates as ActiveFile);
+      const file = updates as ActiveFile;
+      if (file.name?.toLowerCase().endsWith('.glb') && file.content) {
+        const blob = new Blob([file.content as BlobPart], { type: 'model/gltf-binary' });
+        const glbUrl = URL.createObjectURL(blob);
+        setGlbViewerUrl((prev) => {
+          if (prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return glbUrl;
+        });
+        setGlbViewerFilename(file.name);
+        openTab('glb');
+        setActiveTab('glb');
+        return;
+      }
+      openFile(file);
     } else {
       updateActiveFile(updates);
     }
-  }, [openFile, updateActiveFile]);
+  }, [openFile, updateActiveFile, setGlbViewerUrl, setGlbViewerFilename]);
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');

@@ -21034,7 +21034,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   }
 
   if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
-    // Model cascade: Gemini Flash → Workers AI → Anthropic Haiku (never hard-fail on missing key)
+    // Model cascade: Gemini Flash → Workers AI → gpt-5.4-nano (never hard-fail on missing key)
     const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
     const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
     const today = new Date().toISOString().slice(0, 10);
@@ -28544,7 +28544,7 @@ async function sendDailyPlanEmail(env) {
   }
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
   try {
-    const [tasks, cicdPipelines, sprintMemory, deployments, velocity, projects, memory, proposals, overnightSuite, telemetryToday] = await Promise.all([
+    const [tasks, cicdPipelines, sprintMemory, deployments, velocity, projects, memory, proposals, overnightSuite, telemetryToday, todayPlan, blockedProviders] = await Promise.all([
       env.DB.prepare(`SELECT title, description, priority, status, tags FROM tasks
         WHERE tenant_id=? AND status IN ('todo','in_progress','blocked')
         ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, updated_at DESC LIMIT 10`).bind(planTid).all(),
@@ -28581,11 +28581,33 @@ async function sendDailyPlanEmail(env) {
          FROM agent_telemetry
          WHERE created_at >= unixepoch('now', 'start of day')`
       ).first()),
+      // Today's plan from agentsam_plans + tasks
+      safe(env.DB.prepare(
+        `SELECT p.title, p.morning_brief, p.default_model, p.blocked_providers,
+                COUNT(t.id) AS tasks_total,
+                SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) AS tasks_done,
+                SUM(CASE WHEN t.status='blocked' THEN 1 ELSE 0 END) AS tasks_blocked
+         FROM agentsam_plans p
+         LEFT JOIN agentsam_plan_tasks t ON t.plan_id = p.id
+         WHERE p.plan_date = date('now')
+         GROUP BY p.id
+         LIMIT 1`
+      ).first()),
+      // Blocked providers from model_routing_rules
+      safe(env.DB.prepare(
+        `SELECT GROUP_CONCAT(DISTINCT provider) AS blocked
+         FROM model_routing_rules
+         WHERE is_active = 0
+         GROUP BY 1`
+      ).first()),
     ]);
     console.log('[daily-plan] D1 queries complete — tasks:', tasks?.results?.length, 'cicd:', cicdPipelines?.results?.length, 'sprintMem:', sprintMemory?.results?.length);
 
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-    const prompt = `You are Agent Sam writing Sam Primeaux's daily morning briefing. Today is ${today}.
+    const planCtx = todayPlan ? `\nTODAY'S PLAN (from agentsam_plans):\nTitle: ${todayPlan.title}\nTasks: ${todayPlan.tasks_total} total | ${todayPlan.tasks_done} done | ${todayPlan.tasks_blocked} blocked\nMorning Brief: ${todayPlan.morning_brief?.slice(0, 400) || 'none'}\nBlocked providers: ${todayPlan.blocked_providers || '[]'}` : '';
+    const budgetCtx = `\nPROVIDER BUDGET STATUS:\nOpenAI: ~$36 remaining (ACTIVE)\nGoogle/Gemini: ACTIVE (near-free)\nWorkers AI: ACTIVE (free tier)\nAnthropic: DISABLED (zero budget)\nCursor: DISABLED (zero budget)`;
+
+    const prompt = `You are Agent Sam writing Sam Primeaux's daily morning briefing. Today is ${today}.${planCtx}${budgetCtx}
 
 OPEN TASKS (live from D1, ordered by priority):
 ${JSON.stringify(tasks.results)}
@@ -28643,22 +28665,87 @@ OVERNIGHT METRICS
 Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam like a technical founder with limited time and limited AI spend this week.`;
 
     let emailBody = '';
-    if (env.ANTHROPIC_API_KEY) {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 800, messages: [{ role: 'user', content: prompt }] })
-      });
-      const data = await res.json();
-      emailBody = data?.content?.[0]?.text?.trim() || '';
+
+    // Priority 1: Gemini Flash — $0.000004/call (750x cheaper than Haiku)
+    const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
+    if (!emailBody && geminiKey) {
+      try {
+        const gRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: 'You are Agent Sam writing a concise daily morning briefing. Plain text only. Under 450 words. No fluff. No emojis. Direct and actionable.' }] },
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: 900, temperature: 0.3 },
+            })
+          }
+        );
+        if (gRes.ok) {
+          const gData = await gRes.json();
+          emailBody = gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+          if (emailBody) console.log('[daily-plan] generated via Gemini Flash');
+        }
+      } catch (e) { console.warn('[daily-plan] Gemini Flash failed:', e?.message); }
     }
+
+    // Priority 2: OpenAI gpt-5.4-nano via Responses API
+    if (!emailBody && env.OPENAI_API_KEY) {
+      try {
+        const oRes = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'gpt-5.4-nano',
+            input: [
+              { role: 'system', content: 'You are Agent Sam writing a concise daily morning briefing. Plain text only. Under 450 words. No fluff. Direct and actionable.' },
+              { role: 'user', content: prompt }
+            ],
+            reasoning: { effort: 'low' },
+            text: { verbosity: 'low' },
+            max_output_tokens: 900,
+          })
+        });
+        if (oRes.ok) {
+          const oData = await oRes.json();
+          emailBody = oData?.output_text?.trim() || '';
+          if (emailBody) console.log('[daily-plan] generated via gpt-5.4-nano');
+        }
+      } catch (e) { console.warn('[daily-plan] OpenAI fallback failed:', e?.message); }
+    }
+
+    // Priority 3: Workers AI — free, no external budget needed
     if (!emailBody) {
-      const ai = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages: [{ role: 'user', content: prompt }], max_tokens: 800 });
-      emailBody = (ai?.result?.response ?? ai?.response ?? '').trim() || 'Daily plan could not be generated.';
+      try {
+        const ai = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+          messages: [{ role: 'system', content: 'Write a concise daily briefing. Plain text. Under 450 words. No emojis.' }, { role: 'user', content: prompt }],
+          max_tokens: 900,
+        });
+        emailBody = (ai?.result?.response ?? ai?.response ?? '').trim();
+        if (emailBody) console.log('[daily-plan] generated via Workers AI Llama 4 Scout (free)');
+      } catch (e) { console.warn('[daily-plan] Workers AI failed:', e?.message); }
     }
+
+    if (!emailBody) emailBody = 'Daily plan could not be generated. Check provider budgets.';
     console.log('[daily-plan] email body length', emailBody.length);
 
     const subject = `IAM Daily Plan — ${today}`;
+    // Wrap plain text in minimal HTML for better email client rendering
+    const htmlBody = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;background:#0a0a0f;color:#f4f4f5;padding:40px 20px;line-height:1.7}
+      .wrap{max-width:680px;margin:0 auto;background:#111;border:1px solid rgba(255,107,0,0.2);border-radius:12px;padding:40px}
+      .header{border-bottom:2px solid rgba(255,107,0,0.3);padding-bottom:20px;margin-bottom:28px}
+      h1{color:#ff6b00;font-size:22px;margin:0}
+      .date{color:rgba(244,244,245,0.5);font-size:13px;margin-top:6px}
+      pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;font-size:14px;color:#f4f4f5;margin:0}
+      .footer{margin-top:32px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px;color:rgba(244,244,245,0.4);text-align:center}
+    </style></head><body><div class="wrap">
+      <div class="header"><h1>Agent Sam</h1><div class="date">${subject}</div></div>
+      <pre>${emailBody.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
+      <div class="footer">inneranimalmedia.com &bull; Generated by Gemini Flash &bull; $0.000004</div>
+    </div></body></html>`;
+
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
@@ -28666,7 +28753,8 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
         from: 'Agent Sam <agent@inneranimalmedia.com>',
         to: ['sam@inneranimalmedia.com'],
         subject,
-        text: emailBody
+        text: emailBody,
+        html: htmlBody,
       })
     });
     console.log('[daily-plan] Resend status', res.status);

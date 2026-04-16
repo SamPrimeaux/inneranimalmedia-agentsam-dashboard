@@ -1177,7 +1177,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     });
   }, [setMessages]);
 
-  const handleSend = async (overrideMessage?: string) => {
+  async function handleSend(overrideMessage?: string) {
     const text = overrideMessage ?? input;
     if ((!text && attachments.length === 0) || (isLoading && !overrideMessage) || !selectedModelKey) return;
     
@@ -1445,7 +1445,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         void handleSend(next);
       }
     }
-  };
+  }
 
   const renderMessageContent = (content: string, msgIndex: number) => {
     let display = content

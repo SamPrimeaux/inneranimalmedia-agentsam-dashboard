@@ -102,12 +102,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onFormatClick,
 }) => {
   const cursorText = showCursor ? `Ln ${line}, Col ${col}` : 'Ln --, Col --';
-  const versionDisplay =
-    version && String(version).trim() !== ''
-      ? String(version).startsWith('v')
-        ? version
-        : `v${version}`
-      : '';
+  const versionDisplay = '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
   const [sshOpen, setSshOpen] = useState(false);
@@ -226,24 +221,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       )}
 
-      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" style={{ fontFamily: "'Menlo', 'Monaco', 'Courier New', monospace" }}>
+      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" >
         {/* Left Side: Environment Switcher */}
         {/* Left Side: Environment Status Dot */}
-        <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative">
-          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-            healthOk === true ? 'bg-[var(--solar-green)] shadow-[0_0_5px_var(--solar-green)]' : 'bg-[var(--solar-cyan)]'
-          }`} />
-                    <div className="relative flex items-center h-full">
-            <div
-              className="flex items-center gap-1.5 px-1 opacity-80"
-              title={brandTitle}
-            >
-              <span className="uppercase tracking-tight font-bold">
-                {healthOk === true ? 'IAM-OK' : 'Standby'}
-              </span>
-            </div>
-          </div>
-        </div>
+        <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative" />
 
         {/* Center: Active Workspace Context */}
         <div className="flex-1 flex justify-center items-center overflow-hidden px-4 select-none">

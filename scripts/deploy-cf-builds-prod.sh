@@ -7,12 +7,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-DIST_DIR="agent-dashboard/dist"
+DIST_DIR="agent-dashboard/agent-dashboard/dist"
 BUCKET="agent-sam"
 R2_PREFIX="static/dashboard/agent"
 
 echo "=== CF Builds PROD: worker deploy ==="
 npx wrangler deploy ./worker.js -c wrangler.production.toml
+
+
+echo "=== CF Builds PROD: record deploy to D1 ==="
+DEPLOY_TS=$(date -u +"%Y-%m-%d %H:%M:%S")
+npx wrangler d1 execute inneranimalmedia-business \
+  --remote -c wrangler.production.toml \
+  --command="INSERT INTO deployments (id, worker_name, environment, status, timestamp, notes) VALUES ('deploy-'||hex(randomblob(8)), 'inneranimalmedia', 'production', 'success', '${DEPLOY_TS}', 'CF Builds auto-deploy')" 2>/dev/null || true
 
 echo "=== CF Builds PROD: Vite build ==="
 cd agent-dashboard && npm ci --include=dev && npm run build && node scripts/bump-cache.js && cd ..

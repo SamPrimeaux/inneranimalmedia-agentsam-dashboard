@@ -63,3 +63,4 @@ migrations/._*
 # macOS metadata
 ._*
 .DS_Store
+paperclip

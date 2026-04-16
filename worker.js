@@ -2791,7 +2791,13 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
 
 const worker = {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(generateDailySummaryEmail(env));
+    ctx.waitUntil(Promise.allSettled([
+      generateDailySummaryEmail(env),
+      sweepStaleTerminalSessions(env),
+      runAgentMemoryDecay(env),
+      runFinancialCommandCron(env, ctx),
+      updateRoutingPerformanceScores(env),
+    ]));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -5718,7 +5724,8 @@ const worker = {
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
       if (pathLower.startsWith('/dashboard/')) {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
-        const key = `static/dashboard/${segment}.html`;
+        const SPA_ROUTES = new Set(["calendar", "mcp", "overview"]);
+        const key = SPA_ROUTES.has(segment) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
         if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
@@ -20931,11 +20938,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   }
 
   if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
-    if (!env.ANTHROPIC_API_KEY) {
-      const errMsg = 'ANTHROPIC_API_KEY not configured';
-      await rec({ conversationId, toolName: tool_name, toolCategory: 'builtin', toolInput: params, result: null, error: errMsg, serviceName: 'builtin' });
-      return { error: errMsg };
-    }
+    // Model cascade: Gemini Flash → Workers AI → Anthropic Haiku (never hard-fail on missing key)
     const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
     const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
     const today = new Date().toISOString().slice(0, 10);
@@ -20976,15 +20979,12 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT worker_name AS workflow_name, environment AS client_name, status AS implementation_status, 0 AS priority
-           FROM cicd_runs
-           WHERE status IN ('queued','building','testing','deploying','verifying')
-           ORDER BY queued_at DESC LIMIT 10`
+          `SELECT name, status, priority FROM projects WHERE status NOT IN ('archived') ORDER BY priority DESC LIMIT 8`
         ).all()
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT title, status FROM roadmap_steps WHERE plan_id = 'plan_iam_dashboard_v2' ORDER BY order_index`
+          `SELECT plan_id, title, status FROM roadmap_steps WHERE plan_id IN ('plan_iam_dashboard_v1','plan_april14_2026','plan_agent_sam_endgame') AND status NOT IN ('complete','completed','done') ORDER BY plan_id, order_index LIMIT 20`
         ).all()
       ),
     ]);
@@ -21022,29 +21022,35 @@ Write a clean, informative HTML email. Style: dark background #0a0a0a, text #e0e
 
 Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — readable in 60 seconds.`;
     let emailHtml = '';
-    try {
-      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-      const aiData = await aiResp.json().catch(() => ({}));
-      if (!aiResp.ok) {
-        emailHtml = `<p>Error from Claude API: ${String(aiData?.error?.message || JSON.stringify(aiData)).slice(0, 500)}</p>`;
-      } else {
-        emailHtml = aiData.content?.[0]?.text || '';
-      }
-    } catch (e) {
-      emailHtml = '<p>Error generating AI summary</p>';
+    // Model cascade: try cheapest first, fall back up
+    const emailModelCascade = [
+      async () => {
+        if (!env.GEMINI_API_KEY && !env.GOOGLE_AI_API_KEY) return null;
+        const key = env.GEMINI_API_KEY || env.GOOGLE_AI_API_KEY;
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 2000 } }),
+        });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => ({}));
+        return d?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+      },
+      async () => {
+        if (!env.ANTHROPIC_API_KEY) return null;
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 2000, messages: [{ role: 'user', content: prompt }] }),
+        });
+        if (!r.ok) return null;
+        const d = await r.json().catch(() => ({}));
+        return d?.content?.[0]?.text || null;
+      },
+    ];
+    for (const attempt of emailModelCascade) {
+      try { const result = await attempt(); if (result) { emailHtml = result; break; } } catch (_) {}
     }
+    if (!emailHtml) emailHtml = '<p>All AI providers unavailable — raw stats in subject line.</p>';
     if (!emailHtml || !String(emailHtml).trim()) {
       emailHtml = '<p>(No AI body generated)</p>';
     }
@@ -24895,6 +24901,37 @@ async function processQueues(env) {
     }
   } catch (e) {
     console.warn('[processQueues]', e?.message || e);
+  }
+}
+
+/** Nightly: update model_routing_rules performance scores from routing_decisions telemetry. */
+async function updateRoutingPerformanceScores(env) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(`
+      UPDATE model_routing_rules
+      SET
+        performance_score = (
+          SELECT ROUND(AVG(CASE WHEN had_error = 0 THEN 100.0 ELSE 0.0 END), 2)
+          FROM routing_decisions
+          WHERE task_type = model_routing_rules.task_type
+            AND created_at > unixepoch('now', '-7 days')
+        ),
+        avg_latency_ms = (
+          SELECT ROUND(AVG(latency_ms), 0)
+          FROM routing_decisions
+          WHERE task_type = model_routing_rules.task_type
+            AND latency_ms IS NOT NULL
+            AND created_at > unixepoch('now', '-7 days')
+        )
+      WHERE task_type IN (
+        SELECT DISTINCT task_type FROM routing_decisions
+        WHERE created_at > unixepoch('now', '-7 days')
+      )
+    `).run();
+    console.log('[cron] routing performance scores updated');
+  } catch (e) {
+    console.warn('[cron] updateRoutingPerformanceScores', e?.message ?? e);
   }
 }
 
@@ -28877,29 +28914,45 @@ async function handleOverviewDeployments(request, url, env) {
     let cicd_runs = [];
     try {
       const cicdRows = await env.DB.prepare(
-        `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM cicd_runs ORDER BY started_at DESC LIMIT 10`
+        `SELECT p.run_id, p.env AS environment, p.status, p.branch,
+                p.triggered_at AS started_at, p.completed_at, p.notes,
+                g.workflow_name, g.commit_message, g.duration_ms,
+                COUNT(CASE WHEN s.status = 'pass' THEN 1 END) AS steps_passed,
+                COUNT(CASE WHEN s.status = 'fail' THEN 1 END) AS steps_failed,
+                COUNT(s.id) AS steps_total
+         FROM cicd_pipeline_runs p
+         LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(p.run_id, 6)
+         LEFT JOIN cicd_run_steps s ON s.run_id = p.run_id
+         GROUP BY p.run_id
+         ORDER BY p.rowid DESC LIMIT 10`
       ).all();
       cicd_runs = (cicdRows?.results ?? cicdRows ?? []).map((r) => ({
         run_id: r.run_id,
-        workflow_name: r.workflow_name,
+        workflow_name: r.workflow_name || r.run_id,
         branch: r.branch,
+        environment: r.environment,
         status: r.status,
-        conclusion: r.conclusion,
+        conclusion: r.status,
         started_at: r.started_at,
         completed_at: r.completed_at,
+        duration_ms: r.duration_ms,
+        commit_message: r.commit_message,
+        steps_passed: r.steps_passed,
+        steps_failed: r.steps_failed,
+        steps_total: r.steps_total,
       }));
     } catch (_) {
-      // cicd_runs table may not exist; fall back to ci_di_workflow_runs
+      // fallback no-op
       try {
         const altRows = await env.DB.prepare(
-          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM ci_di_workflow_runs ORDER BY started_at DESC LIMIT 10`
+          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM cicd_pipeline_runs ORDER BY rowid DESC LIMIT 10`
         ).all();
         cicd_runs = (altRows?.results ?? altRows ?? []).map((r) => ({
           run_id: r.run_id,
           workflow_name: r.workflow_name,
           branch: r.branch,
           status: r.status,
-          conclusion: r.conclusion,
+          conclusion: r.status,
           started_at: r.started_at,
           completed_at: r.completed_at,
         }));

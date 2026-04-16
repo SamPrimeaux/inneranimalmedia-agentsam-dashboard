@@ -783,7 +783,7 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
       console.warn('[Auto Mode] Model not found in DB:', autoModel, '- falling back to Haiku');
       model = await env.DB.prepare(
         'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
-      ).bind('gpt-4.1-nano').first();
+      ).bind('gpt-5.4-nano').first();
     }
 
     if (returnIntent) return { model, intent, taskType };
@@ -793,7 +793,7 @@ async function selectAutoModel(env, lastUserContent, returnIntent = false) {
     console.error('[Auto Mode] Selection failed:', error);
     return await env.DB.prepare(
       'SELECT * FROM ai_models WHERE model_key = ? AND is_active = 1'
-    ).bind('gpt-4.1-nano').first();
+    ).bind('gpt-5.4-nano').first();
   }
 }
 
@@ -8595,8 +8595,63 @@ Reply ONLY with JSON: {"intent":"sql"|"shell"|"question"|"mixed"}` }]
       }
     } catch (_) { }
   }
-  if (!env.ANTHROPIC_API_KEY) return null;
-  const haikuKey = resolveAnthropicModelKey('claude_haiku_4_5');
+  let _classifyText = '';
+  // Priority 1: Gemini Flash — $0.000004/call, fastest classify
+  if (!_classifyText && (env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY)) {
+    try {
+      const _gKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
+      const _gResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${_gKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: 'user', parts: [{ text: lastMessageText.slice(0, 8000) }] }],
+            generationConfig: { maxOutputTokens: 256, temperature: 0 },
+          }),
+        }
+      );
+      if (_gResp.ok) {
+        const _gData = await _gResp.json();
+        _classifyText = _gData?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+      }
+    } catch (_) {}
+  }
+  // Priority 2: Workers AI — free tier, edge-local
+  if (!_classifyText && env.AI) {
+    try {
+      const _wResp = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: lastMessageText.slice(0, 4000) }
+        ],
+        max_tokens: 256,
+      });
+      _classifyText = _wResp?.response?.trim() || '';
+    } catch (_) {}
+  }
+  // Priority 3: OpenAI gpt-5.4-nano via Responses API
+  if (!_classifyText && env.OPENAI_API_KEY) {
+    try {
+      const _oResp = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: 'gpt-5.4-nano',
+          input: [{ role: 'system', content: system }, { role: 'user', content: lastMessageText.slice(0, 8000) }],
+          reasoning: { effort: 'none' },
+          text: { verbosity: 'low' },
+          max_output_tokens: 256,
+        }),
+      });
+      if (_oResp.ok) {
+        const _oData = await _oResp.json();
+        _classifyText = _oData.output_text?.trim() || '';
+      }
+    } catch (_) {}
+  }
+  if (!_classifyText) return null;
   const system = `You classify the user message into a single intent. Reply with JSON only, no markdown.
 - "sql" = user wants to run a SQL query (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP VIEW, ALTER TABLE, or any database operation).
 - "write" is not a separate intent — all DB operations including writes are classified as "sql".
@@ -8614,25 +8669,7 @@ Always use exact column names from these schemas.
 For large queries spanning many tables, break into multiple sequential d1_query calls of max 5 tables each.
 Reply with only the JSON object.`;
 
-  const body = {
-    model: haikuKey,
-    max_tokens: 512,
-    system,
-    messages: [{ role: 'user', content: lastMessageText.slice(0, 8000) }],
-  };
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await resp.json();
-  const content = data.content?.[0];
-  const text = content?.type === 'text' ? content.text?.trim() : '';
-  if (!text) return null;
+  const text = _classifyText;
   try {
     const parsed = JSON.parse(text.replace(/^[\s\S]*?(\{[\s\S]*\})[\s\S]*$/, '$1'));
     if (parsed && typeof parsed.intent === 'string') {
@@ -15394,7 +15431,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const batch = await env.DB.batch([
           env.DB.prepare("SELECT id, name, role_name, mode FROM agentsam_ai WHERE status='active' ORDER BY CASE id WHEN 'ai_sam_v1' THEN 0 ELSE 1 END, name"),
           env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
-          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'anthropic' THEN 1 WHEN 'google' THEN 2 WHEN 'openai' THEN 3 WHEN 'workers_ai' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
+          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY sort_order ASC, input_rate_per_mtok ASC"),
           env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
           env.DB.prepare("SELECT id, role, content, variant, ab_weight, agent_id FROM iam_agent_sam_prompts WHERE is_active=1"),
         ]);
@@ -16134,13 +16171,14 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const showInPicker = url.searchParams.get('show_in_picker') === '1';
       try {
         const { results } = await env.DB.prepare(
-          `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker
+          `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker,
+                  input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
              AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
              AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor')
              ${showInPicker ? 'AND show_in_picker = 1' : ''}
-           ORDER BY provider, display_name`
+           ORDER BY sort_order ASC, display_name ASC`
         ).all();
         return jsonResponse(results || []);
       } catch (e) {

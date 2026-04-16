@@ -473,7 +473,7 @@ export async function handleAgentRequest(request, env, ctx) {
       const batch = await env.DB.batch([
         env.DB.prepare("SELECT id, name, role_name, mode, thinking_mode, effort FROM agentsam_ai WHERE status='active' ORDER BY sort_order, name"),
         env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
-        env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens, supports_tools, supports_web_search, supports_vision, size_class FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'anthropic' THEN 1 WHEN 'google' THEN 2 WHEN 'openai' THEN 3 WHEN 'workers_ai' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
+        env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens, supports_tools, supports_web_search, supports_vision, size_class FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY CASE provider WHEN 'openai' THEN 1 WHEN 'google' THEN 2 WHEN 'workers_ai' THEN 3 WHEN 'anthropic' THEN 4 ELSE 5 END, input_rate_per_mtok ASC"),
         env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
       ]);
       return jsonResponse({
@@ -900,7 +900,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     activePrompt = await getActivePromptByWeight(env, body.promptHandle || body.promptGroup);
   }
 
-  const modelKey = activePrompt?.model_hint || agent?.model_policy?.model_key || body.model || 'claude-sonnet-4-6';
+  const modelKey = activePrompt?.model_hint || agent?.model_policy?.model_key || body.model || 'gpt-5.4';
   const thinkingMode = agent?.thinking_mode || 'adaptive';
   const effort = agent?.effort || body.effort || 'medium';
 
@@ -958,7 +958,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
               ctx.waitUntil(writeTelemetry(env, {
                 sessionId: body.sessionId || body.conversationId,
                 tenantId: session?.tenant_id,
-                provider: 'anthropic',
+                provider: 'openai',
                 model: modelKey,
                 inputTokens: lastUsage.input_tokens || 0,
                 outputTokens: lastUsage.output_tokens || 0,

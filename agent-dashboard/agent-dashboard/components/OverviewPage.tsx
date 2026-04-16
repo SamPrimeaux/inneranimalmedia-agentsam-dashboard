@@ -3,7 +3,7 @@ import { Zap, Cloud, GitBranch, Clock, Layers, TrendingUp, AlertCircle, CheckCir
 
 interface StatCard { label: string; value: string; sub?: string; color?: string; icon?: React.ReactNode; }
 interface Deploy { worker_name: string; environment: string; status: string; deployed_at: string; deployment_notes?: string; }
-interface CicdRun { id: string; worker_name: string; environment: string; status: string; conclusion: string; started_at: string; }
+interface CicdRun { id: string; workflow_name?: string; worker_name?: string; environment: string; status: string; conclusion: string; started_at: string; completed_at?: string; branch?: string; commit_message?: string; duration_ms?: number; steps_passed?: number; steps_failed?: number; steps_total?: number; notes?: string; }
 interface Project { name: string; status: string; priority?: number; }
 
 function StatCard({ label, value, sub, color = 'var(--solar-cyan)', icon }: StatCard) {
@@ -179,7 +179,10 @@ export const OverviewPage: React.FC = () => {
                     ? <CheckCircle size={13} className="text-[var(--solar-green)] shrink-0" />
                     : <AlertCircle size={13} className="text-[var(--solar-red)] shrink-0" />
                   }
-                  <span className="text-[12px] text-[var(--text-main)] truncate flex-1">{r.worker_name || r.id?.slice(0, 16)}</span>
+                  <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[12px] text-[var(--text-main)] truncate">{r.workflow_name || r.worker_name || r.id?.slice(0, 20)}</span>
+                    {r.branch && <span className="text-[10px] text-[var(--text-muted)] truncate">{r.branch}{r.steps_total ? ` · ${r.steps_passed}/${r.steps_total} steps` : ''}</span>}
+                  </div>
                   <span className="text-[10px] text-[var(--text-muted)] shrink-0">{r.environment}</span>
                 </div>
               ))}

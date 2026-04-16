@@ -15006,7 +15006,25 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       try {
         const { results } = await env.DB.prepare(
-          `SELECT slug, display_name AS label, description, color_hex AS color, icon
+          `SELECT
+             slug,
+             display_name,
+             display_name AS label,
+             description,
+             color_hex,
+             color_hex AS color,
+             color_hex_dark,
+             icon,
+             model_preference,
+             temperature,
+             auto_run,
+             max_tool_calls,
+             context_strategy,
+             tool_policy_json,
+             metadata_json,
+             gate_model,
+             escalation_model,
+             escalation_threshold
            FROM agent_mode_configs
            WHERE is_active = 1
            ORDER BY sort_order`

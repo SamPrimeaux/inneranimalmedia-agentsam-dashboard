@@ -12328,6 +12328,18 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   const toolLoopModes = new Set(['agent', 'debug', 'plan', 'ask']);
   const toolLoopPlatforms = new Set(['anthropic_api', 'openai', 'gemini_api', 'vertex_ai']);
+  const sseToolOpts = {
+    stream: true,
+    mode: mode ?? 'agent',
+    oauthUserId: oauthPersonaUid,
+    routingOpts: { tenantId: tenantIdChatSse },
+    agentsamAgentRunId: chatSseRunId,
+    modelRates: modelRatesMap,
+    subagent_id: subagentProfileKeySse,
+    agent_id: agentAiIdSse,
+    _intent: 'mixed',
+    persistConversationUserId: ingestBypass ? null : chatSseSession?.user_id ?? null,
+  };
   if (toolLoopModes.has(mode) && toolLoopPlatforms.has(apiPlatform)) {
     let apiMessagesForTools = [];
     if (apiPlatform === 'anthropic_api') {
@@ -12341,18 +12353,6 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     } else {
       apiMessagesForTools = [{ role: 'user', content: message }];
     }
-    const sseToolOpts = {
-      stream: true,
-      mode,
-      oauthUserId: oauthPersonaUid,
-      routingOpts: { tenantId: tenantIdChatSse },
-      agentsamAgentRunId: chatSseRunId,
-      modelRates: modelRatesMap,
-      subagent_id: subagentProfileKeySse,
-      agent_id: agentAiIdSse,
-      _intent: 'mixed',
-      persistConversationUserId: ingestBypass ? null : chatSseSession?.user_id ?? null,
-    };
     if (hasMedia && (apiPlatform === 'gemini_api' || apiPlatform === 'vertex_ai')) {
       sseToolOpts.googleUserParts = buildGoogleParts(message, jsonImages, chatAttachments);
     }

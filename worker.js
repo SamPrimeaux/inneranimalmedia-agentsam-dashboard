@@ -24854,6 +24854,37 @@ async function processQueues(env) {
   }
 }
 
+/** Nightly: update model_routing_rules performance scores from routing_decisions telemetry. */
+async function updateRoutingPerformanceScores(env) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(`
+      UPDATE model_routing_rules
+      SET
+        performance_score = (
+          SELECT ROUND(AVG(CASE WHEN had_error = 0 THEN 100.0 ELSE 0.0 END), 2)
+          FROM routing_decisions
+          WHERE task_type = model_routing_rules.task_type
+            AND created_at > unixepoch('now', '-7 days')
+        ),
+        avg_latency_ms = (
+          SELECT ROUND(AVG(latency_ms), 0)
+          FROM routing_decisions
+          WHERE task_type = model_routing_rules.task_type
+            AND latency_ms IS NOT NULL
+            AND created_at > unixepoch('now', '-7 days')
+        )
+      WHERE task_type IN (
+        SELECT DISTINCT task_type FROM routing_decisions
+        WHERE created_at > unixepoch('now', '-7 days')
+      )
+    `).run();
+    console.log('[cron] routing performance scores updated');
+  } catch (e) {
+    console.warn('[cron] updateRoutingPerformanceScores', e?.message ?? e);
+  }
+}
+
 /** Close terminal_sessions idle > 24h so active-count stays accurate. */
 async function sweepStaleTerminalSessions(env) {
   if (!env.DB) return;

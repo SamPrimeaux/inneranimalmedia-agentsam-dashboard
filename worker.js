@@ -12327,7 +12327,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
   };
 
   const toolLoopModes = new Set(['agent', 'debug', 'plan', 'ask']);
-  const toolLoopPlatforms = new Set(['anthropic_api', 'openai', 'gemini_api', 'vertex_ai']);
+  const toolLoopPlatforms = new Set(['anthropic_api', 'openai', 'gemini_api', 'vertex_ai', 'google_ai', 'cursor', 'workers_ai']);
   const sseToolOpts = {
     stream: true,
     mode: mode ?? 'agent',

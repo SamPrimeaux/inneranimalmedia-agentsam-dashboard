@@ -4,11 +4,25 @@
  * No stubs. No fallbacks. Every route implemented.
  */
 import { chatWithAnthropic } from '../integrations/anthropic';
+import { chatWithToolsOpenAI } from '../integrations/openai.js';
+import { chatWithToolsGemini } from '../integrations/gemini.js';
+import { chatWithToolsVertex } from '../integrations/vertex.js';
+import { runModeGate } from '../core/gate.js';
 import { unifiedRagSearch } from './rag';
 import { writeTelemetry } from './telemetry';
 import { getAuthUser, getSession, isIngestSecretAuthorized, jsonResponse, tenantIdFromEnv } from '../core/auth';
 import { notifySam } from '../core/notifications';
 import { getAgentMetadata, logSkillInvocation, getActivePromptByWeight, getPromptMetadata } from './agentsam';
+
+function resolveProviderFromModel(modelKey) {
+  if (!modelKey) return 'openai';
+  const m = modelKey.trim();
+  if (m.startsWith('gemini-') || m.startsWith('gemini')) return 'google';
+  if (m.startsWith('@cf/')) return 'workers_ai';
+  if (m.startsWith('gpt-') || m.startsWith('o3') || m.startsWith('o4') || m.startsWith('gpt-5')) return 'openai';
+  if (m.startsWith('claude-')) return 'anthropic';
+  return 'openai';
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main dispatcher
@@ -900,9 +914,23 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     activePrompt = await getActivePromptByWeight(env, body.promptHandle || body.promptGroup);
   }
 
-  const modelKey = activePrompt?.model_hint || agent?.model_policy?.model_key || body.model || 'gpt-5.4';
+  // Gate: if user explicitly picked a model, skip gate and use it directly
+  let modelKey, provider, reasoningEffort;
+  if (body.model) {
+    modelKey = body.model;
+    provider = resolveProviderFromModel(modelKey);
+    reasoningEffort = body.reasoning_effort || body.effort || 'none';
+  } else {
+    // No explicit model — run cheap gate to classify + route
+    const modeSlug = body.mode || 'agent';
+    const gate = await runModeGate(env, message, modeSlug);
+    modelKey = activePrompt?.model_hint || agent?.model_policy?.model_key || gate.model;
+    provider = resolveProviderFromModel(modelKey);
+    reasoningEffort = gate.reasoning_effort || 'none';
+    message = gate.rewritten_prompt || message;
+  }
+
   const thinkingMode = agent?.thinking_mode || 'adaptive';
-  const effort = agent?.effort || body.effort || 'medium';
 
   if (!message) return jsonResponse({ error: 'message required' }, 400);
 
@@ -911,15 +939,38 @@ export async function agentChatSseHandler(env, request, ctx, session) {
   const basePrompt = activePrompt?.prompt_template || agent?.system_prompt || 'You are Agent Sam, a powerful AI coding assistant.';
   const systemPrompt = basePrompt + (contextText ? `\n\nContext from memory:\n${contextText}` : '');
 
+  const chatParams = {
+    messages: body.messages || [{ role: 'user', content: message }],
+    tools: body.tools || [],
+    model: modelKey,
+    systemPrompt,
+    reasoning_effort: reasoningEffort,
+    tool_choice: body.tool_choice,
+    sessionId: body.sessionId || body.conversationId,
+  };
+
+  console.log('[agent] routing', { provider, modelKey, reasoningEffort });
+
   try {
+    // Route to correct provider
+    if (provider === 'google' || provider === 'gemini') {
+      return chatWithToolsGemini(env, request, chatParams);
+    }
+    if (provider === 'workers_ai') {
+      return chatWithToolsVertex(env, request, chatParams);
+    }
+    if (provider === 'openai') {
+      return chatWithToolsOpenAI(env, request, chatParams);
+    }
+    // anthropic fallback (only if explicitly selected)
     const stream = await chatWithAnthropic({
-      messages: body.messages || [{ role: 'user', content: message }],
-      tools: body.tools || [],
+      messages: chatParams.messages,
+      tools: chatParams.tools,
       env,
       options: {
         model: modelKey,
         systemPrompt,
-        thinking: { type: thinkingMode, effort },
+        thinking: { type: thinkingMode, effort: reasoningEffort },
         inference_geo: body.inference_geo || agent?.model_policy?.inference_geo,
         tool_choice: body.tool_choice,
       }

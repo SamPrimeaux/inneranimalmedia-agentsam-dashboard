@@ -6639,35 +6639,75 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
  * Rapid, low-token intent and tier detection.
  */
 async function preflightClassify(message, env) {
-  if (!env.GEMINI_API_KEY) return { tier: 'moderate', intent: 'mixed', needsTools: true };
-  const systemPrompt = `Classify the user message. Respond with JSON only:
+  const SYSTEM = `Classify the user message. Respond with JSON only, no markdown:
 {"tier":"fast|moderate|complex","intent":"mixed","needs_tools":true|false}
 fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi-step/build/agent`;
 
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: `System: ${systemPrompt}\nUser: ${message}` }] }],
-        generationConfig: { response_mime_type: 'application/json', max_output_tokens: 100 }
-      })
-    });
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const startIdx = text.indexOf('{');
-    const endIdx = text.lastIndexOf('}');
-    if (startIdx === -1 || endIdx === -1) throw new Error('Invalid JSON response');
-    const parsed = JSON.parse(text.slice(startIdx, endIdx + 1));
-    return {
-      tier: parsed.tier || 'moderate',
-      intent: parsed.intent || 'mixed',
-      needsTools: parsed.needs_tools ?? true
-    };
-  } catch (e) {
-    console.error('[preflightClassify] failed:', e.message);
-    return { tier: 'moderate', intent: 'mixed', needsTools: true };
+  function parseClassify(text) {
+    const s = text.indexOf('{'), e = text.lastIndexOf('}');
+    if (s === -1 || e === -1) throw new Error('no JSON braces');
+    const p = JSON.parse(text.slice(s, e + 1));
+    return { tier: p.tier || 'moderate', intent: p.intent || 'mixed', needsTools: p.needs_tools ?? true };
   }
+
+  // Priority 1: Gemini Flash — $0.000004/call
+  const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYSTEM }] },
+            contents: [{ role: 'user', parts: [{ text: message.slice(0, 500) }] }],
+            generationConfig: { maxOutputTokens: 100, temperature: 0 },
+          })
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        return parseClassify(text);
+      }
+    } catch (_) {}
+  }
+
+  // Priority 2: Workers AI — free tier
+  if (env.AI) {
+    try {
+      const res = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: message.slice(0, 500) }],
+        max_tokens: 100,
+      });
+      return parseClassify(res?.response || '');
+    } catch (_) {}
+  }
+
+  // Priority 3: OpenAI gpt-5.4-nano via Responses API
+  if (env.OPENAI_API_KEY) {
+    try {
+      const res = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: 'gpt-5.4-nano',
+          input: [{ role: 'system', content: SYSTEM }, { role: 'user', content: message.slice(0, 500) }],
+          reasoning: { effort: 'none' },
+          text: { verbosity: 'low' },
+          max_output_tokens: 100,
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return parseClassify(data.output_text || '');
+      }
+    } catch (_) {}
+  }
+
+  console.warn('[preflightClassify] all providers failed, using default');
+  return { tier: 'moderate', intent: 'mixed', needsTools: true };
 }
 
 /**

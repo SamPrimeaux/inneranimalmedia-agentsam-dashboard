@@ -6578,10 +6578,26 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
   const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
   await client.connect();
   try {
-    await client.query(
-      `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'user', $3, $4::jsonb)`,
-      [sid, 'agent-sam', u, metaUser]
-    );
+    let userVecLiteral = null;
+    if (env.AI && u) {
+      try {
+        const _uResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [u] });
+        const _uRaw = _uResp?.data ?? _uResp;
+        const _uVec = (Array.isArray(_uRaw) ? _uRaw : _uRaw?.data)?.[0];
+        if (_uVec && Array.isArray(_uVec)) userVecLiteral = '[' + _uVec.join(',') + ']';
+      } catch (e) { console.warn('[agent_memory] user embed failed', e?.message ?? e); }
+    }
+    if (userVecLiteral) {
+      await client.query(
+        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata, embedding) VALUES ($1, $2, 'user', $3, $4::jsonb, $5::vector)`,
+        [sid, 'agent-sam', u, metaUser, userVecLiteral]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'user', $3, $4::jsonb)`,
+        [sid, 'agent-sam', u, metaUser]
+      );
+    }
     let vecLiteral = null;
     if (env.AI && a) {
       try {
@@ -17169,15 +17185,24 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           } catch (_) { }
         }
         const bootTidTodo = tenantIdFromEnv(env);
-        if (!todayTodo && env.DB && bootTidTodo) {
-          const row = await env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'today_todo' AND tenant_id = ?").bind(bootTidTodo).first();
-          if (row?.value) todayTodo = String(row.value);
+        let codebaseManifest = null, workspaceIndexStatus = null;
+        if (env.DB && bootTidTodo) {
+          const [todoRow, manifestRow, wsRow] = await Promise.all([
+            !todayTodo ? env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'today_todo' AND tenant_id = ?").bind(bootTidTodo).first() : Promise.resolve(null),
+            env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'codebase_asset_manifest' AND tenant_id = ?").bind(bootTidTodo).first(),
+            env.DB.prepare("SELECT value FROM agent_memory_index WHERE key = 'workspace_index_status' AND tenant_id = ?").bind(bootTidTodo).first(),
+          ]);
+          if (todoRow?.value) todayTodo = String(todoRow.value);
+          if (manifestRow?.value) codebaseManifest = String(manifestRow.value);
+          if (wsRow?.value) workspaceIndexStatus = String(wsRow.value);
         }
         const context = {
           daily_log: dailyLog || null,
           yesterday_log: yesterdayLog || null,
           schema_and_records_memory: schemaAndRecordsMemory || null,
           today_todo: todayTodo || null,
+          codebase_asset_manifest: codebaseManifest || null,
+          workspace_index_status: workspaceIndexStatus || null,
           date: today,
           hint: 'AI Search indexes from R2 automatically. Store daily logs in R2 at memory/daily/YYYY-MM-DD.md. Store schema/records memory at memory/schema-and-records.md. Store today\'s to-do at memory/today-todo.md or agent_memory_index key today_todo.',
         };
@@ -20075,9 +20100,34 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     }
     const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
     try {
-      console.log('[knowledge_search] D1 ai_knowledge_base + AI Search (parallel)', { query, max_results });
-      const { merged, answer, query: q } = await runKnowledgeSearchMerged(env, query, max_results);
-      const results = merged;
+      console.log('[knowledge_search] D1 + AI Search + Supabase pgvector (parallel)', { query, max_results });
+      const [{ merged, answer, query: q }, pgDocs] = await Promise.all([
+        runKnowledgeSearchMerged(env, query, max_results),
+        (async () => {
+          if (!env.HYPERDRIVE?.connectionString || !env.AI) return [];
+          try {
+            const _emb = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [query] });
+            const _raw = _emb?.data ?? _emb;
+            const _vec = (Array.isArray(_raw) ? _raw : _raw?.data)?.[0];
+            if (!_vec || !Array.isArray(_vec)) return [];
+            const _vecLit = '[' + _vec.join(',') + ']';
+            const { Client } = await import('pg');
+            const _pg = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+            await _pg.connect();
+            try {
+              const _r = await _pg.query(
+                `SELECT title, content, source, similarity FROM match_documents($1::vector, 0.65, $2)`,
+                [_vecLit, max_results]
+              );
+              return (_r.rows || []).map(row => ({
+                content: row.content, title: row.title, source: row.source,
+                score: row.similarity, sourceTag: 'supabase:' + (row.source || 'documents'),
+              }));
+            } finally { await _pg.end().catch(() => {}); }
+          } catch (e) { console.warn('[knowledge_search] supabase arm failed', e?.message ?? e); return []; }
+        })(),
+      ]);
+      const results = [...merged, ...pgDocs].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, max_results);
       if (env.DB) {
         const _mcpKsTid = tenantIdFromEnv(env);
         try {

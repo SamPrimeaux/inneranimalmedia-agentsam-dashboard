@@ -16278,7 +16278,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
              AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
-             AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor')
+             AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor', 'ollama')
              ${showInPicker ? 'AND show_in_picker = 1' : ''}
            ORDER BY sort_order ASC, display_name ASC`
         ).all();

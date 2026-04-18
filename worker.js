@@ -12001,6 +12001,57 @@ async function runSseTelemetrySideBranch(apiPlatform, branch2, modelRow, env, co
   let cacheReadTok = acc.cacheRead || 0;
   let cacheWriteTok = acc.cacheWrite || 0;
   if (apiPlatform === 'workers_ai') {
+
+    // ── OLLAMA (local) ──────────────────────────────────────────────────────
+    if (apiPlatform === 'ollama') {
+      const ollamaUrl = 'https://ollama.inneranimalmedia.com/api/chat';
+      const ollamaBody = {
+        model: modelKey,
+        messages: messages,
+        stream: true,
+      };
+      const ollamaRes = await fetch(ollamaUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'CF-Access-Client-Id': env.OLLAMA_CLIENT_ID || '',
+          'CF-Access-Client-Secret': env.OLLAMA_CLIENT_SECRET || '',
+        },
+        body: JSON.stringify(ollamaBody),
+      });
+      if (!ollamaRes.ok) {
+        const errText = await ollamaRes.text().catch(() => 'unknown error');
+        return jsonResponse({ error: 'Ollama error: ' + errText }, 502);
+      }
+      const reader = ollamaRes.body.getReader();
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const chunk = new TextDecoder().decode(value);
+              const lines = chunk.split('\n').filter(l => l.trim());
+              for (const line of lines) {
+                try {
+                  const json = JSON.parse(line);
+                  const content = json?.message?.content || '';
+                  if (content) {
+                    controller.enqueue(encoder.encode('data: ' + JSON.stringify({ content }) + '\n\n'));
+                  }
+                } catch (_) {}
+              }
+            }
+          } finally {
+            controller.close();
+          }
+        }
+      });
+      return new Response(stream, {
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }
+      });
+    }
     inputTok = 0;
     outputTok = 0;
   }
@@ -12140,21 +12191,12 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const { tier, intent, needsTools } = preflight;
 
   const messageForSlash = String(message).trimStart();
-  if (messageForSlash.startsWith('/claude ')) {
-    const claudePrompt = messageForSlash.slice('/claude '.length).trim();
-    if (!claudePrompt) {
-      return jsonResponse(
-        { error: 'Usage: /claude <instruction> — runs Claude Code on the PTY host (iam-pty) in the Agent Sam repo workspace.' },
-        400
-      );
-    }
-    return handleAgentChatClaudeDelegate(env, request, ctx, { prompt: claudePrompt, conversationId: conversationId || null });
-  }
+
   const hasMedia = hasChatMedia(jsonImages, chatAttachments);
   if (!modelParam) return jsonResponse({ error: 'model required' }, 400);
   const mode = modeRaw || 'agent';
-  if (!['ask', 'agent', 'plan', 'debug'].includes(mode)) {
-    return jsonResponse({ error: 'Invalid mode', allowed: ['ask', 'agent', 'plan', 'debug'] }, 400);
+  if (!['ask', 'agent', 'plan', 'debug', 'auto'].includes(mode)) {
+    return jsonResponse({ error: 'Invalid mode', allowed: ['ask', 'agent', 'plan', 'debug', 'auto'] }, 400);
   }
 
   let modelRow;

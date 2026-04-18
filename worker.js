@@ -8364,9 +8364,11 @@ async function filterToolsByIntent(env, tenantId, intent, message, toolDefinitio
   const msg = (message || '').toLowerCase();
   const INTENT_MAP = {
     shell: ['terminal_execute', 'workspace_read_file', 'workspace_list_files', 'workspace_search'],
-    sql: ['d1_query', 'd1_write', 'platform_info'],
-    question: ['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list'],
+    sql: ['d1_query', 'd1_write', 'platform_info', 'supabase_query', 'supabase_write', 'hyperdrive_query', 'vector_search', 'vector_upsert'],
+    question: ['context_search', 'knowledge_search', 'platform_info', 'd1_query', 'human_context_list', 'supabase_query', 'vector_search'],
     plan: ['generate_execution_plan', 'context_search', 'knowledge_search', 'd1_query', 'platform_info'],
+    mixed: ['d1_query', 'd1_write', 'context_search', 'knowledge_search', 'platform_info', 'terminal_execute', 'r2_read', 'r2_write', 'human_context_list', 'workspace_read_file', 'workspace_write_file', 'supabase_query', 'vector_search'],
+    auto: ['d1_query', 'd1_write', 'context_search', 'knowledge_search', 'platform_info', 'terminal_execute', 'r2_read', 'r2_write', 'human_context_list', 'workspace_read_file', 'workspace_write_file', 'supabase_query', 'vector_search'],
   };
   let keywordGroups = await loadIntentKeywordGroupsFromD1(env, tenantId);
   if (keywordGroups == null) {

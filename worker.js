@@ -6655,7 +6655,7 @@ fast=greeting/status/factual, moderate=lookup/explain/single-tool, complex=multi
   if (geminiKey) {
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -8608,7 +8608,7 @@ async function classifyIntent(env, lastMessageText) {
     try {
       const geminiKey = env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY;
       const classifyRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -11103,7 +11103,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
       (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
       null;
     const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
-    const intentForFilter = opts._intent || 'mixed';
+    const intentForFilter = opts._intent || 'auto';
     let intentFiltered = modeFiltered;
     try {
       intentFiltered = await filterToolsByIntent(env, tenantForIntent, intentForFilter, lastUserForIntent, modeFiltered);
@@ -23814,7 +23814,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
           (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
-        const intentForFilter = opts._intent || 'mixed';
+        const intentForFilter = opts._intent || 'auto';
         tools = await filterToolsByIntent(env, tenantForIntent, intentForFilter, lastUserForIntent, tools);
       } catch (e) {
         console.warn('[chatWithToolsOpenAI] filterToolsByIntent', e?.message ?? e);
@@ -24463,7 +24463,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
           (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
-        const intentForFilter = opts._intent || 'mixed';
+        const intentForFilter = opts._intent || 'auto';
         tools = await filterToolsByIntent(env, tenantForIntent, intentForFilter, lastUserForIntent, tools);
       } catch (e) {
         console.warn('[chatWithToolsAnthropic] filterToolsByIntent', e?.message ?? e);
@@ -28715,7 +28715,7 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
     if (!emailBody && geminiKey) {
       try {
         const gRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${geminiKey}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

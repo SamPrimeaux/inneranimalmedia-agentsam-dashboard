@@ -7,6 +7,7 @@ import { chatWithAnthropic } from '../integrations/anthropic';
 import { chatWithToolsOpenAI } from '../integrations/openai.js';
 import { chatWithToolsGemini } from '../integrations/gemini.js';
 import { chatWithToolsVertex } from '../integrations/vertex.js';
+import { ollamaChat } from '../integrations/ollama.js';
 import { runModeGate } from '../core/gate.js';
 import { unifiedRagSearch } from './rag';
 import { writeTelemetry } from './telemetry';
@@ -44,7 +45,7 @@ export async function handleAgentRequest(request, env, ctx) {
          FROM ai_models
          WHERE COALESCE(is_active, 0) = 1
            AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
-           AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor')
+           AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor', 'ollama')
            ${showInPicker ? 'AND show_in_picker = 1' : ''}
          ORDER BY provider, display_name`
       ).all();
@@ -958,6 +959,11 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     }
     if (provider === 'workers_ai') {
       return chatWithToolsVertex(env, request, chatParams);
+    }
+    if (provider === 'ollama') {
+      const ollamaResp = await ollamaChat(modelKey, chatParams.messages);
+      const text = ollamaResp?.message?.content ?? '';
+      return new Response(JSON.stringify({ type: 'done', text }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (provider === 'openai') {
       return chatWithToolsOpenAI(env, request, chatParams);

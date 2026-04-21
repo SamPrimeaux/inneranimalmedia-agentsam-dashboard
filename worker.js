@@ -15746,12 +15746,10 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           if (t) themeSlug = t;
         } catch (_) { }
       }
-      // Route through AGENT_SESSION DO (stable, hibernatable, buffers output)
-      const userId = authUser?.id ? String(authUser.id) : 'anon';
-      const sessionName = `terminal-${userId}`;
-      const origin = new URL(request.url).origin;
-      const doUrl = `${origin}/api/terminal/ws?session=${encodeURIComponent(sessionName)}&token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
-      const finalUrl = doUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+      // Direct PTY connection — AGENT_SESSION DO proxy removed (DO has no terminal bridge)
+      const ptyToken = (env.PTY_AUTH_TOKEN || secret).trim();
+      const sep2 = wssUrl.includes('?') ? '&' : '?';
+      const finalUrl = `${wssUrl}${sep2}token=${encodeURIComponent(ptyToken)}&theme_slug=${encodeURIComponent(themeSlug)}`;
       return jsonResponse({ url: finalUrl });
     }
 

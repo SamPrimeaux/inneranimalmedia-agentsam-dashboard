@@ -116,9 +116,7 @@ export class AgentChatSqlV1 extends DurableObject {
 
     pty.addEventListener('close', () => {
       this.ptyWs = null;
-      const msg = JSON.stringify({ type: 'output', data: '
-PTY disconnected - reconnecting...
-' });
+      const msg = JSON.stringify({ type: 'output', data: '\r\nPTY disconnected - reconnecting...\r\n' });
       for (const ws of this.ctx.getWebSockets('browser')) {
         try { ws.send(msg); } catch (_) {}
       }

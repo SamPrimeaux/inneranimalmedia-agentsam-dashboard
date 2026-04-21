@@ -235,6 +235,8 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const xtermRef        = useRef<Terminal | null>(null);
     const fitAddonRef     = useRef<FitAddon | null>(null);
     const socketRef       = useRef<WebSocket | null>(null);
+    const retryCountRef   = useRef<number>(0);
+    const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
     const ptySessionIdRef = useRef<string | null>(null);
     const bufferRef       = useRef<string>('');
 
@@ -429,7 +431,16 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             term.clear();
 
             const onDataSub   = term.onData(data => {
-              if (ws.readyState === WebSocket.OPEN) ws.send(data);
+              if (ws.readyState !== WebSocket.OPEN) return;
+              // Intercept slash commands — wrap in JSON so PTY server catches before zsh
+              if ((data.endsWith('\r') || data.endsWith('\n'))) {
+                const cmd = data.replace(/[\r\n]+$/, '').trim();
+                if (cmd.startsWith('/')) {
+                  ws.send(JSON.stringify({ type: 'input', data }));
+                  return;
+                }
+              }
+              ws.send(data);
             });
             const onResizeSub = term.onResize(({ cols, rows }) => {
               if (ws.readyState === WebSocket.OPEN)
@@ -482,15 +493,25 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             xtermRef.current?.write(event.data as string);
           };
 
+          ws.onopen = () => {
+            retryCountRef.current = 0; // reset backoff on successful connect
+          };
+
           ws.onclose = () => {
             disposeListeners.forEach(fn => fn());
             if (!isMounted) return;
             setStatus('offline');
             setSessionId(null);
             ptySessionIdRef.current = null;
+            const attempt = retryCountRef.current++;
+            const delay   = Math.min(1000 * Math.pow(2, attempt), 30_000);
             xtermRef.current?.writeln(
-              '\r\n\x1b[1;31m  ✗ Connection closed.\x1b[0m\r\n\x1b[38;5;240m  Click Retry to reconnect.\x1b[0m',
+              `\r\n\x1b[1;31m  ✗ Connection closed.\x1b[0m\r\n` +
+              `\x1b[38;5;240m  Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt + 1})...\x1b[0m`,
             );
+            retryTimerRef.current = window.setTimeout(() => {
+              if (isMounted) void connect();
+            }, delay);
           };
 
           ws.onerror = () => { if (isMounted) setStatus('offline'); };
@@ -503,6 +524,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
       return () => {
         isMounted = false;
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
         socketRef.current?.close();
         socketRef.current = null;
       };
@@ -518,7 +540,8 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         const fg  = s.getPropertyValue('--text-main').trim()        || '#839496';
         const cur = s.getPropertyValue('--solar-cyan').trim()       || '#2dd4bf';
         const sel = s.getPropertyValue('--bg-panel').trim()         || '#0a2d38';
-        term.options.theme = { ...term.options.theme, background: bg, foreground: fg, cursor: cur, selectionBackground: sel };
+        term.options.theme = { ...term.options.theme, background: bg, foreground: fg, cursor: cur,
+          selectionBackground: 'rgba(45, 212, 191, 0.30)', selectionForeground: fg };
       });
       observer.observe(document.documentElement, {
         attributes: true, attributeFilter: ['data-theme', 'class', 'style'],
@@ -589,11 +612,12 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       const bg  = s.getPropertyValue('--terminal-surface').trim() || '#060e14';
       const fg  = s.getPropertyValue('--text-main').trim()        || '#839496';
       const cur = s.getPropertyValue('--solar-cyan').trim()       || '#2dd4bf';
-      const sel = s.getPropertyValue('--bg-panel').trim()         || '#0a2d38';
+      // selectionBackground handled at init with a fixed rgba — skip here
 
       const term = new Terminal({
         theme: {
-          background: bg, foreground: fg, cursor: cur, selectionBackground: sel,
+          background: bg, foreground: fg, cursor: cur,
+          selectionBackground: 'rgba(45, 212, 191, 0.30)', selectionForeground: fg,
           black: '#002b36',   brightBlack: '#657b83',
           red: '#dc322f',     brightRed: '#cb4b16',
           green: '#859900',   brightGreen: '#586e75',

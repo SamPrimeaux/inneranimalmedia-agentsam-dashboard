@@ -15739,8 +15739,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           if (t) themeSlug = t;
         } catch (_) { }
       }
-      const url = `${wssUrl}${sep}token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
-      return jsonResponse({ url });
+      // Route through AGENT_SESSION DO (stable, hibernatable, buffers output)
+      const userId = authUser?.id ? String(authUser.id) : 'anon';
+      const sessionName = `terminal-${userId}`;
+      const origin = new URL(request.url).origin;
+      const doUrl = `${origin}/api/terminal/ws?session=${encodeURIComponent(sessionName)}&token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
+      const finalUrl = doUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+      return jsonResponse({ url: finalUrl });
     }
 
     if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
@@ -15755,49 +15760,27 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
-      const isWebSocket = request.headers.get('Upgrade') === 'websocket';
-      // Allow both HTTP/1.1 websocket upgrade and HTTP/2 (CF strips header)
-      // Cloudflare will handle the protocol negotiation
+      // Route terminal WebSocket to AGENT_SESSION Durable Object.
+      // The DO holds the PTY connection and buffers output — browser can
+      // disconnect/refresh/navigate away and the shell session stays alive.
       const session = await getSession(env, request);
       if (!session) {
-        console.log('[terminal/ws] 401 Unauthorized (no session)');
         return jsonResponse({ error: 'Unauthorized' }, 401);
       }
-      let wsUrl = (env.TERMINAL_WS_URL || '').trim();
-      if (!wsUrl) {
-        console.log('[terminal/ws] 503 TERMINAL_WS_URL not set');
-        return jsonResponse({ error: 'Terminal not configured', hint: 'Set TERMINAL_WS_URL secret and deploy' }, 503);
+      if (!env.TERMINAL_WS_URL) {
+        return jsonResponse({ error: 'Terminal not configured', hint: 'Set TERMINAL_WS_URL secret' }, 503);
       }
-      if (wsUrl.startsWith('https://')) wsUrl = 'wss://' + wsUrl.slice(8);
-      else if (wsUrl.startsWith('http://')) wsUrl = 'ws://' + wsUrl.slice(7);
-      const sep = wsUrl.includes('?') ? '&' : '?';
-      const wsUrlWithAuth = env.TERMINAL_SECRET
-        ? `${wsUrl}${sep}token=${encodeURIComponent(env.TERMINAL_SECRET)}`
-        : wsUrl;
-      const wsKeyBytes = new Uint8Array(16);
-      crypto.getRandomValues(wsKeyBytes);
-      const secWebSocketKey = btoa(String.fromCharCode.apply(null, wsKeyBytes));
-      const upstreamResp = await fetch(wsUrlWithAuth, {
-        headers: {
-          Upgrade: 'websocket',
-          Connection: 'Upgrade',
-          'Sec-WebSocket-Version': '13',
-          'Sec-WebSocket-Key': secWebSocketKey,
-          'x-terminal-secret': env.TERMINAL_SECRET || '',
-        },
-      });
-      if (upstreamResp.status !== 101) {
-        console.log('[terminal/ws] upstream status:', upstreamResp.status, await upstreamResp.text().catch(() => ''));
-        return jsonResponse({ error: 'Terminal upstream failed', status: upstreamResp.status }, 502);
+      if (!env.AGENT_SESSION) {
+        return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
       }
-      if (!upstreamResp.webSocket) {
-        console.log('[terminal/ws] upstream 101 but no webSocket');
-        return jsonResponse({ error: 'Terminal upstream did not return WebSocket' }, 502);
-      }
-      const pair = new WebSocketPair();
-      const [clientWs, serverWs] = Object.values(pair);
-      serverWs.accept();
-      const upstreamWs = upstreamResp.webSocket;
+      const termUrlParams = new URL(request.url).searchParams;
+      const sessionName = termUrlParams.get('session') || `terminal-${session.userId || 'anon'}`;
+      const doId   = env.AGENT_SESSION.idFromName(sessionName);
+      const doStub = env.AGENT_SESSION.get(doId);
+      // Forward the full request (including WS upgrade headers) to the DO
+      const doReqUrl = new URL(request.url);
+      doReqUrl.pathname = '/terminal/ws';
+      return doStub.fetch(new Request(doReqUrl.toString(), request));
       upstreamWs.accept();
       serverWs.addEventListener('message', (e) => { try { upstreamWs.send(e.data); } catch (_) { } });
       upstreamWs.addEventListener('message', (e) => { try { serverWs.send(e.data); } catch (_) { } });

@@ -118,11 +118,13 @@ export class AgentChatSqlV1 extends DurableObject {
     this.lastToken = token || null;
     this.lastThemeSlug = themeSlug || this.lastThemeSlug || 'meaux-storm-gray';
 
-    let wssUrl = raw.startsWith('https://') ? 'wss://' + raw.slice(8)
-               : raw.startsWith('http://')  ? 'ws://'  + raw.slice(7)
-               : raw;
-    const sep = wssUrl.includes('?') ? '&' : '?';
-    const ptyUrl = `${wssUrl}${sep}token=${encodeURIComponent(this.lastToken || '')}&theme_slug=${encodeURIComponent(this.lastThemeSlug)}`;
+    let upstreamUrl = raw.trim();
+    if (upstreamUrl.startsWith('wss://')) upstreamUrl = 'https://' + upstreamUrl.slice(6);
+    else if (upstreamUrl.startsWith('ws://')) upstreamUrl = 'http://' + upstreamUrl.slice(5);
+    else if (!upstreamUrl.startsWith('https://') && !upstreamUrl.startsWith('http://')) upstreamUrl = 'https://' + upstreamUrl.replace(/^\/+/, '');
+
+    const sep = upstreamUrl.includes('?') ? '&' : '?';
+    const ptyUrl = `${upstreamUrl}${sep}token=${encodeURIComponent(this.lastToken || '')}&theme_slug=${encodeURIComponent(this.lastThemeSlug)}`;
 
     const resp = await fetch(ptyUrl, {
       headers: {

@@ -15766,7 +15766,28 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       });
     }
 
-    if (pathLower === '/api/agent/terminal/ws' || pathLower === '/api/terminal/ws' && method === 'GET') {
+    if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
+      const session = await getSession(env, request);
+      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
+
+      const reqUrl = new URL(request.url);
+      const sessionName =
+        reqUrl.searchParams.get('session') ||
+        reqUrl.searchParams.get('workspace_id') ||
+        reqUrl.searchParams.get('conversation_id') ||
+        `terminal-${session.userId || session.user_id || 'anon'}`;
+
+      const doId = env.AGENT_SESSION.idFromName(sessionName);
+      const doStub = env.AGENT_SESSION.get(doId);
+
+      const doReqUrl = new URL(request.url);
+      doReqUrl.pathname = '/terminal/status';
+
+      return doStub.fetch(new Request(doReqUrl.toString(), { method: 'GET' }));
+    }
+
+    if ((pathLower === '/api/agent/terminal/ws' || pathLower === '/api/terminal/ws') && method === 'GET') {
       // Route terminal WebSocket to AGENT_SESSION Durable Object.
       // The DO holds the PTY connection and buffers output — browser can
       // disconnect/refresh/navigate away and the shell session stays alive.
@@ -15780,53 +15801,23 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!env.AGENT_SESSION) {
         return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
       }
-      const termUrlParams = new URL(request.url).searchParams;
-      const sessionName = termUrlParams.get('session') || `terminal-${session.userId || 'anon'}`;
-      const doId   = env.AGENT_SESSION.idFromName(sessionName);
+
+      const reqUrl = new URL(request.url);
+      const termUrlParams = reqUrl.searchParams;
+      const sessionName =
+        termUrlParams.get('session') ||
+        termUrlParams.get('workspace_id') ||
+        termUrlParams.get('conversation_id') ||
+        `terminal-${session.userId || session.user_id || 'anon'}`;
+
+      const doId = env.AGENT_SESSION.idFromName(sessionName);
       const doStub = env.AGENT_SESSION.get(doId);
-      // Forward the full request (including WS upgrade headers) to the DO
+
       const doReqUrl = new URL(request.url);
       doReqUrl.pathname = '/terminal/ws';
-      return doStub.fetch(request);
-      // removed
-      serverWs.addEventListener('message', (e) => { try { upstreamWs.send(e.data); } catch (_) { } });
-      upstreamWs.addEventListener('message', (e) => { try { serverWs.send(e.data); } catch (_) { } });
-      let terminalCloseLogged = false;
-      const logClose = (source) => {
-        if (!terminalCloseLogged) {
-          terminalCloseLogged = true;
-          console.log('[terminal/ws] closed:', source);
-          fireForgetPtyHealthEvent(env, ctx, 'disconnected', null);
-        }
-      };
-      let terminalBridgeCleaned = false;
-      const closeFromBrowserLeg = () => {
-        if (terminalBridgeCleaned) return;
-        terminalBridgeCleaned = true;
-        logClose('client');
-        try { upstreamWs.close(); } catch (_) { }
-      };
-      const closeFromUpstreamLeg = () => {
-        if (terminalBridgeCleaned) return;
-        terminalBridgeCleaned = true;
-        logClose('upstream');
-        try { serverWs.close(); } catch (_) { }
-      };
-      serverWs.addEventListener('close', closeFromBrowserLeg);
-      upstreamWs.addEventListener('close', closeFromUpstreamLeg);
-      serverWs.addEventListener('error', () => { console.log('[terminal/ws] client leg error (not closing bridge)'); });
-      upstreamWs.addEventListener('error', () => { console.log('[terminal/ws] upstream leg error (not closing bridge)'); });
-      ctx.waitUntil(new Promise((resolve) => {
-        let settled = false;
-        const done = () => {
-          if (settled) return;
-          settled = true;
-          resolve();
-        };
-        serverWs.addEventListener('close', done);
-        upstreamWs.addEventListener('close', done);
-      }));
-      return new Response(null, { status: 101, webSocket: clientWs });
+
+      const doReq = new Request(doReqUrl.toString(), request);
+      return doStub.fetch(doReq);
     }
 
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {

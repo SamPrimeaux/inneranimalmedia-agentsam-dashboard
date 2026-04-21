@@ -66,8 +66,11 @@ export class AgentChatSqlV1 extends DurableObject {
   constructor(state, env) {
     super(state, env);
     this.env = env;
-    this.ptyWs = null;          // outbound WebSocket to iam-pty
-    this.outputBuffer = [];     // ring buffer — last 800 PTY chunks
+    this.ptyWs = null;
+    this.outputBuffer = [];
+    this.connectPromise = null;
+    this.lastThemeSlug = null;
+    this.lastToken = null;
     this.sql = state.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS session_messages (
       id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
@@ -80,15 +83,46 @@ export class AgentChatSqlV1 extends DurableObject {
     )`);
   }
 
+  _broadcastToBrowsers(data) {
+    for (const ws of this.ctx.getWebSockets('browser')) {
+      try { ws.send(data); } catch (_) {}
+    }
+  }
+
+  _pushBuffer(data) {
+    this.outputBuffer.push(data);
+    if (this.outputBuffer.length > 800) this.outputBuffer.shift();
+  }
+
+  _resolveThemeSlug(url) {
+    return url.searchParams.get('theme_slug') || url.searchParams.get('theme') || this.lastThemeSlug || 'meaux-storm-gray';
+  }
+
+  _resolveToken(url) {
+    return url.searchParams.get('token') || this.lastToken || (this.env.TERMINAL_SECRET || '');
+  }
+
   // ── PTY outbound connection ───────────────────────────────────────────────
   async _connectToPty(token, themeSlug) {
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = this._connectToPtyInner(token, themeSlug).finally(() => {
+      this.connectPromise = null;
+    });
+    return this.connectPromise;
+  }
+
+  async _connectToPtyInner(token, themeSlug) {
     const raw = (this.env.TERMINAL_WS_URL || '').trim();
-    if (!raw) return;
+    if (!raw) throw new Error('TERMINAL_WS_URL not configured');
+
+    this.lastToken = token || null;
+    this.lastThemeSlug = themeSlug || this.lastThemeSlug || 'meaux-storm-gray';
+
     let wssUrl = raw.startsWith('https://') ? 'wss://' + raw.slice(8)
                : raw.startsWith('http://')  ? 'ws://'  + raw.slice(7)
                : raw;
     const sep = wssUrl.includes('?') ? '&' : '?';
-    const ptyUrl = `${wssUrl}${sep}token=${encodeURIComponent(token)}&theme_slug=${encodeURIComponent(themeSlug || 'meaux-storm-gray')}`;
+    const ptyUrl = `${wssUrl}${sep}token=${encodeURIComponent(this.lastToken || '')}&theme_slug=${encodeURIComponent(this.lastThemeSlug)}`;
 
     const resp = await fetch(ptyUrl, {
       headers: {
@@ -98,29 +132,28 @@ export class AgentChatSqlV1 extends DurableObject {
         'x-terminal-secret': this.env.TERMINAL_SECRET || '',
       },
     });
-    if (resp.status !== 101 || !resp.webSocket) return;
+    if (resp.status !== 101 || !resp.webSocket) {
+      throw new Error(`PTY connect failed: ${resp.status}`);
+    }
 
     const pty = resp.webSocket;
     pty.accept();
     this.ptyWs = pty;
 
+    this._broadcastToBrowsers(JSON.stringify({ type: 'pty_status', status: 'connected' }));
+
     pty.addEventListener('message', (evt) => {
-      // Buffer output (ring — keep last 800 chunks)
-      this.outputBuffer.push(evt.data);
-      if (this.outputBuffer.length > 800) this.outputBuffer.shift();
-      // Forward to all connected browser sockets
-      for (const ws of this.ctx.getWebSockets('browser')) {
-        try { ws.send(evt.data); } catch (_) {}
-      }
+      this._pushBuffer(evt.data);
+      this._broadcastToBrowsers(evt.data);
     });
 
-    pty.addEventListener('close', () => {
+    const handleDisconnect = () => {
       this.ptyWs = null;
-      const msg = JSON.stringify({ type: 'output', data: 'PTY disconnected - reconnecting...' });
-      for (const ws of this.ctx.getWebSockets('browser')) {
-        try { ws.send(msg); } catch (_) {}
-      }
-    });
+      this._broadcastToBrowsers(JSON.stringify({ type: 'pty_status', status: 'disconnected' }));
+    };
+
+    pty.addEventListener('close', handleDisconnect);
+    pty.addEventListener('error', handleDisconnect);
   }
 
   // ── Browser WebSocket handler ─────────────────────────────────────────────
@@ -129,25 +162,40 @@ export class AgentChatSqlV1 extends DurableObject {
 
     // Terminal WebSocket upgrade — browser connects here
     if (url.pathname === '/terminal/ws' || url.pathname === '/api/terminal/ws') {
-      const token     = url.searchParams.get('token')      || (this.env.TERMINAL_SECRET || '');
-      const themeSlug = url.searchParams.get('theme_slug') || 'meaux-storm-gray';
+      const token = this._resolveToken(url);
+      const themeSlug = this._resolveThemeSlug(url);
 
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
-      // Tag with 'browser' so we can multicast and not confuse with PTY
       this.ctx.acceptWebSocket(server, ['browser']);
 
-      // Replay buffered output to newly connected browser (session resume)
       for (const chunk of this.outputBuffer) {
         try { server.send(chunk); } catch (_) {}
       }
 
-      // Connect to PTY if not already live
-      if (!this.ptyWs || this.ptyWs.readyState > 1) {
-        await this._connectToPty(token, themeSlug);
+      try {
+        if (!this.ptyWs || this.ptyWs.readyState > 1) {
+          await this._connectToPty(token, themeSlug);
+        }
+        try { server.send(JSON.stringify({ type: 'pty_status', status: 'ready' })); } catch (_) {}
+      } catch (e) {
+        try {
+          server.send(JSON.stringify({ type: 'pty_status', status: 'error', error: String(e?.message || e) }));
+        } catch (_) {}
       }
 
       return new Response(null, { status: 101, webSocket: client });
+    }
+
+    if (url.pathname === '/terminal/status') {
+      return Response.json({
+        ok: true,
+        pty_connected: !!this.ptyWs && this.ptyWs.readyState === 1,
+        buffered_chunks: this.outputBuffer.length,
+        browser_clients: this.ctx.getWebSockets('browser').length,
+        has_terminal_url: !!(this.env.TERMINAL_WS_URL || '').trim(),
+        theme_slug: this.lastThemeSlug,
+      });
     }
 
     if (url.pathname === '/history') {
@@ -171,15 +219,12 @@ export class AgentChatSqlV1 extends DurableObject {
     return new Response('AgentChatSqlV1 DO', { status: 200 });
   }
 
-  // ── Hibernation handlers ──────────────────────────────────────────────────
-  // Called when browser sends data → forward to PTY
   webSocketMessage(ws, message) {
     if (this.ptyWs?.readyState === 1) {
       this.ptyWs.send(message);
     }
   }
 
-  // Browser disconnected — DO stays alive, PTY connection held, buffer preserved
   webSocketClose(ws, code, reason) {
     // intentionally empty — session survives browser disconnect
   }

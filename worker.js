@@ -15964,6 +15964,46 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       return jsonResponse({ text });
     }
 
+    // GET /api/terminal/agents — sub-agent list for /agents slash command
+    if (pathLower === '/api/terminal/agents' && method === 'GET') {
+      const auth  = request.headers.get('Authorization') || '';
+      const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : auth.trim();
+      if (!token || token !== (env.PTY_AUTH_TOKEN || '')) {
+        return jsonResponse({ error: 'unauthorized' }, 401);
+      }
+      try {
+        const rows = await env.DB.prepare(
+          `SELECT slug, display_name, description, icon, agent_type, is_active
+           FROM agentsam_subagent_profile
+           WHERE is_active = 1
+           ORDER BY sort_order ASC
+           LIMIT 20`
+        ).all();
+        return jsonResponse({ agents: rows.results || [] });
+      } catch (e) {
+        return jsonResponse({ agents: [], error: e.message });
+      }
+    }
+
+    // GET /api/terminal/commands?q=prefix — slash command autocomplete for XTermShell
+    if (pathLower === '/api/terminal/commands' && method === 'GET') {
+      const q    = (url.searchParams.get('q') || '').toLowerCase().replace(/^\//, '');
+      const mode = url.searchParams.get('mode') || 'auto';
+      try {
+        const rows = await env.DB.prepare(
+          `SELECT slug, display_name, description, usage_hint, risk_level
+           FROM agentsam_slash_commands
+           WHERE is_active = 1
+             AND (? = '' OR slug LIKE ? OR display_name LIKE ?)
+           ORDER BY sort_order
+           LIMIT 12`
+        ).bind(q, q + '%', q + '%').all();
+        return jsonResponse({ commands: rows.results || [] });
+      } catch (e) {
+        return jsonResponse({ commands: [], error: e.message });
+      }
+    }
+
     if (pathLower === '/api/monaco/complete' && method === 'POST') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) {

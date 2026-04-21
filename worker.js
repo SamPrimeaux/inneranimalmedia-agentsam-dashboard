@@ -15787,8 +15787,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       // Forward the full request (including WS upgrade headers) to the DO
       const doReqUrl = new URL(request.url);
       doReqUrl.pathname = '/terminal/ws';
-      return doStub.fetch(new Request(doReqUrl.toString(), request));
-      return doStub.fetch(new Request(doReqUrl.toString(), { headers: request.headers, method: request.method }));
+      return doStub.fetch(request);
+      // removed
       serverWs.addEventListener('message', (e) => { try { upstreamWs.send(e.data); } catch (_) { } });
       upstreamWs.addEventListener('message', (e) => { try { serverWs.send(e.data); } catch (_) { } });
       let terminalCloseLogged = false;

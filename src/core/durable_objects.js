@@ -128,7 +128,7 @@ export class AgentChatSqlV1 extends DurableObject {
     const url = new URL(request.url);
 
     // Terminal WebSocket upgrade — browser connects here
-    if (url.pathname === '/terminal/ws') {
+    if (url.pathname === '/terminal/ws' || url.pathname === '/api/terminal/ws') {
       const token     = url.searchParams.get('token')      || (this.env.TERMINAL_SECRET || '');
       const themeSlug = url.searchParams.get('theme_slug') || 'meaux-storm-gray';
 

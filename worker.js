@@ -458,7 +458,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
 
 async function resolveAgentsamUserKey(env, authUser) {
   if (!authUser?.id) return null;
-  if (authUser.id === 'sam_primeaux') return 'sam_primeaux';
+  // removed hardcoded sam_primeaux shortcut
   if (!env?.DB) return authUser.id;
   try {
     const row = await env.DB.prepare(
@@ -481,7 +481,7 @@ async function resolveAgentsamUserKey(env, authUser) {
 /** Zero Trust / mac tunnel — only superadmin-group users may restart connections (POST /api/tunnel/restart). */
 async function isSamOnlyUser(env, authUser) {
   if (!authUser) return false;
-  if (authUser.id === 'sam_primeaux') return true;
+  // sam_primeaux shortcut removed — use superadmin DB check
   if (!env?.DB) return false;
   const email = String(authUser.email || '').toLowerCase();
   if (email && (await isSuperadminEmail(env, email))) return true;
@@ -3382,6 +3382,12 @@ const worker = {
       }
 
       // ----- Auth: email/password login, backup-code login, logout -----
+      if (pathLower === '/api/auth/signup' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleEmailSignup(request, url, env);
+      }
+      if (pathLower === '/api/auth/verify-email' && (request.method || 'GET').toUpperCase() === 'GET') {
+        return handleEmailVerification(request, url, env);
+      }
       if (pathLower === '/api/auth/login' && (request.method || 'GET').toUpperCase() === 'POST') {
         return handleEmailPasswordLogin(request, url, env);
       }
@@ -3655,7 +3661,7 @@ const worker = {
           const pipeline = await env.DB.prepare('SELECT * FROM ai_workflow_pipelines WHERE id = ? LIMIT 1').bind(pipeline_id).first();
           if (!pipeline) return jsonResponse({ error: 'pipeline not found' }, 404);
           const execId = 'wfexec_' + Date.now();
-          const tenantId = pipeline.tenant_id || 'tenant_sam_primeaux';
+          const tenantId = pipeline.tenant_id || 'tenant_default';
           let stages = [];
           try {
             stages = JSON.parse(pipeline.stages_json || '[]');
@@ -5687,10 +5693,11 @@ const worker = {
       }
 
       // Auth sign-in / login / signup (DASHBOARD) -- same page for all
-      if (pathLower === '/auth/login' || pathLower === '/auth/login' || pathLower === '/auth/signup') {
-        const obj =
-          (await env.DASHBOARD.get('static/auth-signin.html')) ??
-          (await env.DASHBOARD.get('static/static_auth-signin.html'));
+      if (pathLower === '/auth/login' || pathLower === '/auth/signin' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
+        const isSignup = pathLower === '/auth/signup' || pathLower === '/auth/register';
+        const obj = isSignup
+          ? ((await env.DASHBOARD.get('static/auth-signup.html')) ?? (await env.DASHBOARD.get('static/auth-signin.html')))
+          : ((await env.DASHBOARD.get('static/auth-signin.html')) ?? (await env.DASHBOARD.get('static/static_auth-signin.html')));
         if (obj) return respondWithR2Object(obj, 'text/html');
         return notFound(path);
       }
@@ -14602,7 +14609,7 @@ async function handleDrawApi(request, url, env) {
 
     // ── GET /api/draw/load ───────────────────────────────────────────
     if (pathLower === '/api/draw/load' && method === 'GET') {
-      const uid = authUser?.id || authUser?.user_id || 'sam_primeaux';
+      const uid = authUser?.id || authUser?.user_id || null;
       const sceneRow = await env.DB.prepare(
         `SELECT r2_key FROM project_draws
          WHERE project_id = ? AND generation_type = 'json_scene'
@@ -17067,7 +17074,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         if (sameOrigin) {
           const row = await env.DB.prepare(
             `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first();
+          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
           if (row) authUser = { id: row.id };
         }
       }
@@ -17104,7 +17111,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         if (sameOrigin) {
           const row = await env.DB.prepare(
             `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first();
+          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
           if (row) authUser = { id: row.id };
         }
       }
@@ -17148,7 +17155,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         if (sameOrigin) {
           const row = await env.DB.prepare(
             `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first();
+          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
           if (row) authUser = { id: row.id };
         }
       }
@@ -19874,7 +19881,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       (o.tenantId != null && String(o.tenantId).trim()) || defaultTenantForMcp;
     await recordMcpToolCall(env, { ...o, tenantId: tid });
   };
-  const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'sam_primeaux');
+  const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'anonymous');
   const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_inneranimalmedia');
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
@@ -21484,7 +21491,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       query,
       search_engine: 'perplexity'
     });
-    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) || (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'tenant_sam_primeaux';
+    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) || (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'tenant_default';
     
     await env.DB.prepare(`
         INSERT INTO playwright_jobs
@@ -26502,7 +26509,7 @@ async function resolveTenantIdForThemeApi(request, env) {
 }
 
 // ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----
-const VAULT_USER_ID = 'sam_primeaux';
+const VAULT_USER_ID = null; // was sam_primeaux — now resolved per-request
 
 async function vaultGetKey(masterKeyB64) {
   const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
@@ -29312,7 +29319,7 @@ async function handleTimeTrackManual(request, env) {
 }
 
 async function handleTimeTrackHeartbeat(request, env) {
-  const USER_IDS = ['sam_primeaux', 'user_sam_primeaux'];
+  const USER_IDS = []; // superadmin IDs now resolved dynamically from DB
   const userList = USER_IDS.map(() => '?').join(',');
 
   const activeEntry = await env.DB.prepare(
@@ -30101,6 +30108,164 @@ async function hashPassword(password) {
   return { saltHex, hashHex };
 }
 
+/**
+ * POST /api/auth/signup -- body: { name, email, password }
+ * Creates account, provisions workspace, sends verification email via Resend.
+ */
+async function handleEmailSignup(request, url, env) {
+  const accept = request.headers.get('Accept') || '';
+  const wantsJson = accept.includes('application/json') ||
+    (request.headers.get('Content-Type') || '').includes('application/json');
+
+  function signupErr(msg, status = 400) {
+    if (wantsJson) return new Response(JSON.stringify({ ok: false, error: msg }), {
+      status, headers: { 'Content-Type': 'application/json' }
+    });
+    return Response.redirect(`${origin(url)}/auth/signup?error=${encodeURIComponent(msg)}`, 302);
+  }
+
+  if (!env.DB) return signupErr('Service unavailable', 503);
+
+  let body;
+  try { body = await request.json(); } catch (_) { return signupErr('Invalid request body'); }
+
+  const name = (body.name || '').trim().slice(0, 100);
+  const email = (body.email || '').toLowerCase().trim();
+  const password = (body.password || '').toString();
+
+  if (!email || !password) return signupErr('Email and password are required');
+  if (password.length < 8) return signupErr('Password must be at least 8 characters');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return signupErr('Invalid email address');
+
+  // Check if email already registered
+  const existing = await env.DB.prepare(
+    `SELECT id FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+  ).bind(email).first();
+  if (existing) return signupErr('An account with this email already exists');
+
+  // Hash password using existing hashPassword util
+  let passwordHash, salt;
+  try {
+    const result = await hashPassword(password);
+    passwordHash = result.hash;
+    salt = result.salt;
+  } catch (e) {
+    console.error('[signup] hashPassword failed:', e?.message);
+    return signupErr('Account creation failed', 500);
+  }
+
+  // Generate auth user ID
+  const localPart = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 24);
+  const authUserId = 'au_' + localPart + '_' + crypto.randomUUID().slice(0, 8);
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+    ).bind(authUserId, email, name || email.split('@')[0], passwordHash, salt).run();
+  } catch (e) {
+    console.error('[signup] auth_users insert:', e?.message);
+    return signupErr('Account creation failed — email may already be registered', 409);
+  }
+
+  // Provision user, workspace, settings
+  const provisioned = await provisionNewUser(env, { email, name: name || email.split('@')[0], authUserId });
+
+  // Send welcome email via Resend if configured
+  if (env.RESEND_API_KEY && email) {
+    try {
+      const verifyToken = crypto.randomUUID();
+      await env.SESSION_CACHE?.put(
+        `email_verify_${verifyToken}`,
+        JSON.stringify({ email, authUserId }),
+        { expirationTtl: 86400 }
+      );
+      const verifyUrl = `${origin(url)}/api/auth/verify-email?token=${verifyToken}`;
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'Inner Animal Media <noreply@inneranimalmedia.com>',
+          to: [email],
+          subject: 'Welcome — verify your email',
+          html: `
+            <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+              <h2 style="color:#0f172a">Welcome to Inner Animal Media</h2>
+              <p>Hi ${name || 'there'},</p>
+              <p>Your account is ready. Click below to verify your email and access your dashboard.</p>
+              <a href="${verifyUrl}" style="display:inline-block;background:#2dd4bf;color:#000;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;margin:16px 0">
+                Verify Email & Sign In
+              </a>
+              <p style="color:#64748b;font-size:13px">Link expires in 24 hours. If you didn't create this account, ignore this email.</p>
+            </div>
+          `,
+        }),
+      });
+    } catch (e) {
+      console.warn('[signup] Resend email failed:', e?.message);
+      // Non-fatal — user can still log in
+    }
+  }
+
+  // Auto-login after signup
+  const sessionId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const ua = request.headers.get('user-agent') || '';
+
+  const sessionUserId = provisioned
+    ? (await env.DB.prepare(`SELECT id FROM users WHERE email = ? LIMIT 1`).bind(email).first())?.id || authUserId
+    : authUserId;
+
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
+  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
+
+  const tidSignup = await resolveTenantAtLogin(env, sessionUserId).catch(() => null);
+  await writeIamSessionToKv(env, sessionId, sessionUserId, tidSignup, expiresAt);
+
+  const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
+  const next = '/dashboard/overview';
+
+  if (wantsJson) {
+    return new Response(JSON.stringify({ ok: true, redirect: next, workspace_id: provisioned?.workspace_id }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Set-Cookie': cookie },
+    });
+  }
+  const headers = new Headers({ Location: `${origin(url)}${next}` });
+  headers.append('Set-Cookie', cookie);
+  return new Response(null, { status: 302, headers });
+}
+
+/**
+ * GET /api/auth/verify-email?token=xxx
+ * Marks auth_users.is_verified=1, redirects to dashboard.
+ */
+async function handleEmailVerification(request, url, env) {
+  const token = url.searchParams.get('token');
+  if (!token || !env.SESSION_CACHE) {
+    return Response.redirect(`${origin(url)}/auth/login?error=invalid_token`, 302);
+  }
+  const raw = await env.SESSION_CACHE.get(`email_verify_${token}`);
+  if (!raw) {
+    return Response.redirect(`${origin(url)}/auth/login?error=token_expired`, 302);
+  }
+  try {
+    const { email, authUserId } = JSON.parse(raw);
+    await env.DB.prepare(
+      `UPDATE auth_users SET is_verified = 1, updated_at = datetime('now') WHERE id = ?`
+    ).bind(authUserId).run().catch(() => {});
+    await env.SESSION_CACHE.delete(`email_verify_${token}`);
+  } catch (e) {
+    console.warn('[verify-email]', e?.message);
+  }
+  return Response.redirect(`${origin(url)}/dashboard/overview`, 302);
+}
+
 /** POST /api/auth/login -- body: { email, password, next? }. JSON clients get { ok, redirect } + Set-Cookie; others 302. */
 async function handleEmailPasswordLogin(request, url, env) {
   const accept = request.headers.get('Accept') || '';
@@ -30649,6 +30814,67 @@ function oauthPostLoginGlobeRedirectUrl(originBase, returnToFullUrl) {
   return `${originBase}/auth/login?globe_exit=1&next=${encodeURIComponent(path)}`;
 }
 
+/**
+ * Provision a new user account on first login (Google OAuth or email signup).
+ * Idempotent — safe to call on every login via INSERT OR IGNORE.
+ * Creates: users row, user_settings, personal workspace.
+ * Returns { user_key, workspace_id }
+ */
+async function provisionNewUser(env, { email, name, authUserId }) {
+  if (!env.DB || !email) return null;
+
+  // Derive a clean user_key from email: john.doe@gmail.com -> john_doe
+  const localPart = email.split('@')[0].toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32);
+  const user_key = localPart || 'user_' + crypto.randomUUID().slice(0, 8);
+  const workspace_id = 'ws_' + user_key;
+  const displayName = name || email.split('@')[0];
+
+  try {
+    // 1. Ensure users row exists
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO users
+         (id, user_key, email, display_name, role, default_workspace_id, auth_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'user', ?, ?, datetime('now'), datetime('now'))`
+    ).bind(
+      authUserId || ('usr_' + user_key),
+      user_key,
+      email,
+      displayName,
+      workspace_id,
+      authUserId || null
+    ).run();
+
+    // 2. Ensure personal workspace exists
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO workspaces
+         (id, name, handle, status, category, created_at)
+       VALUES (?, ?, ?, 'active', 'personal', unixepoch())`
+    ).bind(workspace_id, displayName + "'s Workspace", user_key).run();
+
+    // 3. Ensure user_settings row exists
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO user_settings
+         (user_id, theme, default_workspace_id, updated_at)
+       VALUES (?, 'meaux-storm-gray', ?, unixepoch())`
+    ).bind(authUserId || ('usr_' + user_key), workspace_id).run();
+
+    // 4. Ensure workspace_members entry
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO workspace_members
+         (workspace_id, user_id, role, joined_at)
+       VALUES (?, ?, 'owner', unixepoch())`
+    ).bind(workspace_id, authUserId || ('usr_' + user_key)).run();
+
+    return { user_key, workspace_id };
+  } catch (e) {
+    console.warn('[provisionNewUser] error:', e?.message ?? e);
+    return null;
+  }
+}
+
 async function handleGoogleOAuthStart(request, url, env) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET || !env.SESSION_CACHE) {
     return new Response(JSON.stringify({ error: 'OAuth not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
@@ -30763,22 +30989,45 @@ async function handleGoogleOAuthCallback(request, url, env) {
       { headers: { 'Content-Type': 'text/html' } }
     );
   }
-  // login flow continues unchanged below
+  // login flow: upsert auth_users, provision user if new, create session
   const oauthPlaceholder = 'oauth';
+  // Use email as auth_users.id for OAuth users (existing behavior preserved)
+  let authUserId = email;
   try {
-    await env.DB.prepare(
-      `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-    ).bind(userId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+    const existingAuth = await env.DB.prepare(
+      `SELECT id FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+    ).bind(email).first();
+    if (existingAuth?.id) {
+      authUserId = existingAuth.id;
+      await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, authUserId).run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+      ).bind(authUserId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+    }
   } catch (e) {
-    await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, userId).run();
+    console.warn('[OAuth] auth_users upsert:', e?.message);
   }
+
+  // Provision user row, workspace, settings on first login
+  await provisionNewUser(env, { email, name, authUserId });
+
+  // Resolve canonical user_id for session (prefer users.id if exists)
+  let sessionUserId = authUserId;
+  try {
+    const usersRow = await env.DB.prepare(
+      `SELECT id FROM users WHERE email = ? OR auth_id = ? LIMIT 1`
+    ).bind(email, authUserId).first();
+    if (usersRow?.id) sessionUserId = usersRow.id;
+  } catch (_) {}
+
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, userId, expiresAt, ip, ua).run();
+  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
 
   // FIX: writeIamSessionToKv was missing — getSession() reads ONLY from KV,
   // so without this the session cookie was set but never resolvable → redirect loop.

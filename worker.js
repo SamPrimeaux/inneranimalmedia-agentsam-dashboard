@@ -15766,7 +15766,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       });
     }
 
-    if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
+    if (pathLower === '/api/agent/terminal/ws' || pathLower === '/api/terminal/ws' && method === 'GET') {
       // Route terminal WebSocket to AGENT_SESSION Durable Object.
       // The DO holds the PTY connection and buffers output — browser can
       // disconnect/refresh/navigate away and the shell session stays alive.

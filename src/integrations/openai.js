@@ -1,122 +1,200 @@
+/**
+ * Integration Layer: OpenAI
+ * Streaming chat completions via api.openai.com.
+ * Key resolved from ai_models.secret_key_name → env.OPENAI_API_KEY fallback.
+ * Proxies OpenAI SSE stream directly — frontend handles choices[0].delta.content format.
+ */
+import { resolveModelApiKey } from './tokens.js';
 import { jsonResponse } from '../core/responses.js';
-import { getAuthUser } from '../core/auth.js';
-import { runBuiltinTool } from '../tools/ai-dispatch.js';
+
+const OPENAI_BASE = 'https://api.openai.com/v1';
+
+// ─── Tool Format ──────────────────────────────────────────────────────────────
 
 /**
- * OpenAI Service Integration (Modular Port).
- * Handles GPT-4o streaming and tool-calling interactions.
+ * Convert Anthropic-style tools to OpenAI function format.
+ * Passes through tools already in OpenAI format.
  */
-
-/**
- * Normalizes tool definitions for the OpenAI schema.
- */
-export function normalizeOpenAITools(tools) {
-    if (!Array.isArray(tools)) return undefined;
-    
-    return tools.map(t => {
-        let parameters = { type: 'object', properties: {} };
-        try {
-            const raw = typeof t.input_schema === 'string' ? JSON.parse(t.input_schema) : (t.input_schema || {});
-            if (raw && raw.type === 'object') parameters = raw;
-        } catch (_) {}
-
-        return {
-            type: 'function',
-            function: {
-                name: t.tool_name || t.name,
-                description: (t.description || t.tool_name || '').slice(0, 500),
-                parameters
-            }
-        };
-    });
+function toOpenAITools(tools) {
+  if (!tools?.length) return undefined;
+  return tools.map(t => {
+    if (t.type === 'function') return t; // already OpenAI format
+    return {
+      type: 'function',
+      function: {
+        name:        t.name,
+        description: t.description || '',
+        parameters:  t.input_schema || { type: 'object', properties: {} },
+      },
+    };
+  });
 }
 
 /**
- * The Core OpenAI Engine.
+ * Build the messages array for OpenAI.
+ * Prepends systemPrompt as a system message if provided and not already present.
+ */
+function buildOpenAIMessages(systemPrompt, messages) {
+  const hasSystem = messages.some(m => m.role === 'system');
+  const normalized = [];
+
+  if (systemPrompt && !hasSystem) {
+    normalized.push({ role: 'system', content: systemPrompt });
+  }
+
+  for (const msg of messages) {
+    // Convert Anthropic tool_use blocks to OpenAI tool_calls
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const textParts  = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const toolCalls  = msg.content
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({
+          id:       b.id || `call_${crypto.randomUUID().slice(0, 8)}`,
+          type:     'function',
+          function: { name: b.name, arguments: JSON.stringify(b.input || {}) },
+        }));
+
+      normalized.push({
+        role:       'assistant',
+        content:    textParts || null,
+        ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+      });
+      continue;
+    }
+
+    // Convert Anthropic tool_result blocks to OpenAI tool messages
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'tool_result') {
+          normalized.push({
+            role:         'tool',
+            tool_call_id: block.tool_use_id,
+            content:      typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+          });
+        } else if (block.type === 'text') {
+          normalized.push({ role: 'user', content: block.text });
+        }
+      }
+      continue;
+    }
+
+    normalized.push(msg);
+  }
+
+  return normalized;
+}
+
+// ─── Main Export ──────────────────────────────────────────────────────────────
+
+/**
+ * Stream a chat completion via OpenAI.
+ * Returns a Response with the OpenAI SSE stream proxied directly.
  */
 export async function chatWithToolsOpenAI(env, request, params) {
-    const { 
-        modelKey, 
-        messages, 
-        tools: toolDefinitions,
-        systemPrompt 
-    } = params;
+  const { modelKey, systemPrompt, messages = [], tools = [] } = params;
 
-    const authUser = await getAuthUser(request, env);
-    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const apiKey = await resolveModelApiKey(env, 'openai', modelKey);
+  if (!apiKey) return jsonResponse({ error: 'OpenAI API key not configured' }, 503);
+  if (!modelKey) return jsonResponse({ error: 'modelKey required' }, 400);
 
-    const apiKey = (env.OPENAI_API_KEY || '').trim();
-    if (!apiKey) return jsonResponse({ error: 'OpenAI API key not configured' }, 503);
+  const oaiMessages = buildOpenAIMessages(systemPrompt, messages);
+  const oaiTools    = toOpenAITools(tools);
 
-    const openAiTools = normalizeOpenAITools(toolDefinitions);
+  const reasoningEffort = params.reasoningEffort || null;
+  const verbosity       = params.verbosity       || null;
 
-    // Initial SSE Setup
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
+  const body = {
+    model:    modelKey,
+    messages: oaiMessages,
+    stream:   true,
+    ...(oaiTools?.length   ? { tools:     oaiTools                   } : {}),
+    ...(reasoningEffort    ? { reasoning: { effort: reasoningEffort } } : {}),
+    ...(verbosity          ? { text:      { verbosity }               } : {}),
+  };
 
-    (async () => {
-        try {
-            const body = {
-                model: modelKey || 'gpt-4o',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...messages.map(m => ({ role: m.role, content: m.content }))
-                ],
-                tools: openAiTools,
-                stream: true
-            };
-
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(body)
-            });
-
-            if (!response.ok) {
-                const err = await response.text();
-                await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: err })}\n\n`));
-                return;
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-
-                for (const line of lines) {
-                    const cleanLine = line.replace(/^data: /, '').trim();
-                    if (!cleanLine || cleanLine === '[DONE]') continue;
-
-                    try {
-                        const json = JSON.parse(cleanLine);
-                        // Forward the choices/delta directly to the frontend stream
-                        await writer.write(encoder.encode(`data: ${JSON.stringify(json)}\n\n`));
-                    } catch (_) {}
-                }
-            }
-
-            await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`));
-        } catch (e) {
-            await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`));
-        } finally {
-            await writer.close();
-        }
-    })();
-
-    return new Response(readable, {
-        headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        }
+  let upstream;
+  try {
+    upstream = await fetch(`${OPENAI_BASE}/chat/completions`, {
+      method:  'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type':  'application/json',
+      },
+      body: JSON.stringify(body),
     });
+  } catch (e) {
+    return jsonResponse({ error: 'OpenAI request failed', detail: e.message }, 502);
+  }
+
+  if (!upstream.ok) {
+    const err = await upstream.text().catch(() => '');
+    return jsonResponse({ error: 'OpenAI API error', status: upstream.status, detail: err.slice(0, 500) }, upstream.status);
+  }
+
+  // Proxy SSE stream directly — OpenAI format (choices[0].delta.content) is
+  // handled by both ChatAssistant and GorillaModeShell buddy panel.
+  return new Response(upstream.body, {
+    headers: {
+      'Content-Type':                'text/event-stream',
+      'Cache-Control':               'no-cache',
+      'Connection':                  'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
+}
+
+/**
+ * Non-streaming OpenAI completion. Returns parsed response object.
+ * Use for batch / background tasks where streaming is not needed.
+ */
+export async function completeWithOpenAI(env, params) {
+  const { modelKey, systemPrompt, messages = [], tools = [] } = params;
+
+  const apiKey = await resolveModelApiKey(env, 'openai', modelKey);
+  if (!apiKey) throw new Error('OpenAI API key not configured');
+
+  const oaiMessages = buildOpenAIMessages(systemPrompt, messages);
+  const oaiTools    = toOpenAITools(tools);
+
+  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      model:    modelKey,
+      messages: oaiMessages,
+      ...(oaiTools?.length ? { tools: oaiTools } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(`OpenAI error ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Generate an image via OpenAI DALL-E.
+ * Returns { url, revised_prompt } or throws on error.
+ */
+export async function generateImageOpenAI(env, params) {
+  const { modelKey = 'dall-e-3', prompt, size = '1024x1024', quality = 'standard', n = 1 } = params;
+
+  const apiKey = await resolveModelApiKey(env, 'openai', modelKey);
+  if (!apiKey) throw new Error('OpenAI API key not configured');
+
+  const res = await fetch(`${OPENAI_BASE}/images/generations`, {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ model: modelKey, prompt, size, quality, n }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(`DALL-E error ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  return data.data?.[0] || null;
 }

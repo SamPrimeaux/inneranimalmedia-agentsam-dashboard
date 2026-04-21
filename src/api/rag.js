@@ -69,6 +69,47 @@ export function unifiedRagCosine(a, b) {
 /**
  * Unified search engine: parallel D1, Vectorize, and R2 retrieval.
  */
+
+/**
+ * Semantic search over Supabase agent_memory via Hyperdrive + pgvector.
+ * Calls match_agent_memory() which filters by agent_id and similarity threshold.
+ */
+async function pgMatchAgentMemory(env, queryText, opts = {}) {
+  const fail = (msg) => ({ rows: [], error: msg });
+  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
+  if (!env.AI) return fail('AI binding missing');
+  const q = String(queryText || '').trim();
+  if (!q) return fail('empty query');
+
+  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.5;
+  const matchCount = Math.min(Math.max(1, opts.match_count || 6), 20);
+
+  try {
+    // Embed query using same model as stored embeddings (BGE base en v1.5)
+    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
+    const raw = modelResp?.data ?? modelResp;
+    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
+
+    const vecLiteral = '[' + vector.join(',') + ']';
+    const { Client } = await import('pg');
+    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+    await client.connect();
+    try {
+      const res = await client.query(
+        `SELECT * FROM match_agent_memory($1::vector, $2::float, $3::int, NULL, 'agent-sam')`,
+        [vecLiteral, threshold, matchCount]
+      );
+      return { rows: res.rows || [], error: null };
+    } finally {
+      await client.end().catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[rag] pgMatchAgentMemory error:', e?.message);
+    return { rows: [], error: e?.message };
+  }
+}
+
 export async function unifiedRagSearch(env, query, opts = {}) {
   const q = String(query || '').trim();
   if (!q || !env.DB || !env.AI) {
@@ -102,6 +143,26 @@ export async function unifiedRagSearch(env, query, opts = {}) {
       const score = unifiedRagCosine(qVec, vec) * 0.7 + unifiedRagRecency01(c.created_at) * 0.3;
       raw.push({ text: c.content, source: c.knowledge_id || c.id, source_type: 'knowledge_chunks', score, doc_type: 'chunk' });
     } catch (_) {}
+  }
+
+  // Leg: Supabase agent_memory semantic search via Hyperdrive
+  if (env.HYPERDRIVE?.connectionString) {
+    try {
+      const memRes = await pgMatchAgentMemory(env, q, { match_threshold: 0.5, match_count: 6 });
+      for (const row of memRes.rows || []) {
+        const text = `[${row.role || 'assistant'} memory] ${row.content}`;
+        raw.push({
+          text,
+          source: row.session_id || row.id,
+          source_type: 'supabase_agent_memory',
+          score: (row.similarity ?? 0.5) * 0.85, // slight discount vs direct knowledge
+          doc_type: 'memory',
+        });
+      }
+      if (memRes.rows?.length) console.log('[rag] supabase memory leg:', memRes.rows.length, 'hits');
+    } catch (e) {
+      console.warn('[rag] supabase leg error:', e?.message);
+    }
   }
 
   // Deduplicate and Sort

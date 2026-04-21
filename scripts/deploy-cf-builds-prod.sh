@@ -14,6 +14,13 @@ R2_PREFIX="static/dashboard/agent"
 echo "=== CF Builds PROD: worker deploy ==="
 npx wrangler deploy ./worker.js -c wrangler.production.toml
 
+
+echo "=== CF Builds PROD: record deploy to D1 ==="
+DEPLOY_TS=$(date -u +"%Y-%m-%d %H:%M:%S")
+npx wrangler d1 execute inneranimalmedia-business \
+  --remote -c wrangler.production.toml \
+  --command="INSERT INTO deployments (id, worker_name, environment, status, timestamp, notes) VALUES ('deploy-'||hex(randomblob(8)), 'inneranimalmedia', 'production', 'success', '${DEPLOY_TS}', 'CF Builds auto-deploy')" 2>/dev/null || true
+
 echo "=== CF Builds PROD: Vite build ==="
 cd agent-dashboard && npm ci --include=dev && npm run build && node scripts/bump-cache.js && cd ..
 
@@ -34,17 +41,17 @@ fi
 echo "=== CF Builds PROD: R2 asset sync ==="
 MAX_JOBS=8
 job_count=0
-if [ -d "$DIST_DIR/assets" ]; then
+if [ -d "$DIST_DIR" ]; then
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    key="${R2_PREFIX}/assets/$(basename "$file")"
+    key="${R2_PREFIX}/$(basename "$file")"
     npx wrangler r2 object put "${BUCKET}/${key}" \
       --file "$file" \
       --remote \
       -c wrangler.production.toml &
     job_count=$((job_count + 1))
     if [ "$job_count" -ge "$MAX_JOBS" ]; then wait; job_count=0; fi
-  done < <(find "$DIST_DIR/assets" -type f ! -name '._*' ! -name '.DS_Store')
+  done < <(find "$DIST_DIR" -type f ! -name '._*' ! -name '.DS_Store')
   wait
 fi
 

@@ -382,14 +382,14 @@ const ComponentsPanel: React.FC<{
   element: InspectedElement | null;
   onClose: () => void;
 }> = ({ element, onClose }) => (
-  <div className="absolute inset-0 z-10 flex flex-col bg-[var(--bg-app)] overflow-hidden">
+  <div className="absolute inset-y-0 right-0 z-10 flex flex-col w-72 bg-[var(--bg-panel)] border-l border-[var(--border-subtle)] overflow-hidden shadow-2xl">
     <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border-subtle)] shrink-0">
       <Layers size={12} className="text-[var(--color-primary)]" />
       <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-main)]">
-        Components
+        Inspector
       </span>
       {element && (
-        <span className="ml-1 text-[10px] font-mono text-[var(--text-muted)]">
+        <span className="ml-1 text-[10px] text-[var(--text-muted)] truncate max-w-[100px]">
           {element.tag}{element.id ? `#${element.id}` : ''}{element.className ? `.${element.className.split(' ')[0]}` : ''}
         </span>
       )}
@@ -408,22 +408,22 @@ const ComponentsPanel: React.FC<{
       <div className="flex-1 overflow-y-auto min-h-0">
         {/* Element info */}
         <div className="px-3 py-2 border-b border-[var(--border-subtle)]">
-          <p className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-muted)] mb-1">Element</p>
-          <code className="text-[10px] font-mono text-[var(--color-primary)] break-all">
+          <p className="text-[9px] uppercase tracking-widest text-[var(--text-muted)] mb-1">Element</p>
+          <code className="text-[10px] text-[var(--color-primary)] break-all">
             {`<${element.tag}${element.id ? ` id="${element.id}"` : ''}${element.className ? ` class="${element.className}"` : ''}>`}
           </code>
-          <p className="text-[9px] font-mono text-[var(--text-muted)] mt-1 opacity-60">{element.path}</p>
+          <p className="text-[9px] text-[var(--text-muted)] mt-1 opacity-60">{element.path}</p>
         </div>
 
         {/* Computed styles */}
         <div className="px-3 py-2">
-          <p className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-muted)] mb-2">Computed Styles</p>
+          <p className="text-[9px] uppercase tracking-widest text-[var(--text-muted)] mb-2">Computed Styles</p>
           <div className="space-y-1">
             {Object.entries(element.styles)
               .filter(([, v]) => v && v !== 'none' && v !== 'normal' && v !== 'auto')
               .slice(0, 40)
               .map(([prop, val]) => (
-                <div key={prop} className="flex items-center gap-2 font-mono text-[10px]">
+                <div key={prop} className="flex items-center gap-2 text-[10px]">
                   <span className="text-[var(--text-muted)] shrink-0 w-32 truncate">{prop}</span>
                   <span className="text-[var(--text-main)] truncate">{val}</span>
                 </div>
@@ -434,8 +434,8 @@ const ComponentsPanel: React.FC<{
         {/* Bounding box */}
         {element.boundingBox && (
           <div className="px-3 py-2 border-t border-[var(--border-subtle)]">
-            <p className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-muted)] mb-2">Position & Size</p>
-            <div className="grid grid-cols-2 gap-1 font-mono text-[10px]">
+            <p className="text-[9px] uppercase tracking-widest text-[var(--text-muted)] mb-2">Position & Size</p>
+            <div className="grid grid-cols-2 gap-1 text-[10px]">
               {Object.entries(element.boundingBox).map(([k, v]) => (
                 <div key={k} className="flex gap-1">
                   <span className="text-[var(--text-muted)]">{k}:</span>

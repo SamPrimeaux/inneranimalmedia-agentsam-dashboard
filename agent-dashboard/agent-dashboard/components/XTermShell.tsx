@@ -545,9 +545,14 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   const items = Array.isArray(data) ? (data as { key?: string; value?: string }[]) : [];
                   const greeting = items.find(m => m.key === 'STARTUP_GREETING')?.value;
                   if (greeting && xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
-                  fetchTunnelStatus();
+                  // auto-check on connect: max once per 60s to prevent 429 storm
+                  const now = Date.now();
+                  if (!window._lastTunnelCheck || now - window._lastTunnelCheck > 60000) {
+                    window._lastTunnelCheck = now;
+                    fetchTunnelStatus();
+                  }
                 })
-                .catch(() => fetchTunnelStatus());
+                .catch(() => {});
             };
 
             ws.onmessage = (event) => {

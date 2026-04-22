@@ -104,7 +104,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
 
         const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
-        const upstream = await fetch(`http://iam-vpc/?token=${token}`, {
+        const upstream = await env.PTY_SERVICE.fetch(`http://localhost:3099/?token=${token}`, {
             headers: {
                 'Upgrade': 'websocket',
                 'Connection': 'Upgrade',

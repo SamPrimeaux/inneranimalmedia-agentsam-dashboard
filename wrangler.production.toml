@@ -92,6 +92,10 @@ class_name = "ChessRoom"
 name = "AGENT_SESSION"
 class_name = "AgentChatSqlV1"
 
+[[vpc_services]]
+binding = "PTY_SERVICE"
+service_id = "019db639-7c70-7071-8ef3-32ec0392a9ff"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["IAMCollaborationSession"]

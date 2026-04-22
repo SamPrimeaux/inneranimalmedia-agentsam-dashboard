@@ -17,6 +17,7 @@ type TerminalConnectionStatus =
   | 'connecting'
   | 'connected'
   | 'reconnecting'
+  | 'offline'
   | 'auth_failed'
   | 'backend_unavailable'
   | 'session_expired'
@@ -34,6 +35,7 @@ function statusMessage(s: TerminalConnectionStatus): string {
     case 'connecting': return 'Connecting';
     case 'connected': return 'Connected';
     case 'reconnecting': return 'Reconnecting';
+    case 'offline': return 'Offline';
     case 'auth_failed': return 'Auth failed';
     case 'backend_unavailable': return 'Backend unavailable';
     case 'session_expired': return 'Session expired';
@@ -266,6 +268,17 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const retryTimerRef   = useRef<ReturnType<typeof window.setTimeout> | null>(null);
     const ptySessionIdRef = useRef<string | null>(null);
     const bufferRef       = useRef<string>('');
+    const statusRef       = useRef<TerminalConnectionStatus>('connecting');
+    useEffect(() => { statusRef.current = status; }, [status]);
+
+    const cachedBootstrapRef = useRef<{
+      cfgOk: boolean;
+      terminalConfigured: boolean;
+      resumeOk: boolean;
+      resumeJson: { resumable?: boolean; session_id?: string };
+      greeting?: string | null;
+      loadedAt: number;
+    } | null>(null);
 
     const [height, setHeight]             = useState(DEFAULT_HEIGHT);
     const [isCollapsed, setIsCollapsed]   = useState(false);
@@ -280,6 +293,47 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const activeConnectRef                = useRef<() => void>(() => {});
     const connectInFlightRef              = useRef(false);
 
+    const refreshBootstrap = useCallback(async () => {
+      cachedBootstrapRef.current = null;
+      try {
+        const [resumePack, cfgPack] = await Promise.all([
+          fetch('/api/terminal/session/resume', {
+            credentials: 'same-origin', headers: { Accept: 'application/json' },
+          }).then(async r => ({ r, j: await r.json().catch(() => ({ resumable: false })) })),
+          fetch('/api/agent/terminal/config-status', {
+            credentials: 'same-origin', headers: { Accept: 'application/json' },
+          }).then(async r => ({ r, j: await r.json().catch(() => ({})) })),
+        ]);
+
+        const greeting = await fetch('/api/agent/memory/list', { method: 'GET', credentials: 'same-origin' })
+          .then(r => (r.ok ? r.json() : null))
+          .then((data: unknown) => {
+            const items = Array.isArray(data) ? (data as { key?: string; value?: string }[]) : [];
+            return items.find(m => m.key === 'STARTUP_GREETING')?.value ?? null;
+          })
+          .catch(() => null);
+
+        const cfgJson = cfgPack.j as { terminal_configured?: boolean };
+        cachedBootstrapRef.current = {
+          cfgOk: cfgPack.r.ok,
+          terminalConfigured: cfgPack.r.ok && cfgJson.terminal_configured === true,
+          resumeOk: resumePack.r.ok,
+          resumeJson: (resumePack.j as { resumable?: boolean; session_id?: string }) ?? { resumable: false },
+          greeting,
+          loadedAt: Date.now(),
+        };
+      } catch {
+        cachedBootstrapRef.current = {
+          cfgOk: false,
+          terminalConfigured: false,
+          resumeOk: false,
+          resumeJson: { resumable: false },
+          greeting: null,
+          loadedAt: Date.now(),
+        };
+      }
+    }, []);
+
     // ── Config fetch ──────────────────────────────────────────────────────────
     useEffect(() => {
       void fetch('/api/agentsam/config', { credentials: 'same-origin' })
@@ -292,6 +346,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         })
         .catch(() => {});
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Bootstrap (once): config-status + session/resume + memory greeting.
+    useEffect(() => {
+      void refreshBootstrap();
+    }, [refreshBootstrap]);
 
     // ── Uptime counter ────────────────────────────────────────────────────────
     useEffect(() => {
@@ -309,13 +368,25 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
     const scheduleReconnect = useCallback((reason: string) => {
       if (intentionalCloseRef.current) return;
-      if (!RETRYABLE_STATES.has(status)) return;
-      const attempt = retryCountRef.current++;
-      const delay = Math.min(1000 * Math.pow(2, attempt), 30_000);
+      if (statusRef.current === 'offline') return;
+      if (!RETRYABLE_STATES.has(statusRef.current)) return;
+
+      const nextAttempt = retryCountRef.current + 1;
+      if (nextAttempt > 5) {
+        setStatus('offline');
+        xtermRef.current?.writeln(
+          `\r\n\x1b[1;31m  ✗ ${reason}\x1b[0m\r\n` +
+          `\x1b[38;5;240m  Terminal is offline (5 failed attempts). Click Retry to reconnect.\x1b[0m`,
+        );
+        return;
+      }
+
+      retryCountRef.current = nextAttempt;
+      const delay = Math.min(2000 * Math.pow(2, nextAttempt - 1), 30_000);
       setStatus('reconnecting');
       xtermRef.current?.writeln(
         `\r\n\x1b[1;31m  ✗ ${reason}\x1b[0m\r\n` +
-        `\x1b[38;5;240m  Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt + 1})...\x1b[0m`,
+        `\x1b[38;5;240m  Reconnecting in ${Math.round(delay / 1000)}s (attempt ${nextAttempt})...\x1b[0m`,
       );
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = window.setTimeout(() => {
@@ -440,6 +511,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
       const connect = () => {
         if (connectInFlightRef.current || !isMounted || intentionalCloseRef.current) return;
+        if (statusRef.current === 'offline') return;
         connectInFlightRef.current = true;
         setStatus(retryCountRef.current > 0 ? 'reconnecting' : 'connecting');
         void (async () => {
@@ -447,37 +519,24 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             ptySessionIdRef.current = null;
             setSessionId(null);
 
-            const [resumePack, cfgPack] = await Promise.all([
-              fetch('/api/terminal/session/resume', {
-                credentials: 'same-origin', headers: { Accept: 'application/json' },
-              }).then(async r => ({ r, j: await r.json().catch(() => ({ resumable: false })) })),
-              fetch('/api/agent/terminal/config-status', {
-                credentials: 'same-origin', headers: { Accept: 'application/json' },
-              }).then(async r => ({ r, j: await r.json().catch(() => ({})) })),
-            ]);
+            if (!cachedBootstrapRef.current) {
+              await refreshBootstrap();
+            }
             if (!isMounted || intentionalCloseRef.current) return;
 
-            if (!cfgPack.r.ok) {
-              const mapped = mapHttpErrorToStatus(cfgPack.r.status);
-              setStatus(mapped);
-              if (mapped === 'disconnected') scheduleReconnect(`config-status ${cfgPack.r.status}`);
+            const boot = cachedBootstrapRef.current;
+            if (!boot || boot.cfgOk !== true) {
+              setStatus('disconnected');
+              scheduleReconnect('config-status failed');
               return;
             }
-
-            const cfgJson = cfgPack.j as { terminal_configured?: boolean };
-            if (cfgJson.terminal_configured !== true) {
+            if (boot.terminalConfigured !== true) {
               setStatus('backend_unavailable');
               scheduleReconnect('Terminal backend unavailable');
               return;
             }
 
-            if (!resumePack.r.ok) {
-              const mapped = mapHttpErrorToStatus(resumePack.r.status);
-              setStatus(mapped);
-              if (mapped === 'disconnected') scheduleReconnect(`session-resume ${resumePack.r.status}`);
-              return;
-            }
-            const resumeJson = resumePack.j as { resumable?: boolean; session_id?: string };
+            const resumeJson = boot.resumeJson ?? { resumable: false };
 
             const wsParams = new URLSearchParams();
             if (workspaceId) wsParams.set('workspace_id', workspaceId);
@@ -539,14 +598,10 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                 term.writeln(`  \x1b[38;5;240m◈ Resume: session ${sid.slice(0, 8)}…\x1b[0m`);
               }
 
-              fetch('/api/agent/memory/list', { method: 'GET', credentials: 'same-origin' })
-                .then(r => r.json())
-                .then((data: unknown) => {
-                  const items = Array.isArray(data) ? (data as { key?: string; value?: string }[]) : [];
-                  const greeting = items.find(m => m.key === 'STARTUP_GREETING')?.value;
-                  if (greeting && xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
-                })
-                .catch(() => {});
+              const greeting = cachedBootstrapRef.current?.greeting ?? null;
+              if (greeting && xtermRef.current) {
+                xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
+              }
             };
 
             ws.onmessage = (event) => {
@@ -875,6 +930,26 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   </span>
                 )}
               </div>
+
+              {/* Manual retry / refresh */}
+              {(status === 'offline' || status === 'disconnected' || status === 'backend_unavailable') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    intentionalCloseRef.current = false;
+                    retryCountRef.current = 0;
+                    void refreshBootstrap().finally(() => {
+                      setStatus('connecting');
+                      activeConnectRef.current();
+                    });
+                  }}
+                  className="hidden sm:inline-flex items-center gap-1.5 ml-2 px-2 py-1 rounded border border-[var(--border-subtle)] text-[10px] font-mono text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:border-[var(--solar-cyan)]/30 hover:bg-[var(--bg-hover)] transition-colors"
+                  title="Retry terminal connection"
+                >
+                  <RefreshCw size={11} />
+                  Retry
+                </button>
+              )}
 
               {/* Tunnel health */}
               {tunnelHealth && (

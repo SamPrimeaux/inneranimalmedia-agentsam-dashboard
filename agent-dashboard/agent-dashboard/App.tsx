@@ -846,7 +846,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     void fetchLiveStatus();
-    const interval = window.setInterval(() => void fetchLiveStatus(), 20000);
+    const interval = window.setInterval(() => void fetchLiveStatus(), 300000);
     return () => clearInterval(interval);
   }, [fetchLiveStatus]);
 

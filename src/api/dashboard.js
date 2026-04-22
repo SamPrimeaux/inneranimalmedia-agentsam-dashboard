@@ -97,42 +97,41 @@ export async function handleDashboardApi(request, url, env, ctx) {
     }
 
     if (pathLower === '/api/agent/terminal/ws') {
-        const authUser = await getAuthUser(request, env);
-        if (!authUser) return new Response('Unauthorized', { status: 401 });
-
-        const upgradeHeader = request.headers.get('Upgrade');
-        if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
-
-        const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
-        let upstream;
         try {
-            upstream = await env.PTY_SERVICE.fetch(`http://localhost:3099/?token=${token}`, {
+            const authUser = await getAuthUser(request, env);
+            if (!authUser) return new Response('Unauthorized', { status: 401 });
+
+            const upgradeHeader = request.headers.get('Upgrade');
+            if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
+
+            const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
+            const upstream = await env.PTY_SERVICE.fetch(`http://localhost:3099/?token=${token}`, {
                 headers: {
                     'Upgrade': 'websocket',
                     'Connection': 'Upgrade',
                     'Sec-WebSocket-Version': '13',
                 },
             });
-        } catch (e) {
-            return new Response(`PTY connection failed: ${e.message}`, { status: 502 });
+
+            if (upstream.status !== 101) {
+                return new Response('PTY upstream failed', { status: 502 });
+            }
+
+            const upstreamWs = upstream.webSocket;
+            upstreamWs.accept();
+
+            const { 0: client, 1: server } = new WebSocketPair();
+            server.accept();
+
+            server.addEventListener('message', e => upstreamWs.send(e.data));
+            server.addEventListener('close', () => upstreamWs.close());
+            upstreamWs.addEventListener('message', e => server.send(e.data));
+            upstreamWs.addEventListener('close', () => server.close());
+
+            return new Response(null, { status: 101, webSocket: client });
+        } catch (_) {
+            return new Response('PTY error', { status: 502 });
         }
-
-        if (upstream.status !== 101) {
-            return new Response('PTY upstream failed', { status: 502 });
-        }
-
-        const upstreamWs = upstream.webSocket;
-        upstreamWs.accept();
-
-        const { 0: client, 1: server } = new WebSocketPair();
-        server.accept();
-
-        server.addEventListener('message', e => upstreamWs.send(e.data));
-        server.addEventListener('close', () => upstreamWs.close());
-        upstreamWs.addEventListener('message', e => server.send(e.data));
-        upstreamWs.addEventListener('close', () => server.close());
-
-        return new Response(null, { status: 101, webSocket: client });
     }
 
     // DEPRECATED PATH: kept for compatibility. ACTIVE PATH is /api/agent/terminal/ws.

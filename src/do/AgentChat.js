@@ -206,6 +206,17 @@ export class AgentChatSqlV1 extends DurableObject {
     this.sendStateToWebSocket(server, "connecting");
     try {
       await this.ensureModeReady(executionMode);
+      if (executionMode === "pty" && this.env?.DB) {
+        const doId = this.ctx.id.toString();
+        await this.env.DB.prepare(
+          `UPDATE agentsam_bootstrap SET terminal_session_id = ?, agent_session_id = ?, updated_at = datetime('now') WHERE id = 'asb_sam_iam_prod_v1'`
+        ).bind(sid, doId).run().catch(() => {});
+        await this.env.DB.prepare(
+          `INSERT INTO agentsam_workspace_state (workspace_id, agent_session_id, workspace_type, updated_at)
+           VALUES ('ws_inneranimalmedia', ?, 'ide', unixepoch())
+           ON CONFLICT(id) DO UPDATE SET agent_session_id = excluded.agent_session_id, updated_at = excluded.updated_at`
+        ).bind(doId).run().catch(() => {});
+      }
       this.sendStateToWebSocket(server, "connected");
     } catch (e) {
       this.sendStateToWebSocket(server, "backend_unavailable", String(e?.message || e));
@@ -361,16 +372,22 @@ export class AgentChatSqlV1 extends DurableObject {
     this.broadcastState("connected");
 
     pty.addEventListener("message", (evt) => {
-      const text = messageToString(evt.data);
-      if (text) this.broadcastTerminalOutput(text);
+      for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+        try { ws.send(evt.data); } catch (_) {}
+      }
     });
-
-    const handleDrop = (reason) => {
+    pty.addEventListener("close", () => {
+      for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+        try { this.sendStateToWebSocket(ws, "disconnected"); } catch (_) {}
+      }
       if (this.ptyWs === pty) this.ptyWs = null;
-      this.broadcastState("backend_unavailable", reason);
-    };
-    pty.addEventListener("close", () => handleDrop("PTY connection closed"));
-    pty.addEventListener("error", () => handleDrop("PTY connection error"));
+    });
+    pty.addEventListener("error", () => {
+      for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+        try { this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error"); } catch (_) {}
+      }
+      if (this.ptyWs === pty) this.ptyWs = null;
+    });
   }
 
   async executePtyCommand(command) {

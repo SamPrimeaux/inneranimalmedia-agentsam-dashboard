@@ -552,12 +552,13 @@ export async function handleAgentApi(request, url, env, ctx) {
   // ── /api/agent/commands ───────────────────────────────────────────────────
   if (path === '/api/agent/commands' && method === 'GET') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    const tenantId = tenantIdFromEnv(env);
     try {
-      const query = tenantId
-        ? env.DB.prepare(`SELECT slug, description FROM agent_commands WHERE tenant_id = ? AND COALESCE(status,'active') = 'active' ORDER BY slug`).bind(tenantId)
-        : env.DB.prepare(`SELECT slug, description FROM agent_commands WHERE COALESCE(status,'active') = 'active' ORDER BY slug`);
-      const { results } = await query.all();
+      const { results } = await env.DB.prepare(
+        `SELECT slug, display_name as name, description, usage_hint, handler_type, is_active
+         FROM agentsam_slash_commands
+         WHERE is_active = 1
+         ORDER BY sort_order ASC, slug ASC`
+      ).all();
       return jsonResponse(results || []);
     } catch (e) { return jsonResponse({ error: e?.message }, 500); }
   }

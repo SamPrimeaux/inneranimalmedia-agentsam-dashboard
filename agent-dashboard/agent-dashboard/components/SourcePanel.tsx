@@ -8,7 +8,8 @@ import {
   CheckCircle2, 
   Clock, 
   RefreshCcw,
-  ArrowRight
+  ArrowRight,
+  Sparkles
 } from 'lucide-react';
 
 interface GitStatus {

@@ -346,31 +346,69 @@ export class AgentChatSqlV1 extends DurableObject {
   }
 
   async connectPty() {
-    const rawUrl = String(this.env?.TERMINAL_WS_URL || "").trim();
     const token = String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
-    if (!rawUrl || !token) throw new Error("PTY backend is not configured");
 
+    // VPC Service path (private — preferred)
+    if (this.env?.PTY_SERVICE) {
+      const resp = await this.env.PTY_SERVICE.fetch(
+        new Request("http://localhost:3099/ws", {
+          headers: {
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
+            "Sec-WebSocket-Version": "13",
+            ...(token ? { "X-PTY-Token": token } : {})
+          }
+        })
+      );
+      if (resp.status !== 101 || !resp.webSocket) {
+        throw new Error(`PTY VPC connect failed: ${resp.status}`);
+      }
+      const pty = resp.webSocket;
+      pty.accept();
+      this.ptyWs = pty;
+      this.broadcastState("connected");
+      pty.addEventListener("message", (evt) => {
+        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+          try { ws.send(evt.data); } catch (_) {}
+        }
+      });
+      pty.addEventListener("close", () => {
+        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+          try { this.sendStateToWebSocket(ws, "disconnected"); } catch (_) {}
+        }
+        if (this.ptyWs === pty) this.ptyWs = null;
+      });
+      pty.addEventListener("error", () => {
+        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+          try { this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error"); } catch (_) {}
+        }
+        if (this.ptyWs === pty) this.ptyWs = null;
+      });
+      return;
+    }
+
+    // Fallback: public tunnel (TERMINAL_WS_URL secret)
+    const rawUrl = String(this.env?.TERMINAL_WS_URL || "").trim();
+    if (!rawUrl || !token) throw new Error("PTY backend is not configured — set PTY_SERVICE binding or TERMINAL_WS_URL + PTY_AUTH_TOKEN");
     let wsUrl = normalizeWebSocketUrl(rawUrl);
     const sep = wsUrl.includes("?") ? "&" : "?";
     wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
-
     const wsResp = await fetch(wsUrl, {
       headers: {
-        Upgrade: "websocket",
-        Connection: "Upgrade",
+        "Upgrade": "websocket",
+        "Connection": "Upgrade",
         "Sec-WebSocket-Version": "13",
         "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
-      },
+      }
     });
     if (wsResp.status !== 101 || !wsResp.webSocket) {
       throw new Error(`PTY connect failed: ${wsResp.status}`);
     }
-
     const pty = wsResp.webSocket;
     pty.accept();
     this.ptyWs = pty;
     this.broadcastState("connected");
-
     pty.addEventListener("message", (evt) => {
       for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
         try { ws.send(evt.data); } catch (_) {}

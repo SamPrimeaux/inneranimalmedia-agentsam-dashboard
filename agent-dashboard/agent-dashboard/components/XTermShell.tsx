@@ -13,6 +13,33 @@ import '@xterm/xterm/css/xterm.css';
 // ─── Types ────────────────────────────────────────────────────────────────────
 const DEFAULT_PRODUCT = 'Agent Sam';
 export type ShellTab = 'terminal' | 'output' | 'problems';
+type TerminalConnectionStatus =
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'auth_failed'
+  | 'backend_unavailable'
+  | 'session_expired'
+  | 'disconnected';
+
+const RETRYABLE_STATES: ReadonlySet<TerminalConnectionStatus> = new Set([
+  'connecting',
+  'reconnecting',
+  'backend_unavailable',
+  'disconnected',
+]);
+
+function statusMessage(s: TerminalConnectionStatus): string {
+  switch (s) {
+    case 'connecting': return 'Connecting';
+    case 'connected': return 'Connected';
+    case 'reconnecting': return 'Reconnecting';
+    case 'auth_failed': return 'Auth failed';
+    case 'backend_unavailable': return 'Backend unavailable';
+    case 'session_expired': return 'Session expired';
+    default: return 'Disconnected';
+  }
+}
 
 export interface XTermShellHandle {
   writeToTerminal: (text: string) => void;
@@ -236,19 +263,22 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const fitAddonRef     = useRef<FitAddon | null>(null);
     const socketRef       = useRef<WebSocket | null>(null);
     const retryCountRef   = useRef<number>(0);
-    const retryTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const retryTimerRef   = useRef<ReturnType<typeof window.setTimeout> | null>(null);
     const ptySessionIdRef = useRef<string | null>(null);
     const bufferRef       = useRef<string>('');
 
     const [height, setHeight]             = useState(DEFAULT_HEIGHT);
     const [isCollapsed, setIsCollapsed]   = useState(false);
     const [activeTab, setActiveTab]       = useState<ShellTab>('terminal');
-    const [status, setStatus]             = useState<'connecting' | 'online' | 'offline'>('connecting');
+    const [status, setStatus]             = useState<TerminalConnectionStatus>('connecting');
     const [showSplash, setShowSplash]     = useState(true);
     const [restarting, setRestarting]     = useState(false);
     const [tunnelHealth, setTunnelHealth] = useState<{ healthy: boolean; connections: number } | null>(null);
     const [sessionId, setSessionId]       = useState<string | null>(null);
     const [uptime, setUptime]             = useState(0);
+    const intentionalCloseRef             = useRef(false);
+    const activeConnectRef                = useRef<() => void>(() => {});
+    const connectInFlightRef              = useRef(false);
 
     // ── Config fetch ──────────────────────────────────────────────────────────
     useEffect(() => {
@@ -265,10 +295,33 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
     // ── Uptime counter ────────────────────────────────────────────────────────
     useEffect(() => {
-      if (status !== 'online') { setUptime(0); return; }
+      if (status !== 'connected') { setUptime(0); return; }
       const t = setInterval(() => setUptime(s => s + 1), 1000);
       return () => clearInterval(t);
     }, [status]);
+
+    const mapHttpErrorToStatus = useCallback((code: number): TerminalConnectionStatus => {
+      if (code === 401) return 'session_expired';
+      if (code === 403) return 'auth_failed';
+      if (code === 503) return 'backend_unavailable';
+      return 'disconnected';
+    }, []);
+
+    const scheduleReconnect = useCallback((reason: string) => {
+      if (intentionalCloseRef.current) return;
+      if (!RETRYABLE_STATES.has(status)) return;
+      const attempt = retryCountRef.current++;
+      const delay = Math.min(1000 * Math.pow(2, attempt), 30_000);
+      setStatus('reconnecting');
+      xtermRef.current?.writeln(
+        `\r\n\x1b[1;31m  ✗ ${reason}\x1b[0m\r\n` +
+        `\x1b[38;5;240m  Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt + 1})...\x1b[0m`,
+      );
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = window.setTimeout(() => {
+        if (!intentionalCloseRef.current) activeConnectRef.current();
+      }, delay);
+    }, []);
 
     const fmtUptime = (s: number) => {
       const h = Math.floor(s / 3600);
@@ -385,146 +438,185 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     useEffect(() => {
       let isMounted = true;
 
-      const connect = async () => {
-        try {
-          ptySessionIdRef.current = null;
-          setSessionId(null);
+      const connect = () => {
+        if (connectInFlightRef.current || !isMounted || intentionalCloseRef.current) return;
+        connectInFlightRef.current = true;
+        setStatus(retryCountRef.current > 0 ? 'reconnecting' : 'connecting');
+        void (async () => {
+          try {
+            ptySessionIdRef.current = null;
+            setSessionId(null);
 
-          const [socketPack, resumeJson, cfgJson] = await Promise.all([
-            fetch('/api/agent/terminal/socket-url', {
-              credentials: 'same-origin', headers: { Accept: 'application/json' },
-            }).then(async r => ({ r, j: await r.json().catch(() => ({})) as Record<string, unknown> })),
-            fetch('/api/terminal/session/resume', {
-              credentials: 'same-origin', headers: { Accept: 'application/json' },
-            }).then(r => r.json().catch(() => ({ resumable: false }))),
-            fetch('/api/agent/terminal/config-status', {
-              credentials: 'same-origin', headers: { Accept: 'application/json' },
-            }).then(r => r.json().catch(() => ({}))),
-          ]);
+            const [resumePack, cfgPack] = await Promise.all([
+              fetch('/api/terminal/session/resume', {
+                credentials: 'same-origin', headers: { Accept: 'application/json' },
+              }).then(async r => ({ r, j: await r.json().catch(() => ({ resumable: false })) })),
+              fetch('/api/agent/terminal/config-status', {
+                credentials: 'same-origin', headers: { Accept: 'application/json' },
+              }).then(async r => ({ r, j: await r.json().catch(() => ({})) })),
+            ]);
+            if (!isMounted || intentionalCloseRef.current) return;
 
-          if (!isMounted) return;
-
-          if (!socketPack.r.ok || !(socketPack.j as { url?: string }).url) {
-            if (isMounted) setStatus('offline');
-            const err = (socketPack.j as { error?: string }).error ?? `socket-url ${socketPack.r.status}`;
-            xtermRef.current?.writeln(`\r\n\x1b[1;31m  ✗ Terminal URL failed: ${err}\x1b[0m`);
-            xtermRef.current?.writeln(
-              '\x1b[38;5;240m  Fix: pm2 restart iam-pty → check :3099 → cloudflared tunnel active → TERMINAL_WS_URL set\x1b[0m',
-            );
-            return;
-          }
-
-          const { url } = socketPack.j as { url: string };
-          const ws = new WebSocket(url);
-          socketRef.current = ws;
-
-          // Collect disposables so ws.onclose can clean them up safely
-          const disposeListeners: Array<() => void> = [];
-
-          ws.onopen = () => {
-            setStatus('online');
-            if (!isMounted) return;
-
-            const term = xtermRef.current;
-            if (!term) return; // terminal may not be mounted yet; WS output will still buffer
-
-            term.clear();
-
-            const onDataSub   = term.onData(data => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-              // Intercept slash commands — wrap in JSON so PTY server catches before zsh
-              if ((data.endsWith('\r') || data.endsWith('\n'))) {
-                const cmd = data.replace(/[\r\n]+$/, '').trim();
-                if (cmd.startsWith('/')) {
-                  ws.send(JSON.stringify({ type: 'input', data }));
-                  return;
-                }
-              }
-              ws.send(data);
-            });
-            const onResizeSub = term.onResize(({ cols, rows }) => {
-              if (ws.readyState === WebSocket.OPEN)
-                ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-            });
-            disposeListeners.push(() => { onDataSub.dispose(); onResizeSub.dispose(); });
-
-            const cfgOk = (cfgJson as { terminal_configured?: boolean }).terminal_configured === true;
-            term.writeln(
-              `  ${cfgOk ? '\x1b[38;5;82m◈\x1b[0m' : '\x1b[38;5;196m◈\x1b[0m'} Worker config: ${
-                cfgOk ? '\x1b[38;5;82mOK\x1b[0m' : '\x1b[38;5;196mMISSING\x1b[0m'
-              }`,
-            );
-
-            if ((resumeJson as { resumable?: boolean }).resumable === true) {
-              const sid = (resumeJson as { session_id?: string }).session_id ?? '';
-              term.writeln(`  \x1b[38;5;240m◈ Resume: session ${sid.slice(0, 8)}…\x1b[0m`);
+            if (!cfgPack.r.ok) {
+              const mapped = mapHttpErrorToStatus(cfgPack.r.status);
+              setStatus(mapped);
+              if (mapped === 'disconnected') scheduleReconnect(`config-status ${cfgPack.r.status}`);
+              return;
             }
 
-            fetch('/api/agent/memory/list', { method: 'GET', credentials: 'same-origin' })
-              .then(r => r.json())
-              .then((data: unknown) => {
-                const items   = Array.isArray(data) ? (data as { key?: string; value?: string }[]) : [];
-                const greeting = items.find(m => m.key === 'STARTUP_GREETING')?.value;
-                if (greeting && xtermRef.current)
-                  xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
-                fetchTunnelStatus();
-              })
-              .catch(() => fetchTunnelStatus());
-          };
+            const cfgJson = cfgPack.j as { terminal_configured?: boolean };
+            if (cfgJson.terminal_configured !== true) {
+              setStatus('backend_unavailable');
+              scheduleReconnect('Terminal backend unavailable');
+              return;
+            }
 
-          ws.onmessage = (event) => {
-            try {
-              const msg = JSON.parse(event.data as string) as {
-                type?: string; session_id?: string; data?: string;
-              };
-              if (msg.type === 'session_id') {
-                const sid = msg.session_id?.trim() ?? '';
-                if (sid) { ptySessionIdRef.current = sid; setSessionId(sid); }
-                return;
-              }
-              if (msg.type === 'output') {
-                const text = msg.data ?? '';
-                appendBuffer(text);
-                xtermRef.current?.write(text);
-                return;
-              }
-            } catch (_) { /* fall through to raw write */ }
-            appendBuffer(event.data as string);
-            xtermRef.current?.write(event.data as string);
-          };
+            if (!resumePack.r.ok) {
+              const mapped = mapHttpErrorToStatus(resumePack.r.status);
+              setStatus(mapped);
+              if (mapped === 'disconnected') scheduleReconnect(`session-resume ${resumePack.r.status}`);
+              return;
+            }
+            const resumeJson = resumePack.j as { resumable?: boolean; session_id?: string };
 
-          ws.onclose = () => {
-            disposeListeners.forEach(fn => fn());
-            if (!isMounted) return;
-            setStatus('offline');
-            setSessionId(null);
-            ptySessionIdRef.current = null;
-            const attempt = retryCountRef.current++;
-            const delay   = Math.min(1000 * Math.pow(2, attempt), 30_000);
-            xtermRef.current?.writeln(
-              `\r\n\x1b[1;31m  ✗ Connection closed.\x1b[0m\r\n` +
-              `\x1b[38;5;240m  Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt + 1})...\x1b[0m`,
+            const wsParams = new URLSearchParams();
+            if (workspaceId) wsParams.set('workspace_id', workspaceId);
+            wsParams.set('execution_mode', 'pty');
+            const wsUrl = `/api/agent/terminal/ws?${wsParams.toString()}`;
+
+            const ws = new WebSocket(wsUrl);
+            socketRef.current = ws;
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = null;
+            }
+
+            const disposeListeners: Array<() => void> = [];
+            let closeHandled = false;
+            const handleSocketDrop = (reason: string) => {
+              if (closeHandled) return;
+              closeHandled = true;
+              disposeListeners.forEach(fn => fn());
+              if (!isMounted || intentionalCloseRef.current) return;
+              setSessionId(null);
+              ptySessionIdRef.current = null;
+              scheduleReconnect(reason);
+            };
+
+            ws.onopen = () => {
+              retryCountRef.current = 0;
+              setStatus('connected');
+              if (!isMounted || intentionalCloseRef.current) return;
+
+              const term = xtermRef.current;
+              if (!term) return;
+              term.clear();
+
+              const onDataSub = term.onData(data => {
+                if (ws.readyState !== WebSocket.OPEN) return;
+                if ((data.endsWith('\r') || data.endsWith('\n'))) {
+                  const cmd = data.replace(/[\r\n]+$/, '').trim();
+                  if (cmd.startsWith('/')) {
+                    ws.send(JSON.stringify({ type: 'input', data }));
+                    return;
+                  }
+                }
+                ws.send(data);
+              });
+              const onResizeSub = term.onResize(({ cols, rows }) => {
+                if (ws.readyState === WebSocket.OPEN)
+                  ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+              });
+              disposeListeners.push(() => { onDataSub.dispose(); onResizeSub.dispose(); });
+
+              term.writeln('  \x1b[38;5;82m◈\x1b[0m Worker control-plane: \x1b[38;5;82mACTIVE\x1b[0m');
+              term.writeln('  \x1b[38;5;240m◈ Backend mode: pty\x1b[0m');
+
+              if (resumeJson.resumable === true) {
+                const sid = resumeJson.session_id ?? '';
+                term.writeln(`  \x1b[38;5;240m◈ Resume: session ${sid.slice(0, 8)}…\x1b[0m`);
+              }
+
+              fetch('/api/agent/memory/list', { method: 'GET', credentials: 'same-origin' })
+                .then(r => r.json())
+                .then((data: unknown) => {
+                  const items = Array.isArray(data) ? (data as { key?: string; value?: string }[]) : [];
+                  const greeting = items.find(m => m.key === 'STARTUP_GREETING')?.value;
+                  if (greeting && xtermRef.current) xtermRef.current.writeln(`\r\n\x1b[1;36m  › ${greeting}\x1b[0m`);
+                  fetchTunnelStatus();
+                })
+                .catch(() => fetchTunnelStatus());
+            };
+
+            ws.onmessage = (event) => {
+              try {
+                const msg = JSON.parse(event.data as string) as {
+                  type?: string; session_id?: string; data?: string; status?: string; error?: string;
+                };
+                if (msg.type === 'session_id') {
+                  const sid = msg.session_id?.trim() ?? '';
+                  if (sid) { ptySessionIdRef.current = sid; setSessionId(sid); }
+                  return;
+                }
+                if (msg.type === 'state') {
+                  if (msg.status === 'auth_failed') setStatus('auth_failed');
+                  else if (msg.status === 'session_expired') setStatus('session_expired');
+                  else if (msg.status === 'backend_unavailable') setStatus('backend_unavailable');
+                  if (msg.error) xtermRef.current?.writeln(`\r\n\x1b[1;31m  ${msg.error}\x1b[0m`);
+                  return;
+                }
+                if (msg.type === 'output') {
+                  const text = msg.data ?? '';
+                  appendBuffer(text);
+                  xtermRef.current?.write(text);
+                  return;
+                }
+              } catch (_) {}
+              appendBuffer(event.data as string);
+              xtermRef.current?.write(event.data as string);
+            };
+
+            ws.onerror = () => {
+              if (!isMounted || intentionalCloseRef.current) return;
+              setStatus('disconnected');
+              handleSocketDrop('Connection error');
+            };
+
+            ws.onclose = (evt) => {
+              if (!isMounted || intentionalCloseRef.current) return;
+              if (evt.code === 4401) { setStatus('session_expired'); return; }
+              if (evt.code === 4403) { setStatus('auth_failed'); return; }
+              if (evt.code === 4503) { setStatus('backend_unavailable'); return; }
+              setStatus('disconnected');
+              handleSocketDrop(`Connection closed (${evt.code || 'no-code'})`);
+            };
+          } catch (e: unknown) {
+            if (!isMounted || intentionalCloseRef.current) return;
+            setStatus('disconnected');
+            scheduleReconnect(
+              `Connection bootstrap failed: ${e instanceof Error ? e.message : String(e)}`,
             );
-            retryTimerRef.current = window.setTimeout(() => {
-              if (isMounted) void connect();
-            }, delay);
-          };
-
-          ws.onerror = () => { if (isMounted) setStatus('offline'); };
-        } catch (_) {
-          if (isMounted) setStatus('offline');
-        }
+          } finally {
+            connectInFlightRef.current = false;
+          }
+        })();
       };
 
-      if (!isCollapsed && activeTab === 'terminal' && (!socketRef.current || socketRef.current.readyState > 1)) void connect();
+      activeConnectRef.current = connect;
+
+      if (!isCollapsed && activeTab === 'terminal' && (!socketRef.current || socketRef.current.readyState > 1)) {
+        intentionalCloseRef.current = false;
+        connect();
+      }
 
       return () => {
         isMounted = false;
+        intentionalCloseRef.current = true;
         if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
         socketRef.current?.close();
         socketRef.current = null;
       };
-    }, [isCollapsed, activeTab, fetchTunnelStatus, appendBuffer]);
+    }, [isCollapsed, activeTab, workspaceId, fetchTunnelStatus, appendBuffer, mapHttpErrorToStatus, scheduleReconnect]);
 
     // ── Theme reactivity ──────────────────────────────────────────────────────
     useEffect(() => {
@@ -757,28 +849,28 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
               {/* WS status */}
               <div className="hidden sm:flex items-center gap-1.5 shrink-0">
-                {status === 'connecting' && (
+                {(status === 'connecting' || status === 'reconnecting') && (
                   <span className="text-[10px] font-mono text-[var(--solar-yellow)] flex items-center gap-1.5">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--solar-yellow)] opacity-40" />
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--solar-yellow)]" />
                     </span>
-                    Connecting
+                    {statusMessage(status)}
                   </span>
                 )}
-                {status === 'online' && (
+                {status === 'connected' && (
                   <span className="text-[10px] font-mono text-[var(--solar-green)] flex items-center gap-1.5">
                     <span className="iam-online-dot h-2 w-2 rounded-full bg-[var(--solar-green)] inline-block" />
-                    Online · {fmtUptime(uptime)}
+                    {statusMessage(status)} · {fmtUptime(uptime)}
                     {sessionId && (
                       <span className="text-[var(--text-muted)]/40"> · {sessionId.slice(0, 6)}…</span>
                     )}
                   </span>
                 )}
-                {status === 'offline' && (
+                {status !== 'connected' && status !== 'connecting' && status !== 'reconnecting' && (
                   <span className="text-[10px] font-mono text-[var(--solar-red)] flex items-center gap-1.5">
                     <WifiOff size={10} />
-                    Offline
+                    {statusMessage(status)}
                   </span>
                 )}
               </div>

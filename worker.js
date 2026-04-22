@@ -5892,11 +5892,20 @@ async function respondWithDashboardHtml(obj, url, options = {}, env = {}) {
   let html = await obj.text();
   // Never load shell.css from production host when this page is on sandbox or another origin (CORS blocks stylesheet fetch).
   html = html.replace(/https?:\/\/(?:www\.)?inneranimalmedia\.com(?=\/static\/dashboard\/shell\.css)/gi, '');
-  
+
   const workspaceId = env.WORKSPACE_ID || 'ws_sandbox';
   const injectedCode = `<script>window.__WORKSPACE_ID__ = "${workspaceId}";</script>`;
 
   html = html.replace(/<head([^>]*)>/i, `<head$1>\n    ${injectedCode}`);
+
+  // Inject versioned agent bundle tags in place of the static placeholder comment.
+  // SHELL_VERSION is set as a Worker var; falls back to a known-good frozen version.
+  const shellVer = (env.SHELL_VERSION && String(env.SHELL_VERSION).trim()) || '1.2.0-1775835017650';
+  const bundleTags = [
+    `<script type="module" crossorigin src="/static/dashboard/agent/agent-dashboard.js?v=${shellVer}"></script>`,
+    `<link rel="stylesheet" crossorigin href="/static/dashboard/agent/agent-dashboard.css?v=${shellVer}">`,
+  ].join('\n  ');
+  html = html.replace('<!-- agent bundle injected by Worker at serve time -->', bundleTags);
 
   if (!isEmbedded) {
     const headers = new Headers();

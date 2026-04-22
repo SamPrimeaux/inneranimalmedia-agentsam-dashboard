@@ -105,13 +105,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
             if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
 
             const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
-            const upstream = await env.PTY_SERVICE.fetch(`http://localhost:3099/?token=${token}`, {
-                headers: {
-                    'Upgrade': 'websocket',
-                    'Connection': 'Upgrade',
-                    'Sec-WebSocket-Version': '13',
-                },
-            });
+            const upstream = await env.PTY_SERVICE.fetch(new Request(`http://localhost:3099/?token=${token}`, request));
 
             if (upstream.status !== 101) {
                 return new Response('PTY upstream failed', { status: 502 });

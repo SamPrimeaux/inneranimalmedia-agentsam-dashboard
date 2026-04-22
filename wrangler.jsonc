@@ -92,22 +92,22 @@
     "bindings": [
       {
         "name": "IAM_COLLAB",
-        "class_name": "inneranimalmedia_IAMCollaborationSession"
+        "class_name": "IAMCollaborationSession"
       },
       {
         "name": "CHESS_SESSION",
-        "class_name": "inneranimalmedia_ChessRoom"
+        "class_name": "ChessRoom"
       },
       {
         "name": "AGENT_SESSION",
-        "class_name": "inneranimalmedia_AgentChatSqlV1"
+        "class_name": "AgentChatSqlV1"
       }
     ]
   },
   "migrations": [
     {
       "tag": "v5",
-      "new_sqlite_classes": ["inneranimalmedia_AgentChatSqlV1"]
+      "new_sqlite_classes": ["AgentChatSqlV1"]
     }
   ],
   "queues": {

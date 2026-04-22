@@ -269,7 +269,6 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const ptySessionIdRef = useRef<string | null>(null);
     const bufferRef       = useRef<string>('');
     const statusRef       = useRef<TerminalConnectionStatus>('connecting');
-    useEffect(() => { statusRef.current = status; }, [status]);
 
     const cachedBootstrapRef = useRef<{
       cfgOk: boolean;
@@ -284,6 +283,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const [isCollapsed, setIsCollapsed]   = useState(false);
     const [activeTab, setActiveTab]       = useState<ShellTab>('terminal');
     const [status, setStatus]             = useState<TerminalConnectionStatus>('connecting');
+    useEffect(() => { statusRef.current = status; }, [status]);
     const [showSplash, setShowSplash]     = useState(true);
     const [restarting, setRestarting]     = useState(false);
     const [tunnelHealth, setTunnelHealth] = useState<{ healthy: boolean; connections: number } | null>(null);

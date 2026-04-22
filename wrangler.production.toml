@@ -99,7 +99,7 @@ new_classes = ["IAMCollaborationSession"]
 [[migrations]]
 tag = "v2"
 new_classes = ["ChessRoom"]
-deleted_classes = ["MeauxSession"]
+deleted_classes = ["MeauxSession", "IAMAgentSession"]
 
 [[migrations]]
 tag = "v4"

@@ -15764,58 +15764,16 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       });
     }
 
+    // DEPRECATED: replaced by control-plane path in `src/api/dashboard.js` (/api/agent/terminal/status).
     if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
-      const session = await getSession(env, request);
-      if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
-      if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
-
-      const reqUrl = new URL(request.url);
-      const sessionName =
-        reqUrl.searchParams.get('session') ||
-        reqUrl.searchParams.get('workspace_id') ||
-        reqUrl.searchParams.get('conversation_id') ||
-        `terminal-${session.userId || session.user_id || 'anon'}`;
-
-      const doId = env.AGENT_SESSION.idFromName(sessionName);
-      const doStub = env.AGENT_SESSION.get(doId);
-
-      const doReqUrl = new URL(request.url);
-      doReqUrl.pathname = '/terminal/status';
-
-      return doStub.fetch(new Request(doReqUrl.toString(), { method: 'GET' }));
+      // Deprecated in legacy worker path: modular dashboard router now owns authoritative status routing.
+      return jsonResponse({ error: 'Deprecated terminal status route in legacy worker' }, 410);
     }
 
+    // DEPRECATED: replaced by control-plane path in `src/api/dashboard.js` (/api/agent/terminal/ws).
     if ((pathLower === '/api/agent/terminal/ws' || pathLower === '/api/terminal/ws') && method === 'GET') {
-      // Route terminal WebSocket to AGENT_SESSION Durable Object.
-      // The DO holds the PTY connection and buffers output — browser can
-      // disconnect/refresh/navigate away and the shell session stays alive.
-      const session = await getSession(env, request);
-      if (!session) {
-        return jsonResponse({ error: 'Unauthorized' }, 401);
-      }
-      if (!env.TERMINAL_WS_URL) {
-        return jsonResponse({ error: 'Terminal not configured', hint: 'Set TERMINAL_WS_URL secret' }, 503);
-      }
-      if (!env.AGENT_SESSION) {
-        return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
-      }
-
-      const reqUrl = new URL(request.url);
-      const termUrlParams = reqUrl.searchParams;
-      const sessionName =
-        termUrlParams.get('session') ||
-        termUrlParams.get('workspace_id') ||
-        termUrlParams.get('conversation_id') ||
-        `terminal-${session.userId || session.user_id || 'anon'}`;
-
-      const doId = env.AGENT_SESSION.idFromName(sessionName);
-      const doStub = env.AGENT_SESSION.get(doId);
-
-      const doReqUrl = new URL(request.url);
-      doReqUrl.pathname = '/terminal/ws';
-
-      const doReq = new Request(doReqUrl.toString(), request);
-      return doStub.fetch(doReq);
+      // Deprecated in legacy worker path: modular dashboard router now owns authoritative WS control-plane routing.
+      return jsonResponse({ error: 'Deprecated terminal ws route in legacy worker' }, 410);
     }
 
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
@@ -31209,5 +31167,5 @@ async function emitSessionEvent(env, sessionId, event) {
 }
 // Build Trigger: 2026-04-09-00-43
 
-export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom, IAMSession, IAMAgentSession, MeauxSession } from "./src/core/durable_objects.js";
+export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom } from "./src/core/durable_objects.js";
 // build trigger Tue Apr 14 11:21:16 CDT 2026

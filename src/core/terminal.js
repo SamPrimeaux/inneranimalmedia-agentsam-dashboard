@@ -101,10 +101,87 @@ export async function runTerminalCommandViaHttpExec(env, cmd) {
 }
 
 /**
+ * ACTIVE PATH: Execute through the authoritative Worker/DO control plane.
+ * DEPRECATED DIRECT PATH: direct browser → upstream PTY websocket.
+ */
+export async function runTerminalCommandViaControlPlane(env, request, command, executionMode = 'pty', extra = {}) {
+  if (!env?.AGENT_SESSION) return { ok: false };
+  const cmd = typeof command === 'string' ? command.trim() : '';
+  if (!cmd) return { ok: false, error: 'No command' };
+  try {
+    const authUser = await getAuthUser(request, env);
+    const userId = String(authUser?.id || 'anonymous');
+    const workspaceId = String(extra.workspace_id || authUser?.tenant_id || tenantIdFromEnv(env) || 'default').trim();
+    const mode = ['pty', 'ssh', 'mcp'].includes(String(executionMode || '').toLowerCase())
+      ? String(executionMode).toLowerCase()
+      : 'pty';
+    const sessionName = `terminal:${userId}:${workspaceId}:${mode}`;
+    const doId = env.AGENT_SESSION.idFromName(sessionName);
+    const stub = env.AGENT_SESSION.get(doId);
+    const doUrl = new URL('https://do.internal/terminal/exec');
+    doUrl.searchParams.set('execution_mode', mode);
+    doUrl.searchParams.set('workspace_id', workspaceId);
+    doUrl.searchParams.set('user_id', userId);
+    const resp = await stub.fetch(new Request(doUrl.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        command: cmd,
+        execution_mode: mode,
+        ssh_target_id: extra.ssh_target_id || null,
+        tool_name: extra.tool_name || null,
+        params: extra.params || null,
+      }),
+    }));
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.ok === false) {
+      return { ok: false, error: payload?.error || `control-plane ${resp.status}` };
+    }
+    return {
+      ok: true,
+      text: typeof payload?.output === 'string' ? payload.output : '',
+      exitCode: payload?.exit_code ?? 0,
+      toolName: payload?.tool_name ?? null,
+      targetId: payload?.target_id ?? null,
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+async function writeTerminalHistory(env, request, sessionId, commandText, outputText, exitCode) {
+  if (!env.DB) return;
+  const terminalSessionId = await resolveTerminalSessionIdForHistory(env, request);
+  const tenantId = tenantIdFromEnv(env);
+  if (!terminalSessionId || !tenantId) return;
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(
+    `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, direction, content, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?)`
+  ).bind('th_' + crypto.randomUUID().slice(0, 16), terminalSessionId, tenantId, 'input', commandText.slice(0, 5000), 'agent', sessionId, now).run();
+  await env.DB.prepare(
+    `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`
+  ).bind('th_' + crypto.randomUUID().slice(0, 16), terminalSessionId, tenantId, 'output', outputText.slice(0, 10000), exitCode ?? null, 'agent', sessionId, now).run();
+}
+
+/**
  * Primary Execution Orchestrator.
  */
 export async function runTerminalCommand(env, request, command, sessionId = null, executionCtx = null) {
   const cmd = typeof command === 'string' ? command.trim() : '';
+  const mode = String(executionCtx?.execution_mode || 'pty').toLowerCase();
+  const controlTry = await runTerminalCommandViaControlPlane(env, request, cmd, mode, executionCtx || {});
+  if (controlTry.ok) {
+    const cleanOutput = controlTry.text;
+    const exitCode = controlTry.exitCode;
+    await writeTerminalHistory(env, request, sessionId, cmd, cleanOutput, exitCode);
+    return { output: cleanOutput, command: cmd, exitCode };
+  }
+
+  // Keep single control plane for all modes.
+  if (mode !== 'pty' || env?.AGENT_SESSION) {
+    throw new Error(controlTry.error || `${mode} execution unavailable`);
+  }
+
   let wsUrl = (env.TERMINAL_WS_URL || '').trim();
   if (!wsUrl) throw new Error('Terminal not configured');
 
@@ -121,7 +198,8 @@ export async function runTerminalCommand(env, request, command, sessionId = null
     else if (wsUrl.startsWith('http://')) wsUrl = 'ws://' + wsUrl.slice(7);
     
     const sep = wsUrl.includes('?') ? '&' : '?';
-    const wsUrlWithAuth = env.TERMINAL_SECRET ? `${wsUrl}${sep}token=${encodeURIComponent(env.TERMINAL_SECRET)}` : wsUrl;
+    const token = String(env.PTY_AUTH_TOKEN || env.TERMINAL_SECRET || '').trim();
+    const wsUrlWithAuth = token ? `${wsUrl}${sep}token=${encodeURIComponent(token)}` : wsUrl;
     
     const wsResp = await fetch(wsUrlWithAuth, {
       headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13' },
@@ -146,21 +224,7 @@ export async function runTerminalCommand(env, request, command, sessionId = null
     ws.close();
   }
 
-  // History Logging
-  if (env.DB) {
-     const terminalSessionId = await resolveTerminalSessionIdForHistory(env, request);
-     const tenantId = tenantIdFromEnv(env);
-     if (terminalSessionId && tenantId) {
-        const now = Math.floor(Date.now() / 1000);
-        await env.DB.prepare(
-          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, direction, content, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?)`
-        ).bind('th_' + crypto.randomUUID().slice(0, 16), terminalSessionId, tenantId, 'input', cmd.slice(0, 5000), 'agent', sessionId, now).run();
-        
-        await env.DB.prepare(
-          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`
-        ).bind('th_' + crypto.randomUUID().slice(0, 16), terminalSessionId, tenantId, 'output', cleanOutput.slice(0, 10000), exitCode ?? null, 'agent', sessionId, now).run();
-     }
-  }
+  await writeTerminalHistory(env, request, sessionId, cmd, cleanOutput, exitCode);
 
   return { output: cleanOutput, command: cmd, exitCode };
 }

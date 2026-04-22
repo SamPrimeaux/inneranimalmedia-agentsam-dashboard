@@ -346,6 +346,7 @@ After building, upload changed assets and any changed dashboard HTML to R2 (see 
 | `docs/memory/AGENT_MEMORY_SCHEMA_AND_RECORDS.md` | D1 tables, metrics, backfill/correction workflow. |
 | `docs/memory/today-todo.md` | Today's priorities (synced to D1 and R2). |
 | `docs/MCP_CURSOR_TERMINAL_SYNC.md` | MCP endpoint, Cursor config, terminal health check. |
+| `docs/agentsam-terminal.md` | Agent terminal control-plane architecture (`Browser -> Worker -> DO -> PTY/SSH/MCP`), active/deprecated paths, env/secrets, failure modes, validation and deploy checklist. |
 | `docs/API_METRICS_AND_AGENT_COST_TRACKING.md` | API metrics, agent cost tracking (agent_telemetry, spend_ledger, etc.). |
 | `docs/AGENT_SAM_UNIVERSAL_SYNC_LAW.md` | **D1 namespaces audit** (`agent_*`, `mcp_*`, `agentsam_*`, `ai_*`, `cicd*`) + **Universal Sync Law** (one writer per concern, correlation IDs, tool contract, boot parity). |
 | `.cursor/rules/` | Project rules: deploy, file protection, R2-before-deploy, D1 schema, MCP reference, session-start D1 context. |

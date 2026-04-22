@@ -2,6 +2,7 @@ import { jsonResponse } from '../core/responses.js';
 import { getAuthUser } from '../core/auth.js';
 import { getIntegrationToken } from '../integrations/tokens.js';
 import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
+import { runTerminalCommand } from '../core/terminal.js';
 
 // Integrations
 import { chatWithAnthropic } from '../integrations/anthropic.js';
@@ -19,6 +20,7 @@ import { handleGitHubApi } from '../integrations/github.js';
 export async function handleDashboardApi(request, url, env, ctx) {
     const pathLower = url.pathname.toLowerCase();
     const method = request.method.toUpperCase();
+    const isWebSocketUpgrade = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
 
     // ── /api/agent/git/status ────────────────────────────────────────────────
     if (pathLower === '/api/agent/git/status' && method === 'GET') {
@@ -94,31 +96,19 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
+    // DEPRECATED PATH: kept for compatibility. ACTIVE PATH is /api/agent/terminal/ws.
     // ── /api/agent/terminal/socket-url ───────────────────────────────────────
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        
-        const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
-        const secret = (env.TERMINAL_SECRET || '').trim();
-        if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
-        
-        let wssUrl = httpsUrl;
-        if (httpsUrl.startsWith('https://')) wssUrl = 'wss://' + httpsUrl.slice(8);
-        else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
-        else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
-        
-        const sep = wssUrl.includes('?') ? '&' : '?';
-        let themeSlug = 'meaux-storm-gray';
-        
-        // Dynamic Workspace-Aware Theme Resolution
-        if (env.DB) {
-            const workspaceId = url.searchParams.get('workspace_id') || url.searchParams.get('tenant_id');
-            themeSlug = await getWorkspaceTheme(env, workspaceId);
-        }
-        
-        const socketUrl = `${wssUrl}${sep}token=${encodeURIComponent(secret)}&theme_slug=${encodeURIComponent(themeSlug)}`;
-        return jsonResponse({ url: socketUrl });
+
+        const wsProto = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        const workspaceId = (url.searchParams.get('workspace_id') || '').trim();
+        const executionMode = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
+        const params = new URLSearchParams();
+        if (workspaceId) params.set('workspace_id', workspaceId);
+        params.set('execution_mode', executionMode || 'pty');
+        return jsonResponse({ url: `${wsProto}//${url.host}/api/agent/terminal/ws?${params.toString()}` });
     }
 
     // ── /api/agent/terminal/config-status ────────────────────────────────────
@@ -130,8 +120,134 @@ export async function handleDashboardApi(request, url, env, ctx) {
         const secret = (env.TERMINAL_SECRET || '').trim();
         return jsonResponse({
             terminal_configured: !!(httpsUrl && secret),
-            direct_wss_available: !!(httpsUrl && secret),
+            control_plane_available: !!env.AGENT_SESSION,
+            direct_wss_available: false,
         });
+    }
+
+    // ACTIVE PATH: browser connects here for terminal websocket.
+    // ── /api/agent/terminal/ws (authoritative control plane) ────────────────
+    if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!isWebSocketUpgrade) {
+            return new Response('Worker expected Upgrade: websocket', { status: 426 });
+        }
+        if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
+
+        const executionModeRaw = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
+        const executionMode = ['pty', 'ssh', 'mcp'].includes(executionModeRaw) ? executionModeRaw : 'pty';
+        const workspaceId = (url.searchParams.get('workspace_id') || authUser.tenant_id || 'default').trim();
+        const sessionName = `terminal:${authUser.id}:${workspaceId}:${executionMode}`;
+        const doId = env.AGENT_SESSION.idFromName(sessionName);
+        const stub = env.AGENT_SESSION.get(doId);
+        const doUrl = new URL(request.url);
+        doUrl.pathname = '/terminal/ws';
+        doUrl.searchParams.set('execution_mode', executionMode);
+        doUrl.searchParams.set('workspace_id', workspaceId);
+        doUrl.searchParams.set('user_id', String(authUser.id || 'anonymous'));
+        return stub.fetch(new Request(doUrl.toString(), request));
+    }
+
+    // ACTIVE PATH: terminal status through DO control plane.
+    // ── /api/agent/terminal/status ───────────────────────────────────────────
+    if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
+        const executionModeRaw = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
+        const executionMode = ['pty', 'ssh', 'mcp'].includes(executionModeRaw) ? executionModeRaw : 'pty';
+        const workspaceId = (url.searchParams.get('workspace_id') || authUser.tenant_id || 'default').trim();
+        const sessionName = `terminal:${authUser.id}:${workspaceId}:${executionMode}`;
+        const doId = env.AGENT_SESSION.idFromName(sessionName);
+        const stub = env.AGENT_SESSION.get(doId);
+        const doUrl = new URL(request.url);
+        doUrl.pathname = '/terminal/status';
+        doUrl.searchParams.set('execution_mode', executionMode);
+        doUrl.searchParams.set('workspace_id', workspaceId);
+        doUrl.searchParams.set('user_id', String(authUser.id || 'anonymous'));
+        return stub.fetch(new Request(doUrl.toString(), { method: 'GET', headers: request.headers }));
+    }
+
+    // ACTIVE PATH: execution_mode-aware execution API behind Worker/DO control plane.
+    // ── /api/agent/terminal/exec (authoritative mode execution) ─────────────
+    if (pathLower === '/api/agent/terminal/exec' && method === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const executionModeRaw = String(body?.execution_mode || url.searchParams.get('execution_mode') || 'pty')
+            .trim().toLowerCase();
+        const executionMode = ['pty', 'ssh', 'mcp'].includes(executionModeRaw) ? executionModeRaw : 'pty';
+        const workspaceId = (
+            body?.workspace_id ||
+            url.searchParams.get('workspace_id') ||
+            authUser.tenant_id ||
+            'default'
+        ).toString().trim();
+        const sessionName = `terminal:${authUser.id}:${workspaceId}:${executionMode}`;
+        const doId = env.AGENT_SESSION.idFromName(sessionName);
+        const stub = env.AGENT_SESSION.get(doId);
+        const doUrl = new URL(request.url);
+        doUrl.pathname = '/terminal/exec';
+        doUrl.searchParams.set('execution_mode', executionMode);
+        doUrl.searchParams.set('workspace_id', workspaceId);
+        doUrl.searchParams.set('user_id', String(authUser.id || 'anonymous'));
+        return stub.fetch(new Request(doUrl.toString(), {
+            method: 'POST',
+            headers: request.headers,
+            body: JSON.stringify(body || {}),
+        }));
+    }
+
+    // ACTIVE PATH: compatibility command runner; internally routes to control plane first.
+    // ── /api/agent/terminal/run (consistent session-auth model) ──────────────
+    if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        try {
+            const body = await request.json().catch(() => ({}));
+            const command = typeof body?.command === 'string' ? body.command.trim() : '';
+            const session_id = body?.session_id ?? null;
+            if (!command) return jsonResponse({ error: 'No command' }, 400);
+            const { output, command: runCommand } = await runTerminalCommand(env, request, command, session_id, ctx);
+            const execId = crypto.randomUUID();
+            try {
+                await env.DB?.prepare(
+                    `INSERT INTO agent_command_executions
+                     (id, tenant_id, workspace_id, session_id, command_name, command_text, output_text, status, started_at, completed_at)
+                     VALUES (?, ?, ?, ?, 'terminal_run', ?, ?, 'completed', unixepoch(), unixepoch())`
+                ).bind(
+                    execId,
+                    authUser.tenant_id || 'system',
+                    (url.searchParams.get('workspace_id') || 'ws_inneranimalmedia'),
+                    session_id || null,
+                    runCommand,
+                    output,
+                ).run();
+            } catch (_) {}
+            return jsonResponse({ output, command: runCommand, execution_id: execId });
+        } catch (e) {
+            return jsonResponse({ error: e?.message || 'terminal run failed' }, 500);
+        }
+    }
+
+    // ── /api/agent/terminal/complete ──────────────────────────────────────────
+    if (pathLower === '/api/agent/terminal/complete' && method === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const executionId = body?.execution_id;
+        const status = body?.status;
+        const now = Math.floor(Date.now() / 1000);
+        if (executionId && (status === 'completed' || status === 'failed')) {
+            try {
+                await env.DB?.prepare(
+                    "UPDATE agent_command_executions SET status = ?, completed_at = ?, output_text = COALESCE(?, output_text), exit_code = COALESCE(?, exit_code) WHERE id = ?"
+                ).bind(status, now, body?.output_text ?? null, body?.exit_code ?? null, executionId).run();
+            } catch (_) {}
+        }
+        return jsonResponse({ ok: true });
     }
 
     // ── /api/terminal/session/resume ─────────────────────────────────────────

@@ -8,5 +8,6 @@
   "scripts": {
     "build": "npm run build --workspace=agent-dashboard",
     "build:vite-only": "npm run build --workspace=agent-dashboard"
-  }
+  },
+  "type": "module"
 }

@@ -8,7 +8,7 @@
  *  - Tool definitions loaded per-request via classifyIntent + loadToolsForRequest
  *  - Approval gate wired for high-risk tool calls
  *  - Telemetry written per request via writeTelemetry
- *  - Tool execution delegated to src/tools/builtin/index.js
+ *  - Tool execution delegated to src/tools/ai-dispatch.js
  */
 import { chatWithAnthropic }                            from '../integrations/anthropic.js';
 import { dispatchStream }                              from '../core/provider.js';
@@ -17,13 +17,153 @@ import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
          isIngestSecretAuthorized,
-         tenantIdFromEnv, projectIdFromEnv }            from '../core/auth.js';
+         tenantIdFromEnv }                              from '../core/auth.js';
 import { notifySam }                                    from '../core/notifications.js';
 import { getAgentMetadata, logSkillInvocation,
          getActivePromptByWeight, getPromptMetadata }   from './agentsam.js';
-import { classifyIntent, loadToolsForRequest,
-         validateToolCall }                             from '../core/tools.js';
-import { dispatchToolCall }                             from '../tools/builtin/index.js';
+import { runBuiltinTool }                               from '../tools/ai-dispatch.js';
+
+const WRITE_LIKE_PREFIXES = ['d1_', 'worker_', 'resend_', 'meshyai_'];
+const TERM_WRITE_TOOLS = new Set(['terminal_execute', 'run_command', 'bash']);
+
+function projectIdFromEnv(env) {
+  const candidates = [env?.PROJECT_ID, env?.WORKER_NAME, env?.CLOUDFLARE_WORKER_NAME];
+  for (const c of candidates) {
+    if (c != null && String(c).trim()) return String(c).trim();
+  }
+  return 'inneranimalmedia';
+}
+
+function parseJsonSafe(value, fallback = null) {
+  if (value == null) return fallback;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function normalizeModeToolPolicy(raw) {
+  const policy = parseJsonSafe(raw, {}) || {};
+  const allowTools = policy.allow_tools || policy.allowlist || policy.allowed_tools || [];
+  const denyTools = policy.deny_tools || policy.blocklist || policy.blocked_tools || [];
+  const requireApprovalTools = policy.require_approval_tools || policy.confirmation_required_tools || [];
+  return {
+    allowTools: Array.isArray(allowTools) ? allowTools.map((v) => String(v)) : [],
+    denyTools: Array.isArray(denyTools) ? denyTools.map((v) => String(v)) : [],
+    requireApprovalTools: Array.isArray(requireApprovalTools) ? requireApprovalTools.map((v) => String(v)) : [],
+  };
+}
+
+async function loadModeToolPolicy(env, modeSlug) {
+  if (!env.DB) return { allowTools: [], denyTools: [], requireApprovalTools: [] };
+  try {
+    const row = await env.DB.prepare(
+      'SELECT tool_policy_json FROM agent_mode_configs WHERE slug = ? AND is_active = 1 LIMIT 1'
+    ).bind(modeSlug || 'ask').first();
+    return normalizeModeToolPolicy(row?.tool_policy_json);
+  } catch (_) {
+    return { allowTools: [], denyTools: [], requireApprovalTools: [] };
+  }
+}
+
+function inferIntentHeuristically(lastMessageText) {
+  const text = String(lastMessageText || '').trim();
+  if (!text) return 'question';
+  const low = text.toLowerCase();
+  const hasSql = /\b(select|insert|update|delete|upsert|create|drop|alter|truncate|from|where|join)\b/.test(low) ||
+                 /\bd1_|sql\b/.test(low);
+  const hasShell = /\b(run|execute|terminal|shell|bash|zsh|npm|pnpm|yarn|git|ls|cd|cat|pwd|chmod|curl)\b/.test(low);
+  if (hasSql && hasShell) return 'mixed';
+  if (hasSql) return 'sql';
+  if (hasShell) return 'shell';
+  return 'question';
+}
+
+async function classifyIntent(_env, lastMessageText) {
+  const intent = inferIntentHeuristically(lastMessageText);
+  return { intent };
+}
+
+async function loadToolsForRequest(env, modeSlug, _intent, opts = {}) {
+  const lim = Math.max(1, Math.min(200, Number(opts.limit || 20) || 20));
+  if (!env.DB) return { tools: [] };
+  const policy = await loadModeToolPolicy(env, modeSlug);
+  const { results } = await env.DB.prepare(
+    `SELECT tool_name, description, input_schema, tool_category, requires_approval
+     FROM mcp_registered_tools
+     WHERE enabled = 1
+     ORDER BY tool_name
+     LIMIT ?`
+  ).bind(lim).all().catch(() => ({ results: [] }));
+  let rows = Array.isArray(results) ? results : [];
+  if (policy.allowTools.length) {
+    const allow = new Set(policy.allowTools);
+    rows = rows.filter((r) => allow.has(String(r.tool_name)));
+  }
+  if (policy.denyTools.length) {
+    const deny = new Set(policy.denyTools);
+    rows = rows.filter((r) => !deny.has(String(r.tool_name)));
+  }
+  const tools = rows.map((r) => ({
+    name: String(r.tool_name),
+    description: String(r.description || ''),
+    input_schema: parseJsonSafe(r.input_schema, { type: 'object', properties: {} }),
+    tool_category: String(r.tool_category || 'builtin'),
+    requires_approval: Number(r.requires_approval || 0) === 1,
+  }));
+  return { tools };
+}
+
+function inferRiskLevel(toolName, category = '') {
+  const t = String(toolName || '').toLowerCase();
+  const c = String(category || '').toLowerCase();
+  if (WRITE_LIKE_PREFIXES.some((p) => t.startsWith(p))) return 'high';
+  if (TERM_WRITE_TOOLS.has(t)) return 'high';
+  if (c === 'terminal' || c === 'deploy') return 'high';
+  if (c === 'd1' || c === 'r2') return 'medium';
+  return 'low';
+}
+
+async function validateToolCall(env, modeSlug, toolName) {
+  const name = String(toolName || '').trim();
+  if (!name) return { allowed: false, reason: 'missing tool name', riskLevel: 'blocked', requiresConfirmation: false };
+  const policy = await loadModeToolPolicy(env, modeSlug);
+  if (policy.denyTools.includes(name)) {
+    return { allowed: false, reason: 'blocked by mode policy', riskLevel: 'blocked', requiresConfirmation: false };
+  }
+  if (policy.allowTools.length && !policy.allowTools.includes(name)) {
+    return { allowed: false, reason: 'not in mode allowlist', riskLevel: 'blocked', requiresConfirmation: false };
+  }
+  let row = null;
+  if (env.DB) {
+    row = await env.DB.prepare(
+      'SELECT tool_name, tool_category, requires_approval, enabled FROM mcp_registered_tools WHERE tool_name = ? LIMIT 1'
+    ).bind(name).first().catch(() => null);
+    if (row && Number(row.enabled || 0) !== 1) {
+      return { allowed: false, reason: 'tool disabled', riskLevel: 'blocked', requiresConfirmation: false };
+    }
+  }
+  const riskLevel = inferRiskLevel(name, row?.tool_category);
+  const requiresConfirmation =
+    Number(row?.requires_approval || 0) === 1 ||
+    policy.requireApprovalTools.includes(name) ||
+    riskLevel === 'high';
+  return { allowed: true, reason: 'allowed', riskLevel, requiresConfirmation };
+}
+
+async function dispatchToolCall(env, toolName, input, context = {}) {
+  const params = {
+    ...(input && typeof input === 'object' ? input : {}),
+    session: context,
+    session_id: context.sessionId || input?.session_id || null,
+    tenant_id: context.tenantId || input?.tenant_id || null,
+    user_id: context.userId || input?.user_id || null,
+  };
+  const out = await runBuiltinTool(env, toolName, params);
+  if (out && typeof out === 'object' && out.error) {
+    throw new Error(typeof out.error === 'string' ? out.error : JSON.stringify(out.error));
+  }
+  return out;
+}
 
 // ─── Request-scoped Context Loaders ──────────────────────────────────────────
 
@@ -939,6 +1079,11 @@ export async function handleAgentApi(request, url, env, ctx) {
   }
 
   return jsonResponse({ error: 'Agent route not found', path }, 404);
+}
+
+export async function handleAgentRequest(request, env, ctx, _authUser = null) {
+  const url = new URL(request.url);
+  return handleAgentApi(request, url, env, ctx);
 }
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────

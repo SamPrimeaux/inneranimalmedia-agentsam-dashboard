@@ -15764,11 +15764,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       });
     }
 
+    // DEPRECATED: replaced by control-plane path in `src/api/dashboard.js` (/api/agent/terminal/status).
     if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
       // Deprecated in legacy worker path: modular dashboard router now owns authoritative status routing.
       return jsonResponse({ error: 'Deprecated terminal status route in legacy worker' }, 410);
     }
 
+    // DEPRECATED: replaced by control-plane path in `src/api/dashboard.js` (/api/agent/terminal/ws).
     if ((pathLower === '/api/agent/terminal/ws' || pathLower === '/api/terminal/ws') && method === 'GET') {
       // Deprecated in legacy worker path: modular dashboard router now owns authoritative WS control-plane routing.
       return jsonResponse({ error: 'Deprecated terminal ws route in legacy worker' }, 410);
@@ -31165,5 +31167,5 @@ async function emitSessionEvent(env, sessionId, event) {
 }
 // Build Trigger: 2026-04-09-00-43
 
-export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom, IAMSession, IAMAgentSession, MeauxSession } from "./src/core/durable_objects.js";
+export { IAMCollaborationSession, AgentChatSqlV1, ChessRoom } from "./src/core/durable_objects.js";
 // build trigger Tue Apr 14 11:21:16 CDT 2026

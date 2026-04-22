@@ -70,13 +70,7 @@ export class ChessRoom extends DurableObject {
   }
 }
 
-/** Legacy KV-backed stubs to satisfy Cloudflare persistence migrations. */
-export class IAMSession extends DurableObject {
-  async fetch() { return new Response(JSON.stringify({ do: 'IAMSession', ok: true, legacy: true })); }
-}
-export class IAMAgentSession extends DurableObject {
-  async fetch() { return new Response(JSON.stringify({ do: 'IAMAgentSession', ok: true, legacy: true })); }
-}
-export class MeauxSession extends DurableObject {
-  async fetch() { return new Response(JSON.stringify({ do: 'MeauxSession', ok: true, legacy: true })); }
-}
+// DEPRECATED: legacy DO stubs removed from active exports.
+
+// ACTIVE PATH: Agent terminal/chat session control plane implementation.
+export { AgentChatSqlV1 };

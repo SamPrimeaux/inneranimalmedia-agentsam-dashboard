@@ -29,10 +29,10 @@ import { runIntegritySnapshot } from './api/integrity';
 import { handleDashboardApi } from './api/dashboard';
 import legacyWorker from '../worker.js';
 
-// --- Durable Objects ---
+// --- Durable Objects (ACTIVE: 3 production classes only) ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
 export { AgentChatSqlV1 } from './do/AgentChat.js';
-export { IAMSession, IAMAgentSession, MeauxSession, ChessRoom } from './do/Legacy.js';
+export { ChessRoom } from './do/Legacy.js';
 
 export default {
 

@@ -96,6 +96,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
+    // DEPRECATED PATH: kept for compatibility. ACTIVE PATH is /api/agent/terminal/ws.
     // ── /api/agent/terminal/socket-url ───────────────────────────────────────
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
@@ -124,6 +125,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         });
     }
 
+    // ACTIVE PATH: browser connects here for terminal websocket.
     // ── /api/agent/terminal/ws (authoritative control plane) ────────────────
     if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
@@ -147,6 +149,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         return stub.fetch(new Request(doUrl.toString(), request));
     }
 
+    // ACTIVE PATH: terminal status through DO control plane.
     // ── /api/agent/terminal/status ───────────────────────────────────────────
     if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
@@ -166,6 +169,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         return stub.fetch(new Request(doUrl.toString(), { method: 'GET', headers: request.headers }));
     }
 
+    // ACTIVE PATH: execution_mode-aware execution API behind Worker/DO control plane.
     // ── /api/agent/terminal/exec (authoritative mode execution) ─────────────
     if (pathLower === '/api/agent/terminal/exec' && method === 'POST') {
         const authUser = await getAuthUser(request, env);
@@ -196,6 +200,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }));
     }
 
+    // ACTIVE PATH: compatibility command runner; internally routes to control plane first.
     // ── /api/agent/terminal/run (consistent session-auth model) ──────────────
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
         const authUser = await getAuthUser(request, env);

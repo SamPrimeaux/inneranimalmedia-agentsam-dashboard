@@ -101,8 +101,8 @@ export async function runTerminalCommandViaHttpExec(env, cmd) {
 }
 
 /**
- * Execute through the authoritative Worker/DO control plane instead of
- * directly reaching the upstream PTY URL from browser paths.
+ * ACTIVE PATH: Execute through the authoritative Worker/DO control plane.
+ * DEPRECATED DIRECT PATH: direct browser → upstream PTY websocket.
  */
 export async function runTerminalCommandViaControlPlane(env, request, command, executionMode = 'pty', extra = {}) {
   if (!env?.AGENT_SESSION) return { ok: false };

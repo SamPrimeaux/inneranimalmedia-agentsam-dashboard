@@ -4,6 +4,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
+// ACTIVE PATH: AGENT_SESSION DO terminal coordination for /api/agent/terminal/ws.
 const TERMINAL_WS_TAG = "terminal";
 const DEFAULT_EXECUTION_MODE = "pty";
 const DEFAULT_MCP_ENDPOINT = "https://mcp.inneranimalmedia.com/mcp";

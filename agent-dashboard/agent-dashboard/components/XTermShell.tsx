@@ -422,8 +422,8 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
           const disposeListeners: Array<() => void> = [];
 
           ws.onopen = () => {
-            if (!isMounted) return;
             setStatus('online');
+            if (!isMounted) return;
 
             const term = xtermRef.current;
             if (!term) return; // terminal may not be mounted yet; WS output will still buffer
@@ -493,10 +493,6 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             xtermRef.current?.write(event.data as string);
           };
 
-          ws.onopen = () => {
-            retryCountRef.current = 0; // reset backoff on successful connect
-          };
-
           ws.onclose = () => {
             disposeListeners.forEach(fn => fn());
             if (!isMounted) return;
@@ -520,7 +516,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         }
       };
 
-      if (!isCollapsed && activeTab === 'terminal') void connect();
+      if (!isCollapsed && activeTab === 'terminal' && (!socketRef.current || socketRef.current.readyState > 1)) void connect();
 
       return () => {
         isMounted = false;

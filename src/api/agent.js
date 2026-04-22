@@ -512,6 +512,24 @@ export async function handleAgentApi(request, url, env, ctx) {
   const path   = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
   const method = request.method.toUpperCase();
 
+  // GET /api/agent/health — first thing Agent Sam queries on session start
+  if (path === '/api/agent/health' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const { results } = await env.DB.prepare(
+      `SELECT component, status, last_checked_at, last_healthy_at,
+              error_message, metadata_json
+       FROM iam_system_health
+       ORDER BY status DESC, component ASC`
+    ).all();
+    const down = (results || []).filter((r) => r.status === 'down').length;
+    const degraded = (results || []).filter((r) => r.status === 'degraded').length;
+    return jsonResponse({
+      overall: down > 0 ? 'down' : degraded > 0 ? 'degraded' : 'healthy',
+      components: results || [],
+      queried_at: new Date().toISOString()
+    });
+  }
+
   // ── /api/agent/models ─────────────────────────────────────────────────────
   if (path === '/api/agent/models') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);

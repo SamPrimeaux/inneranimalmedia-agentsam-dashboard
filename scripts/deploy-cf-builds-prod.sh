@@ -49,12 +49,26 @@ fi
 echo "=== CF Builds PROD: R2 asset sync ==="
 MAX_JOBS=8
 job_count=0
+get_content_type() {
+  case "${1##*.}" in
+    js)   echo "application/javascript" ;;
+    css)  echo "text/css" ;;
+    html) echo "text/html" ;;
+    json) echo "application/json" ;;
+    png)  echo "image/png" ;;
+    svg)  echo "image/svg+xml" ;;
+    woff2)echo "font/woff2" ;;
+    *)    echo "application/octet-stream" ;;
+  esac
+}
 if [ -d "$DIST_DIR" ]; then
   while IFS= read -r file; do
     [ -z "$file" ] && continue
     key="${R2_PREFIX}/$(basename "$file")"
+    CT=$(get_content_type "$file")
     npx wrangler r2 object put "${BUCKET}/${key}" \
       --file "$file" \
+      --content-type "$CT" \
       --remote \
       -c wrangler.production.toml &
     job_count=$((job_count + 1))

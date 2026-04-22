@@ -482,7 +482,9 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
             const wsParams = new URLSearchParams();
             if (workspaceId) wsParams.set('workspace_id', workspaceId);
             wsParams.set('execution_mode', 'pty');
-            const wsUrl = `/api/agent/terminal/ws?${wsParams.toString()}`;
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsOrigin = `${wsProtocol}//${window.location.host}`;
+            const wsUrl = `${wsOrigin}/api/agent/terminal/ws?${wsParams.toString()}`;
 
             const ws = new WebSocket(wsUrl);
             socketRef.current = ws;

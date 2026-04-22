@@ -129,8 +129,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
             upstreamWs.addEventListener('close', () => server.close());
 
             return new Response(null, { status: 101, webSocket: client });
-        } catch (_) {
-            return new Response('PTY error', { status: 502 });
+        } catch (e) {
+            console.error('[PTY_WS_ERROR]', e?.message, e?.stack);
+            return new Response('PTY error: ' + (e?.message || 'unknown'), { status: 502 });
         }
     }
 

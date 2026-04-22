@@ -26485,7 +26485,7 @@ function agentIdeWorkspaceStorageId(authUser, conversationId) {
   const t = (authUser?.tenant_id != null && String(authUser.tenant_id).trim()) ? String(authUser.tenant_id).trim() : 'global';
   const u = (authUser?.id != null && String(authUser.id).trim()) ? String(authUser.id).trim() : 'global';
   const c = String(conversationId).trim();
-  return `ide_ws:${t}:${u}:${c}`;
+  return `ws_ide_${u.replace(/[^a-z0-9_]/gi, "_").toLowerCase()}`;
 }
 
 /** Tenant for theme APIs: session user (KV/auth_sessions) then wrangler TENANT_ID. */

@@ -65,8 +65,6 @@ export function terminalExecHttpUrlFromEnv(env) {
  * Run via HTTP-exec (reliable fallback for Cloudflare Workers).
  */
 export async function runTerminalCommandViaHttpExec(env, cmd) {
-  const execUrl = terminalExecHttpUrlFromEnv(env);
-  if (!execUrl) return { ok: false };
   const tokens = [];
   const pushTok = (t) => {
     const s = String(t || '').trim();
@@ -75,6 +73,38 @@ export async function runTerminalCommandViaHttpExec(env, cmd) {
   pushTok(env.PTY_AUTH_TOKEN);
   pushTok(env.TERMINAL_SECRET);
   if (!tokens.length) return { ok: false };
+
+  // Prefer private VPC connector when present.
+  if (env?.PTY_SERVICE) {
+    try {
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const res = await env.PTY_SERVICE.fetch(new Request('http://localhost:3099/exec', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + token,
+            'X-PTY-Token': token,
+          },
+          body: JSON.stringify({ command: cmd }),
+        }));
+        if (res.status === 401 && i < tokens.length - 1) continue;
+        if (!res.ok) return { ok: false };
+        const data = await res.json().catch(() => null);
+        if (!data || typeof data !== 'object') return { ok: false };
+        const stdout = typeof data.stdout === 'string' ? data.stdout : '';
+        const stderr = typeof data.stderr === 'string' ? data.stderr : '';
+        const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
+        return { ok: true, text, exitCode: data.exit_code ?? 0 };
+      }
+      return { ok: false };
+    } catch (_) {
+      // Fall through to TERMINAL_WS_URL-based HTTP /exec fallback.
+    }
+  }
+
+  const execUrl = terminalExecHttpUrlFromEnv(env);
+  if (!execUrl) return { ok: false };
 
   try {
     for (let i = 0; i < tokens.length; i++) {
@@ -182,47 +212,13 @@ export async function runTerminalCommand(env, request, command, sessionId = null
     throw new Error(controlTry.error || `${mode} execution unavailable`);
   }
 
-  let wsUrl = (env.TERMINAL_WS_URL || '').trim();
-  if (!wsUrl) throw new Error('Terminal not configured');
-
+  // Legacy fallback path for environments missing AGENT_SESSION.
   const httpTry = await runTerminalCommandViaHttpExec(env, cmd);
-  let cleanOutput = '';
-  let exitCode;
-
-  if (httpTry.ok) {
-    cleanOutput = httpTry.text;
-    exitCode = httpTry.exitCode;
-  } else {
-    // WebSocket Fallback Logic...
-    if (wsUrl.startsWith('https://')) wsUrl = 'wss://' + wsUrl.slice(8);
-    else if (wsUrl.startsWith('http://')) wsUrl = 'ws://' + wsUrl.slice(7);
-    
-    const sep = wsUrl.includes('?') ? '&' : '?';
-    const token = String(env.PTY_AUTH_TOKEN || env.TERMINAL_SECRET || '').trim();
-    const wsUrlWithAuth = token ? `${wsUrl}${sep}token=${encodeURIComponent(token)}` : wsUrl;
-    
-    const wsResp = await fetch(wsUrlWithAuth, {
-      headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13' },
-    });
-    if (wsResp.status !== 101) throw new Error(`Terminal connect failed: ${wsResp.status}`);
-    const ws = wsResp.webSocket;
-    ws.accept();
-
-    cleanOutput = await new Promise((resolve) => {
-      const chunks = [];
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        resolve(aggregateTerminalRunOutput(chunks));
-      };
-      setTimeout(finish, 10000); // 10s ceiling
-      ws.addEventListener('message', (e) => chunks.push(e.data));
-      ws.addEventListener('close', finish);
-      ws.send(JSON.stringify({ type: 'run', command: cmd }));
-    });
-    ws.close();
+  if (!httpTry.ok) {
+    throw new Error(controlTry.error || 'terminal execution unavailable');
   }
+  const cleanOutput = httpTry.text;
+  const exitCode = httpTry.exitCode;
 
   await writeTerminalHistory(env, request, sessionId, cmd, cleanOutput, exitCode);
 
@@ -230,14 +226,37 @@ export async function runTerminalCommand(env, request, command, sessionId = null
 }
 
 export async function resolveIamWorkspaceRoot(env) {
-  const fallback = '/Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard';
-  if (!env?.DB) return fallback;
-  const row = await env.DB.prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?').bind('ws_inneranimalmedia').first();
-  if (row?.settings_json) {
-    const j = JSON.parse(row.settings_json);
-    return j.workspace_root || fallback;
+  if (!env?.DB) throw new Error('DB not configured');
+
+  const workspaceSettingsRow = await env.DB
+    .prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?')
+    .bind('ws_inneranimalmedia')
+    .first()
+    .catch(() => null);
+
+  if (workspaceSettingsRow?.settings_json) {
+    try {
+      const parsed = JSON.parse(workspaceSettingsRow.settings_json);
+      const root = typeof parsed?.workspace_root === 'string' ? parsed.workspace_root.trim() : '';
+      if (root) return root;
+    } catch (_) {}
   }
-  return fallback;
+
+  const workspaceRow = await env.DB
+    .prepare('SELECT settings_json FROM agentsam_workspace WHERE id = ?')
+    .bind('ws_inneranimalmedia')
+    .first()
+    .catch(() => null);
+
+  if (workspaceRow?.settings_json) {
+    try {
+      const parsed = JSON.parse(workspaceRow.settings_json);
+      const root = typeof parsed?.workspace_root === 'string' ? parsed.workspace_root.trim() : '';
+      if (root) return root;
+    } catch (_) {}
+  }
+
+  throw new Error('workspace_root_missing_in_d1');
 }
 
 export async function resolveTerminalSessionIdForHistory(env, request) {

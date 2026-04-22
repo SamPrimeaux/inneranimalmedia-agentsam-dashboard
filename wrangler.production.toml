@@ -110,7 +110,7 @@ new_sqlite_classes = ["AgentChatSqlV1"]
 
 [[migrations]]
 tag = "v6"
-deleted_classes = ["MeauxSession", "IAMAgentSession"]
+deleted_classes = ["MeauxSession", "IAMAgentSession", "IAMSession"]
 
 [[queues.producers]]
 binding = "MY_QUEUE"

@@ -1,0 +1,128 @@
+================================================================
+INNERANIMALMEDIA — PRODUCTION DEPLOY INVENTORY
+Last Deploy: 2026-04-22 ~00:24 CST
+Script: bash scripts/deploy-cf-builds-prod.sh
+Worker Version: 22ee2875-9cba-4f25-b084-f71ea1f7f7c3
+================================================================
+
+── STEP 1: WORKER DEPLOY ────────────────────────────────────────
+Target Worker : inneranimalmedia
+Upload Size   : 4,945.93 KiB (gzip: 955.52 KiB)
+Startup Time  : 42 ms
+
+Routes Served:
+  https://inneranimalmedia.meauxbility.workers.dev
+  inneranimalmedia.com/*
+  www.inneranimalmedia.com/*
+  webhooks.inneranimalmedia.com/*
+
+Cron Schedules:
+  0 6 * * *       (daily 6am)
+  30 13 * * *     (daily 1:30pm)
+  0 9 * * *       (daily 9am)
+  */30 * * * *    (every 30 min)
+  0 12 * * *      (daily noon)
+  0 0 * * *       (daily midnight)
+
+Tail Worker   : inneranimalmedia-tail
+
+── STEP 2: BINDINGS ─────────────────────────────────────────────
+Type              Binding Name              Resource
+Durable Object    env.IAM_COLLAB            IAMCollaborationSession
+Durable Object    env.CHESS_SESSION         ChessRoom
+Durable Object    env.AGENT_SESSION         AgentChatSqlV1
+KV Namespace      env.KV                    09438d5e4f664bf78467a15af7743c44
+KV Namespace      env.SESSION_CACHE         dc87920b0a9247979a213c09df9a0234
+Queue             env.MY_QUEUE              74b3155b36334b69852411c083d50322
+D1 Database       env.DB                    inneranimalmedia-business
+Vectorize         env.VECTORIZE             ai-search-inneranimalmedia-autorag
+Hyperdrive        env.HYPERDRIVE            08183bb9d2914e87ac8395d7e4ecff60
+R2 Bucket         env.ASSETS                inneranimalmedia-assets
+R2 Bucket         env.DASHBOARD             agent-sam           ← frontend lives here
+R2 Bucket         env.AUTORAG_BUCKET        autorag
+R2 Bucket         env.DOCS_BUCKET           iam-docs
+R2 Bucket         env.R2                    iam-platform
+R2 Bucket         env.TOOLS                 tools
+Analytics Engine  env.WAE                   inneranimalmedia
+Browser           env.MYBROWSER             Browser Run
+AI                env.AI                    (Workers AI — prod only, not sandbox)
+Env Var           CLOUDFLARE_ACCOUNT_ID     ede6590ac0d2fb7daf155b35653457b2
+Env Var           TENANT_ID                 tenant_sam_primeaux
+Env Var           WORKSPACE_ID              ws_inneranimalmedia
+Env Var           DEPLOY_ENV                production
+
+── STEP 3: D1 DEPLOY RECORD ────────────────────────────────────
+Database : inneranimalmedia-business
+Action   : INSERT deploy record (automated by script)
+
+── STEP 4: VITE BUILD ──────────────────────────────────────────
+Source    : agent-dashboard/
+Output    : agent-dashboard/dist/
+Build Tool: Vite 6.4.1
+Modules   : 3,599 transformed
+Time      : 25.72s
+
+Key Output Files:
+  agent-dashboard.js        5,197.00 kB  (main bundle)
+  agent-dashboard.css         167.09 kB
+  agent-dashboard.js.map   10,073.76 kB  (source map)
+  index.html                   2.64 kB
+  agent.html                   (root entry)
+
+Font Files (4):
+  Assistant-Bold.woff2
+  Assistant-SemiBold.woff2
+  Assistant-Medium.woff2
+  Assistant-Regular.woff2
+
+Lazy-loaded Diagram Chunks (~110 files):
+  mindmap-definition-fc14e90a.js    1,204.32 kB
+  subset-shared.chunk.js            1,840.73 kB
+  flowchart-elk-definition.js       3,298.07 kB
+  katex.js                            481.10 kB
+  index.js                            509.36 kB
+  [+ ~100 locale + diagram chunks, all hashed]
+
+Cache Bust: package 1.2.0 → index.html ?v=1.2.0-1776835427365
+
+── STEP 5: R2 ASSET SYNC ───────────────────────────────────────
+Destination Bucket : agent-sam
+Prefix             : static/dashboard/agent/
+Method             : wrangler r2 object put (parallel uploads)
+Result             : ALL files uploaded (1 transient network error
+                     mid-upload, recovered — all complete)
+
+Also uploaded:
+  static/dashboard/agent.html   → agent-sam  (root HTML entry)
+
+── WHAT IS NOT DEPLOYED BY THIS SCRIPT ────────────────────────
+iam-pty          Local PM2 process — deploy separately via git push
+                 to SamPrimeaux/iam-pty + pm2 restart --update-env
+
+inneranimalmedia-mcp-server
+                 Separate worker — deploy via its own wrangler or
+                 git push to SamPrimeaux/inneranimalmedia-mcp-server
+
+inneranimal-dashboard (sandbox)
+                 Separate worker from ~/inneranimalmedia repo —
+                 NOT touched by this script
+
+D1 schema changes
+                 Must be run manually via wrangler d1 execute
+                 before or after deploy as needed
+
+Secrets (PTY_AUTH_TOKEN etc.)
+                 Must be set via wrangler versions secret put
+                 independently — NOT included in this script
+
+================================================================
+DEPLOY CHECKLIST (run before promoting anything)
+================================================================
+[ ] grep verify patch landed before deploy
+[ ] bash scripts/deploy-cf-builds-prod.sh  (this script)
+[ ] hard refresh browser (Cmd+Shift+R)
+[ ] check terminal connects + input works
+[ ] npx wrangler tail inneranimalmedia --format pretty  (watch live)
+[ ] confirm no 500s in tail for 60 seconds
+[ ] git push origin production  (if not already committed)
+================================================================

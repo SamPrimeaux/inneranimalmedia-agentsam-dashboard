@@ -138,7 +138,7 @@ export async function handleDashboardApi(request, url, env, ctx) {
         const executionModeRaw = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
         const executionMode = ['pty', 'ssh', 'mcp'].includes(executionModeRaw) ? executionModeRaw : 'pty';
         const workspaceId = (url.searchParams.get('workspace_id') || authUser.tenant_id || 'default').trim();
-        const sessionName = `terminal:${authUser.id}:${workspaceId}:${executionMode}`;
+        const sessionName = `terminal:v2:${authUser.id}:${workspaceId}:${executionMode}`;
         const doId = env.AGENT_SESSION.idFromName(sessionName);
         const stub = env.AGENT_SESSION.get(doId);
         const doUrl = new URL(request.url);

@@ -101,6 +101,43 @@ export class AgentChatSqlV1 extends DurableObject {
     this.ptyConnectPromise = null;
     this.cachedTerminalSessionId = null;
     this.terminalLineBuffers = new Map();
+    this.workspaceId = "ws_inneranimalmedia";
+    this.workspaceSettings = {};
+    this.workspaceSettingsPromise = null;
+  }
+
+  async loadWorkspaceSettings() {
+    if (!this.env?.DB || !this.workspaceId) {
+      this.workspaceSettings = {};
+      return this.workspaceSettings;
+    }
+    const row = await this.env.DB.prepare(
+      "SELECT settings_json FROM agentsam_workspace WHERE id = ?"
+    ).bind(this.workspaceId).first();
+    try {
+      const parsed = row?.settings_json ? JSON.parse(row.settings_json) : {};
+      this.workspaceSettings = parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      this.workspaceSettings = {};
+    }
+    return this.workspaceSettings;
+  }
+
+  async ensureWorkspaceSettingsLoaded(workspaceId) {
+    const nextWorkspaceId = String(workspaceId || "").trim() || "ws_inneranimalmedia";
+    if (this.workspaceId !== nextWorkspaceId) {
+      this.workspaceId = nextWorkspaceId;
+      this.workspaceSettings = {};
+    }
+    if (this.workspaceSettingsPromise) {
+      await this.workspaceSettingsPromise;
+      return this.workspaceSettings;
+    }
+    this.workspaceSettingsPromise = this.loadWorkspaceSettings().finally(() => {
+      this.workspaceSettingsPromise = null;
+    });
+    await this.workspaceSettingsPromise;
+    return this.workspaceSettings;
   }
 
   /** @param {Request} request */
@@ -193,6 +230,8 @@ export class AgentChatSqlV1 extends DurableObject {
     }
 
     const executionMode = normalizeExecutionMode(url.searchParams.get("execution_mode"));
+    const workspaceId = (url.searchParams.get("workspace_id") || "").trim();
+    await this.ensureWorkspaceSettingsLoaded(workspaceId);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     this.ctx.acceptWebSocket(server, [TERMINAL_WS_TAG, `mode:${executionMode}`]);
@@ -228,6 +267,8 @@ export class AgentChatSqlV1 extends DurableObject {
   async handleTerminalExec(request, url) {
     const body = await request.json().catch(() => ({}));
     const executionMode = normalizeExecutionMode(body?.execution_mode || url.searchParams.get("execution_mode"));
+    const workspaceId = String(body?.workspace_id || url.searchParams.get("workspace_id") || "").trim();
+    await this.ensureWorkspaceSettingsLoaded(workspaceId);
     const command = String(body?.command || "").trim();
 
     try {
@@ -389,7 +430,9 @@ export class AgentChatSqlV1 extends DurableObject {
     }
 
     // Fallback: public tunnel (TERMINAL_WS_URL secret)
-    const rawUrl = String(this.env?.TERMINAL_WS_URL || "").trim();
+    // Per-workspace URL takes priority over global secret
+    const workspaceUrl = this.workspaceSettings?.terminal_ws_url;
+    const rawUrl = workspaceUrl || String(this.env?.TERMINAL_WS_URL || "").trim();
     if (!rawUrl || !token) throw new Error("PTY backend is not configured — set PTY_SERVICE binding or TERMINAL_WS_URL + PTY_AUTH_TOKEN");
     let wsUrl = normalizeWebSocketUrl(rawUrl);
     const sep = wsUrl.includes("?") ? "&" : "?";

@@ -96,19 +96,49 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
+    if (pathLower === '/api/agent/terminal/ws') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return new Response('Unauthorized', { status: 401 });
+
+        const upgradeHeader = request.headers.get('Upgrade');
+        if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
+
+        const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
+        const upstream = await fetch(`http://iam-vpc/?token=${token}`, {
+            headers: {
+                'Upgrade': 'websocket',
+                'Connection': 'Upgrade',
+                'Sec-WebSocket-Version': '13',
+            },
+        });
+
+        if (upstream.status !== 101) {
+            return new Response('PTY upstream failed', { status: 502 });
+        }
+
+        const upstreamWs = upstream.webSocket;
+        upstreamWs.accept();
+
+        const { 0: client, 1: server } = new WebSocketPair();
+        server.accept();
+
+        server.addEventListener('message', e => upstreamWs.send(e.data));
+        server.addEventListener('close', () => upstreamWs.close());
+        upstreamWs.addEventListener('message', e => server.send(e.data));
+        upstreamWs.addEventListener('close', () => server.close());
+
+        return new Response(null, { status: 101, webSocket: client });
+    }
+
     // DEPRECATED PATH: kept for compatibility. ACTIVE PATH is /api/agent/terminal/ws.
     // ── /api/agent/terminal/socket-url ───────────────────────────────────────
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
-        const wsProto = url.protocol === 'https:' ? 'wss:' : 'ws:';
-        const workspaceId = (url.searchParams.get('workspace_id') || '').trim();
-        const executionMode = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
-        const params = new URLSearchParams();
-        if (workspaceId) params.set('workspace_id', workspaceId);
-        params.set('execution_mode', executionMode || 'pty');
-        return jsonResponse({ url: `${wsProto}//${url.host}/api/agent/terminal/ws?${params.toString()}` });
+        const origin = new URL(request.url).origin;
+        const wsOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
+        return jsonResponse({ url: `${wsOrigin}/api/agent/terminal/ws` });
     }
 
     // ── /api/agent/terminal/config-status ────────────────────────────────────

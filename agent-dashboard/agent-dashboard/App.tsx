@@ -1512,7 +1512,7 @@ const App: React.FC = () => {
                   icon={Database}
                   title="D1 Explorer"
                   active={activeActivity === 'database'}
-                  onClick={() => toggleActivity('database')}
+                  onClick={() => navigate('/dashboard/database')}
               />
               <ActivityIcon icon={Cloud} title="Cloud Sync" active={activeActivity === 'drive'} onClick={() => toggleActivity('drive')} />
               <ActivityIcon icon={Monitor} title="Playwright Jobs" active={activeActivity === 'playwright'} onClick={() => toggleActivity('playwright')} />
@@ -2039,7 +2039,7 @@ const App: React.FC = () => {
         <button
           type="button"
           className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'database' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => toggleActivity('database')}
+          onClick={() => navigate('/dashboard/database')}
         >
           <Database size={24} strokeWidth={1.5} aria-hidden />
           <span>Database</span>

@@ -7,6 +7,7 @@ import { handleAgentRequest } from './api/agent';
 import { handleAgentSamRegistryRequest } from './api/agentsam';
 import { handleTimeDispatch } from './tools/time';
 import { handleR2Api } from './api/r2-api';
+import { handleStorageApi } from './api/storage';
 import { handleIntegrationsRequest } from './api/integrations';
 import { recordWorkerAnalyticsError, writeTelemetry } from './api/telemetry';
 import { getAuthUser, jsonResponse } from './core/auth';
@@ -114,6 +115,10 @@ export default {
       if (pathLower.startsWith('/api/agentsam')) {
         const res = await handleAgentSamRegistryRequest(request, env, ctx, authUser);
         if (res && res.status !== 404) return res;
+      }
+
+      if (pathLower.startsWith('/api/storage')) {
+        return handleStorageApi(request, url, env);
       }
 
       if (pathLower.startsWith('/api/r2/')) {

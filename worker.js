@@ -7,6 +7,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { handleStorageApi } from "./src/api/storage.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -4020,6 +4021,11 @@ const worker = {
       // ── IAM EXPLORER ROUTES (added session_1) ──────────────────────────
       const iamExplorerRes = await handleIamExplorerApi(request, url, env, ctx);
       if (iamExplorerRes) return iamExplorerRes;
+
+      // ----- API: Storage dashboard (/api/storage/*) — tenant-scoped; see src/api/storage.js -----
+      if (pathLower.startsWith('/api/storage')) {
+        return handleStorageApi(request, url, env);
+      }
 
       // ----- API: R2 DevOps (buckets, objects, sync, upload, stats, bulk-action) -----
       if (pathLower.startsWith('/api/r2/')) {

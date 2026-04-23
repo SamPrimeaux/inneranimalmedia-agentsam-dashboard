@@ -243,9 +243,9 @@ export async function handleR2Api(request, url, env) {
   return jsonResponse({ error: 'R2 route not matched' }, 404);
 }
 
-// --- HELPER FUNCTIONS ---
+// --- HELPER FUNCTIONS (exported for storage dashboard API) ---
 
-function getR2Binding(env, bucketName) {
+export function getR2Binding(env, bucketName) {
   const map = {
     'inneranimalmedia-assets': env.ASSETS,
     autorag: env.AUTORAG_BUCKET,
@@ -259,7 +259,7 @@ function getR2Binding(env, bucketName) {
   return map[bucketName] || null;
 }
 
-function listBoundR2BucketNames(env) {
+export function listBoundR2BucketNames(env) {
   const names = [];
   if (env.ASSETS) names.push('inneranimalmedia-assets');
   if (env.AUTORAG_BUCKET) names.push('autorag');
@@ -272,7 +272,7 @@ function listBoundR2BucketNames(env) {
   return names;
 }
 
-async function r2LiveBucketStats(env, bucketName) {
+export async function r2LiveBucketStats(env, bucketName) {
   const binding = getR2Binding(env, bucketName);
   if (!binding || !binding.list) return { ok: false, error: 'Binding not available' };
   let cursor;

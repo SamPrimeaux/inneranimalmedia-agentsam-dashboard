@@ -133,7 +133,7 @@ const App: React.FC = () => {
 
   // IDE State
   type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | null>(() =>
+  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
   const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
@@ -340,6 +340,7 @@ const App: React.FC = () => {
   const [glbViewerFilename, setGlbViewerFilename] = useState('Meshy_AI_Jet.glb');
 
   const [cmdSearch, setCmdSearch] = useState('');
+  const [cmdHubOpen, setCmdHubOpen] = useState(false);
 
   const handleCommandExecution = useCallback((cmdText: string) => {
     terminalRef.current?.runCommand(cmdText);
@@ -1758,7 +1759,7 @@ const App: React.FC = () => {
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
                     <Route path="/dashboard/mcp" element={<McpPage />} />
-                    <Route path="/dashboard/settings" element={<SettingsPanel />} />
+                    <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
                   </Routes>
                 </div>
               ) : (

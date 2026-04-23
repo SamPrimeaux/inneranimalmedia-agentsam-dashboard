@@ -1511,7 +1511,7 @@ const App: React.FC = () => {
               <ActivityIcon
                   icon={Database}
                   title="D1 Explorer"
-                  active={activeActivity === 'database'}
+                  active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
               <ActivityIcon icon={Cloud} title="Cloud Sync" active={activeActivity === 'drive'} onClick={() => toggleActivity('drive')} />
@@ -1756,6 +1756,7 @@ const App: React.FC = () => {
                     <Route path="/dashboard/calendar" element={<CalendarPage />} />
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
+                    <Route path="/dashboard/settings" element={<SettingsPanel />} />
                   </Routes>
                 </div>
               ) : (
@@ -2038,7 +2039,7 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'database' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${location.pathname === '/dashboard/database' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
           onClick={() => navigate('/dashboard/database')}
         >
           <Database size={24} strokeWidth={1.5} aria-hidden />

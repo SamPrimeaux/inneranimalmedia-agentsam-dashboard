@@ -130,15 +130,17 @@ function normalizeSchema(rows: Record<string, unknown>[]): SchemaCol[] {
 // ─── UI Helpers ───────────────────────────────────────────────────────────────
 
 function groupByPrefix(tables: string[]): TableGroup[] {
+  const sorted = [...tables].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const map = new Map<string, string[]>();
-  for (const t of tables) {
+  for (const t of sorted) {
     const prefix = t.includes('_') ? t.split('_')[0] : '\u00b7misc';
     if (!map.has(prefix)) map.set(prefix, []);
     map.get(prefix)!.push(t);
   }
   return Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([prefix, tbls]) => ({ prefix, tables: tbls.sort() }));
+    .map(([prefix, tbls]) => ({ prefix, tables: tbls }));
 }
 
 function typeColor(type: string): string {
@@ -720,7 +722,7 @@ const TableSidebar: React.FC<TableSidebarProps> = ({
                       ? 'text-[var(--solar-cyan)]'
                       : 'text-[var(--text-muted)] group-hover:text-[var(--solar-cyan)]'
                   }`} />
-                  <span className={`text-[0.6875rem] truncate font-mono ${
+                  <span className={`text-[0.75rem] truncate font-mono ${
                     selected === table ? 'text-[var(--solar-cyan)] font-semibold' : 'text-[var(--text-main)]'
                   }`}>
                     {table}
@@ -1175,7 +1177,7 @@ export const DatabasePage: React.FC = () => {
         {/* sidebar */}
         {sidebarOpen && (
           <div className="w-56 shrink-0 border-r border-[var(--border-subtle)] flex flex-col min-h-0
-                          max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:w-72 max-md:shadow-2xl">
+                          max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:w-[85vw] max-md:shadow-2xl">
             <TableSidebar
               groups={filteredGroups}
               openGroups={openGroups}

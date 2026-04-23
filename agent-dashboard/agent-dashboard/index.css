@@ -4,12 +4,12 @@
 @import "tailwindcss";
 
 :root {
-  --font-inter: system-ui, -apple-system, sans-serif;
-  --font-mono: Menlo, Monaco, 'Courier New', monospace;
+  --font-sans: 'Nunito', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace;
 }
 
 body {
-  font-family: var(--font-inter);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.011em;

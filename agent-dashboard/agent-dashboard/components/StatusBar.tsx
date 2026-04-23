@@ -1,5 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, XCircle, AlertTriangle, Bell, Check, KeyRound, Monitor, Globe, Package, HardDrive, Database, ChevronUp, ChevronDown, User, LogOut, MessageSquare } from 'lucide-react';
+import {
+  MonitorDot,
+  GitBranch,
+  RefreshCw,
+  XCircle,
+  AlertTriangle,
+  WrapText,
+  Bell,
+  Check,
+  ChevronUp,
+  ChevronDown,
+  User,
+  LogOut,
+} from 'lucide-react';
 import { SHELL_VERSION } from '../src/shellVersion';
 
 /** Cloudflare Worker name for this dashboard host (sandbox vs prod). */
@@ -101,22 +114,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onVersionClick,
   onFormatClick,
 }) => {
-  const cursorText = showCursor ? `Ln ${line}, Col ${col}` : 'Ln --, Col --';
-  const versionDisplay = '';
   const [chatModeLabel, setChatModeLabel] = useState<string>('');
   const [notifOpen, setNotifOpen] = useState(false);
-  const [sshOpen, setSshOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const sshRef = useRef<HTMLDivElement>(null);
-
-  const QUICK_COMMANDS = [
-    { icon: Monitor, label: 'Local PTY', cmd: 'ssh iam-pty', desc: 'Inner Animal PTY' },
-    { icon: Globe, label: 'Production SSH', cmd: 'ssh production-iam', desc: 'Mainstage Access' },
-    { icon: HardDrive, label: 'Sandbox SSH', cmd: 'ssh sandbox-d1', desc: 'Experiment D1' },
-    { icon: MessageSquare, label: 'Clear Chat', cmd: 'clear', desc: 'Reset Agent Session' },
-    { icon: Package, label: 'Build Project', cmd: 'npm run build', desc: 'Production Bundle' },
-    { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
-  ];
+  const [showRemoteMenu, setRemoteMenu] = useState(false);
+  const remoteRef = useRef<HTMLDivElement>(null);
+  const [showBranchMenu, setBranchMenu] = useState(false);
+  const branchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onMode = (ev: Event) => {
@@ -135,7 +139,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
       if (panelRef.current && !panelRef.current.contains(t)) setNotifOpen(false);
-      if (sshRef.current && !sshRef.current.contains(t)) setSshOpen(false);
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('mousedown', onDown);
@@ -145,31 +148,39 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     };
   }, [notifOpen]);
 
-  const workerDisplayName = useMemo(() => resolveWorkerDisplayName(), []);
+  useEffect(() => {
+    if (!showRemoteMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (remoteRef.current && !remoteRef.current.contains(e.target as Node)) {
+        setRemoteMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showRemoteMenu]);
 
-  const brandTitle = [
-    workerDisplayName,
-    healthOk === true ? 'Worker healthy' : healthOk === false ? 'Worker health check failed' : 'Health unknown',
-    lastDeployLine || undefined,
-    tunnelLabel || undefined,
-    terminalOk === true ? 'Terminal configured' : terminalOk === false ? 'Terminal not configured' : undefined,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  useEffect(() => {
+    if (!showBranchMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (branchRef.current && !branchRef.current.contains(e.target as Node)) {
+        setBranchMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showBranchMenu]);
 
   const stop = (e: React.MouseEvent) => {
     e.stopPropagation();
   };
 
-  const copyVersion = useCallback(() => {
-    if (versionDisplay) void navigator.clipboard.writeText(versionDisplay);
-    onVersionClick?.();
-  }, [versionDisplay, onVersionClick]);
-
   const unread = notifUnreadCount > 0 ? notifUnreadCount : notifications.length;
 
   return (
-    <div className="shrink-0 z-[100] relative w-full bg-[var(--bg-app)] border-t border-[var(--border-subtle)]/30 pb-[env(safe-area-inset-bottom,0px)]">
+    <nav
+      className="h-6 flex items-stretch text-[var(--text-muted)] bg-[var(--bg-panel)] border-t border-[var(--border-subtle)] overflow-hidden select-none shrink-0"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+    >
       {notifOpen && (
         <div
           ref={panelRef}
@@ -221,180 +232,235 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </div>
       )}
 
-      <div className="h-6 flex items-center justify-between text-[11px] text-[var(--text-main)]/90 w-full px-1" >
-        {/* Left Side: Environment Switcher */}
-        {/* Left Side: Environment Status Dot */}
-        <div className="flex items-center gap-1.5 px-2 h-full py-0.5 relative" />
-
-        {/* Center: Active Workspace Context */}
-        <div className="flex-1 flex justify-center items-center overflow-hidden px-4 select-none">
-          <div 
-            className="flex items-center gap-2 px-3 py-0.5 rounded-full bg-[var(--bg-panel)] border border-[var(--border-subtle)]/40 hover:border-[var(--solar-cyan)]/40 transition-all cursor-pointer truncate shadow-[0_2px_10px_rgba(0,0,0,0.2)]"
-            onClick={onWorkspaceClick}
-          >
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--solar-cyan)] shadow-[0_0_5px_var(--solar-cyan)] shrink-0" />
-            <span className="truncate opacity-80 hover:opacity-100 transition-opacity uppercase tracking-widest font-bold text-[9px]">
-              {workspace}
-            </span>
-          </div>
-        </div>
-
-        {/* Right Side: Git & Status */}
-        <div className="flex items-center gap-0.5 h-full">
+      <div className="flex items-stretch shrink-0">
+        {/* SSH corner, branch, sync, workspace */}
+        <div ref={remoteRef} className="relative flex items-stretch">
           <button
             type="button"
-            className="flex items-center gap-1.5 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent text-[11px]"
-            title={tunnelLabel ? `Tunnel: ${tunnelLabel}` : 'Source control'}
-            onClick={() => onGitBranchClick?.()}
+            onClick={() => setRemoteMenu((v) => !v)}
+            className="flex items-center gap-1.5 h-full px-2.5 bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] border-r border-[var(--border-subtle)] transition-colors"
+            title="Remote Connection — connect to a host or configure your PTY terminal tunnel"
           >
-            <GitBranch size={12} className="opacity-70 text-[var(--solar-cyan)]" />
-            <span className="tracking-tight">{branch}</span>
-            {tunnelHealthy !== null && (
-              <span
-                className={`ml-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
-                  tunnelHealthy ? 'bg-[var(--solar-green)]' : 'bg-[var(--solar-red)]'
-                }`}
-              />
-            )}
+            <MonitorDot size={11} className="text-[var(--text-muted)]" />
           </button>
-          <button
-            type="button"
-            className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent"
-            title="Open Run & Debug (errors from D1)"
-            onClick={() => onErrorsClick?.()}
-          >
-            <XCircle size={12} className="text-[var(--solar-red)]" /> {errorCount}
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-1 hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors shrink-0 border-0 bg-transparent"
-            title="Open Tools & MCP (audit warnings)"
-            onClick={() => onWarningsClick?.()}
-          >
-            <AlertTriangle size={12} className="text-[var(--solar-yellow)]" /> {warningCount}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-1 sm:gap-2 h-full overflow-hidden shrink-0">
-          <button
-            type="button"
-            className="hidden sm:flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-2 h-full transition-colors border-0 bg-transparent"
-            title={showCursor ? 'Cursor' : 'Focus editor'}
-            onClick={() => onCursorClick?.()}
-          >
-            {cursorText}
-          </button>
-          <div
-            className="hidden sm:flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] px-2 h-full transition-colors"
-            title="Indentation from Monaco model"
-          >
-            {indentLabel}
-          </div>
-          <div
-            className="hidden md:flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] px-2 h-full transition-colors"
-            title="Text encoding"
-          >
-            {encodingLabel}
-          </div>
-          <div
-            className="hidden lg:flex items-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] px-2 h-full transition-colors"
-            title="End of line sequence"
-          >
-            {eolLabel}
-          </div>
-          {chatModeLabel && (
-            <div
-              className="hidden min-[1000px]:flex items-center px-2 h-full text-[var(--text-muted)] font-semibold border-x border-[var(--border-subtle)]/20 max-w-[120px] truncate"
-              title={chatModeLabel}
-            >
-              {chatModeLabel}
+          {showRemoteMenu && (
+            <div className="absolute bottom-full left-0 mb-1 z-50 w-56 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg shadow-xl overflow-hidden py-1">
+              {[
+                { label: 'Connect to Host...', badge: 'Remote-SSH' },
+                { label: 'Connect Current Window to Host...' },
+                { label: 'Open SSH Configuration File...' },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className="w-full flex items-center justify-between px-3 py-1.5 text-[0.6875rem] text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors text-left font-[var(--font-sans)]"
+                  onClick={() => setRemoteMenu(false)}
+                >
+                  <span>{item.label}</span>
+                  {item.badge && (
+                    <span className="text-[0.5rem] text-[var(--text-muted)] font-semibold ml-2 shrink-0">
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+              <div className="border-t border-[var(--border-subtle)] my-1" />
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-1.5 text-[0.6875rem] text-[var(--text-muted)] cursor-not-allowed text-left font-[var(--font-sans)]"
+              >
+                <span>Dev Container</span>
+                <span className="text-[0.5rem] ml-2 shrink-0">Install</span>
+              </button>
             </div>
           )}
-          {versionDisplay && (
-            <button
-              type="button"
-              className="hidden min-[1100px]:flex items-center px-2 h-full bg-[var(--solar-green)]/15 text-[var(--solar-green)] font-bold border-x border-[var(--border-subtle)]/20 border-0 cursor-pointer hover:brightness-110"
-              title="Copy version"
-              onClick={copyVersion}
-            >
-              {versionDisplay}
-            </button>
-          )}
-          {canFormatDocument && (
-            <button
-              type="button"
-              className="hidden sm:flex items-center gap-1 hover:text-[var(--text-main)] cursor-pointer px-2 py-0.5 transition-colors border-0 bg-transparent rounded-sm bg-[var(--bg-hover)]/80"
-              title="Format document (Monaco)"
-              onClick={() => onFormatClick?.()}
-              style={{ fontSize: '11px' }}
-            >
-              <Check size={12} className="text-[var(--solar-green)]" /> Prettier
-            </button>
-          )}
+        </div>
 
-          <button
-            type="button"
-            className="relative flex items-center justify-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-3 h-full transition-colors border-0 bg-transparent"
-            title="Notifications"
-            aria-expanded={notifOpen}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => setNotifOpen((o) => !o)}
-          >
-            <Bell size={13} className="opacity-70" />
-            {unread > 0 && (
-              <span className="absolute top-0.5 right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[var(--solar-red)] text-white text-[9px] font-bold flex items-center justify-center">
-                {unread > 99 ? '99+' : unread}
+        {branch && (
+          <div ref={branchRef} className="relative flex items-stretch">
+            <button
+              type="button"
+              onClick={() => setBranchMenu((v) => !v)}
+              className="flex items-center gap-1.5 px-2.5 h-full hover:bg-[var(--bg-hover)] transition-colors"
+              title="Select a branch or tag to checkout"
+            >
+              <GitBranch size={11} />
+              <span className="text-[0.5625rem] font-semibold text-[var(--text-muted)] font-[var(--font-sans)]">
+                {branch}
               </span>
-            )}
-          </button>
-
-          <div className="relative h-full flex items-center" ref={sshRef}>
+            </button>
             <button
               type="button"
-              className={`flex items-center justify-center cursor-pointer px-2 h-full transition-colors border-0 bg-transparent ${
-                sshOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]'
-              }`}
-              title="Command Hub (SSH & Tools)"
-              onClick={() => setSshOpen(!sshOpen)}
+              onClick={onGitBranchClick}
+              className="flex items-center px-1.5 h-full hover:bg-[var(--bg-hover)] transition-colors"
+              title="Sync with remote — pull and push commits from and to origin"
             >
-              <KeyRound size={13} className="opacity-70" />
+              <RefreshCw size={10} />
             </button>
-
-            {sshOpen && (
-              <div
-                className="absolute bottom-full right-0 mb-1 z-[110] w-[240px] bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded shadow-xl overflow-hidden"
-                onMouseDown={stop}
-              >
-                <div className="px-3 py-1.5 border-b border-[var(--border-subtle)] text-[9px] font-bold uppercase tracking-widest text-[var(--text-muted)]">
-                  Command Hub
+            {showBranchMenu && (
+              <div className="absolute bottom-full left-0 mb-1 z-50 w-64 bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg shadow-xl overflow-hidden">
+                <div className="px-3 py-2 border-b border-[var(--border-subtle)]">
+                  <input
+                    type="text"
+                    placeholder="Select a branch or tag..."
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded px-2 py-1 text-[0.6875rem] text-[var(--text-main)] outline-none focus:border-[var(--solar-cyan)]/50 font-[var(--font-sans)]"
+                    autoFocus
+                  />
                 </div>
-                <div className="max-h-[300px] overflow-y-auto">
-                  {QUICK_COMMANDS.map((c) => (
+                <div className="py-1 max-h-48 overflow-y-auto">
+                  <div className="px-3 py-1">
+                    <p className="text-[0.5rem] font-bold uppercase tracking-widest text-[var(--text-muted)] mb-1">
+                      branches
+                    </p>
                     <button
-                      key={c.label}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-[var(--bg-hover)] text-left group transition-colors border-0 bg-transparent"
-                      onClick={() => {
-                        window.dispatchEvent(
-                          new CustomEvent('iam-agent-external-send', { detail: { message: c.cmd } })
-                        );
-                        setSshOpen(false);
-                      }}
+                      type="button"
+                      onClick={() => setBranchMenu(false)}
+                      className="w-full text-left px-2 py-1.5 rounded text-[0.6875rem] text-[var(--text-main)] bg-[var(--bg-hover)] flex items-center gap-2 font-[var(--font-sans)]"
                     >
-                      <c.icon size={12} className="text-[var(--solar-cyan)] opacity-70 group-hover:opacity-100" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[11px] font-medium text-[var(--text-main)] group-hover:text-[var(--solar-cyan)] truncate">
-                          {c.label}
-                        </div>
-                        <div className="text-[9px] text-[var(--text-muted)] truncate">{c.desc}</div>
-                      </div>
+                      <Check size={11} className="text-[var(--solar-cyan)]" />
+                      {branch}
+                      <span className="ml-auto text-[0.5rem] text-[var(--text-muted)]">HEAD</span>
                     </button>
-                  ))}
+                  </div>
+                  <div className="px-3 py-1 border-t border-[var(--border-subtle)] mt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBranchMenu(false);
+                        onGitBranchClick?.();
+                      }}
+                      className="w-full text-left px-2 py-1.5 text-[0.6875rem] text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] rounded font-[var(--font-sans)]"
+                    >
+                      + Create new branch...
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        )}
+
+        {workspace && (
+          <button
+            type="button"
+            onClick={onWorkspaceClick}
+            title="Switch workspace"
+            className="px-2.5 h-full hover:bg-[var(--bg-hover)] transition-colors hidden sm:flex items-center"
+          >
+            <span className="text-[0.5625rem] font-semibold text-[var(--text-muted)] truncate max-w-[140px] font-[var(--font-sans)]">
+              {workspace}
+            </span>
+          </button>
+        )}
       </div>
-    </div>
+
+      <div className="flex items-stretch flex-1 min-w-0">
+        {/* errors, warnings */}
+        {(errorCount ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={onErrorsClick}
+            title={`${errorCount} errors — click to open Problems panel`}
+            className="flex items-center gap-1 px-2 h-full hover:bg-[var(--bg-hover)] transition-colors"
+          >
+            <XCircle size={11} className="text-[var(--solar-red)]" />
+            <span className="text-[0.5625rem] font-semibold text-[var(--solar-red)] font-[var(--font-sans)]">
+              {errorCount}
+            </span>
+          </button>
+        )}
+        {(warningCount ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={onWarningsClick}
+            title={`${warningCount} warnings — click to view`}
+            className="flex items-center gap-1 px-2 h-full hover:bg-[var(--bg-hover)] transition-colors"
+          >
+            <AlertTriangle size={11} className="text-[var(--solar-yellow)]" />
+            <span className="text-[0.5625rem] font-semibold text-[var(--solar-yellow)] font-[var(--font-sans)]">
+              {warningCount}
+            </span>
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-stretch shrink-0 ml-auto">
+        {/* cursor pos, indent, encoding, eol, format, mode pill, notifications */}
+        {showCursor === true && (
+          <>
+            <button
+              type="button"
+              onClick={onCursorClick}
+              title="Go to Line/Column — click to navigate to a specific line number"
+              className="px-2 h-full hover:bg-[var(--bg-hover)] transition-colors flex items-center"
+            >
+              <span className="text-[0.5625rem] font-semibold text-[var(--text-muted)] font-[var(--font-sans)]">
+                Ln {line}, Col {col}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              title="Indentation — controls whether Tab inserts spaces or a tab character, and how many spaces per indent. Click to change (Spaces vs Tabs, size per level)."
+              className="px-2 h-full hover:bg-[var(--bg-hover)] transition-colors flex items-center"
+            >
+              <span className="text-[0.5625rem] font-mono text-[var(--text-muted)]">{indentLabel}</span>
+            </button>
+
+            <button
+              type="button"
+              title="File Encoding — UTF-8 stores every character (all languages + emoji) as universal bytes. Most files should stay UTF-8. Only change for legacy files expecting Latin-1 or Windows-1252."
+              className="px-2 h-full hover:bg-[var(--bg-hover)] transition-colors flex items-center"
+            >
+              <span className="text-[0.5625rem] font-mono text-[var(--text-muted)]">{encodingLabel}</span>
+            </button>
+
+            <button
+              type="button"
+              title="Line Endings — the invisible character at the end of each line. LF = Unix/Mac. CRLF = Windows. Mismatches cause every line to appear changed in git diffs even when nothing actually changed. Click to change for this file."
+              className="px-2 h-full hover:bg-[var(--bg-hover)] transition-colors flex items-center"
+            >
+              <span className="text-[0.5625rem] font-mono text-[var(--text-muted)]">{eolLabel}</span>
+            </button>
+
+            {canFormatDocument && (
+              <button
+                type="button"
+                onClick={onFormatClick}
+                title="Format Document — run Prettier on the active file to auto-fix indentation, quotes, spacing."
+                className="px-2 h-full hover:bg-[var(--bg-hover)] transition-colors flex items-center"
+              >
+                <WrapText size={11} />
+              </button>
+            )}
+          </>
+        )}
+
+        {chatModeLabel && (
+          <div
+            className="hidden min-[1000px]:flex items-center px-2 h-full text-[var(--text-muted)] font-semibold border-x border-[var(--border-subtle)]/20 max-w-[120px] truncate"
+            title={chatModeLabel}
+          >
+            {chatModeLabel}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="relative flex items-center justify-center hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] cursor-pointer px-3 h-full transition-colors border-0 bg-transparent"
+          title="Notifications"
+          aria-expanded={notifOpen}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => setNotifOpen((o) => !o)}
+        >
+          <Bell size={13} className="opacity-70" />
+          {unread > 0 && (
+            <span className="absolute top-0.5 right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[var(--solar-red)] text-white text-[9px] font-bold flex items-center justify-center">
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
+        </button>
+      </div>
+    </nav>
   );
 };

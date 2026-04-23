@@ -221,8 +221,9 @@ const App: React.FC = () => {
   const [authWorkspaceId, setAuthWorkspaceId] = useState<string | null>(null);
   /** Rows from same API — used for human-readable workspace name in chrome + chat. */
   const [workspaceRows, setWorkspaceRows] = useState<Array<{ id: string; name: string }>>([]);
+  const [workspaceDisplayName, setWorkspaceDisplayName] = useState<string | null>(null);
 
-  const workspaceDisplayName = useMemo(() => {
+  const workspaceDisplayFallback = useMemo(() => {
     const id = authWorkspaceId?.trim();
     if (id && workspaceRows.length > 0) {
       const row = workspaceRows.find((w) => w.id === id);
@@ -232,11 +233,21 @@ const App: React.FC = () => {
     return formatWorkspaceStatusLine(ideWorkspace);
   }, [authWorkspaceId, workspaceRows, ideWorkspace]);
 
+  const workspaceDisplayLine = workspaceDisplayName || workspaceDisplayFallback;
+
   useEffect(() => {
     fetch('/api/settings/workspaces', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { current?: string; data?: Array<{ id?: string; name?: string }> } | null) => {
-        if (d?.current && typeof d.current === 'string') setAuthWorkspaceId(d.current);
+        if (d?.current && typeof d.current === 'string') {
+          setAuthWorkspaceId(d.current);
+          fetch(`/api/agent/workspace?id=${encodeURIComponent(d.current)}`, { credentials: 'same-origin' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+              if (d?.workspace?.display_name) setWorkspaceDisplayName(d.workspace.display_name);
+            })
+            .catch(() => {});
+        }
         if (Array.isArray(d?.data)) {
           setWorkspaceRows(
             d.data
@@ -249,8 +260,8 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    document.title = `${workspaceDisplayName} — ${PRODUCT_NAME}`;
-  }, [workspaceDisplayName]);
+    document.title = `${workspaceDisplayLine} — ${PRODUCT_NAME}`;
+  }, [workspaceDisplayLine]);
 
   const idePersistRef = useRef({
     ideWorkspace: { source: 'none' } as IdeWorkspaceSnapshot,
@@ -439,11 +450,11 @@ const App: React.FC = () => {
   useEffect(() => {
     setChatMessages((prev) => {
       if (prev.length !== 1 || prev[0].role !== 'assistant') return prev;
-      const next = buildAgentSamGreeting(workspaceDisplayName);
+      const next = buildAgentSamGreeting(workspaceDisplayLine);
       if (prev[0].content === next) return prev;
       return [{ role: 'assistant', content: next }];
     });
-  }, [workspaceDisplayName]);
+  }, [workspaceDisplayLine]);
 
   useEffect(() => {
     const onConv = (e: Event) => {
@@ -451,14 +462,14 @@ const App: React.FC = () => {
       const id = typeof raw === 'string' ? raw.trim() : '';
       setAgentChatConversationId(id);
       if (!id) {
-        setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+        setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayLine) }]);
         return;
       }
       void fetch(`/api/agent/sessions/${encodeURIComponent(id)}/messages`, { credentials: 'same-origin' })
         .then((r) => (r.ok ? r.json() : []))
         .then((rows: unknown) => {
           if (!Array.isArray(rows) || rows.length === 0) {
-            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayLine) }]);
             return;
           }
           const mapped: { role: 'user' | 'assistant'; content: string }[] = [];
@@ -477,18 +488,18 @@ const App: React.FC = () => {
             mapped.push({ role, content: content.trim() ? content : '(empty)' });
           }
           if (mapped.length === 0) {
-            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+            setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayLine) }]);
             return;
           }
           setChatMessages(mapped);
         })
         .catch(() => {
-          setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayName) }]);
+          setChatMessages([{ role: 'assistant', content: buildAgentSamGreeting(workspaceDisplayLine) }]);
         });
     };
     window.addEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onConv);
     return () => window.removeEventListener(IAM_AGENT_CHAT_CONVERSATION_CHANGE, onConv);
-  }, [workspaceDisplayName]);
+  }, [workspaceDisplayLine]);
 
   const narrowBackToCenter = useCallback(() => {
     setActiveActivity(null);
@@ -1427,7 +1438,7 @@ const App: React.FC = () => {
                 src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/ac515729-af6b-4ea5-8b10-e581a4d02100/thumbnail"
                 alt=""
                 className="w-7 h-7 object-contain drop-shadow shrink-0 cursor-pointer"
-                title={workspaceDisplayName}
+                title={workspaceDisplayLine}
                 onClick={() => setActiveTab('Workspace')}
               />
               <button
@@ -1443,7 +1454,7 @@ const App: React.FC = () => {
           {/* Unified search (Cmd+K) + Knowledge panel (RAG / chats list) */}
           <div className="flex-1 flex justify-center items-center min-w-0 px-2 gap-2">
               <UnifiedSearchBar
-                workspaceLabel={workspaceDisplayName}
+                workspaceLabel={workspaceDisplayLine}
                 recentFiles={mappedRecentFiles}
                 onNavigate={(nav, _q) => handleUnifiedNavigate(nav)}
                 onRunCommand={(cmd) => terminalRef.current?.runCommand(cmd)}
@@ -1695,7 +1706,7 @@ const App: React.FC = () => {
                   ) : activeActivity === 'projects' ? (
                       <WorkspaceExplorerPanel
                         ideWorkspace={ideWorkspace}
-                        workspaceTitle={workspaceDisplayName}
+                        workspaceTitle={workspaceDisplayLine}
                         recentFiles={recentFiles}
                         onRefreshRecent={() => {
                           const sid = agentChatConversationId?.trim();
@@ -1937,7 +1948,7 @@ const App: React.FC = () => {
                           problems={systemProblems ?? []}
                           iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
                           workspaceCdCommand="cd /Users/samprimeaux/inneranimalmedia"
-                          workspaceLabel={workspaceDisplayName}
+                          workspaceLabel={workspaceDisplayLine}
                           workspaceId={authWorkspaceId || undefined}
                           productLabel={PRODUCT_NAME}
                           outputLines={shellOutputLines}
@@ -2113,7 +2124,7 @@ const App: React.FC = () => {
 
       <StatusBar 
         branch={gitBranch}
-        workspace={authWorkspaceId || formatWorkspaceStatusLine(ideWorkspace)}
+        workspace={workspaceDisplayName || authWorkspaceId || undefined}
         errorCount={errorCount}
         warningCount={warningCount}
         showCursor={activeTab === 'code'}

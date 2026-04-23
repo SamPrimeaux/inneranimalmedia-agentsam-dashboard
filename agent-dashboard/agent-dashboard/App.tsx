@@ -54,6 +54,7 @@ import { useEditor } from './src/EditorContext';
 import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
 import { DatabasePage } from './components/DatabasePage';
+import { McpPage } from './components/McpPage';
 import { Bot, Home, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -1507,7 +1508,7 @@ const App: React.FC = () => {
               <ActivityIcon icon={GitBranch} title="Source Control" active={activeActivity === 'git'} onClick={() => toggleActivity('git')} />
               <ActivityIcon icon={Network} title="Remote Explorers" active={activeActivity === 'remote'} onClick={() => toggleActivity('remote')} />
               <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
-              <ActivityIcon icon={Github} title="GitHub Actions" active={activeActivity === 'actions'} onClick={() => toggleActivity('actions')} />
+              <ActivityIcon icon={Github} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
               <ActivityIcon
                   icon={Database}
                   title="D1 Explorer"
@@ -1756,6 +1757,7 @@ const App: React.FC = () => {
                     <Route path="/dashboard/calendar" element={<CalendarPage />} />
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
+                    <Route path="/dashboard/mcp" element={<McpPage />} />
                     <Route path="/dashboard/settings" element={<SettingsPanel />} />
                   </Routes>
                 </div>

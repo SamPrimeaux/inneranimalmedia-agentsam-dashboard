@@ -53,6 +53,7 @@ import {
 import { useEditor } from './src/EditorContext';
 import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
+import { DatabasePage } from './components/DatabasePage';
 import { Bot, Home, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -1754,6 +1755,7 @@ const App: React.FC = () => {
                   <Routes>
                     <Route path="/dashboard/calendar" element={<CalendarPage />} />
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
+                    <Route path="/dashboard/database" element={<DatabasePage />} />
                   </Routes>
                 </div>
               ) : (

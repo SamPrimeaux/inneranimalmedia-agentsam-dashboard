@@ -4,6 +4,7 @@
  * Deconstructed from legacy worker.js.
  */
 import { jsonResponse } from '../core/auth.js';
+import { handleAgentsamWorkspacesApi } from './workspaces.js';
 
 const IAM_EXPLORER_WS_SANDBOX = 'ws_inneranimalmedia';
 
@@ -17,20 +18,8 @@ export async function handleWorkspaceApi(request, url, env, ctx, authUser) {
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
-    // ── /api/workspaces/list ────────────────────────────────────────────────
-    if (pathLower === '/api/workspaces/list' && method === 'GET') {
-        try {
-            const { results } = await env.DB.prepare(
-                `SELECT w.id, w.name, w.domain, w.status, w.theme_id, w.handle,
-                  (SELECT p.id FROM workspace_projects p WHERE p.workspace_id = w.id LIMIT 1) AS project_id
-                 FROM workspaces w WHERE COALESCE(w.is_archived, 0) = 0 ORDER BY w.created_at DESC`
-            ).all();
-            const rows = (results || []).map((r) => ({ ...r, worker_id: null }));
-            return jsonResponse({ workspaces: rows });
-        } catch (e) {
-            return jsonResponse({ error: e.message }, 500);
-        }
-    }
+    const agentsamRes = await handleAgentsamWorkspacesApi(request, url, env, ctx, authUser);
+    if (agentsamRes) return agentsamRes;
 
     // ── /api/workspace/create (Ephemeral User State) ───────────────────────
     if (pathLower === '/api/workspace/create' && method === 'POST') {

@@ -232,24 +232,47 @@ const App: React.FC = () => {
   }, [authWorkspaceId]);
 
   useEffect(() => {
+    const applyRecent = (list: Array<{ id: string; display_name?: string; slug?: string }>) => {
+      try {
+        const raw = localStorage.getItem('iam_recent_workspaces');
+        const recent = raw ? (JSON.parse(raw) as Array<{ id?: string }>) : [];
+        const rid = Array.isArray(recent) && recent[0]?.id ? String(recent[0].id).trim() : '';
+        if (rid && list.some((w) => w.id === rid)) {
+          setAuthWorkspaceId(rid);
+          const row = list.find((w) => w.id === rid);
+          if (row?.display_name) setWorkspaceDisplayName(row.display_name);
+          return;
+        }
+        if (list[0]?.id) {
+          setAuthWorkspaceId(list[0].id);
+          if (list[0].display_name) setWorkspaceDisplayName(list[0].display_name);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    fetch('/api/workspaces/list', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { workspaces?: Array<{ id: string; display_name?: string; slug?: string }> } | null) => {
+        const workspaces = Array.isArray(d?.workspaces) ? d.workspaces : [];
+        setWorkspaceRows(
+          workspaces
+            .filter((w) => w && typeof w.id === 'string')
+            .map((w) => ({
+              id: w.id,
+              name: typeof w.display_name === 'string' && w.display_name.trim() ? w.display_name : w.slug || w.id,
+            })),
+        );
+        applyRecent(workspaces);
+      })
+      .catch(() => {});
+
     fetch('/api/settings/workspaces', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { current?: string; data?: Array<{ id?: string; name?: string }> } | null) => {
+      .then((d: { current?: string } | null) => {
         if (d?.current && typeof d.current === 'string') {
-          setAuthWorkspaceId(d.current);
-          fetch(`/api/agent/workspace?id=${encodeURIComponent(d.current)}`, { credentials: 'same-origin' })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => {
-              if (d?.workspace?.display_name) setWorkspaceDisplayName(d.workspace.display_name);
-            })
-            .catch(() => {});
-        }
-        if (Array.isArray(d?.data)) {
-          setWorkspaceRows(
-            d.data
-              .filter((r) => r && typeof r.id === 'string')
-              .map((r) => ({ id: r.id as string, name: typeof r.name === 'string' ? r.name : r.id as string })),
-          );
+          setAuthWorkspaceId((prev) => prev || d.current || null);
         }
       })
       .catch(() => {});
@@ -1948,10 +1971,14 @@ const App: React.FC = () => {
       {isWorkspaceLauncherOpen && (
         <WorkspaceLauncher
           onClose={() => setWorkspaceLauncherOpen(false)}
+          authWorkspaceId={authWorkspaceId}
+          setAuthWorkspaceId={setAuthWorkspaceId}
+          setWorkspaceDisplayName={setWorkspaceDisplayName}
+          setToastMsg={setToastMsg}
           onOpenLocalFolder={() => {
             setWorkspaceLauncherOpen(false);
             setActiveActivity('files');
-            setNativeFolderOpenSignal(n => n + 1);
+            setNativeFolderOpenSignal((n) => n + 1);
           }}
           onConnectWorkspace={() => setWorkspaceLauncherOpen(false)}
         />

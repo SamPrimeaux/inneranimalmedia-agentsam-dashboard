@@ -146,7 +146,7 @@ export default {
         if (agentRes.status !== 404) return agentRes;
       }
 
-      if (pathLower.startsWith('/api/settings')) {
+      if (pathLower.startsWith('/api/settings') || pathLower.startsWith('/api/tenant')) {
         return handleSettingsRequest(request, env, ctx);
       }
 

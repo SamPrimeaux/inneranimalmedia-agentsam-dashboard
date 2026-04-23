@@ -102,18 +102,144 @@ export async function handleStorageApi(request, url, env) {
 
   const baseMeta = { tenant_id: tenantId, user_id: userId };
 
-  // ── Policies (stub) ─────────────────────────────────────────────
-  if (pathLower === '/api/storage/policies') {
-    if (method === 'GET' || method === 'POST') {
-      return jsonResponse(
-        {
-          error: 'Not Implemented',
-          detail: 'Storage policies API is not available yet.',
-          ...baseMeta,
-        },
-        501,
-      );
+  // ── DELETE /api/storage/policies/:id ────────────────────────────────────
+  const policyIdMatch = path.match(/^\/api\/storage\/policies\/([^/]+)$/i);
+  if (policyIdMatch && method === 'DELETE') {
+    if (!env.DB) return jsonResponse({ error: 'Database not configured', ...baseMeta }, 503);
+    const policyId = decodeURIComponent(policyIdMatch[1] || '').trim();
+    if (!policyId) return jsonResponse({ error: 'id required' }, 400);
+    try {
+      const del = await env.DB.prepare(
+        `DELETE FROM storage_policies WHERE id = ? AND tenant_id = ? AND user_id = ?`,
+      )
+        .bind(policyId, tenantId, userId)
+        .run();
+      if (!(del.meta?.changes ?? 0)) {
+        return jsonResponse({ error: 'Not found' }, 404);
+      }
+      return jsonResponse({ ok: true, ...baseMeta });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (msg.includes('no such table')) {
+        return jsonResponse(
+          {
+            error: 'storage_policies table missing',
+            hint: 'Apply migrations/234_storage_policies.sql',
+            ...baseMeta,
+          },
+          503,
+        );
+      }
+      return jsonResponse({ error: msg, ...baseMeta }, 500);
     }
+  }
+
+  // ── GET / POST /api/storage/policies ─────────────────────────────────────
+  if (pathLower === '/api/storage/policies') {
+    if (method === 'GET') {
+      if (!env.DB) return jsonResponse({ policies: [], ...baseMeta });
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT * FROM storage_policies
+           WHERE tenant_id = ? AND user_id = ?
+           ORDER BY created_at DESC`,
+        )
+          .bind(tenantId, userId)
+          .all();
+        return jsonResponse({ policies: results || [], ...baseMeta });
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('no such table')) {
+          return jsonResponse(
+            {
+              policies: [],
+              error: 'storage_policies table missing',
+              hint: 'Apply migrations/234_storage_policies.sql',
+              ...baseMeta,
+            },
+            503,
+          );
+        }
+        return jsonResponse({ error: msg, ...baseMeta }, 500);
+      }
+    }
+
+    if (method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Database not configured', ...baseMeta }, 503);
+      }
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+      const effect = String(body.effect || '').toLowerCase().trim();
+      if (effect !== 'allow' && effect !== 'deny') {
+        return jsonResponse({ error: 'effect must be allow or deny' }, 400);
+      }
+      const bucket_name =
+        typeof body.bucket_name === 'string' ? body.bucket_name.trim() : '';
+      if (!bucket_name) return jsonResponse({ error: 'bucket_name required' }, 400);
+
+      let actionsArr = body.actions;
+      if (typeof actionsArr === 'string') {
+        try {
+          actionsArr = JSON.parse(actionsArr);
+        } catch {
+          actionsArr = null;
+        }
+      }
+      if (!Array.isArray(actionsArr) || actionsArr.length === 0) {
+        return jsonResponse({ error: 'actions must be a non-empty JSON array' }, 400);
+      }
+      const actionsStr = JSON.stringify(actionsArr);
+      const resource =
+        typeof body.resource === 'string' && body.resource.trim()
+          ? body.resource.trim()
+          : '*';
+      const id = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      try {
+        await env.DB.prepare(
+          `INSERT INTO storage_policies (
+            id, tenant_id, user_id, bucket_name, effect, actions, resource, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+          .bind(
+            id,
+            tenantId,
+            userId,
+            bucket_name,
+            effect,
+            actionsStr,
+            resource,
+            now,
+            now,
+          )
+          .run();
+      } catch (e) {
+        const msg = String(e?.message || e);
+        if (msg.includes('no such table')) {
+          return jsonResponse(
+            {
+              error: 'storage_policies table missing',
+              hint: 'Apply migrations/234_storage_policies.sql',
+              ...baseMeta,
+            },
+            503,
+          );
+        }
+        return jsonResponse({ error: msg, ...baseMeta }, 500);
+      }
+      const policy = await env.DB.prepare(
+        `SELECT * FROM storage_policies WHERE id = ? LIMIT 1`,
+      )
+        .bind(id)
+        .first();
+      return jsonResponse({ policy, ...baseMeta }, 201);
+    }
+
     return jsonResponse({ error: 'Method not allowed' }, 405);
   }
 

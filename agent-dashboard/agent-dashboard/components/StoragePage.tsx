@@ -17,6 +17,7 @@ import {
   RefreshCw,
   KeyRound,
   Server,
+  History,
 } from 'lucide-react';
 
 type NavKey = 'files' | 'analytics' | 'vectors' | 's3';
@@ -63,6 +64,28 @@ export const StoragePage: React.FC = () => {
   const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
 
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditRows, setAuditRows] = useState<Array<Record<string, unknown>>>([]);
+
+  const loadWorkspaceAudit = useCallback(async () => {
+    const wid =
+      typeof window !== 'undefined'
+        ? (window as unknown as { __IAM_WORKSPACE_ID__?: string }).__IAM_WORKSPACE_ID__?.trim()
+        : '';
+    if (!wid || wid === 'global') {
+      setAuditRows([]);
+      return;
+    }
+    setAuditLoading(true);
+    const { ok, data } = await fetchJson<{ events?: unknown[] }>(
+      `/api/workspaces/${encodeURIComponent(wid)}/audit`,
+    );
+    setAuditLoading(false);
+    const ev =
+      ok && data && Array.isArray(data.events) ? data.events : [];
+    setAuditRows(ev as Array<Record<string, unknown>>);
+  }, []);
+
   const loadBuckets = useCallback(async () => {
     setBucketsLoading(true);
     const { ok, data } = await fetchJson<{ buckets?: unknown[] } | unknown[]>('/api/storage/buckets');
@@ -96,6 +119,7 @@ export const StoragePage: React.FC = () => {
   const loadPolicies = useCallback(async () => {
     setPoliciesLoading(true);
     const { ok, data } = await fetchJson<{
+      policies?: unknown[];
       storage?: { objects?: unknown[]; buckets?: unknown[] };
       objectPolicies?: unknown[];
       bucketPolicies?: unknown[];
@@ -103,6 +127,11 @@ export const StoragePage: React.FC = () => {
     setPoliciesLoading(false);
     if (!ok || !data) {
       setObjectPolicies([]);
+      setBucketPolicies([]);
+      return;
+    }
+    if (Array.isArray(data.policies)) {
+      setObjectPolicies(data.policies);
       setBucketPolicies([]);
       return;
     }
@@ -163,6 +192,14 @@ export const StoragePage: React.FC = () => {
   useEffect(() => {
     if (nav === 's3') void loadS3();
   }, [nav, loadS3]);
+
+  useEffect(() => {
+    if (nav !== 's3') return;
+    void loadWorkspaceAudit();
+    const fn = () => void loadWorkspaceAudit();
+    window.addEventListener('iam_workspace_id', fn);
+    return () => window.removeEventListener('iam_workspace_id', fn);
+  }, [nav, loadWorkspaceAudit]);
 
   const saveSettings = async () => {
     setSettingsSaving(true);
@@ -365,30 +402,41 @@ export const StoragePage: React.FC = () => {
                     <>
                       <section>
                         <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                          storage.objects
+                          Storage policies (D1)
                         </h3>
                         {objectPolicies.length === 0 ? (
                           <div className="rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-6 text-[12px] text-[var(--text-muted)]">
-                            No object policies configured.
+                            No policies yet. POST to <code className="text-[var(--text-main)]">/api/storage/policies</code> or apply migration 234.
                           </div>
                         ) : (
-                          <pre className="text-[11px] font-mono p-4 rounded-lg bg-[var(--bg-panel)] border border-[var(--border-subtle)] overflow-auto">
-                            {JSON.stringify(objectPolicies, null, 2)}
-                          </pre>
-                        )}
-                      </section>
-                      <section>
-                        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                          storage.buckets
-                        </h3>
-                        {bucketPolicies.length === 0 ? (
-                          <div className="rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-6 text-[12px] text-[var(--text-muted)]">
-                            No bucket policies configured.
+                          <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
+                            <table className="w-full text-[11px]">
+                              <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left">
+                                <tr>
+                                  <th className="px-3 py-2 font-semibold">Bucket</th>
+                                  <th className="px-3 py-2 font-semibold">Effect</th>
+                                  <th className="px-3 py-2 font-semibold">Actions</th>
+                                  <th className="px-3 py-2 font-semibold">Resource</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--border-subtle)]">
+                                {objectPolicies.map((row, i) => (
+                                  <tr key={i}>
+                                    <td className="px-3 py-2 font-mono">
+                                      {String((row as { bucket_name?: string }).bucket_name ?? '—')}
+                                    </td>
+                                    <td className="px-3 py-2">{String((row as { effect?: string }).effect ?? '—')}</td>
+                                    <td className="px-3 py-2 max-w-[200px] truncate" title={String((row as { actions?: string }).actions ?? '')}>
+                                      {String((row as { actions?: string }).actions ?? '—')}
+                                    </td>
+                                    <td className="px-3 py-2 font-mono text-[var(--text-muted)]">
+                                      {String((row as { resource?: string }).resource ?? '*')}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
-                        ) : (
-                          <pre className="text-[11px] font-mono p-4 rounded-lg bg-[var(--bg-panel)] border border-[var(--border-subtle)] overflow-auto">
-                            {JSON.stringify(bucketPolicies, null, 2)}
-                          </pre>
                         )}
                       </section>
                     </>
@@ -592,6 +640,85 @@ export const StoragePage: React.FC = () => {
                         'Hyperdrive connection strings for Postgres or regional buckets appear here when returned by the Worker (e.g. HYPERDRIVE binding).'}
                     </p>
                   </div>
+                </div>
+
+                <div className="max-w-4xl space-y-3 pt-6 border-t border-[var(--border-subtle)]">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h3 className="text-[12px] font-semibold uppercase tracking-wide text-[var(--text-muted)] flex items-center gap-2">
+                      <History size={14} />
+                      Audit log
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => void loadWorkspaceAudit()}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
+                    >
+                      <RefreshCw size={14} />
+                      Refresh
+                    </button>
+                  </div>
+                  {auditLoading ? (
+                    <div className="flex items-center gap-2 text-[var(--text-muted)] text-[13px]">
+                      <Loader2 size={16} className="animate-spin" />
+                      Loading audit…
+                    </div>
+                  ) : auditRows.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 text-[12px] text-[var(--text-muted)]">
+                      No audit events yet.
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
+                      <table className="w-full text-[11px]">
+                        <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left uppercase tracking-wider">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold">Time</th>
+                            <th className="px-3 py-2 font-semibold">Actor</th>
+                            <th className="px-3 py-2 font-semibold">Action</th>
+                            <th className="px-3 py-2 font-semibold">Entity</th>
+                            <th className="px-3 py-2 font-semibold">Severity</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--border-subtle)]">
+                          {auditRows.map((row, i) => {
+                            const sev = String(row.severity ?? 'info').toLowerCase();
+                            const sevClass =
+                              sev === 'error'
+                                ? 'text-red-400'
+                                : sev === 'warn' || sev === 'warning'
+                                  ? 'text-amber-400'
+                                  : 'text-[var(--text-muted)]';
+                            const ts = row.created_at;
+                            const timeLabel =
+                              ts == null
+                                ? '—'
+                                : typeof ts === 'number'
+                                  ? new Date(ts < 1e12 ? ts * 1000 : ts).toLocaleString()
+                                  : String(ts);
+                            const actor =
+                              (row.actor_email as string) ||
+                              (row.actor_id as string) ||
+                              '—';
+                            const entity = `${String(row.entity_type ?? '')} ${String(row.entity_id ?? '')}`.trim() || '—';
+                            return (
+                              <tr key={String(row.id ?? i)} className="hover:bg-[var(--bg-hover)]/80">
+                                <td className="px-3 py-2 font-mono text-[var(--text-muted)] whitespace-nowrap">
+                                  {timeLabel}
+                                </td>
+                                <td className="px-3 py-2 max-w-[140px] truncate" title={actor}>
+                                  {actor}
+                                </td>
+                                <td className="px-3 py-2">{String(row.action ?? '—')}</td>
+                                <td className="px-3 py-2 max-w-[180px] truncate" title={entity}>
+                                  {entity}
+                                </td>
+                                <td className={`px-3 py-2 font-medium ${sevClass}`}>{sev}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </>
             )}

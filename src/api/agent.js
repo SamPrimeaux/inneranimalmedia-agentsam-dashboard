@@ -17,7 +17,8 @@ import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
          isIngestSecretAuthorized,
-         tenantIdFromEnv }                              from '../core/auth.js';
+         tenantIdFromEnv, fetchAuthUserTenantId }        from '../core/auth.js';
+import { formatRelativeCheckedAgo, toUnixSeconds }     from './workspaces.js';
 import { notifySam }                                    from '../core/notifications.js';
 import { getAgentMetadata, logSkillInvocation,
          getActivePromptByWeight, getPromptMetadata }   from './agentsam.js';
@@ -607,29 +608,144 @@ export async function handleAgentApi(request, url, env, ctx) {
     return jsonResponse({ checked_at: checkedAt, mcp_tool_errors, audit_failures, worker_errors });
   }
 
-  // ── /api/agent/notifications ──────────────────────────────────────────────
+  // ── /api/agent/notifications (deployments + conversations + connectivity) ──
   if (path === '/api/agent/notifications' && method === 'GET') {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB)   return jsonResponse({ error: 'DB not configured' }, 503);
-    const recipientId = String(authUser.id || '').trim();
-    if (!recipientId) return jsonResponse({ notifications: [] });
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+
+    let tenantId = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+      ? String(authUser.tenant_id).trim()
+      : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) tenantId = tenantIdFromEnv(env);
+
+    const userId = String(authUser.id || '').trim();
+
     try {
-      const { results } = await env.DB.prepare(`SELECT id, subject, message, status, created_at FROM notifications WHERE recipient_id = ? AND read_at IS NULL ORDER BY created_at DESC LIMIT 20`).bind(recipientId).all();
-      return jsonResponse({ notifications: results || [] });
-    } catch (e) { return jsonResponse({ error: e?.message }, 500); }
+      let deployRows = [];
+      try {
+        const q = await env.DB.prepare(
+          `SELECT id, status, deployed_by, environment, worker_name,
+                  triggered_by, git_hash, timestamp AS created_at
+           FROM deployments
+           ORDER BY timestamp DESC LIMIT 10`,
+        ).all();
+        deployRows = q.results || [];
+      } catch {
+        try {
+          const q = await env.DB.prepare(
+            `SELECT * FROM deployments ORDER BY COALESCE(created_at, 0) DESC LIMIT 10`,
+          ).all();
+          deployRows = q.results || [];
+        } catch {
+          deployRows = [];
+        }
+      }
+
+      let convRows = [];
+      if (tenantId && userId) {
+        try {
+          const q = await env.DB.prepare(
+            `SELECT id, title, message_count, last_message_at AS created_at,
+                    total_cost_usd, workspace_id
+             FROM agent_conversations
+             WHERE (tenant_id = ? OR user_id = ?) AND COALESCE(is_archived, 0) = 0
+             ORDER BY last_message_at DESC LIMIT 20`,
+          ).bind(tenantId, userId).all();
+          convRows = q.results || [];
+        } catch {
+          convRows = [];
+        }
+      }
+
+      let healthRows = [];
+      if (tenantId) {
+        try {
+          const q = await env.DB.prepare(
+            `SELECT wc.workspace_id, wc.service, wc.status,
+                    wc.last_checked_at AS created_at, w.display_name
+             FROM workspace_connectivity_status wc
+             JOIN agentsam_workspace w ON w.id = wc.workspace_id
+             WHERE wc.status IN ('degraded','down') AND w.tenant_id = ?
+             LIMIT 10`,
+          ).bind(tenantId).all();
+          healthRows = q.results || [];
+        } catch {
+          healthRows = [];
+        }
+      }
+
+      const normalized = [];
+
+      for (const r of deployRows) {
+        const worker = r.worker_name != null ? String(r.worker_name) : 'worker';
+        const gh = r.git_hash != null ? String(r.git_hash) : '';
+        const trig = r.triggered_by != null ? String(r.triggered_by) : '';
+        const st = r.status != null ? String(r.status) : '';
+        const ts = toUnixSeconds(r.created_at ?? r.timestamp);
+        normalized.push({
+          id: `deploy:${r.id}`,
+          type: 'deploy',
+          title: `Deploy ${st}: ${worker}`,
+          message: `${trig} · ${gh ? gh.slice(0, 7) : '—'}`,
+          created_at: ts,
+          read: false,
+          meta: r,
+          subject: `Deploy ${st}: ${worker}`,
+        });
+      }
+
+      for (const r of convRows) {
+        const ts = toUnixSeconds(r.created_at);
+        const titleBase =
+          r.title != null && String(r.title).trim()
+            ? String(r.title).trim()
+            : 'Untitled conversation';
+        const mc = r.message_count != null ? Number(r.message_count) : 0;
+        normalized.push({
+          id: `conv:${r.id}`,
+          type: 'conversation',
+          title: titleBase,
+          message: `${mc} messages`,
+          created_at: ts,
+          read: false,
+          meta: r,
+          subject: titleBase,
+        });
+      }
+
+      for (const r of healthRows) {
+        const ts = toUnixSeconds(r.created_at);
+        const svc = r.service != null ? String(r.service) : 'service';
+        const st = r.status != null ? String(r.status) : '';
+        const dn = r.display_name != null ? String(r.display_name) : 'workspace';
+        normalized.push({
+          id: `health:${r.workspace_id}:${svc}`,
+          type: 'health',
+          title: `${svc} ${st} on ${dn}`,
+          message: `Last checked ${formatRelativeCheckedAgo(ts)}`,
+          created_at: ts,
+          read: false,
+          meta: r,
+          subject: `${svc} ${st} on ${dn}`,
+        });
+      }
+
+      normalized.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      const top = normalized.slice(0, 50);
+      return jsonResponse({ notifications: top });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
   }
 
   const notifReadMatch = path.match(/^\/api\/agent\/notifications\/([^/]+)\/read$/);
   if (notifReadMatch && method === 'PATCH') {
-    const nid      = decodeURIComponent(notifReadMatch[1] || '').trim();
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB)   return jsonResponse({ error: 'DB not configured' }, 503);
-    const recipientId = String(authUser.id || '').trim();
-    const upd = await env.DB.prepare(`UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND recipient_id = ?`).bind(nid, recipientId).run();
-    if (!(upd.meta?.changes ?? 0)) return jsonResponse({ error: 'Not found' }, 404);
-    return jsonResponse({ ok: true, id: nid });
+    return jsonResponse({ success: true });
   }
 
   // ── /api/agent/keyboard-shortcuts ────────────────────────────────────────

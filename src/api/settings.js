@@ -3,7 +3,37 @@
  * Handles workspace listings, themes, and personal account configurations.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, jsonResponse } from '../core/auth.js';
+import {
+  getAuthUser,
+  jsonResponse,
+  fetchAuthUserTenantId,
+  tenantIdFromEnv,
+} from '../core/auth.js';
+
+async function resolveAuthTenantId(env, authUser) {
+  if (authUser.tenant_id != null && String(authUser.tenant_id).trim() !== '') {
+    return String(authUser.tenant_id).trim();
+  }
+  let tid = await fetchAuthUserTenantId(env, authUser.id);
+  if (tid) return tid;
+  if (authUser.email) {
+    tid = await fetchAuthUserTenantId(env, authUser.email);
+    if (tid) return tid;
+  }
+  const envTid = tenantIdFromEnv(env);
+  if (envTid) return envTid;
+  return null;
+}
+
+function parseJsonSafe(str, fallback = {}) {
+  if (str == null || str === '') return { ...fallback };
+  try {
+    const o = typeof str === 'string' ? JSON.parse(str) : str;
+    return typeof o === 'object' && o !== null ? o : { ...fallback };
+  } catch {
+    return { ...fallback };
+  }
+}
 
 const CORE_WORKSPACES_DATA = [
   { id: 'ws_inneranimalmedia', name: 'Inner Animal Media', category: 'entity' },
@@ -36,6 +66,175 @@ export async function handleSettingsRequest(request, env, ctx) {
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
   const userId = authUser.id;
+
+  // ── /api/tenant/onboarding ─────────────────────────────────────────────
+  if (pathLower === '/api/tenant/onboarding' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    if (!tenantId) return jsonResponse({ error: 'Tenant required' }, 403);
+    try {
+      const row = await env.DB.prepare(
+        `SELECT * FROM tenant_activation_status WHERE tenant_id = ? LIMIT 1`,
+      )
+        .bind(tenantId)
+        .first();
+      if (!row) {
+        return jsonResponse({
+          onboarding_completed: 0,
+          activation_progress: 0,
+          activation_checks: {},
+          activation_checks_json: '{}',
+        });
+      }
+      const checks = parseJsonSafe(row.activation_checks_json, {});
+      return jsonResponse({
+        ...row,
+        activation_checks: checks,
+        activation_checks_json:
+          typeof row.activation_checks_json === 'string'
+            ? row.activation_checks_json
+            : JSON.stringify(checks),
+      });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
+
+  if (pathLower === '/api/tenant/onboarding' && method === 'PATCH') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    if (!tenantId) return jsonResponse({ error: 'Tenant required' }, 403);
+    const body = await request.json().catch(() => ({}));
+    const checkKey =
+      typeof body.check_key === 'string' ? body.check_key.trim() : '';
+    if (!checkKey) return jsonResponse({ error: 'check_key required' }, 400);
+    const completed =
+      body.completed === true ||
+      body.completed === 1 ||
+      body.completed === '1';
+
+    try {
+      const existing = await env.DB.prepare(
+        `SELECT * FROM tenant_activation_status WHERE tenant_id = ? LIMIT 1`,
+      )
+        .bind(tenantId)
+        .first();
+
+      let checks = parseJsonSafe(existing?.activation_checks_json, {});
+      checks[checkKey] = !!completed;
+
+      const keys = Object.keys(checks);
+      const total = keys.length;
+      const done = keys.filter((k) => checks[k] === true).length;
+      const activation_progress =
+        total === 0 ? 0 : Math.round((done / total) * 100);
+      const onboarding_completed = total > 0 && done === total ? 1 : 0;
+
+      const checksJson = JSON.stringify(checks);
+
+      await env.DB.prepare(
+        `INSERT INTO tenant_activation_status (
+          tenant_id, onboarding_completed, activation_checks_json, activation_progress
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(tenant_id) DO UPDATE SET
+          onboarding_completed = excluded.onboarding_completed,
+          activation_checks_json = excluded.activation_checks_json,
+          activation_progress = excluded.activation_progress`,
+      )
+        .bind(
+          tenantId,
+          onboarding_completed,
+          checksJson,
+          activation_progress,
+        )
+        .run();
+
+      const row = await env.DB.prepare(
+        `SELECT * FROM tenant_activation_status WHERE tenant_id = ? LIMIT 1`,
+      )
+        .bind(tenantId)
+        .first();
+
+      return jsonResponse({
+        ...row,
+        activation_checks: checks,
+      });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (msg.includes('ON CONFLICT') || msg.includes('no such column')) {
+        try {
+          const existing = await env.DB.prepare(
+            `SELECT * FROM tenant_activation_status WHERE tenant_id = ? LIMIT 1`,
+          )
+            .bind(tenantId)
+            .first();
+          let checks = parseJsonSafe(existing?.activation_checks_json, {});
+          checks[checkKey] = !!completed;
+          const keys = Object.keys(checks);
+          const total = keys.length;
+          const done = keys.filter((k) => checks[k] === true).length;
+          const activation_progress =
+            total === 0 ? 0 : Math.round((done / total) * 100);
+          const onboarding_completed = total > 0 && done === total ? 1 : 0;
+          const checksJson = JSON.stringify(checks);
+          if (existing) {
+            await env.DB.prepare(
+              `UPDATE tenant_activation_status SET
+                onboarding_completed = ?, activation_checks_json = ?, activation_progress = ?
+               WHERE tenant_id = ?`,
+            )
+              .bind(
+                onboarding_completed,
+                checksJson,
+                activation_progress,
+                tenantId,
+              )
+              .run();
+          } else {
+            await env.DB.prepare(
+              `INSERT INTO tenant_activation_status (
+                tenant_id, onboarding_completed, activation_checks_json, activation_progress
+              ) VALUES (?, ?, ?, ?)`,
+            )
+              .bind(
+                tenantId,
+                onboarding_completed,
+                checksJson,
+                activation_progress,
+              )
+              .run();
+          }
+          const row = await env.DB.prepare(
+            `SELECT * FROM tenant_activation_status WHERE tenant_id = ? LIMIT 1`,
+          )
+            .bind(tenantId)
+            .first();
+          return jsonResponse({ ...row, activation_checks: checks });
+        } catch (e2) {
+          return jsonResponse({ error: e2?.message ?? String(e2) }, 500);
+        }
+      }
+      return jsonResponse({ error: msg }, 500);
+    }
+  }
+
+  // ── GET /api/tenant/branding ─────────────────────────────────────────────
+  if (pathLower === '/api/tenant/branding' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    if (!tenantId) return jsonResponse({ error: 'Tenant required' }, 403);
+    try {
+      const row = await env.DB.prepare(
+        `SELECT * FROM tenant_branding WHERE tenant_id = ? LIMIT 1`,
+      )
+        .bind(tenantId)
+        .first();
+      if (!row) return jsonResponse({ branding: null });
+      return jsonResponse(row);
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
 
   // ── /api/settings/workspaces ───────────────────────────────────────────
   if (pathLower === '/api/settings/workspaces' || pathLower === '/api/workspaces') {
@@ -145,21 +344,49 @@ export async function handleSettingsRequest(request, env, ctx) {
     }
   }
 
-  // ── POST /api/settings/workspaces/active — persist default workspace (body: { id }) ──
+  // ── POST /api/settings/workspaces/active — touch agentsam_workspace (sort order) ──
   if (pathLower === '/api/settings/workspaces/active' && method === 'POST') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
     try {
+      const tenantId = await resolveAuthTenantId(env, authUser);
+      if (!tenantId) return jsonResponse({ error: 'Tenant required' }, 403);
       const body = await request.json().catch(() => ({}));
       const id = body.id != null ? String(body.id).trim() : '';
       if (!id) return jsonResponse({ error: 'id required' }, 400);
-      const ok = await workspaceIdIsAllowed(env, id);
-      if (!ok) return jsonResponse({ error: 'Invalid workspace id' }, 400);
-      await env.DB.prepare(
-        `UPDATE user_settings SET default_workspace_id = ?, updated_at = unixepoch() WHERE user_id = ?`,
+
+      const row = await env.DB.prepare(
+        `SELECT id, display_name, slug FROM agentsam_workspace WHERE id = ? AND tenant_id = ? LIMIT 1`,
       )
-        .bind(id, userId)
+        .bind(id, tenantId)
+        .first();
+      if (!row) return jsonResponse({ error: 'Workspace not found' }, 404);
+
+      await env.DB.prepare(
+        `UPDATE agentsam_workspace SET updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`,
+      )
+        .bind(id, tenantId)
         .run();
-      return jsonResponse({ ok: true, current: id });
+
+      try {
+        await env.DB.prepare(
+          `UPDATE user_settings SET default_workspace_id = ?, updated_at = unixepoch() WHERE user_id = ?`,
+        )
+          .bind(id, userId)
+          .run();
+      } catch (_) {
+        /* optional legacy row */
+      }
+
+      return jsonResponse({
+        success: true,
+        workspace: {
+          id: row.id,
+          display_name: row.display_name,
+          slug: row.slug,
+        },
+        ok: true,
+        current: id,
+      });
     } catch (e) {
       return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
     }

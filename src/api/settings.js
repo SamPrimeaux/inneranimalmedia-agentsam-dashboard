@@ -14,6 +14,17 @@ const CORE_WORKSPACES_DATA = [
 
 const CORE_WORKSPACE_IDS = CORE_WORKSPACES_DATA.map(w => w.id);
 
+async function workspaceIdIsAllowed(env, id) {
+  if (CORE_WORKSPACE_IDS.includes(id)) return true;
+  if (!env.DB) return false;
+  try {
+    const row = await env.DB.prepare('SELECT id FROM workspaces WHERE id = ? LIMIT 1').bind(id).first();
+    return !!row;
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * Main dispatcher for Settings-related API routes (/api/settings/*).
  */
@@ -131,6 +142,26 @@ export async function handleSettingsRequest(request, env, ctx) {
       } catch (e) {
         return jsonResponse({ error: e?.message ?? 'Save failed' }, 500);
       }
+    }
+  }
+
+  // ── POST /api/settings/workspaces/active — persist default workspace (body: { id }) ──
+  if (pathLower === '/api/settings/workspaces/active' && method === 'POST') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    try {
+      const body = await request.json().catch(() => ({}));
+      const id = body.id != null ? String(body.id).trim() : '';
+      if (!id) return jsonResponse({ error: 'id required' }, 400);
+      const ok = await workspaceIdIsAllowed(env, id);
+      if (!ok) return jsonResponse({ error: 'Invalid workspace id' }, 400);
+      await env.DB.prepare(
+        `UPDATE user_settings SET default_workspace_id = ?, updated_at = unixepoch() WHERE user_id = ?`,
+      )
+        .bind(id, userId)
+        .run();
+      return jsonResponse({ ok: true, current: id });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
     }
   }
 

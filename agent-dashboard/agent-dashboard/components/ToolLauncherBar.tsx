@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { PenLine, Box, Triangle, Wand2, Layers, Upload, Plus } from 'lucide-react';
+import { PenLine, Box, Triangle, Wand2, Upload, Plus } from 'lucide-react';
 
 interface Tool {
   id: string;
@@ -45,13 +45,6 @@ export const ToolLauncherBar: React.FC<ToolLauncherBarProps> = ({ onNavigate, on
       label: 'Draw',
       url: 'https://excalidraw.com',
       color: 'text-[var(--solar-violet)]',
-    },
-    {
-      id: 'tldraw',
-      icon: <Layers size={16} />,
-      label: 'tldraw',
-      url: 'https://tldraw.com',
-      color: 'text-[var(--solar-green)]',
     },
   ];
 

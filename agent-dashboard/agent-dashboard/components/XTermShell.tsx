@@ -265,7 +265,8 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const fitAddonRef     = useRef<FitAddon | null>(null);
     const socketRef       = useRef<WebSocket | null>(null);
     const retryCountRef   = useRef<number>(0);
-    const retryTimerRef   = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+    /** Browser timers are numeric IDs; avoid NodeJS.Timeout vs number mismatch under @types/node. */
+    const retryTimerRef   = useRef<number | null>(null);
     const ptySessionIdRef = useRef<string | null>(null);
     const bufferRef       = useRef<string>('');
     const statusRef       = useRef<TerminalConnectionStatus>('connecting');
@@ -391,7 +392,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = window.setTimeout(() => {
         if (!intentionalCloseRef.current) activeConnectRef.current();
-      }, delay);
+      }, delay) as unknown as number;
     }, []);
 
     const fmtUptime = (s: number) => {

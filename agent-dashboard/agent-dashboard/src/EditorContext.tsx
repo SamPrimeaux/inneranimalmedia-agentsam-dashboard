@@ -113,6 +113,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       closeFile, 
       setActiveTab: setActiveTabId,
       updateActiveContent,
+      updateActiveFile,
       saveActiveFile,
       discardChanges
     }}>

@@ -75,7 +75,8 @@ export function applyCmsThemeToDocument(payload: CmsActiveThemePayload): boolean
     }
   }
   if (typeof payload.is_dark === 'boolean') {
-    document.documentElement.setAttribute('data-theme', payload.is_dark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', payload.slug ?? (payload.is_dark ? 'dark' : 'light'));
+    document.documentElement.classList.toggle('dark', payload.is_dark === true);
     try {
       localStorage.setItem(INNERANIMALMEDIA_LS_THEME_IS_DARK, payload.is_dark ? '1' : '0');
       localStorage.removeItem(LEGACY_MCAD_IS_DARK);

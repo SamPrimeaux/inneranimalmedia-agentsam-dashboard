@@ -25,7 +25,7 @@ export const GitHubActionsPanel: React.FC = () => {
                     </div>
                     <div className="text-[10px] text-[var(--text-muted)] pl-5 flex items-center justify-between">
                         <span>#42 • main</span>
-                        <PlayCircle size={12} className="opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] transition-opacity" title="Re-run" />
+                        <PlayCircle size={12} className="opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] transition-opacity" aria-label="Re-run" />
                     </div>
                 </div>
 
@@ -40,7 +40,7 @@ export const GitHubActionsPanel: React.FC = () => {
                     </div>
                     <div className="text-[10px] text-[var(--text-muted)] pl-5 flex items-center justify-between">
                         <span>#41 • feature/excalidraw</span>
-                        <PlayCircle size={12} className="opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] transition-opacity" title="Re-run" />
+                        <PlayCircle size={12} className="opacity-0 group-hover:opacity-100 text-[var(--solar-cyan)] transition-opacity" aria-label="Re-run" />
                     </div>
                 </div>
 

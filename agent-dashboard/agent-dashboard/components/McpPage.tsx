@@ -1,0 +1,661 @@
+/**
+ * McpPage — /dashboard/mcp
+ *
+ * 4-agent cloud operations board:
+ *   - Architect  → Plan, design, brainstorm
+ *   - Builder    → Code, generate, implement
+ *   - Inspector  → Debug, test, audit
+ *   - Operator   → Deploy, monitor, ship
+ *
+ * Fully wired to existing /api/mcp/* endpoints.
+ * Matches IAM dark IDE aesthetic via CSS vars.
+ */
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Brain, Hammer, FlaskConical, Rocket,
+  Terminal, Zap, Activity, CheckCircle2,
+  Clock, AlertCircle, Loader2, ChevronRight,
+  Send, X, Search, Plus, RefreshCw,
+  Cpu, Network, Shield, GitBranch,
+  MoreHorizontal, Circle, Wifi, WifiOff,
+} from 'lucide-react';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'success';
+
+interface AgentConfig {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  icon: React.ReactNode;
+  accentVar: string;
+  tools: string[];
+}
+
+interface AgentState {
+  id: string;
+  status: AgentStatus;
+  current_task: string | null;
+  progress_pct: number;
+  cost_usd: number;
+  logs: string[];
+  session_id: string | null;
+}
+
+interface McpService {
+  id?: string;
+  service_name?: string;
+  name?: string;
+  endpoint_url?: string;
+  url?: string;
+  health_status?: string;
+  service_type?: string;
+}
+
+interface WsMessage {
+  role: 'user' | 'assistant' | 'thinking';
+  content: string;
+}
+
+// ─── Agent Definitions ────────────────────────────────────────────────────────
+const AGENTS: AgentConfig[] = [
+  {
+    id: 'mcp_agent_architect',
+    name: 'Architect',
+    role: 'Plan · Design · Brainstorm',
+    description: 'Systems design, architecture planning, technical strategy',
+    icon: <Brain size={18} />,
+    accentVar: 'var(--solar-blue)',
+    tools: ['d1_query', 'r2_list', 'r2_read'],
+  },
+  {
+    id: 'mcp_agent_builder',
+    name: 'Builder',
+    role: 'Code · Generate · Implement',
+    description: 'Full-stack code generation, feature implementation, scaffolding',
+    icon: <Hammer size={18} />,
+    accentVar: 'var(--solar-cyan)',
+    tools: ['d1_query', 'd1_write', 'r2_read', 'r2_write'],
+  },
+  {
+    id: 'mcp_agent_inspector',
+    name: 'Inspector',
+    role: 'Debug · Test · Audit',
+    description: 'Code review, bug hunting, test coverage, security audits',
+    icon: <FlaskConical size={18} />,
+    accentVar: 'var(--solar-green)',
+    tools: ['d1_query', 'r2_list', 'r2_read'],
+  },
+  {
+    id: 'mcp_agent_operator',
+    name: 'Operator',
+    role: 'Deploy · Monitor · Ship',
+    description: 'Deployments, health monitoring, infra ops, release management',
+    icon: <Rocket size={18} />,
+    accentVar: 'var(--solar-yellow)',
+    tools: ['d1_query', 'r2_list', 'worker_deploy'],
+  },
+];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function statusIcon(status: AgentStatus, accent: string) {
+  switch (status) {
+    case 'running':  return <Loader2 size={13} className="animate-spin" style={{ color: accent }} />;
+    case 'success':  return <CheckCircle2 size={13} style={{ color: 'var(--solar-green)' }} />;
+    case 'error':    return <AlertCircle size={13} style={{ color: 'var(--solar-red)' }} />;
+    case 'waiting':  return <Clock size={13} style={{ color: 'var(--solar-yellow)' }} />;
+    default:         return <Circle size={13} className="opacity-30" style={{ color: accent }} />;
+  }
+}
+
+// ─── AgentCard ────────────────────────────────────────────────────────────────
+interface AgentCardProps {
+  config: AgentConfig;
+  state: AgentState;
+  onOpen: (id: string) => void;
+}
+
+const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen }) => {
+  const accent = config.accentVar;
+  const isActive = state.status === 'running' || state.status === 'waiting';
+
+  return (
+    <div
+      className="relative flex flex-col rounded-xl border overflow-hidden transition-all duration-200 hover:border-opacity-60"
+      style={{
+        background: 'var(--bg-panel)',
+        borderColor: isActive ? accent : 'var(--border-subtle)',
+        boxShadow: isActive ? `0 0 0 1px ${accent}22, 0 4px 24px ${accent}11` : 'none',
+      }}
+    >
+      {/* accent bar */}
+      <div className="absolute top-0 left-0 right-0 h-0.5" style={{ background: isActive ? accent : 'transparent' }} />
+
+      {/* header */}
+      <div className="flex items-start justify-between px-4 pt-4 pb-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg" style={{ background: `${accent}18`, color: accent }}>
+            {config.icon}
+          </div>
+          <div>
+            <p className="text-[0.8125rem] font-bold text-[var(--text-heading)]">{config.name}</p>
+            <p className="text-[0.5625rem] font-mono uppercase tracking-widest text-[var(--text-muted)] mt-0.5">{config.role}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          {statusIcon(state.status, accent)}
+          <span className="text-[0.5625rem] font-bold uppercase tracking-wider text-[var(--text-muted)] capitalize">
+            {state.status}
+          </span>
+        </div>
+      </div>
+
+      {/* task */}
+      <div className="px-4 pb-2 min-h-[2rem]">
+        {state.current_task ? (
+          <p className="text-[0.6875rem] text-[var(--text-main)] font-mono truncate">{state.current_task}</p>
+        ) : (
+          <p className="text-[0.6875rem] text-[var(--text-muted)] italic">Waiting for task…</p>
+        )}
+      </div>
+
+      {/* progress bar */}
+      {state.progress_pct > 0 && (
+        <div className="mx-4 mb-3 h-0.5 rounded-full bg-[var(--border-subtle)] overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{ width: `${state.progress_pct}%`, background: accent }}
+          />
+        </div>
+      )}
+
+      {/* log lines */}
+      <div
+        className="mx-4 mb-3 rounded-lg px-3 py-2 font-mono text-[0.5625rem] leading-relaxed space-y-0.5 overflow-hidden"
+        style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', minHeight: '3.5rem', maxHeight: '3.5rem' }}
+      >
+        {state.logs.slice(-3).length > 0
+          ? state.logs.slice(-3).map((l, i) => (
+            <div key={i} className="truncate text-[var(--text-muted)]">{l}</div>
+          ))
+          : <div className="text-[var(--text-muted)] opacity-40">No activity yet</div>
+        }
+      </div>
+
+      {/* footer */}
+      <div className="flex items-center justify-between px-4 pb-4">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {config.tools.slice(0, 3).map(t => (
+            <span
+              key={t}
+              className="px-1.5 py-0.5 rounded text-[0.5rem] font-mono font-bold uppercase tracking-wide"
+              style={{ background: `${accent}12`, border: `1px solid ${accent}25`, color: accent }}
+            >
+              {t}
+            </span>
+          ))}
+          {config.tools.length > 3 && (
+            <span className="text-[0.5rem] text-[var(--text-muted)]">+{config.tools.length - 3}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[0.5625rem] font-mono text-[var(--text-muted)]">
+            ${state.cost_usd.toFixed(4)}
+          </span>
+          <button
+            type="button"
+            onClick={() => onOpen(config.id)}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[0.625rem] font-bold uppercase tracking-widest transition-all"
+            style={{
+              background: `${accent}15`,
+              border: `1px solid ${accent}35`,
+              color: accent,
+            }}
+          >
+            Open <ChevronRight size={10} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── WorkspacePanel ───────────────────────────────────────────────────────────
+interface WorkspacePanelProps {
+  agentId: string | null;
+  onClose: () => void;
+}
+
+const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ agentId, onClose }) => {
+  const config = AGENTS.find(a => a.id === agentId);
+  const [messages, setMessages] = useState<WsMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (agentId && config) {
+      setMessages([{ role: 'assistant', content: `${config.name} ready. What should I work on?` }]);
+      setInput('');
+      setSessionId(null);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const send = useCallback(async () => {
+    if (!input.trim() || !agentId || sending) return;
+    const text = input.trim();
+    setInput('');
+    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    setSending(true);
+    setMessages(prev => [...prev, { role: 'thinking', content: 'Thinking…' }]);
+
+    try {
+      const body: Record<string, unknown> = {
+        messages: [...messages.filter(m => m.role !== 'thinking'), { role: 'user', content: text }],
+        agent_id: agentId,
+        model_id: 'auto',
+      };
+      if (sessionId) body.session_id = sessionId;
+
+      const res = await fetch('/api/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      const reply = data.content?.[0]?.text ?? data.response ?? data.message ?? JSON.stringify(data);
+      if (data.conversation_id && !sessionId) setSessionId(data.conversation_id);
+      setMessages(prev => [...prev.filter(m => m.role !== 'thinking'), { role: 'assistant', content: reply }]);
+    } catch (err) {
+      setMessages(prev => [...prev.filter(m => m.role !== 'thinking'), { role: 'assistant', content: `Error: ${String(err)}` }]);
+    } finally {
+      setSending(false);
+    }
+  }, [input, agentId, sending, messages, sessionId]);
+
+  if (!agentId || !config) return null;
+  const accent = config.accentVar;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
+      <div className="ml-auto w-full max-w-xl flex flex-col" style={{ background: 'var(--bg-panel)', borderLeft: '1px solid var(--border-subtle)' }}>
+        {/* header */}
+        <div className="flex items-center gap-3 px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-app)' }}>
+          <div className="p-2 rounded-lg" style={{ background: `${accent}18`, color: accent }}>
+            {config.icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[0.875rem] font-bold text-[var(--text-heading)]">{config.name}</p>
+            <p className="text-[0.5625rem] font-mono uppercase tracking-widest text-[var(--text-muted)]">{config.role}</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-2 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]">
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* messages */}
+        <div ref={messagesRef} className="flex-1 overflow-y-auto p-5 space-y-3 min-h-0 custom-scrollbar">
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className="max-w-[85%] px-4 py-2.5 rounded-xl text-[0.75rem] leading-relaxed whitespace-pre-wrap"
+                style={
+                  m.role === 'user'
+                    ? { background: accent, color: '#fff' }
+                    : m.role === 'thinking'
+                    ? { color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.6875rem' }
+                    : { background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)' }
+                }
+              >
+                {m.content}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* input */}
+        <div className="px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-app)' }}>
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder={`Message ${config.name}…`}
+              rows={2}
+              className="flex-1 resize-none rounded-xl px-3 py-2.5 text-[0.75rem] font-mono outline-none placeholder:text-[var(--text-muted)]/50"
+              style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)' }}
+            />
+            <button
+              type="button"
+              onClick={send}
+              disabled={sending || !input.trim()}
+              className="p-2.5 rounded-xl disabled:opacity-40 transition-all"
+              style={{ background: accent, color: '#fff' }}
+            >
+              {sending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── McpPage ──────────────────────────────────────────────────────────────────
+export const McpPage: React.FC = () => {
+  const [agentStates, setAgentStates] = useState<Record<string, AgentState>>(() =>
+    Object.fromEntries(AGENTS.map(a => [a.id, {
+      id: a.id, status: 'idle', current_task: null,
+      progress_pct: 0, cost_usd: 0, logs: [], session_id: null,
+    }]))
+  );
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
+  const [services, setServices] = useState<McpService[]>([]);
+  const [servicesOpen, setServicesOpen] = useState(false);
+  const [servicesLoaded, setServicesLoaded] = useState(false);
+  const [commandInput, setCommandInput] = useState('');
+  const [commandFocus, setCommandFocus] = useState(false);
+  const [dispatching, setDispatching] = useState(false);
+  const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null);
+  const commandRef = useRef<HTMLInputElement>(null);
+
+  // ── Load agents ─────────────────────────────────────────────────────────────
+  const loadAgents = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mcp/agents', { credentials: 'same-origin' });
+      const data = await res.json();
+      const list: AgentState[] = data.agents || data || [];
+      if (Array.isArray(list)) {
+        setAgentStates(prev => {
+          const next = { ...prev };
+          list.forEach((a: AgentState) => {
+            if (next[a.id]) {
+              next[a.id] = {
+                ...next[a.id],
+                status: a.status ?? 'idle',
+                current_task: a.current_task ?? null,
+                progress_pct: a.progress_pct ?? 0,
+                cost_usd: a.cost_usd ?? 0,
+                logs: a.logs ?? [],
+              };
+            }
+          });
+          return next;
+        });
+      }
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => { void loadAgents(); }, [loadAgents]);
+
+  // polling when any agent running
+  useEffect(() => {
+    const anyRunning = Object.values(agentStates).some(a => a.status === 'running' || a.status === 'waiting');
+    if (anyRunning && !pollTimer) {
+      const t = setInterval(() => void loadAgents(), 4000);
+      setPollTimer(t);
+    } else if (!anyRunning && pollTimer) {
+      clearInterval(pollTimer);
+      setPollTimer(null);
+    }
+    return () => { if (pollTimer) clearInterval(pollTimer); };
+  }, [agentStates, pollTimer, loadAgents]);
+
+  // ── Load services ────────────────────────────────────────────────────────────
+  const loadServices = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mcp/services', { credentials: 'same-origin' });
+      const data = await res.json();
+      const list = data.services ?? data.results ?? [];
+      setServices(Array.isArray(list) ? list : []);
+      setServicesLoaded(true);
+    } catch { setServicesLoaded(true); }
+  }, []);
+
+  // ── Dispatch command ─────────────────────────────────────────────────────────
+  const dispatch = useCallback(async () => {
+    const prompt = commandInput.trim();
+    if (!prompt || dispatching) return;
+    setDispatching(true);
+    setCommandFocus(false);
+    try {
+      const res = await fetch('/api/mcp/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (data.agent_id) {
+        setCommandInput('');
+        await loadAgents();
+        setTimeout(() => setActiveAgent(data.agent_id), 400);
+      }
+    } catch { /* silent */ }
+    finally { setDispatching(false); }
+  }, [commandInput, dispatching, loadAgents]);
+
+  const healthColor = (status?: string) => {
+    const s = (status ?? '').toLowerCase();
+    if (s === 'healthy') return 'var(--solar-green)';
+    if (s === 'degraded') return 'var(--solar-yellow)';
+    if (s === 'down') return 'var(--solar-red)';
+    return 'var(--text-muted)';
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-[var(--bg-app)] text-[var(--text-main)] overflow-hidden">
+
+      {/* ── Top bar ───────────────────────────────────────────────────────── */}
+      <div
+        className="flex items-center gap-4 px-5 py-3 shrink-0 flex-wrap"
+        style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-panel)' }}
+      >
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 rounded-lg" style={{ background: 'var(--solar-cyan)18' }}>
+            <Network size={15} style={{ color: 'var(--solar-cyan)' }} />
+          </div>
+          <div>
+            <p className="text-[0.6875rem] font-bold tracking-widest uppercase leading-none text-[var(--text-heading)]">MCP Cloud Agents</p>
+            <p className="text-[0.5rem] font-mono text-[var(--text-muted)] mt-0.5">4-agent parallel ops · inneranimalmedia</p>
+          </div>
+        </div>
+
+        {/* status dots */}
+        <div className="flex items-center gap-3 ml-4">
+          {AGENTS.map(a => {
+            const s = agentStates[a.id];
+            const running = s?.status === 'running';
+            return (
+              <div key={a.id} className="flex items-center gap-1.5">
+                <div
+                  className={`w-1.5 h-1.5 rounded-full ${running ? 'animate-pulse' : ''}`}
+                  style={{ background: running ? a.accentVar : 'var(--text-muted)', opacity: running ? 1 : 0.3 }}
+                />
+                <span className="text-[0.5rem] font-mono text-[var(--text-muted)] hidden sm:block">{a.name}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void loadAgents()}
+          className="ml-auto p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
+        >
+          <RefreshCw size={13} />
+        </button>
+      </div>
+
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5">
+
+        {/* Command bar */}
+        <div className="relative">
+          <div
+            className="flex items-center gap-3 rounded-xl px-4 py-3 transition-all"
+            style={{
+              background: 'var(--bg-panel)',
+              border: `1px solid ${commandFocus ? 'var(--solar-cyan)' : 'var(--border-subtle)'}`,
+              boxShadow: commandFocus ? '0 0 0 3px var(--solar-cyan)18' : 'none',
+            }}
+          >
+            {dispatching
+              ? <Loader2 size={15} className="animate-spin shrink-0" style={{ color: 'var(--solar-cyan)' }} />
+              : <Terminal size={15} className="shrink-0 text-[var(--text-muted)]" />
+            }
+            <input
+              ref={commandRef}
+              value={commandInput}
+              onChange={e => setCommandInput(e.target.value)}
+              onFocus={() => setCommandFocus(true)}
+              onBlur={() => setTimeout(() => setCommandFocus(false), 150)}
+              onKeyDown={e => { if (e.key === 'Enter') dispatch(); }}
+              placeholder='Ask MCP…  e.g. "scaffold a new Cloudflare worker with D1 binding"'
+              className="flex-1 bg-transparent outline-none text-[0.75rem] font-mono placeholder:text-[var(--text-muted)]/50 text-[var(--text-main)]"
+            />
+            <button
+              type="button"
+              onClick={dispatch}
+              disabled={dispatching || !commandInput.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[0.5625rem] font-bold uppercase tracking-widest disabled:opacity-30 transition-all"
+              style={{ background: 'var(--solar-cyan)18', border: '1px solid var(--solar-cyan)35', color: 'var(--solar-cyan)' }}
+            >
+              <Zap size={11} /> Dispatch
+            </button>
+          </div>
+
+          {/* quick chips */}
+          <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+            {[
+              { label: 'Audit codebase', agent: 'Inspector' },
+              { label: 'New worker pipeline', agent: 'Builder' },
+              { label: 'Plan architecture', agent: 'Architect' },
+              { label: 'Deploy to production', agent: 'Operator' },
+            ].map(chip => (
+              <button
+                key={chip.label}
+                type="button"
+                onClick={() => { setCommandInput(chip.label); commandRef.current?.focus(); }}
+                className="px-2.5 py-1 rounded-lg text-[0.5625rem] font-bold uppercase tracking-widest transition-all hover:opacity-80"
+                style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}
+              >
+                {chip.label}
+                <span className="ml-1.5 opacity-50">→ {chip.agent}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Agent grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {AGENTS.map(config => (
+            <AgentCard
+              key={config.id}
+              config={config}
+              state={agentStates[config.id]}
+              onOpen={setActiveAgent}
+            />
+          ))}
+        </div>
+
+        {/* MCP Services panel */}
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
+          <button
+            type="button"
+            onClick={() => {
+              setServicesOpen(o => !o);
+              if (!servicesLoaded) void loadServices();
+            }}
+            className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-[var(--bg-hover)] transition-colors text-left"
+            style={{ background: 'var(--bg-panel)' }}
+          >
+            <div className="flex items-center gap-2.5">
+              <Wifi size={13} style={{ color: 'var(--solar-cyan)' }} />
+              <span className="text-[0.75rem] font-bold text-[var(--text-heading)]">MCP Connections</span>
+              {services.length > 0 && (
+                <span className="text-[0.5rem] font-mono text-[var(--text-muted)] opacity-60">({services.length})</span>
+              )}
+            </div>
+            <ChevronRight
+              size={13}
+              className="text-[var(--text-muted)] transition-transform"
+              style={{ transform: servicesOpen ? 'rotate(90deg)' : 'none' }}
+            />
+          </button>
+
+          {servicesOpen && (
+            <div style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-app)' }}>
+              {!servicesLoaded ? (
+                <div className="flex items-center gap-2 px-5 py-4 text-[var(--text-muted)] text-[0.75rem]">
+                  <Loader2 size={13} className="animate-spin" /> Loading connections…
+                </div>
+              ) : services.length === 0 ? (
+                <div className="px-5 py-4 text-[0.75rem] text-[var(--text-muted)]">No connections registered.</div>
+              ) : (
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      {['Service', 'Endpoint', 'Health'].map(h => (
+                        <th key={h} className="px-5 py-2.5 text-[0.5rem] font-black uppercase tracking-widest text-[var(--text-muted)]">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {services.map((s, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td className="px-5 py-2.5 text-[0.75rem] font-semibold text-[var(--text-main)]">
+                          {s.service_name ?? s.name ?? '—'}
+                        </td>
+                        <td className="px-5 py-2.5 text-[0.625rem] font-mono text-[var(--text-muted)] max-w-[200px] truncate">
+                          {s.endpoint_url ?? s.url ?? '—'}
+                        </td>
+                        <td className="px-5 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: healthColor(s.health_status) }} />
+                            <span className="text-[0.5625rem] font-bold capitalize" style={{ color: healthColor(s.health_status) }}>
+                              {s.health_status ?? 'unverified'}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div className="flex justify-end px-5 py-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[0.625rem] font-bold uppercase tracking-widest transition-all"
+                  style={{ background: 'var(--solar-cyan)15', border: '1px solid var(--solar-cyan)35', color: 'var(--solar-cyan)' }}
+                >
+                  <Plus size={11} /> New Connection
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* ── Workspace overlay ─────────────────────────────────────────────── */}
+      {activeAgent && (
+        <WorkspacePanel agentId={activeAgent} onClose={() => setActiveAgent(null)} />
+      )}
+    </div>
+  );
+};
+
+export default McpPage;

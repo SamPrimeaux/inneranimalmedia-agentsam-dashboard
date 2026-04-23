@@ -1,3 +1,4 @@
+// Used by DesignStudioPage.tsx for CAD toolbar / HUD overlays.
 
 /**
  * @license

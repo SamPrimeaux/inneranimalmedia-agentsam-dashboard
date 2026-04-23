@@ -6,9 +6,6 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, Routes, Route, Navigate, useNavigate } from "react-router-dom";
-import { VoxelEngine } from './services/VoxelEngine';
-import { StudioSidebar } from './components/StudioSidebar';
-import { UIOverlay } from './components/UIOverlay';
 import { ChatAssistant } from './components/ChatAssistant';
 import { WorkspaceDashboard } from './components/WorkspaceDashboard';
 import { MCPPanel } from './components/MCPPanel';
@@ -20,7 +17,6 @@ import { MonacoEditorView, type EditorModelMeta } from './components/MonacoEdito
 import { LocalExplorer } from './components/LocalExplorer';
 import { BrowserView } from './components/BrowserView';
 import { SettingsPanel } from './components/SettingsPanel';
-import { ToolLauncherBar } from './components/ToolLauncherBar';
 import { StatusBar, type AgentNotificationRow } from './components/StatusBar';
 import { ExcalidrawView } from './components/ExcalidrawView';
 import { DatabaseBrowser, type DatabaseExplorerJump } from './components/DatabaseBrowser';
@@ -34,7 +30,7 @@ import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
 import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { SourcePanel } from './components/SourcePanel';
-import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
+import { ProjectType, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
 import {
   fetchAndApplyActiveCmsTheme,
@@ -58,7 +54,7 @@ import { McpPage } from './components/McpPage';
 import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
-import { Bot, Home, Files, Search, GitBranch, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History } from 'lucide-react';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -119,32 +115,20 @@ const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
   const navigate = useNavigate();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const engineRef = useRef<VoxelEngine | null>(null);
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
   
-  const [activeProject, setActiveProject] = useState<ProjectType>(ProjectType.SANDBOX);
-  const [appState, setAppState] = useState<AppState>(AppState.EDITING);
-  const [voxelCount, setVoxelCount] = useState<number>(0);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [customAssets, setCustomAssets] = useState<CustomAsset[]>([]);
-  
-  // History Management
-  const [undoStack, setUndoStack] = useState<GameEntity[]>([]);
-  const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
+  const [activeProject] = useState<ProjectType>(ProjectType.SANDBOX);
 
   // IDE State
-  type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database' | null>(() =>
+  type TabId = 'Workspace' | 'welcome' | 'code' | 'browser' | 'glb' | 'excalidraw';
+  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
   const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
   );
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
-  /** Layout: optional split editor chrome (reserved for Monaco split view). */
-  const [splitLayout, setSplitLayout] = useState(false);
   /** Mirrored from Lab shell for Output tab (build / r2 / help). */
   const [shellOutputLines, setShellOutputLines] = useState<string[]>([]);
 
@@ -435,11 +419,8 @@ const App: React.FC = () => {
   }, [topChromeMoreOpen]);
 
   const openTab = (tab: TabId) => {
-    setOpenTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
+    setOpenTabs((prev) => (prev.includes(tab) ? prev : [...prev, tab]));
     setActiveTab(tab);
-    if (tab === 'engine' && activeActivity !== 'cad') {
-      setActiveActivity('cad');
-    }
   };
 
   const closeTab = (tab: TabId, e: React.MouseEvent) => {
@@ -727,16 +708,15 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database') => {
+  const toggleActivity = (
+    activity: 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database',
+  ) => {
     setActiveActivity((prev) => {
       if (prev === activity) return null;
       if (activity === 'debug') {
         setIsTerminalOpen(true);
         setTimeout(() => terminalRef.current?.setActiveTab('problems'), 50);
         return null; // Don't open a sidebar for debug anymore
-      }
-      if (activity === 'cad') {
-        openTab('engine');
       }
       return activity;
     });
@@ -1219,233 +1199,19 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const [genConfig, setGenConfig] = useState<GenerationConfig>({
-    style: ArtStyle.CYBERPUNK,
-    density: 5,
-    usePhysics: true,
-    cadTool: CADTool.NONE,
-    cadPlane: CADPlane.XZ,
-    extrusion: 1
-  });
-
-  const [sceneConfig, setSceneConfig] = useState<SceneConfig>({
-    ambientIntensity: 1.5,
-    sunColor: '#ffffff',
-    castShadows: true,
-    showPhysicsDebug: false
-  });
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const engine = new VoxelEngine(
-      containerRef.current,
-      (s) => setAppState(s),
-      (c) => setVoxelCount(c)
-    );
-    engineRef.current = engine;
-    
-    // Wire up engine events for history
-    engine.setOnEntityCreated((entity) => {
-      setUndoStack(prev => [...prev, entity]);
-      setRedoStack([]); // Clear redo on new action
-    });
-
-    // Initial sync
-    engine.updateLighting(sceneConfig);
-    engine.setCADPlane(genConfig.cadPlane);
-    engine.setExtrusion(genConfig.extrusion);
-
-    const handleResize = () => engine.handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      engine.cleanup();
-    };
-  }, []);
-
-  useEffect(() => {
-    engineRef.current?.updateLighting(sceneConfig);
-  }, [sceneConfig]);
-
-  const handleUndo = () => {
-    if (undoStack.length === 0) return;
-    const last = undoStack[undoStack.length - 1];
-    engineRef.current?.removeEntity(last.id);
-    setUndoStack(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, last]);
-  };
-
-  const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    engineRef.current?.spawnEntity(next);
-    setRedoStack(prev => prev.slice(0, -1));
-    setUndoStack(prev => [...prev, next]);
-  };
-
-  const handleProjectSwitch = (type: ProjectType) => {
-    setActiveProject(type);
-    engineRef.current?.setProjectType(type);
-    setGenConfig(prev => ({ ...prev, cadTool: CADTool.NONE }));
-    setUndoStack([]);
-    setRedoStack([]);
-    // Auto-surface the engine canvas when a 3D project is picked
-    openTab('engine');
-    setActiveActivity('cad');
-  };
-
-  const handleUpdateGenConfig = (cfg: Partial<GenerationConfig>) => {
-    const next = { ...genConfig, ...cfg };
-    setGenConfig(next);
-    
-    if (cfg.cadTool !== undefined) engineRef.current?.setCADTool(cfg.cadTool);
-    if (cfg.cadPlane !== undefined) engineRef.current?.setCADPlane(cfg.cadPlane);
-    if (cfg.extrusion !== undefined) engineRef.current?.setExtrusion(cfg.extrusion);
-  };
-
-  const handleSpawnModel = (name: string, url: string, scale: number) => {
-    if (activeTab !== 'engine') openTab('engine');
-    engineRef.current?.spawnEntity({
-      id: `asset_${Date.now()}`,
-      name: name,
-      type: 'prop',
-      modelUrl: url,
-      scale: scale,
-      position: { x: (Math.random() - 0.5) * 10, y: 10, z: (Math.random() - 0.5) * 10 },
-      behavior: { type: 'dynamic', mass: 10, restitution: 0.2 }
-    });
-  };
-
-  const handleFileDrop = (e: React.DragEvent) => {
+  const handleMainFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files);
-    const glb = files.find(f => f.name.toLowerCase().endsWith('.glb'));
-    if (glb) {
-      const url = URL.createObjectURL(glb);
-      handleSpawnModel(glb.name, url, 1);
-    }
+    const glb = files.find((f) => f.name.toLowerCase().endsWith('.glb'));
+    if (!glb) return;
+    const url = URL.createObjectURL(glb);
+    navigate('/dashboard/designstudio', {
+      state: { pendingGlb: { url, name: glb.name.replace(/\.glb$/i, '') } },
+    });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleMainDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-  };
-
-  const handleAddCustomAsset = (name: string, url: string) => {
-    const newAsset: CustomAsset = {
-      id: `custom_${Date.now()}`,
-      name,
-      url
-    };
-    setCustomAssets(prev => [...prev, newAsset]);
-  };
-
-  const handleRemoveCustomAsset = (id: string) => {
-    setCustomAssets(prev => prev.filter(a => a.id !== id));
-  };
-
-  const handleSave = async (id: string) => {
-    try {
-      const dataToSave = { undoStack, genConfig, sceneConfig }; 
-      await fetch(`/api/cad/upload/${id}`, {
-          method: 'POST',
-          body: JSON.stringify(dataToSave)
-      });
-      alert(`Project saved as ${id} to R2!`);
-    } catch(err) {
-      console.error(err);
-      alert('Save failed');
-    }
-  };
-
-  const handleLoad = async (id: string) => {
-    try {
-      const res = await fetch(`/api/cad/get/${id}`);
-      if (!res.ok) throw new Error('Not found');
-      const data = await res.json();
-      
-      engineRef.current?.clearWorld();
-      setUndoStack([]);
-      setRedoStack([]);
-      
-      if (data.undoStack) {
-          data.undoStack.forEach((ent: GameEntity) => {
-              engineRef.current?.spawnEntity(ent);
-              setUndoStack(prev => [...prev, ent]);
-          });
-      }
-      if (data.genConfig) handleUpdateGenConfig(data.genConfig);
-      if (data.sceneConfig) setSceneConfig(data.sceneConfig);
-      
-      alert(`Project loaded from R2!`);
-    } catch(err) {
-      console.error(err);
-      alert('Load failed');
-    }
-  };
-
-  const handleCommand = async (prompt: string) => {
-    if (prompt.startsWith('save ')) {
-        const id = prompt.replace('save ', '').trim();
-        await handleSave(id);
-        return;
-    }
-    if (prompt.startsWith('load ')) {
-        const id = prompt.replace('load ', '').trim();
-        await handleLoad(id);
-        return;
-    }
-
-    setIsGenerating(true);
-    try {
-      const styleGuidelines = {
-        [ArtStyle.CYBERPUNK]: "Neon accents, high-contrast, glowing colors (emissive), sharp technological angles.",
-        [ArtStyle.BRUTALIST]: "Monolithic shapes, concrete-gray color schemes, massive proportions, minimal decoration.",
-        [ArtStyle.ORGANIC]: "Soft curves, earth tones (greens/browns), flowing bio-inspired shapes.",
-        [ArtStyle.LOW_POLY]: "Basic geometric primitives, simple color blocking, retro 90s game look."
-      };
-      const densityMultiplier = genConfig.density * 50;
-      
-      const fullPrompt = `
-          PROJECT: ${activeProject}
-          STYLE PRESET: ${genConfig.style}
-          STYLE GUIDELINES: ${styleGuidelines[genConfig.style]}
-          PHYSICS ENABLED: ${genConfig.usePhysics}
-          DETAIL LEVEL (DENSITY): ${genConfig.density}/10 (Use roughly ${densityMultiplier} voxels per entity)
-          
-          COMMAND: "${prompt}"
-          
-          Return a JSON array of NEW entities. 
-          Behaviors: 'static', 'dynamic', 'hover', 'rotate'.
-          If physics is enabled, use 'dynamic' for objects that should fall and collide.
-          Include 'mass' (0.5 to 10), 'restitution' (0 to 1), and 'friction' (0 to 1) in behavior if dynamic.
-          Colors: Use hex strings appropriate for ${genConfig.style}.
-      `;
-
-      const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: fullPrompt })
-      });
-      const data = await response.json();
-
-      if (data.response && engineRef.current) {
-        const entities: any[] = JSON.parse(data.response);
-        entities.forEach(ent => {
-            const formattedVoxels = ent.voxels.map((v: any) => ({
-                ...v,
-                color: typeof v.color === 'string' ? parseInt(v.color.replace('#', ''), 16) : v.color
-            }));
-            const finalEntity = { ...ent, voxels: formattedVoxels };
-            engineRef.current?.spawnEntity(finalEntity);
-            setUndoStack(prev => [...prev, finalEntity]);
-        });
-        setRedoStack([]);
-      }
-    } catch (err) {
-      console.error("Studio Operation Failed", err);
-    } finally {
-      setIsGenerating(false);
-    }
   };
 
   const narrowBlocksCenter = isNarrowViewport && (!!activeActivity || agentPosition !== 'off');
@@ -1511,11 +1277,13 @@ const App: React.FC = () => {
               </button>
               <button
                   type="button"
-                  title="Toggle split editor layout"
-                  className={`p-1.5 rounded transition-colors ${splitLayout ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => setSplitLayout((v) => !v)}
+                  title="Open Browser"
+                  className="p-1.5 rounded transition-colors text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]"
+                  onClick={() => {
+                    openTab('browser');
+                  }}
               >
-                  <Columns2 size={15} strokeWidth={1.75} />
+                  <Globe size={15} strokeWidth={1.75} />
               </button>
               <button
                   type="button"
@@ -1539,8 +1307,8 @@ const App: React.FC = () => {
               <button
                   type="button"
                   title="Settings"
-                  className={`p-1.5 rounded transition-colors ${activeActivity === 'settings' ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => toggleActivity('settings')}
+                  className={`p-1.5 rounded transition-colors ${location.pathname === '/dashboard/settings' ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
+                  onClick={() => navigate('/dashboard/settings')}
               >
                   <Settings size={15} strokeWidth={1.75} />
               </button>
@@ -1624,7 +1392,7 @@ const App: React.FC = () => {
                   active={location.pathname === '/dashboard/storage'}
                   onClick={() => navigate('/dashboard/storage')}
               />
-              <ActivityIcon icon={Github} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
+              <ActivityIcon icon={Wrench} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
               <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
               <ActivityIcon
                   icon={Database}
@@ -1632,7 +1400,7 @@ const App: React.FC = () => {
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
-              <ActivityIcon icon={Settings} title="Settings" active={activeActivity === 'settings'} onClick={() => toggleActivity('settings')} />
+              <ActivityIcon icon={Settings} title="Settings" active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1669,18 +1437,9 @@ const App: React.FC = () => {
                             return glbUrl;
                           });
                           setGlbViewerFilename(file.name);
-                          openTab('engine');
-                          if (engineRef.current) {
-                            engineRef.current.spawnEntity({
-                              id: `chat-glb-${Date.now()}`,
-                              name: file.name.replace(/\.glb$/i, ''),
-                              type: 'prop',
-                              position: { x: 0, y: 1, z: 0 },
-                              behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
-                              modelUrl: glbUrl,
-                              scale: 1,
-                            });
-                          }
+                          navigate('/dashboard/designstudio', {
+                            state: { pendingGlb: { url: glbUrl, name: file.name.replace(/\.glb$/i, '') } },
+                          });
                         }}
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -1705,23 +1464,8 @@ const App: React.FC = () => {
               style={{ width: activeActivity ? sidebarW : 0 }}
               {...(narrowNeedsBack && !!activeActivity ? mobileEdgeSwipeHandlers : {})}
           >
-              <div className="w-full h-full flex flex-col relative">                  
-                  {activeActivity === 'cad' ? (
-                      <StudioSidebar 
-                          activeProject={activeProject} 
-                          onSwitchProject={handleProjectSwitch}
-                          onExport={() => engineRef.current?.exportForBlender()}
-                          genConfig={genConfig}
-                          onUpdateGenConfig={handleUpdateGenConfig}
-                          sceneConfig={sceneConfig}
-                          onUpdateSceneConfig={(cfg) => setSceneConfig(prev => ({ ...prev, ...cfg }))}
-                          onSpawnModel={handleSpawnModel}
-                          customAssets={customAssets}
-                          onAddCustomAsset={handleAddCustomAsset}
-                          onRemoveCustomAsset={handleRemoveCustomAsset}
-                          isEmbedded={true}
-                      />
-                  ) : activeActivity === 'search' ? (
+              <div className="w-full h-full flex flex-col relative">
+                  {activeActivity === 'search' ? (
                       <KnowledgeSearchPanel
                         onClose={() => setActiveActivity(null)}
                         activeConversationId={agentChatConversationId}
@@ -1745,16 +1489,6 @@ const App: React.FC = () => {
                       />
                   ) : activeActivity === 'mcps' ? (
                       <MCPPanel />
-                  ) : activeActivity === 'settings' ? (
-                      <SettingsPanel
-                          workspaceId={authWorkspaceId}
-                          onClose={() => setActiveActivity(null)}
-                          onFileSelect={(file) => {
-                              setActiveFile({ ...file, originalContent: file.content });
-                              openTab('code');
-                              revealMainWorkspaceIfNarrow();
-                          }}
-                      />
                   ) : activeActivity === 'actions' ? (
                       <GitHubExplorer
                           expandRepoFullName={githubExpandRepo}
@@ -1843,8 +1577,8 @@ const App: React.FC = () => {
           {/* 4. MAIN EDITOR AREA */}
           <main 
               className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative ${narrowBlocksCenter ? 'max-md:hidden' : ''}`}
-              onDrop={handleFileDrop}
-              onDragOver={handleDragOver}
+              onDrop={handleMainFileDrop}
+              onDragOver={handleMainDragOver}
           >
               {/* Dashboard page routes — non-agent pages render here */}
               {location.pathname !== '/dashboard/agent' ? (
@@ -1919,15 +1653,6 @@ const App: React.FC = () => {
                       )}
                       </>
                   )}
-                  {openTabs.includes('engine') && (
-                      <Tab
-                          title="Voxel"
-                          icon={<Box size={13} className="text-[var(--solar-magenta)]"/>}
-                          active={activeTab === 'engine'}
-                          onClick={() => setActiveTab('engine')}
-                          onClose={(e) => closeTab('engine', e)}
-                      />
-                  )}
                   {openTabs.includes('browser') && (
                       <Tab
                           title={browserTabTitle ?? 'Browser'}
@@ -1959,13 +1684,6 @@ const App: React.FC = () => {
               {/* Editor + optional aux bottom + terminal — flex column so drawer respects drag height */}
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
                   <div className="flex-1 min-h-0 relative flex flex-col">
-                  {/* 3D CANVAS MOUNT - Permanently in DOM to avoid WebGL context loss */}
-                  <div 
-                      ref={containerRef} 
-                      className={`absolute inset-0 z-0 transition-opacity duration-300 ${activeTab === 'engine' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-                      style={{ background: 'var(--scene-bg)' }}
-                  />
-                  
                   {location.pathname === '/dashboard/agent' && activeTab === 'Workspace' && (
                       <div className="absolute inset-0 z-10">
                           <WorkspaceDashboard 
@@ -1984,19 +1702,8 @@ const App: React.FC = () => {
                       </div>
                   )}
 
-                  {activeTab === 'engine' && (
-                      <div className="relative z-10 w-full h-full pointer-events-none flex flex-col justify-end pb-8">
-                          <ToolLauncherBar onNavigate={(url) => {
-                              setBrowserAddressDisplay(null);
-                              setBrowserTabTitle(null);
-                              setBrowserUrl(url);
-                              openTab('browser');
-                          }} />
-                      </div>
-                  )}
-
                   {activeTab === 'code' && (
-                      <div className="absolute inset-0 z-10" data-editor-split={splitLayout ? 'true' : undefined}>
+                      <div className="absolute inset-0 z-10">
                           <MonacoEditorView
                               fileData={activeFile}
                               isDirty={isDirty}
@@ -2088,18 +1795,9 @@ const App: React.FC = () => {
                                 return glbUrl;
                               });
                               setGlbViewerFilename(file.name);
-                              openTab('engine');
-                              if (engineRef.current) {
-                                engineRef.current.spawnEntity({
-                                  id: `chat-glb-${Date.now()}`,
-                                  name: file.name.replace(/\.glb$/i, ''),
-                                  type: 'prop',
-                                  position: { x: 0, y: 1, z: 0 },
-                                  behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
-                                  modelUrl: glbUrl,
-                                  scale: 1,
-                                });
-                              }
+                              navigate('/dashboard/designstudio', {
+                                state: { pendingGlb: { url: glbUrl, name: file.name.replace(/\.glb$/i, '') } },
+                              });
                             }}
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -2164,8 +1862,8 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'settings' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => toggleActivity('settings')}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${location.pathname === '/dashboard/settings' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => navigate('/dashboard/settings')}
         >
           <Settings size={24} strokeWidth={1.5} aria-hidden />
           <span>Settings</span>
@@ -2203,7 +1901,7 @@ const App: React.FC = () => {
               <MobileMoreRow icon={Layers} label="Tools & MCP" onClick={() => { setMobileMoreOpen(false); toggleActivity('mcps'); }} />
               <MobileMoreRow icon={Cloud} label="Cloud Sync" onClick={() => { setMobileMoreOpen(false); toggleActivity('drive'); }} />
               <MobileMoreRow icon={Monitor} label="Playwright Jobs" onClick={() => { setMobileMoreOpen(false); toggleActivity('playwright'); }} />
-              <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); toggleActivity('cad'); }} />
+              <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); navigate('/dashboard/designstudio'); }} />
             </div>
           </div>
         </>

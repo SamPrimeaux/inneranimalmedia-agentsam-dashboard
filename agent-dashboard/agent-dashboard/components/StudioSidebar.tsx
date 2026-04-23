@@ -1,4 +1,4 @@
-
+// Absorbed into DesignStudioPage.tsx
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0

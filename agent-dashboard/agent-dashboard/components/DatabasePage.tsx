@@ -694,15 +694,15 @@ const TableSidebar: React.FC<TableSidebarProps> = ({
               <button
                 type="button"
                 onClick={() => onToggleGroup(group.prefix)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--bg-hover)] transition-colors text-left"
+                className="w-full flex items-center gap-2 px-3 py-1.5 min-h-[40px] touch-action-manipulation hover:bg-[var(--bg-hover)] transition-colors text-left"
               >
                 <div style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 150ms' }}>
                   <ChevronRight size={10} className="text-[var(--text-muted)]" />
                 </div>
-                <span className="text-[0.5625rem] font-black uppercase tracking-widest text-[var(--text-muted)] flex-1 truncate">
+                <span className="text-[0.625rem] font-black uppercase tracking-widest text-[var(--text-muted)] flex-1 truncate">
                   {group.prefix}
                 </span>
-                <span className="text-[0.5rem] font-mono text-[var(--text-muted)] opacity-40 shrink-0">{group.tables.length}</span>
+                <span className="text-[0.5625rem] font-mono text-[var(--text-muted)] opacity-40 shrink-0">{group.tables.length}</span>
               </button>
 
               {isOpen && group.tables.map(table => (
@@ -710,7 +710,7 @@ const TableSidebar: React.FC<TableSidebarProps> = ({
                   key={table}
                   type="button"
                   onClick={() => onSelect(table)}
-                  className={`group w-full flex items-center gap-2 pl-7 pr-3 py-1 hover:bg-[var(--bg-hover)] transition-colors text-left relative ${
+                  className={`group w-full flex items-center gap-2 pl-6 pr-3 py-1 min-h-[36px] hover:bg-[var(--bg-hover)] transition-colors text-left relative ${
                     selected === table ? 'bg-[var(--bg-hover)]' : ''
                   }`}
                 >
@@ -1176,8 +1176,7 @@ export const DatabasePage: React.FC = () => {
 
         {/* sidebar */}
         {sidebarOpen && (
-          <div className="w-56 shrink-0 border-r border-[var(--border-subtle)] flex flex-col min-h-0
-                          max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:w-[85vw] max-md:shadow-2xl">
+          <div className="w-64 shrink-0 border-r border-[var(--border-subtle)] flex flex-col min-h-0 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:w-[92vw] max-md:shadow-2xl">
             <TableSidebar
               groups={filteredGroups}
               openGroups={openGroups}

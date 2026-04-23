@@ -5525,6 +5525,31 @@ const worker = {
           }
         }
       }
+      if (pathLower === '/api/settings/workspaces/active' && (request.method || 'GET').toUpperCase() === 'POST') {
+        if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const body = await request.json().catch(() => ({}));
+          const id = body.id != null ? String(body.id).trim() : '';
+          if (!id) return jsonResponse({ error: 'id required' }, 400);
+          let valid = CORE_WORKSPACE_IDS.includes(id);
+          if (!valid) {
+            try {
+              const row = await env.DB.prepare('SELECT id FROM workspaces WHERE id = ? LIMIT 1').bind(id).first();
+              valid = !!row;
+            } catch (_) {
+              valid = false;
+            }
+          }
+          if (!valid) return jsonResponse({ error: 'Invalid workspace id' }, 400);
+          await env.DB.prepare(
+            `UPDATE user_settings SET default_workspace_id = ?, updated_at = unixepoch() WHERE user_id = ?`
+          ).bind(id, settingsSessionUserId).run();
+          return jsonResponse({ ok: true, current: id });
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? 'Update failed' }, 500);
+        }
+      }
       if (pathLower === '/api/settings/workspace/default' && (request.method === 'PUT' || request.method === 'PATCH')) {
         if (!settingsUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -5731,7 +5756,7 @@ const worker = {
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
       if (pathLower.startsWith('/dashboard/')) {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
-        const SPA_ROUTES = new Set(["calendar", "mcp", "overview", "database", "settings", "integrations"]);
+        const SPA_ROUTES = new Set(["calendar", "mcp", "overview", "database", "settings", "integrations", "designstudio", "storage"]);
         const key = SPA_ROUTES.has(segment) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);

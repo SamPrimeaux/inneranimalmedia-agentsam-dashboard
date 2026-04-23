@@ -175,7 +175,9 @@ export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({ onSelect, 
             <span className="flex items-center gap-1"><ShieldCheck size={12} className="text-[var(--solar-green)]" /> Authenticated</span>
             <span className="flex items-center gap-1"><Server size={12} /> D1 Storage: Active</span>
           </div>
-          <p className="text-[var(--text-muted)] font-mono">WORKSPACE_ID: CORE_CONTROL_PLANE</p>
+          <p className="text-[var(--text-muted)] font-mono truncate max-w-[55%] text-right">
+            Switch cloud workspace from the status bar or Agent home.
+          </p>
         </div>
       </div>
     </div>

@@ -55,7 +55,10 @@ import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
 import { DatabasePage } from './components/DatabasePage';
 import { McpPage } from './components/McpPage';
-import { Bot, Home, Files, Search, GitBranch, PlayCircle, Blocks, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Plane } from 'lucide-react';
+import { IntegrationsPage } from './components/IntegrationsPage';
+import { DesignStudioPage } from './components/DesignStudioPage';
+import { StoragePage } from './components/StoragePage';
+import { Bot, Home, Files, Search, GitBranch, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -147,7 +150,7 @@ const App: React.FC = () => {
 
   const [ideWorkspace, setIdeWorkspace] = useState<IdeWorkspaceSnapshot>(() => ({ source: 'none' }));
   const [recentFiles, setRecentFiles] = useState<RecentFileEntry[]>([]);
-  const [gitBranch, setGitBranch] = useState(() => 'main');
+  const [gitBranch, setGitBranch] = useState(() => '');
   const [agentChatConversationId, setAgentChatConversationId] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem(LS_AGENT_CHAT_CONVERSATION_ID)?.trim() || '' : '',
   );
@@ -172,6 +175,9 @@ const App: React.FC = () => {
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
   /** ≤768px: secondary rail actions (sheet above bottom tab bar). */
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  /** Desktop: Draw / Search / Playwright / History (Addendum A). */
+  const [topChromeMoreOpen, setTopChromeMoreOpen] = useState(false);
+  const topChromeMoreRef = useRef<HTMLDivElement>(null);
   const [isWorkspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false);
 
   const [isNarrowViewport, setIsNarrowViewport] = useState(
@@ -236,6 +242,12 @@ const App: React.FC = () => {
   const workspaceDisplayLine = workspaceDisplayName || workspaceDisplayFallback;
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    (window as unknown as { __IAM_WORKSPACE_ID__?: string }).__IAM_WORKSPACE_ID__ = authWorkspaceId || 'global';
+    window.dispatchEvent(new CustomEvent('iam_workspace_id'));
+  }, [authWorkspaceId]);
+
+  useEffect(() => {
     fetch('/api/settings/workspaces', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { current?: string; data?: Array<{ id?: string; name?: string }> } | null) => {
@@ -265,7 +277,7 @@ const App: React.FC = () => {
 
   const idePersistRef = useRef({
     ideWorkspace: { source: 'none' } as IdeWorkspaceSnapshot,
-    gitBranch: 'main',
+    gitBranch: '',
     recentFiles: [] as RecentFileEntry[],
   });
   useEffect(() => {
@@ -341,6 +353,7 @@ const App: React.FC = () => {
   }, [openFile, updateActiveFile]);
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
   const [browserUrl, setBrowserUrl] = useState<string>('https://inneranimalmedia.com');
   /** When set with a blob browser URL, Browser tab shows this label (e.g. r2://binding/key) instead of blob:. */
   const [browserAddressDisplay, setBrowserAddressDisplay] = useState<string | null>(null);
@@ -363,6 +376,21 @@ const App: React.FC = () => {
     if (agentPosition === 'off') setAgentPosition('right');
     window.dispatchEvent(new CustomEvent('iam-agent-external-send', { detail: { message: msg } }));
   }, [agentPosition]);
+
+  const persistActiveWorkspace = useCallback(async (id: string) => {
+    setAuthWorkspaceId(id);
+    try {
+      const r = await fetch('/api/settings/workspaces/active', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error('sync failed');
+    } catch {
+      setToastMsg('Workspace saved locally — sync failed.');
+    }
+  }, []);
 
   const lastPersistedTabRef = useRef<TabId | null>(null);
   useEffect(() => {
@@ -395,6 +423,16 @@ const App: React.FC = () => {
     const t = window.setTimeout(() => setToastMsg(null), 4500);
     return () => clearTimeout(t);
   }, [toastMsg]);
+
+  useEffect(() => {
+    if (!topChromeMoreOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const el = topChromeMoreRef.current;
+      if (el && !el.contains(e.target as Node)) setTopChromeMoreOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [topChromeMoreOpen]);
 
   const openTab = (tab: TabId) => {
     setOpenTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
@@ -1506,49 +1544,95 @@ const App: React.FC = () => {
               >
                   <Settings size={15} strokeWidth={1.75} />
               </button>
+              <div className="relative hidden md:block" ref={topChromeMoreRef}>
+                  <button
+                      type="button"
+                      title="More tools"
+                      className={`p-1.5 rounded transition-colors ${topChromeMoreOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
+                      onClick={() => setTopChromeMoreOpen((v) => !v)}
+                  >
+                      <MoreHorizontal size={15} strokeWidth={1.75} />
+                  </button>
+                  {topChromeMoreOpen && (
+                      <div className="absolute right-0 top-full mt-1 z-[120] min-w-[200px] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-xl py-1">
+                          <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                              onClick={() => {
+                                  setTopChromeMoreOpen(false);
+                                  navigate('/dashboard/agent');
+                                  queueMicrotask(() => openTab('excalidraw'));
+                              }}
+                          >
+                              <PenTool size={14} className="text-[var(--text-muted)]" />
+                              Draw
+                          </button>
+                          <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                              onClick={() => {
+                                  setTopChromeMoreOpen(false);
+                                  toggleActivity('search');
+                              }}
+                          >
+                              <Search size={14} className="text-[var(--text-muted)]" />
+                              Search
+                          </button>
+                          <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                              onClick={() => {
+                                  setTopChromeMoreOpen(false);
+                                  toggleActivity('playwright');
+                              }}
+                          >
+                              <Monitor size={14} className="text-[var(--text-muted)]" />
+                              Playwright
+                          </button>
+                          <button
+                              type="button"
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
+                              onClick={() => {
+                                  setTopChromeMoreOpen(false);
+                                  navigate('/dashboard/overview');
+                              }}
+                          >
+                              <History size={14} className="text-[var(--text-muted)]" />
+                              History
+                          </button>
+                      </div>
+                  )}
+              </div>
           </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
           {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
-          <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-4 border-r border-[var(--border-subtle)] shrink-0 z-50">
+          {/* Activity bar: exactly 8 icons (v3 rail) */}
+          <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-3 border-r border-[var(--border-subtle)] shrink-0 z-50">
               <ActivityIcon icon={Home} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
               <ActivityIcon icon={Bot} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
-              <div className="w-6 h-px bg-[var(--border-subtle)] my-1" />
-              <ActivityIcon icon={PenTool} title="Draw" active={openTabs.includes('excalidraw')} onClick={() => openTab('excalidraw')} />
-              <ActivityIcon icon={Search} title="Search" active={activeActivity === 'search'} onClick={() => toggleActivity('search')} />
-              <ActivityIcon icon={GitBranch} title="Source Control" active={activeActivity === 'git'} onClick={() => toggleActivity('git')} />
-              <ActivityIcon icon={Network} title="Remote Explorers" active={activeActivity === 'remote'} onClick={() => toggleActivity('remote')} />
-              <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
+              <ActivityIcon
+                  icon={Palette}
+                  title="Design Studio"
+                  active={location.pathname === '/dashboard/designstudio'}
+                  onClick={() => navigate('/dashboard/designstudio')}
+              />
+              <ActivityIcon
+                  icon={HardDrive}
+                  title="Storage"
+                  active={location.pathname === '/dashboard/storage'}
+                  onClick={() => navigate('/dashboard/storage')}
+              />
               <ActivityIcon icon={Github} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
+              <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
               <ActivityIcon
                   icon={Database}
                   title="D1 Explorer"
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
-              <ActivityIcon icon={Cloud} title="Cloud Sync" active={activeActivity === 'drive'} onClick={() => toggleActivity('drive')} />
-              <ActivityIcon icon={Monitor} title="Playwright Jobs" active={activeActivity === 'playwright'} onClick={() => toggleActivity('playwright')} />
-              
-              <div className="flex-1" />
-              <ActivityIcon icon={FolderOpen} title="Projects" active={activeActivity === 'projects'} onClick={() => toggleActivity('projects')} />
-              <ActivityIcon 
-                icon={Plane} 
-                title="Studio Engine" 
-                active={activeActivity === 'cad'} 
-                onClick={() => {
-                  if (activeActivity === 'cad') {
-                    setActiveActivity(null);
-                  } else {
-                    toggleActivity('cad');
-                    openTab('engine');
-                  }
-                }} 
-              />
               <ActivityIcon icon={Settings} title="Settings" active={activeActivity === 'settings'} onClick={() => toggleActivity('settings')} />
-              <div className="w-full h-px bg-[var(--border-subtle)] my-1" />
-              <ActivityIcon icon={Monitor} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
-              <ActivityIcon icon={LayoutTemplate} title="Calendar" active={location.pathname === '/dashboard/calendar'} onClick={() => navigate('/dashboard/calendar')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1770,6 +1854,9 @@ const App: React.FC = () => {
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
                     <Route path="/dashboard/mcp" element={<McpPage />} />
+                    <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
+                    <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
+                    <Route path="/dashboard/storage" element={<StoragePage />} />
                     <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
                   </Routes>
                 </div>
@@ -1891,7 +1978,7 @@ const App: React.FC = () => {
                             recentFiles={recentFiles}
                             workspaceRows={workspaceRows}
                             authWorkspaceId={authWorkspaceId}
-                            onSwitchWorkspace={(id) => setAuthWorkspaceId(id)}
+                            onSwitchWorkspace={persistActiveWorkspace}
                             onSendMessage={handleSendMessage}
                           />
                       </div>
@@ -2124,7 +2211,7 @@ const App: React.FC = () => {
 
       <StatusBar 
         branch={gitBranch}
-        workspace={workspaceDisplayName || authWorkspaceId || undefined}
+        workspace={(workspaceDisplayName?.trim() || authWorkspaceId?.trim() || '')}
         errorCount={errorCount}
         warningCount={warningCount}
         showCursor={activeTab === 'code'}

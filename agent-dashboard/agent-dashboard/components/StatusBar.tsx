@@ -85,8 +85,8 @@ interface StatusBarProps {
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
-  branch = 'main',
-  workspace = 'No workspace',
+  branch = '',
+  workspace = '',
   errorCount = 0,
   warningCount = 0,
   line = 1,

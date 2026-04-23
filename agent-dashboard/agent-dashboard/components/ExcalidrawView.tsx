@@ -1,11 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Excalidraw } from '@excalidraw/excalidraw';
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types';
-import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types/types';
 import '@excalidraw/excalidraw/index.css';
 
-const WORKSPACE_ID = 'global';
+/** Scene elements — deep paths under @excalidraw/excalidraw are not resolved by this project's tsc. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExcalidrawElement = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExcalidrawImperativeAPI = any;
+
 const DEBOUNCE_MS = 800;
+
+function getIamWorkspaceId(): string {
+    if (typeof window === 'undefined') return 'global';
+    const w = (window as unknown as { __IAM_WORKSPACE_ID__?: string }).__IAM_WORKSPACE_ID__;
+    return typeof w === 'string' && w.trim() ? w.trim() : 'global';
+}
 
 export const ExcalidrawView: React.FC = () => {
     const [initialElements, setInitialElements] = useState<readonly ExcalidrawElement[]>([]);
@@ -14,17 +23,23 @@ export const ExcalidrawView: React.FC = () => {
     const isLocalChangeRef = useRef(false);
     const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // On mount: load persisted canvas state from IAM_COLLAB DO
+    // Load persisted canvas when mount or IAM workspace id changes (via event from App.tsx).
     useEffect(() => {
-        fetch(`/api/collab/canvas/state?workspace_id=${WORKSPACE_ID}`, { credentials: 'same-origin' })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
-                if (data?.canvasElements && Array.isArray(data.canvasElements) && data.canvasElements.length > 0) {
-                    setInitialElements(data.canvasElements as readonly ExcalidrawElement[]);
-                }
-            })
-            .catch(() => {})
-            .finally(() => setInitialDataLoaded(true));
+        const load = () => {
+            const ws = getIamWorkspaceId();
+            fetch(`/api/collab/canvas/state?workspace_id=${encodeURIComponent(ws)}`, { credentials: 'same-origin' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (data?.canvasElements && Array.isArray(data.canvasElements) && data.canvasElements.length > 0) {
+                        setInitialElements(data.canvasElements as readonly ExcalidrawElement[]);
+                    }
+                })
+                .catch(() => {})
+                .finally(() => setInitialDataLoaded(true));
+        };
+        load();
+        window.addEventListener('iam_workspace_id', load);
+        return () => window.removeEventListener('iam_workspace_id', load);
     }, []);
 
     // Listen for agent-driven tool calls (excalidraw_open, excalidraw_add_elements, excalidraw_clear, excalidraw_export)
@@ -39,7 +54,7 @@ export const ExcalidrawView: React.FC = () => {
                 const existing = api.getSceneElements();
                 api.updateScene({ elements: [...existing, ...params.elements] });
             } else if (action === 'export') {
-                api.exportToBlob({ mimeType: 'image/png' }).then((blob) => {
+                api.exportToBlob({ mimeType: 'image/png' }).then((blob: Blob) => {
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url; a.download = 'excalidraw-export.png'; a.click();
@@ -69,7 +84,8 @@ export const ExcalidrawView: React.FC = () => {
         debounceTimer.current = setTimeout(async () => {
             isLocalChangeRef.current = true;
             try {
-                await fetch(`/api/collab/canvas/elements?workspace_id=${WORKSPACE_ID}`, {
+                const ws = getIamWorkspaceId();
+                await fetch(`/api/collab/canvas/elements?workspace_id=${encodeURIComponent(ws)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'same-origin',

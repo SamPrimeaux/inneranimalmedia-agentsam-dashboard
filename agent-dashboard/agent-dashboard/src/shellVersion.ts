@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 /**
  * Agent Sam dashboard shell build label. Production/sandbox builds set
  * `VITE_SHELL_VERSION` from `scripts/deploy-sandbox.sh` (monotonic `agent-dashboard/.sandbox-deploy-version`).

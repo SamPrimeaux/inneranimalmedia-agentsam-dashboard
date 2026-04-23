@@ -58,12 +58,31 @@ interface WsMessage {
   content: string;
 }
 
-// ─── Agent Definitions ────────────────────────────────────────────────────────
-const AGENTS: AgentConfig[] = [
+type WorkflowRow = {
+  id: string;
+  name: string;
+  trigger_type: string | null;
+  status: string | null;
+  last_run_at: unknown;
+  run_count: number | null;
+  requires_approval?: boolean;
+};
+
+type AgentProfile = {
+  slug: string;
+  display_name: string;
+  description: string | null;
+  icon: string | null;
+  access_mode: string | null;
+  tool_categories: string | null;
+  allowed_tool_globs: unknown;
+};
+
+const FALLBACK_AGENTS: AgentConfig[] = [
   {
     id: 'mcp_agent_architect',
     name: 'Architect',
-    role: 'Plan · Design · Brainstorm',
+    role: 'Systems design, architecture planning, technical strategy'.slice(0, 60),
     description: 'Systems design, architecture planning, technical strategy',
     icon: <Brain size={18} />,
     accentVar: 'var(--solar-blue)',
@@ -72,7 +91,7 @@ const AGENTS: AgentConfig[] = [
   {
     id: 'mcp_agent_builder',
     name: 'Builder',
-    role: 'Code · Generate · Implement',
+    role: 'Full-stack code generation, feature implementation, scaffolding'.slice(0, 60),
     description: 'Full-stack code generation, feature implementation, scaffolding',
     icon: <Hammer size={18} />,
     accentVar: 'var(--solar-cyan)',
@@ -81,7 +100,7 @@ const AGENTS: AgentConfig[] = [
   {
     id: 'mcp_agent_inspector',
     name: 'Inspector',
-    role: 'Debug · Test · Audit',
+    role: 'Code review, bug hunting, test coverage, security audits'.slice(0, 60),
     description: 'Code review, bug hunting, test coverage, security audits',
     icon: <FlaskConical size={18} />,
     accentVar: 'var(--solar-green)',
@@ -90,13 +109,65 @@ const AGENTS: AgentConfig[] = [
   {
     id: 'mcp_agent_operator',
     name: 'Operator',
-    role: 'Deploy · Monitor · Ship',
+    role: 'Deployments, health monitoring, infra ops, release management'.slice(0, 60),
     description: 'Deployments, health monitoring, infra ops, release management',
     icon: <Rocket size={18} />,
     accentVar: 'var(--solar-yellow)',
     tools: ['d1_query', 'r2_list', 'worker_deploy'],
   },
 ];
+
+const ACCENT_CYCLE = [
+  'var(--solar-blue)',
+  'var(--solar-cyan)',
+  'var(--solar-green)',
+  'var(--solar-yellow)',
+  'var(--solar-magenta)',
+];
+
+function parseAllowedToolGlobs(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const j = JSON.parse(s);
+      if (Array.isArray(j)) return j.map(String).map((x) => x.trim()).filter(Boolean);
+    } catch (_) { }
+    return s
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function lucideForIconName(name: string | null): React.ReactNode {
+  const k = String(name || '').trim().toLowerCase();
+  if (k === 'folder-search') return <Brain size={18} />;
+  if (k === 'terminal') return <Terminal size={18} />;
+  if (k === 'code-2') return <Hammer size={18} />;
+  if (k === 'database') return <FlaskConical size={18} />;
+  if (k === 'git-merge') return <Rocket size={18} />;
+  return <Cpu size={18} />;
+}
+
+function mapProfilesToAgents(profiles: AgentProfile[]): AgentConfig[] {
+  return profiles.map((p, idx) => {
+    const id = String(p.slug || '').trim();
+    const name = String(p.display_name || id || 'Agent').trim();
+    const desc = String(p.description || '').trim();
+    return {
+      id,
+      name,
+      role: (desc || name).slice(0, 60),
+      description: desc || name,
+      icon: lucideForIconName(p.icon),
+      accentVar: ACCENT_CYCLE[idx % ACCENT_CYCLE.length],
+      tools: parseAllowedToolGlobs((p as any).allowed_tool_globs),
+    };
+  }).filter((a) => !!a.id);
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function statusIcon(status: AgentStatus, accent: string) {
@@ -224,11 +295,12 @@ const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen }) => {
 // ─── WorkspacePanel ───────────────────────────────────────────────────────────
 interface WorkspacePanelProps {
   agentId: string | null;
+  agents: AgentConfig[];
   onClose: () => void;
 }
 
-const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ agentId, onClose }) => {
-  const config = AGENTS.find(a => a.id === agentId);
+const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ agentId, agents, onClose }) => {
+  const config = agents.find(a => a.id === agentId);
   const [messages, setMessages] = useState<WsMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -355,8 +427,9 @@ const WorkspacePanel: React.FC<WorkspacePanelProps> = ({ agentId, onClose }) => 
 
 // ─── McpPage ──────────────────────────────────────────────────────────────────
 export const McpPage: React.FC = () => {
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [agentStates, setAgentStates] = useState<Record<string, AgentState>>(() =>
-    Object.fromEntries(AGENTS.map(a => [a.id, {
+    Object.fromEntries(FALLBACK_AGENTS.map(a => [a.id, {
       id: a.id, status: 'idle', current_task: null,
       progress_pct: 0, cost_usd: 0, logs: [], session_id: null,
     }]))
@@ -365,11 +438,119 @@ export const McpPage: React.FC = () => {
   const [services, setServices] = useState<McpService[]>([]);
   const [servicesOpen, setServicesOpen] = useState(false);
   const [servicesLoaded, setServicesLoaded] = useState(false);
+  const [workflows, setWorkflows] = useState<WorkflowRow[]>([]);
+  const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
+  const [workflowsBusyId, setWorkflowsBusyId] = useState<string | null>(null);
   const [commandInput, setCommandInput] = useState('');
   const [commandFocus, setCommandFocus] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null);
   const commandRef = useRef<HTMLInputElement>(null);
+
+  const formatRelativeTime = useCallback((raw: unknown): string => {
+    if (raw == null) return 'never';
+    let ms: number | null = null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      ms = raw > 10_000_000_000 ? raw : raw * 1000; // ms vs unix seconds
+    } else if (typeof raw === 'string') {
+      const s = raw.trim();
+      if (!s) return 'never';
+      const asNum = Number(s);
+      if (!Number.isNaN(asNum) && Number.isFinite(asNum)) {
+        ms = asNum > 10_000_000_000 ? asNum : asNum * 1000;
+      } else {
+        const parsed = Date.parse(s);
+        if (!Number.isNaN(parsed)) ms = parsed;
+      }
+    }
+    if (!ms) return 'never';
+    const diff = Date.now() - ms;
+    if (diff < 0) return 'just now';
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    return `${day}d ago`;
+  }, []);
+
+  const loadWorkflows = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mcp/workflows', { credentials: 'same-origin' });
+      const data = await res.json().catch(() => ({}));
+      const list = Array.isArray((data as any)?.workflows) ? (data as any).workflows : (Array.isArray(data) ? data : []);
+      setWorkflows(Array.isArray(list) ? list : []);
+      setWorkflowsLoaded(true);
+    } catch {
+      setWorkflowsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { void loadWorkflows(); }, [loadWorkflows]);
+
+  const runWorkflow = useCallback(async (wf: WorkflowRow) => {
+    const id = String(wf?.id || '').trim();
+    if (!id || workflowsBusyId) return;
+    const trig = String(wf?.trigger_type || '').trim().toLowerCase();
+    if (trig === 'manual') {
+      const ok = window.confirm(`Run workflow "${wf.name}" now?`);
+      if (!ok) return;
+    }
+    setWorkflowsBusyId(id);
+    try {
+      const res = await fetch(`/api/mcp/workflows/${encodeURIComponent(id)}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({}),
+      });
+      await res.json().catch(() => ({}));
+      await loadWorkflows();
+    } catch {
+      /* ignore */
+    } finally {
+      setWorkflowsBusyId(null);
+    }
+  }, [loadWorkflows, workflowsBusyId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/agent/subagent-profiles', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
+        const mapped = mapProfilesToAgents(profiles as AgentProfile[]);
+        const nextAgents = mapped.length > 0 ? mapped : FALLBACK_AGENTS;
+        if (cancelled) return;
+        setAgents(nextAgents);
+      } catch {
+        if (!cancelled) setAgents(FALLBACK_AGENTS);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!agents.length) return;
+    setAgentStates((prev) => {
+      const next: Record<string, AgentState> = {};
+      for (const a of agents) {
+        next[a.id] = prev[a.id] || {
+          id: a.id,
+          status: 'idle',
+          current_task: null,
+          progress_pct: 0,
+          cost_usd: 0,
+          logs: [],
+          session_id: null,
+        };
+      }
+      return next;
+    });
+  }, [agents]);
 
   // ── Load agents ─────────────────────────────────────────────────────────────
   const loadAgents = useCallback(async () => {
@@ -475,7 +656,7 @@ export const McpPage: React.FC = () => {
 
         {/* status dots */}
         <div className="flex items-center gap-3 ml-4">
-          {AGENTS.map(a => {
+          {(agents.length ? agents : FALLBACK_AGENTS).map(a => {
             const s = agentStates[a.id];
             const running = s?.status === 'running';
             return (
@@ -561,7 +742,7 @@ export const McpPage: React.FC = () => {
 
         {/* Agent grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {AGENTS.map(config => (
+          {(agents.length ? agents : FALLBACK_AGENTS).map(config => (
             <AgentCard
               key={config.id}
               config={config}
@@ -648,11 +829,81 @@ export const McpPage: React.FC = () => {
           )}
         </div>
 
+        {/* Workflows panel */}
+        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-subtle)' }}>
+          <div
+            className="w-full flex items-center justify-between px-5 py-3.5 text-left"
+            style={{ background: 'var(--bg-panel)' }}
+          >
+            <div className="flex items-center gap-2.5">
+              <Activity size={13} style={{ color: 'var(--solar-cyan)' }} />
+              <span className="text-[0.75rem] font-bold text-[var(--text-heading)]">Workflows</span>
+              {workflows.length > 0 && (
+                <span className="text-[0.5rem] font-mono text-[var(--text-muted)] opacity-60">({workflows.length})</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadWorkflows()}
+              className="p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
+              title="Refresh workflows"
+            >
+              <RefreshCw size={13} />
+            </button>
+          </div>
+
+          <div style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-app)' }}>
+            {!workflowsLoaded ? (
+              <div className="flex items-center gap-2 px-5 py-4 text-[var(--text-muted)] text-[0.75rem]">
+                <Loader2 size={13} className="animate-spin" /> Loading workflows…
+              </div>
+            ) : workflows.length === 0 ? (
+              <div className="px-5 py-4 text-[0.75rem] text-[var(--text-muted)]">No workflows configured.</div>
+            ) : (
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    {['Workflow', 'Last run', 'Runs', ''].map(h => (
+                      <th key={h} className="px-5 py-2.5 text-[0.5rem] font-black uppercase tracking-widest text-[var(--text-muted)]">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflows.map((wf) => (
+                    <tr key={wf.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td className="px-5 py-2.5 text-[0.75rem] font-semibold text-[var(--text-main)]">
+                        {wf.name}
+                      </td>
+                      <td className="px-5 py-2.5 text-[0.625rem] font-mono text-[var(--text-muted)]">
+                        {formatRelativeTime(wf.last_run_at)}
+                      </td>
+                      <td className="px-5 py-2.5 text-[0.625rem] font-mono text-[var(--text-muted)]">
+                        {wf.run_count ?? 0}
+                      </td>
+                      <td className="px-5 py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => void runWorkflow(wf)}
+                          disabled={!!workflowsBusyId}
+                          className="px-3 py-1.5 rounded-lg text-[0.625rem] font-bold uppercase tracking-widest transition-all disabled:opacity-40"
+                          style={{ background: 'var(--solar-cyan)15', border: '1px solid var(--solar-cyan)35', color: 'var(--solar-cyan)' }}
+                        >
+                          {workflowsBusyId === wf.id ? 'Running…' : 'Run'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
       </div>
 
       {/* ── Workspace overlay ─────────────────────────────────────────────── */}
       {activeAgent && (
-        <WorkspacePanel agentId={activeAgent} onClose={() => setActiveAgent(null)} />
+        <WorkspacePanel agentId={activeAgent} agents={agents.length ? agents : FALLBACK_AGENTS} onClose={() => setActiveAgent(null)} />
       )}
     </div>
   );

@@ -14940,6 +14940,28 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
   const method = (request.method || 'GET').toUpperCase();
 
   try {
+    if (pathLower === '/api/agent/subagent-profiles' && method === 'GET') {
+      const session = await getSession(env, request).catch(() => null);
+      if (!session?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
+      if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+      const userId = session.user_id;
+      const workspaceId = session.workspace_id || tenantIdFromEnv(env) || 'ws_inneranimalmedia';
+      const { results } = await env.DB.prepare(
+        `SELECT
+           slug,
+           display_name,
+           description,
+           icon,
+           access_mode,
+           tool_categories,
+           allowed_tool_globs
+         FROM agentsam_subagent_profile
+         WHERE user_id = ? AND workspace_id = ? AND is_active = 1
+         ORDER BY sort_order ASC`
+      ).bind(userId, workspaceId).all();
+      return jsonResponse({ profiles: results || [] }, 200);
+    }
+
     if (pathLower === '/api/agent/browse' && method === 'POST') {
       const _browseSess = await getSession(env, request).catch(() => null);
       const _browseIngest = isIngestSecretAuthorized(request, env, secretFn);
@@ -15025,7 +15047,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
              SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS success_count,
              SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failure_count
            FROM mcp_tool_calls
-           WHERE datetime(created_at) >= datetime('now', '-7 days')
+           WHERE created_at >= CAST(strftime('%s', 'now', '-7 days') AS INTEGER)
            GROUP BY tool_name
            ORDER BY call_count DESC
            LIMIT 200`
@@ -19000,7 +19022,7 @@ async function handleMcpApi(req, u, e, ctx) {
              WHERE tenant_id = ?
              ORDER BY updated_at DESC`
       ).bind(MCP_WF_TENANT).all();
-      return jsonResponse(results || [], 200);
+      return jsonResponse({ workflows: results || [] }, 200);
     }
     if (pathLower === '/api/mcp/workflows' && method === 'POST') {
       let body = {};
@@ -28262,6 +28284,8 @@ async function sendDailyDigest(env) {
   let providerTop = { results: [] };
   let roadmap = { results: [] };
   let pending = { results: [{ count: 0 }] };
+  let activeProjects = { results: [] };
+  let hookHealth = { results: [] };
 
   if (env.DB) {
     [
@@ -28279,6 +28303,8 @@ async function sendDailyDigest(env) {
       providerTop,
       roadmap,
       pending,
+      activeProjects,
+      hookHealth,
     ] = await Promise.all([
       safe(env.DB.prepare(
         `SELECT COUNT(*) AS calls,
@@ -28287,7 +28313,7 @@ async function sendDailyDigest(env) {
           ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd,
           COUNT(DISTINCT model_used) AS models_used
          FROM agent_telemetry
-         WHERE created_at >= unixepoch('now', 'start of day')`
+         WHERE timestamp > CAST(strftime('%s', 'now', '-1 day') AS INTEGER)`
       ).first()),
       safe(env.DB.prepare(
         `SELECT COUNT(*) AS total,
@@ -28306,12 +28332,12 @@ async function sendDailyDigest(env) {
       safe(env.DB.prepare(
         `SELECT COUNT(*) AS calls, COUNT(DISTINCT tool_name) AS unique_tools
          FROM mcp_tool_calls
-         WHERE date(created_at) = date('now')`
+         WHERE created_at > CAST(strftime('%s', 'now', '-1 day') AS INTEGER)`
       ).first()),
       safe(env.DB.prepare(
         `SELECT tool_name, COUNT(*) AS c
          FROM mcp_tool_calls
-         WHERE date(created_at) = date('now')
+         WHERE created_at > CAST(strftime('%s', 'now', '-1 day') AS INTEGER)
          GROUP BY tool_name
          ORDER BY c DESC
          LIMIT 3`
@@ -28363,6 +28389,20 @@ async function sendDailyDigest(env) {
       ).all()),
       safe(env.DB.prepare(
         `SELECT COUNT(*) AS count FROM notification_outbox WHERE status = 'pending'`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT project_name, status, priority, current_blockers,
+                cursor_usage_percent, tokens_used
+         FROM agentsam_project_context
+         WHERE status = 'active'
+         ORDER BY priority DESC
+         LIMIT 5`
+      ).all()),
+      safe(env.DB.prepare(
+        `SELECT hook_id, status, COUNT(*) as count, MAX(ran_at) as latest
+         FROM agentsam_hook_execution
+         WHERE ran_at > datetime('now', '-7 days')
+         GROUP BY hook_id, status`
       ).all()),
     ]);
   }
@@ -28434,6 +28474,44 @@ Write 3-5 sentences: AI spend and deploy activity, then one sentence on what to 
   const qfHtml = qfRows.length
     ? `<ul>${qfRows.map((r) => `<li>[${esc(r.severity)}] ${esc(r.check_name)}: ${esc((r.details || '').slice(0, 200))}</li>`).join('')}</ul>`
     : '<p>None open.</p>';
+  const projRows = activeProjects?.results ?? [];
+  const projHtml = projRows.length
+    ? `<ul>${projRows.map((r) => {
+      const p = r && typeof r === 'object' ? r : {};
+      const prio = p.priority != null ? String(p.priority) : '';
+      const blockers = p.current_blockers != null ? String(p.current_blockers).trim() : '';
+      const warn = blockers ? ' ⚠' : '';
+      const usage = p.cursor_usage_percent != null ? String(p.cursor_usage_percent) : '';
+      const tokens = p.tokens_used != null ? String(p.tokens_used) : '';
+      return `<li><strong>${esc(p.project_name)}</strong> (P${esc(prio)})${warn}<br/>` +
+        `${blockers ? `<span style="color:#b45309"><strong>Blockers:</strong> ${esc(blockers)}</span><br/>` : ''}` +
+        `<span style="opacity:0.8">Cursor:</span> ${esc(usage)}% | <span style="opacity:0.8">Tokens:</span> ${esc(tokens)}</li>`;
+    }).join('')}</ul>`
+    : '<p>None.</p>';
+  const hhRows = hookHealth?.results ?? [];
+  const hookMap = new Map();
+  for (const r of hhRows) {
+    const hookId = r && typeof r === 'object' ? String(r.hook_id || '') : '';
+    const status = r && typeof r === 'object' ? String(r.status || '') : '';
+    const count = r && typeof r === 'object' ? Number(r.count) || 0 : 0;
+    const latest = r && typeof r === 'object' ? r.latest : null;
+    if (!hookId) continue;
+    if (!hookMap.has(hookId)) hookMap.set(hookId, { ok: 0, fail: 0, latest: null });
+    const row = hookMap.get(hookId);
+    if (status.toLowerCase().includes('success')) row.ok += count;
+    else row.fail += count;
+    if (latest && (!row.latest || String(latest) > String(row.latest))) row.latest = latest;
+  }
+  const hookHtml = hookMap.size
+    ? `<ul>${Array.from(hookMap.entries()).map(([hookId, v]) => {
+      const last = v.latest != null ? String(v.latest) : '';
+      return `<li><strong>${esc(hookId)}</strong>: ` +
+        `<span style="color:var(--solar-green,#16a34a)">success ${esc(v.ok)}</span>, ` +
+        `<span style="color:var(--solar-red,#dc2626)">fail ${esc(v.fail)}</span>` +
+        `${last ? ` — last: ${esc(last)}` : ''}` +
+        `</li>`;
+    }).join('')}</ul>`
+    : '<p>No runs recorded.</p>';
 
   const htmlBody = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>IAM Daily Digest</title></head><body style="font-family:system-ui,sans-serif;line-height:1.5">
 <h1>IAM Daily Digest</h1>
@@ -28464,6 +28542,12 @@ ${qfHtml}
 <h2>7. Conversation archive</h2>
 <p>Messages in D1: ${esc(msgTableSize?.total_msgs)} rows, ${esc(msgTableSize?.size_mb)} MB, ${esc(msgTableSize?.convos)} convos.</p>
 <p>Archived (is_archived): ${esc(archiveStatus?.archived_convos)} | Ready to prune (archived + R2 key): ${esc(readyPrune?.ready)}</p>
+
+<h2>Active Projects</h2>
+${projHtml}
+
+<h2>Hook Health (last 7 days)</h2>
+${hookHtml}
 
 <h2>8. Tomorrow priorities</h2>
 <ul>

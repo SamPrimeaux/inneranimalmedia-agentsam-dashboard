@@ -453,17 +453,56 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     let stopReason = null, turnUsage = null;
     const assistantContent = [];
 
+    const extractWorkersAiLineToken = (obj) => {
+      if (!obj || typeof obj !== 'object') return '';
+      const c0 = Array.isArray(obj.choices) ? obj.choices[0] : null;
+      const t =
+        c0?.delta?.content ??
+        c0?.text ??
+        (typeof obj.response === 'string' ? obj.response : obj.response != null ? String(obj.response) : '') ??
+        '';
+      return typeof t === 'string' ? t : String(t || '');
+    };
+
     const consumeWorkersAiText = async (readable) => {
       const reader = readable.getReader();
       const decoder = new TextDecoder();
+      let buf = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        if (!text || !text.trim()) continue;
-        const last = assistantContent.findLast(b => b.type === 'text');
-        if (last) last.text += text;
-        emit('text', { text });
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          const t = line.trim();
+          if (!t) continue;
+          let piece = '';
+          try {
+            piece = extractWorkersAiLineToken(JSON.parse(t));
+          } catch {
+            piece = t;
+          }
+          if (!piece) continue;
+          const last = assistantContent.findLast(b => b.type === 'text');
+          if (last) last.text += piece;
+          emit('text', { text: piece });
+        }
+      }
+      const tail = buf.trim();
+      if (tail) {
+        let piece = '';
+        try {
+          piece = extractWorkersAiLineToken(JSON.parse(tail));
+        } catch {
+          piece = tail;
+        }
+        if (piece) {
+          const last = assistantContent.findLast(b => b.type === 'text');
+          if (last) last.text += piece;
+          emit('text', { text: piece });
+        }
       }
     };
 

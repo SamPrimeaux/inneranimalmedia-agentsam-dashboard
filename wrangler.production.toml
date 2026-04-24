@@ -37,8 +37,7 @@ binding = "MYBROWSER"
 binding = "ASSETS"
 bucket_name = "inneranimalmedia-assets"
 
-# Dashboard JS/HTML/CSS served on inneranimalmedia.com — production bucket only.
-# Staging: agent-sam-sandbox-cicd (wrangler.jsonc / deploy-sandbox.sh). Promote copies → here.
+# Dashboard JS/HTML/CSS served on inneranimalmedia.com — production R2 (`agent-sam`) only.
 [[r2_buckets]]
 binding = "DASHBOARD"
 bucket_name = "agent-sam"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# promote-to-prod.sh — pull sandbox R2 build → push to production R2 → deploy worker
-# Sandbox bucket: agent-sam-sandbox-cicd (canonical CI/CD staging bucket for dashboard assets).
-# Override: SANDBOX_BUCKET=my-bucket ./scripts/promote-to-prod.sh
+# promote-to-prod.sh — pull dashboard assets from a source R2 bucket → push to production R2 → deploy worker
+# Default source bucket: agent-sam-sandbox-cicd (legacy object prefix; not a separate “user environment”).
+# Override: SOURCE_ASSETS_BUCKET=my-bucket ./scripts/promote-to-prod.sh (legacy env: SANDBOX_BUCKET)
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
 # After deploy: logs cicd_* tables including cicd_runs via scripts/lib/cicd-d1-log.sh; optional
 # ai_workflow_pipelines / ai_workflow_executions rows. Optional: CICD_D1_LOG=0 | CICD_SKIP_HEALTH_CURL=1 | PROD_HEALTH_URL=...
@@ -35,7 +35,7 @@ PROMOTE_GIT_HASH=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unkno
 export WORKER_NAME="${WORKER_NAME:-inneranimalmedia}"
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
-SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
+SOURCE_ASSETS_BUCKET="${SOURCE_ASSETS_BUCKET:-${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}}"
 PROD_BUCKET="agent-sam"
 PROD_CFG="wrangler.production.toml"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
@@ -135,11 +135,11 @@ HTML_PATH="${REPO_ROOT}/dashboard/agent.html"
 MANIFEST_NAME=".deploy-manifest"
 MANIFEST_KEY="static/dashboard/agent/${MANIFEST_NAME}"
 R2_AGENT_PREFIX="static/dashboard/agent"
-# set -u: must always be set; deploy-sandbox injects <!-- dashboard-v:N --> into dist/index.html
+# set -u: must always be set; CI may inject <!-- dashboard-v:N --> into dist/index.html
 # and uploads that file to R2 as static/dashboard/agent.html — parse both after pull.
 CURRENT_V=0
 
-# Parse dashboard bundle version from pulled shell HTML (R2 agent.html == sandbox dist/index.html).
+# Parse dashboard bundle version from pulled shell HTML (R2 agent.html mirrors built dist/index.html).
 _parse_dashboard_v_from_html() {
   local v f
   v=""
@@ -156,17 +156,17 @@ _parse_dashboard_v_from_html() {
   return 0
 }
 
-# ── Step 1: Pull current build from sandbox R2 into local dist ────────────────
+# ── Step 1: Pull current build from source R2 into local dist ────────────────
 if [ "$WORKER_ONLY" -eq 0 ]; then
-  echo "Pulling latest build from sandbox R2 (${SANDBOX_BUCKET})..."
+  echo "Pulling latest build from source R2 (${SOURCE_ASSETS_BUCKET})..."
   CICD_T_PULL_START=$(date +%s)
   mkdir -p "${DIST_DIR}" "${REPO_ROOT}/dashboard"
   rm -f "${DIST_DIR}/${MANIFEST_NAME}"
 
   MANIFEST_LOCAL="${DIST_DIR}/${MANIFEST_NAME}"
-  if ! "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/${MANIFEST_KEY}" \
+  if ! "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/${MANIFEST_KEY}" \
       --file "$MANIFEST_LOCAL" --remote -c "$PROD_CFG"; then
-    echo "ERROR: Could not fetch ${MANIFEST_NAME} from sandbox. Run ./scripts/deploy-sandbox.sh first."
+    echo "ERROR: Could not fetch ${MANIFEST_NAME} from source bucket. Upload a fresh dashboard build to ${SOURCE_ASSETS_BUCKET} first."
     exit 1
   fi
   echo "  Using ${MANIFEST_NAME} for multi-file pull (Vite chunks + assets/)."
@@ -175,25 +175,25 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     echo "  Pulling ${R2_AGENT_PREFIX}/${line}..."
     target="${DIST_DIR}/${line}"
     mkdir -p "$(dirname "$target")"
-    "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/${R2_AGENT_PREFIX}/${line}" \
+    "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/${R2_AGENT_PREFIX}/${line}" \
       --file "$target" --remote -c "$PROD_CFG"
   done < "$MANIFEST_LOCAL" || true
 
-  "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+  "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/static/dashboard/agent.html" \
     --file "$HTML_PATH" --remote -c "$PROD_CFG"
 
   CICD_T_PULL_END=$(date +%s)
 
   if [ ! -f "$HTML_PATH" ]; then
-    echo "ERROR: ${HTML_PATH} missing after sandbox pull. Re-run deploy-sandbox first."
+    echo "ERROR: ${HTML_PATH} missing after source pull. Re-upload dashboard assets to ${SOURCE_ASSETS_BUCKET} first."
     exit 1
   fi
 
   _parse_dashboard_v_from_html
-  echo "  Pulled v=${CURRENT_V:-0} from sandbox."
+  echo "  Pulled v=${CURRENT_V:-0} from source bucket."
   if [ "${CURRENT_V:-0}" = "0" ]; then
     echo "  WARN: Could not read <!-- dashboard-v:N --> from pulled agent.html or dist/index.html."
-    echo "        If sandbox is newer, run ./scripts/deploy-sandbox.sh first, then promote again."
+    echo "        If the source bucket has a newer build, upload it there first, then promote again."
   fi
   echo ""
 
@@ -268,7 +268,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     row_id=$(printf 'prod-%s-v%s-%s' "$pn" "${CURRENT_V:-0}" "$DEPLOY_TS")
     id_esc=$(sql_escape "$row_id")
     r2_esc=$(sql_escape "${R2_AGENT_PREFIX}/${rel}")
-    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V:-0}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from sandbox', 1, 1, unixepoch())"
+    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V:-0}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from source R2', 1, 1, unixepoch())"
     if [ "$first" -eq 1 ]; then
       D1_VALUES="$row"
       first=0
@@ -281,7 +281,7 @@ EOF
 
   HTML_HASH=$(md5 -q "$HTML_PATH" 2>/dev/null || md5sum "$HTML_PATH" | cut -d' ' -f1)
   HTML_SIZE=$(wc -c < "$HTML_PATH" | tr -d ' ')
-  html_row="('prod-agent-html-v${CURRENT_V:-0}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V:-0}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from sandbox', 1, 1, unixepoch())"
+  html_row="('prod-agent-html-v${CURRENT_V:-0}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V:-0}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from source R2', 1, 1, unixepoch())"
   if [ -n "$D1_VALUES" ]; then
     D1_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ${D1_VALUES}, ${html_row}"
   else
@@ -293,14 +293,14 @@ EOF
     --command="$D1_SQL"   2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
 fi
 
-# Worker-only: full R2 pull is skipped — still fetch agent shell from sandbox so Resend/CICD see current v.
+# Worker-only: full R2 pull is skipped — still fetch agent shell from source bucket so Resend/CICD see current v.
 if [ "$WORKER_ONLY" -eq 1 ]; then
-  echo "Worker-only: fetching static/dashboard/agent.html from sandbox R2 (${SANDBOX_BUCKET})..."
+  echo "Worker-only: fetching static/dashboard/agent.html from source R2 (${SOURCE_ASSETS_BUCKET})..."
   CICD_T_PULL_START=$(date +%s)
   mkdir -p "$(dirname "$HTML_PATH")"
-  if ! "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+  if ! "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/static/dashboard/agent.html" \
       --file "$HTML_PATH" --remote -c "$PROD_CFG"; then
-    echo "  WARN: sandbox agent.html fetch failed — dashboard version in email/logs may be stale"
+    echo "  WARN: source agent.html fetch failed — dashboard version in email/logs may be stale"
   fi
   CICD_T_PULL_END=$(date +%s)
   echo ""
@@ -310,7 +310,7 @@ _parse_dashboard_v_from_html
 
 # ── Step 3: Deploy production worker ──────────────────────────────────────────
 echo "Deploying production worker (inneranimalmedia)..."
-NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
+NOTES="${DEPLOYMENT_NOTES:-Promoted via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
 
 CICD_T_WORKER_START=$(date +%s)
@@ -411,7 +411,7 @@ GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
     'wfpipe_promote_prod',
     'tenant_sam_primeaux',
     'promote-to-prod',
-    'Pull sandbox R2 build, push to prod R2, deploy inneranimalmedia worker, health check, notify via Resend',
+    'Pull source R2 dashboard build, push to prod R2, deploy inneranimalmedia worker, health check, notify via Resend',
     'deployment',
     'manual',
     '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"tool_role\":\"internal\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"tool_role\":\"wrangler_deploy\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"tool_role\":\"curl\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"tool_role\":\"resend\"}]',

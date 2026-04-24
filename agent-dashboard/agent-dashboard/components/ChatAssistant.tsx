@@ -187,14 +187,32 @@ function measureAboveAnchor(
   };
 }
 
+/**
+ * Extract assistant-visible text from one SSE JSON object (OpenAI, Anthropic-style, Workers AI / Granite, worker-wrapped).
+ */
+function extractContent(chunk: unknown): string | null {
+  if (!chunk || typeof chunk !== 'object') return null;
+  const o = chunk as Record<string, unknown>;
+  if (o.type === 'text' && typeof o.text === 'string' && o.text.length > 0) return o.text;
+  const choices = o.choices as Array<{ delta?: { content?: string }; text?: string }> | undefined;
+  const fromDelta = choices?.[0]?.delta?.content;
+  if (fromDelta != null && String(fromDelta) !== '') return String(fromDelta);
+  const fromChoiceText = choices?.[0]?.text;
+  if (fromChoiceText != null && String(fromChoiceText) !== '') return String(fromChoiceText);
+  if (typeof o.response === 'string' && o.response.length > 0) return o.response;
+  if (o.response != null && typeof o.response !== 'object') {
+    const s = String(o.response).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
 function extractSseAssistantDelta(parsed: unknown): string {
+  const direct = extractContent(parsed);
+  if (direct != null && direct !== '') return direct;
   if (!parsed || typeof parsed !== 'object') return '';
   const o = parsed as Record<string, unknown>;
   if (typeof o.text === 'string') return o.text;
-  const choices = o.choices as Array<{ delta?: { content?: string } }> | undefined;
-  if (Array.isArray(choices) && choices[0]?.delta?.content != null) {
-    return String(choices[0].delta.content);
-  }
   if (o.type === 'content_block_delta') {
     const delta = o.delta as Record<string, unknown> | undefined;
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') return delta.text;
@@ -1287,7 +1305,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
       setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
-      while (true) {
+      sseLoop: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -1298,9 +1316,16 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         for (const block of parts) {
           for (const rawLine of block.split('\n')) {
             const line = rawLine.trim();
-            if (!line.startsWith('data:')) continue;
-            const dataStr = line.slice(5).trim();
-            if (dataStr === '[DONE]') continue;
+            if (!line) continue;
+            let dataStr = '';
+            if (line.startsWith('data:')) {
+              dataStr = line.slice(5).trim();
+            } else if (line.startsWith('{') || line.startsWith('[')) {
+              dataStr = line;
+            } else {
+              continue;
+            }
+            if (dataStr === '[DONE]') break sseLoop;
             let data: unknown;
             try {
               data = JSON.parse(dataStr);
@@ -1387,33 +1412,6 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                   last[last.length - 1] = { role: 'assistant', content: assistantContent };
                   return last;
                 });
-              }
-            }
-            if (data && typeof data === 'object' && typeof (data as { text?: string }).text === 'string') {
-              const legacy = (data as { text: string }).text;
-              if (legacy && !delta && !fileEchoSuppress) {
-                const trialBuf = assistantStreamBuf + legacy;
-                const extracted = extractMonacoInvokesFromBuffer(trialBuf);
-                const nextBuf = extracted.text;
-                const nextVisible = hideIncompleteMonacoInvokeTail(nextBuf);
-                if (looksLikeEmbeddedFileDumpStart(nextVisible)) {
-                  fileEchoSuppress = true;
-                } else {
-                  assistantStreamBuf = nextBuf;
-                  for (const f of extracted.files) {
-                    try {
-                      onFileSelect?.({ name: f.name, content: f.content, originalContent: '' });
-                    } catch (e) {
-                      console.warn('[ChatAssistant] onFileSelect failed for monaco invoke', e);
-                    }
-                  }
-                  assistantContent = nextVisible;
-                  setMessages((prev) => {
-                    const last = [...prev];
-                    last[last.length - 1] = { role: 'assistant', content: assistantContent };
-                    return last;
-                  });
-                }
               }
             }
           }

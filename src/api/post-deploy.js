@@ -1,8 +1,8 @@
 /**
  * API Handler: POST /api/internal/post-deploy
  *
- * Called by deploy-sandbox.sh (and promote-to-prod.sh) immediately after a
- * successful worker deployment.  Syncs Agent Sam's knowledge context cache
+ * Called after a successful worker deployment (e.g. promote-to-prod / CI).
+ * Syncs Agent Sam's knowledge context cache
  * in KV so the AI has fresh awareness of the codebase state.
  *
  * Auth: X-Internal-Secret header (INTERNAL_API_SECRET)
@@ -24,7 +24,7 @@ export async function handlePostDeploy(request, env, ctx) {
   let body = {};
   try { body = await request.json(); } catch (_) {}
 
-  const environment   = body.environment   || 'sandbox';
+  const environment   = body.environment   || 'production';
   const gitHash       = body.git_hash      || body.gitHash || 'unknown';
   const version       = body.version       || body.dashboard_version || 'unknown';
   const workerVersion = body.worker_version_id || 'unknown';

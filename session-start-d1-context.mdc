@@ -6,7 +6,7 @@ alwaysApply: true
 
 ## DEPLOY RULE (non-negotiable)
 
-Every change goes: **sandbox first** (`cd agent-dashboard && npm run build:vite-only && cd .. && ./scripts/deploy-sandbox.sh`), verify on the sandbox worker, then promote (`./scripts/promote-to-prod.sh`). **Never** deploy the production worker directly (no prod worker deploy without a prior sandbox pass and benchmark gate). If you deployed to prod without sandbox first, **flag it explicitly** in the session log and in chat.
+Ship the dashboard with `cd agent-dashboard && npm run build:vite-only`, upload or promote assets to **production** R2 (`agent-sam`), then deploy the production worker via `./scripts/with-cloudflare-env.sh npx wrangler deploy -c wrangler.production.toml` or `./scripts/promote-to-prod.sh` when copying from a source asset bucket. Production (`inneranimalmedia.com`) is the canonical runtime for users.
 
 ## project_memory bootstrap (mandatory at session start)
 
@@ -20,7 +20,7 @@ ORDER BY importance_score DESC
 LIMIT 15;
 ```
 
-The **`SANDBOX_WORKER_CANONICAL`** and **`DEPLOY_RULES`** keys are critical. If you reference any URL, worker name, or deploy command **not** found in these query results, **stop and ask Sam to confirm** before proceeding.
+The **`DEPLOY_RULES`** key is critical. If you reference any URL, worker name, or deploy command **not** found in these query results, **stop and ask Sam to confirm** before proceeding.
 
 # IAM Agent Sam — Cursor Session Start Rule
 ## Last updated: 2026-03-29 (project_memory bootstrap query) | Prod version: v=191 | Benchmark: 31/31 PASS
@@ -29,7 +29,7 @@ The **`SANDBOX_WORKER_CANONICAL`** and **`DEPLOY_RULES`** keys are critical. If 
 
 ## ⛔ READ THIS FIRST — NON-NEGOTIABLE RULES
 
-1. **NEVER deploy a single-line change alone.** Batch minimum 2–3 related fixes per sandbox deploy.
+1. **NEVER deploy a single-line change alone.** Batch minimum 2–3 related fixes per production deploy when practical.
 2. **NEVER touch wrangler.production.toml bindings or secrets.** All 22 bindings are live. One wrong edit wipes the worker.
 3. **NEVER create new D1 tables without explicit approval.** Consolidate into canonical tables (see below).
 4. **NEVER use `cloudflare_deployments` table** — it no longer exists. Use `deployments` only.
@@ -39,32 +39,22 @@ The **`SANDBOX_WORKER_CANONICAL`** and **`DEPLOY_RULES`** keys are critical. If 
 
 ---
 
-## CIDI Deploy Pipeline (the ONLY valid deploy path)
+## CIDI Deploy Pipeline (canonical production path)
 
 ```bash
 # Step 1 — Build frontend
 cd agent-dashboard && npm run build:vite-only && cd ..
 
-# Step 2 — Deploy to sandbox
-./scripts/deploy-sandbox.sh
-# Uploads to: agent-sam-sandbox-cidi bucket
-# Worker URL: https://inneranimal-dashboard.meauxbility.workers.dev
-
-# Step 3 — Gate: must be 31/31 before continuing
-./scripts/benchmark-full.sh sandbox
-
-# Step 4 — Promote to prod (copies sandbox R2 → prod R2, deploys worker)
+# Step 2 — Promote dashboard assets + deploy production worker (or wrangler deploy with R2 upload per your runbook)
 ./scripts/promote-to-prod.sh
 
-# Step 5 — Gate: confirm prod
+# Step 3 — Optional health gate
 ./scripts/benchmark-full.sh prod
 
-# Step 6 — Verify version match
+# Step 4 — Verify production shell version
 curl -s https://inneranimalmedia.com/dashboard/agent | grep -o 'v=[0-9]*' | head -1
-curl -s https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent | grep -o 'v=[0-9]*' | head -1
-# Must be identical
 
-# Step 7 — Commit
+# Step 5 — Commit
 git add <changed files>
 git commit -m "fix/feat: description (v=NNN)"
 git push origin main
@@ -73,9 +63,8 @@ git push origin main
 **Repo:** `/Users/samprimeaux/Downloads/march1st-inneranimalmedia/`
 **GitHub:** `https://github.com/SamPrimeaux/inneranimalmedia-agentsam-dashboard`
 **Prod URL:** `https://inneranimalmedia.com/dashboard/agent`
-**Sandbox URL:** `https://inneranimal-dashboard.meauxbility.workers.dev/dashboard/agent`
 **Starting version:** v=190
-**Target deploys today:** ≤20 total (≤15 sandbox, ≤5 prod promotes)
+**Target deploys today:** keep production deploys deliberate and batched
 
 ---
 

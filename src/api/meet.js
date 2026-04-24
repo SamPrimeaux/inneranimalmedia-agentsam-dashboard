@@ -387,20 +387,37 @@ async function handleSchedule(request, env) {
     INSERT INTO meet_scheduled (id, created_by, title, scheduled_at, invite_emails, status, created_at)
     VALUES (?, ?, ?, ?, ?, 'scheduled', datetime('now'))
   `).bind(id, userId, title, sAt, JSON.stringify(emails)).run();
+
+  const meetUrl = 'https://inneranimalmedia.com/dashboard/meet';
+  const fromAddr = env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>';
+  const inviteSubject = "You're invited to a call — Inner Animal Media";
   if (emails.length && env.RESEND_API_KEY) {
-    const link = `https://inneranimalmedia.com/dashboard/meet`;
-    for (const email of emails) {
-      await fetch('https://api.resend.com/emails', {
+    for (const raw of emails) {
+      const to = String(raw || '')
+        .trim()
+        .toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) continue;
+      fetch('https://api.resend.com/emails', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          from: 'InnerAnimalMedia Meet <meet@inneranimalmedia.com>',
-          to: [email],
-          subject: `Meeting scheduled: ${title}`,
-          html: `<p>${title} — ${sAt}</p><a href="${link}">Join when ready</a>`,
+          from: fromAddr,
+          to: [to],
+          subject: inviteSubject,
+          html: `<div style="font-family:system-ui,Segoe UI,sans-serif;background:#07100f;color:#c9d8d6;padding:28px;border-radius:12px;max-width:520px;line-height:1.5">
+  <p style="margin:0 0 12px;color:#2dd4bf;font-weight:600">Inner Animal Media</p>
+  <p style="margin:0 0 8px;color:#e2efed">You're invited to a call.</p>
+  <p style="margin:0 0 20px;color:#6b9e99;font-size:14px">Open Meet to join when you're ready.</p>
+  <a href="${meetUrl}" style="display:inline-block;background:#2dd4bf;color:#07100f;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700">Open Meet</a>
+  <p style="margin:20px 0 0;font-size:12px;color:#4a7a75">Or copy: <span style="color:#7a9aaa">${meetUrl}</span></p>
+</div>`,
         }),
-      }).catch(() => {});
+      }).catch((e) => console.warn('[meet-schedule-invite]', e?.message));
     }
   }
+
   return jsonResponse({ ok: true, id }, 200);
 }

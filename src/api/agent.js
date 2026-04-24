@@ -319,6 +319,8 @@ function withTimeout(promise, ms) {
 let modelTierMigrationStarted = false;
 async function runModelTierMigration(env) {
   if (!env?.DB) return;
+  const wsId = env.WORKSPACE_ID || 'global';
+
   await env.DB.prepare(
     `CREATE TABLE IF NOT EXISTS agentsam_model_tier_v2 (
       id TEXT PRIMARY KEY DEFAULT ('tier_' || lower(hex(randomblob(6)))),
@@ -341,18 +343,23 @@ async function runModelTierMigration(env) {
     );`
   ).run();
 
+  const existing = await env.DB.prepare(
+    'SELECT COUNT(*) as count FROM agentsam_model_tier_v2 WHERE workspace_id = ?'
+  ).bind(wsId).first();
+  if (existing?.count > 0) return; // already seeded, skip
+
   await env.DB.prepare(
     `INSERT OR IGNORE INTO agentsam_model_tier_v2
       (id, workspace_id, tier_level, tier_name, model_id, api_platform,
        role_description, escalate_if_confidence_below, escalate_after_failures,
        max_context_tokens, max_output_tokens, cost_tier, is_active, sort_order)
     VALUES
-      ('tier_0_ollama',     'ws_inneranimalmedia', 0, 'Local Free',  'ollama-qwen2.5-coder-7b',    'ollama',     'Primary — free local Ollama. Best for code/shell. Escalates if offline or low confidence.', 0.70, 1,  8192,  2048, 'free',     1, 0),
-      ('tier_1_workers_ai', 'ws_inneranimalmedia', 1, 'Edge Free',   'mdl_cf_granite_4_0_h_micro', 'workers_ai', 'Workers AI edge fallback — near-zero cost, always available. Handles Ollama failures.',      0.72, 1,  4096,  1024, 'free',     1, 1),
-      ('tier_2_nano',       'ws_inneranimalmedia', 2, 'OpenAI Nano', 'gpt-5.4-nano',               'openai',     'GPT-5.4 Nano — cheapest 5.4-era OpenAI. Fast, low cost. Fires when edge models fail.',      0.80, 1, 16384,  4096, 'low',      1, 2),
-      ('tier_3_mini',       'ws_inneranimalmedia', 3, 'OpenAI Mini', 'gpt-5.4-mini',               'openai',     'GPT-5.4 Mini — mid-tier. Multi-step reasoning and agentic tool use.',                       0.88, 1, 32768,  8192, 'standard', 1, 3),
-      ('tier_4_full',       'ws_inneranimalmedia', 4, 'OpenAI Full', 'gpt-5.4',                    'openai',     'GPT-5.4 — full power, final fallback. No escalation.',                                      1.00, 1, 65536, 16384, 'high',     1, 4);`
-  ).run();
+      ('tier_0_ollama',     ?, 0, 'Local Free',  'ollama-qwen2.5-coder-7b',    'ollama',     'Primary — free local Ollama. Best for code/shell. Escalates if offline or low confidence.', 0.70, 1,  8192,  2048, 'free',     1, 0),
+      ('tier_1_workers_ai', ?, 1, 'Edge Free',   'mdl_cf_granite_4_0_h_micro', 'workers_ai', 'Workers AI edge fallback — near-zero cost, always available. Handles Ollama failures.',      0.72, 1,  4096,  1024, 'free',     1, 1),
+      ('tier_2_nano',       ?, 2, 'OpenAI Nano', 'gpt-5.4-nano',               'openai',     'GPT-5.4 Nano — cheapest 5.4-era OpenAI. Fast, low cost. Fires when edge models fail.',      0.80, 1, 16384,  4096, 'low',      1, 2),
+      ('tier_3_mini',       ?, 3, 'OpenAI Mini', 'gpt-5.4-mini',               'openai',     'GPT-5.4 Mini — mid-tier. Multi-step reasoning and agentic tool use.',                       0.88, 1, 32768,  8192, 'standard', 1, 3),
+      ('tier_4_full',       ?, 4, 'OpenAI Full', 'gpt-5.4',                    'openai',     'GPT-5.4 — full power, final fallback. No escalation.',                                      1.00, 1, 65536, 16384, 'high',     1, 4);`
+  ).bind(wsId, wsId, wsId, wsId, wsId).run();
 }
 
 function kickoffModelTierMigration(env, ctx) {

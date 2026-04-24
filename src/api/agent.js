@@ -12,7 +12,7 @@
  */
 import { chatWithAnthropic }                            from '../integrations/anthropic.js';
 import { dispatchStream }                              from '../core/provider.js';
-import { unifiedRagSearch }                             from './rag.js';
+import { unifiedRagSearch, handleAgentMemorySync }      from './rag.js';
 import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
@@ -1091,11 +1091,7 @@ export async function handleAgentApi(request, url, env, ctx) {
 
   // ── /api/agent/memory/sync ────────────────────────────────────────────────
   if (path === '/api/agent/memory/sync' && method === 'POST') {
-    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    const tenantId = tenantIdFromEnv(env);
-    if (!tenantId) return jsonResponse({ error: 'TENANT_ID not configured' }, 503);
-    const { results } = await env.DB.prepare(`SELECT key, value, memory_type, importance_score FROM agent_memory_index WHERE tenant_id = ? ORDER BY importance_score DESC LIMIT 20`).bind(tenantId).all().catch(() => ({ results: [] }));
-    return jsonResponse({ ok: true, rows: results || [] });
+    return handleAgentMemorySync(request, env);
   }
 
   // ── /api/agent/db/tables ──────────────────────────────────────────────────

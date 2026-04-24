@@ -1,29 +1,23 @@
 /**
- * API Service: RAG (Retrieval-Augmented Generation)
- * Handles vector search, context retrieval, and memory indexing.
- * Deconstructed from legacy worker.js.
+ * RAG API — OpenAI embeddings + Supabase (Hyperdrive/pgvector) + R2 (S3-compatible).
+ * No AI Search, Vectorize, or Workers AI embedding models on this path.
  */
-import { tenantIdFromEnv } from '../core/auth';
+import { AwsClient } from 'aws4fetch';
+import { jsonResponse } from '../core/responses.js';
+import { getAuthUser, tenantIdFromEnv } from '../core/auth.js';
 
-export const UNIFIED_RAG_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
-export const RAG_MEMORY_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
 export const RAG_CHUNK_MAX_CHARS = 600;
 export const RAG_CHUNK_OVERLAP = 80;
 export const RAG_EMBED_BATCH_SIZE = 32;
 export const RAG_COMPACT_MAX_MSG_CHARS = 800;
 export const RAG_COMPACT_HOURS = 48;
-export const PGVECTOR_DEFAULT_PROJECT_ID = 'inneranimalmedia';
 
-/**
- * Sanitizes search terms for SQL LIKE queries.
- */
+// ── small utilities (kept for callers / chunking) ─────────────────────────────
+
 export function sanitizeUnifiedRagLike(q) {
   return String(q || '').slice(0, 120).replace(/[%_\[\]^]/g, ' ').trim();
 }
 
-/**
- * Fast content hasher for deduplication.
- */
 export function unifiedRagContentHash(s) {
   const t = String(s || '').trim().replace(/\s+/g, ' ').slice(0, 600);
   let h = 2166136261;
@@ -34,9 +28,6 @@ export function unifiedRagContentHash(s) {
   return String(h);
 }
 
-/**
- * Normalizes recency score (0 to 1).
- */
 export function unifiedRagRecency01(ts) {
   const now = Math.floor(Date.now() / 1000);
   let sec = 0;
@@ -45,18 +36,17 @@ export function unifiedRagRecency01(ts) {
     sec = ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
   } else {
     const parsed = Date.parse(String(ts));
-    if (isNaN(parsed)) return 0.5;
+    if (Number.isNaN(parsed)) return 0.5;
     sec = Math.floor(parsed / 1000);
   }
   const ageDays = Math.max(0, (now - sec) / 86400);
   return Math.max(0, Math.min(1, 1 - Math.min(ageDays, 365) / 365));
 }
 
-/**
- * Cosine similarity calculation for vector comparison.
- */
 export function unifiedRagCosine(a, b) {
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
   const len = Math.min(a.length, b.length);
   for (let i = 0; i < len; i++) {
     dot += a[i] * b[i];
@@ -66,220 +56,444 @@ export function unifiedRagCosine(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
 }
 
-/**
- * Unified search engine: parallel D1, Vectorize, and R2 retrieval.
- */
+function timingSafeEqualUtf8(a, b) {
+  if (a.length !== b.length) return false;
+  let x = 0;
+  for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return x === 0;
+}
 
-/**
- * Semantic search over Supabase agent_memory via Hyperdrive + pgvector.
- * Calls match_agent_memory() which filters by agent_id and similarity threshold.
- */
-async function pgMatchAgentMemory(env, queryText, opts = {}) {
-  const fail = (msg) => ({ rows: [], error: msg });
-  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
-  if (!env.AI) return fail('AI binding missing');
-  const q = String(queryText || '').trim();
-  if (!q) return fail('empty query');
+async function hmacSha256HexFromUtf8Key(secretUtf8, messageUtf8) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secretUtf8),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(messageUtf8));
+  return [...new Uint8Array(sig)].map((c) => c.toString(16).padStart(2, '0')).join('');
+}
 
-  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.5;
-  const matchCount = Math.min(Math.max(1, opts.match_count || 6), 20);
+async function verifySupabaseWebhookSignature(secret, rawBody, sigHeader) {
+  if (!secret || !sigHeader) return false;
+  const trimmed = String(sigHeader).trim();
+  const got = trimmed.replace(/^sha256=/i, '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(got)) return false;
+  const expectedHex = (await hmacSha256HexFromUtf8Key(secret, rawBody)).toLowerCase();
+  return timingSafeEqualUtf8(expectedHex, got);
+}
 
+function ragAgentId(env) {
+  return String(env.RAG_AGENT_ID || '').trim();
+}
+
+function ragDocumentsProjectId(env) {
+  return String(env.RAG_DOCUMENTS_PROJECT_ID || '').trim();
+}
+
+function ragEmbeddingModel(env) {
+  return String(env.RAG_OPENAI_EMBEDDING_MODEL || '').trim();
+}
+
+function ragEmbeddingDims(env) {
+  const n = Number(String(env.RAG_EMBEDDING_DIMENSIONS ?? '').trim());
+  return Number.isFinite(n) && n > 0 ? n : NaN;
+}
+
+function r2AutoragBucketName(env) {
+  return String(env.R2_AUTORAG_BUCKET_NAME || '').trim();
+}
+
+function openaiEmbeddingsBaseUrl(env) {
+  const b = String(env.OPENAI_API_BASE_URL || '').trim().replace(/\/$/, '');
+  if (!b) throw new Error('OPENAI_API_BASE_URL not configured');
+  return b;
+}
+
+function verifyInternalSecret(request, env) {
+  const secret = env.INTERNAL_API_SECRET;
+  if (!secret || typeof secret !== 'string') return false;
+  const auth = request.headers.get('Authorization') || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const header = (request.headers.get('X-Internal-Secret') || '').trim();
+  const token = bearer || header;
+  return token === secret;
+}
+
+function resolveAutoragFolder(env, metadata) {
+  const prefixes = String(env.RAG_AUTORAG_FOLDER_PREFIXES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const fallback = prefixes[0] || 'knowledge/';
+  const folder = metadata && metadata.folder != null ? String(metadata.folder) : '';
+  const normalized = folder.endsWith('/') ? folder : folder ? `${folder}/` : '';
+  if (normalized && prefixes.includes(normalized)) return normalized;
+  return fallback;
+}
+
+function safeObjectSuffix(source) {
+  const s = String(source || 'doc')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .slice(0, 200);
+  return s || 'doc';
+}
+
+function r2AwsClient(env) {
+  const accessKeyId = env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = env.R2_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) return null;
+  return new AwsClient({
+    accessKeyId,
+    secretAccessKey,
+    service: 's3',
+    region: 'auto',
+  });
+}
+
+function parseListKeys(xml) {
+  const keys = [];
+  const re = /<Key>([^<]*)<\/Key>/g;
+  let m;
+  while ((m = re.exec(xml))) keys.push(m[1]);
+  return keys;
+}
+
+function parseListTruncated(xml) {
+  return /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml);
+}
+
+function parseNextContinuationToken(xml) {
+  const m = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/);
+  return m ? m[1] : '';
+}
+
+async function r2ListAllObjectKeys(env) {
+  const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+  const bucket = r2AutoragBucketName(env);
+  const client = r2AwsClient(env);
+  if (!accountId || !bucket || !client) throw new Error('R2 list: missing account, bucket name, or credentials');
+  const keys = [];
+  let token = '';
+  do {
+    const q = new URLSearchParams({ 'list-type': '2' });
+    if (token) q.set('continuation-token', token);
+    const url = `https://${accountId}.r2.cloudflarestorage.com/${bucket}?${q}`;
+    const res = await client.fetch(url);
+    if (!res.ok) throw new Error(`R2 ListObjects failed: ${res.status}`);
+    const xml = await res.text();
+    keys.push(...parseListKeys(xml));
+    const truncated = parseListTruncated(xml);
+    token = truncated ? parseNextContinuationToken(xml) : '';
+  } while (token);
+  return keys;
+}
+
+function encodeS3ObjectKey(key) {
+  return String(key)
+    .split('/')
+    .filter((seg) => seg.length > 0)
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+async function r2GetObjectText(env, key) {
+  const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+  const bucket = r2AutoragBucketName(env);
+  const client = r2AwsClient(env);
+  if (!accountId || !bucket || !client) throw new Error('R2 get: missing account, bucket name, or credentials');
+  const url = `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${encodeS3ObjectKey(key)}`;
+  const res = await client.fetch(url);
+  if (!res.ok) throw new Error(`R2 GetObject failed: ${res.status}`);
+  return await res.text();
+}
+
+async function r2PutObjectText(env, key, bodyText) {
+  const accountId = String(env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+  const bucket = r2AutoragBucketName(env);
+  const client = r2AwsClient(env);
+  if (!accountId || !bucket || !client) throw new Error('R2 put: missing account, bucket name, or credentials');
+  const url = `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${encodeS3ObjectKey(key)}`;
+  const res = await client.fetch(url, {
+    method: 'PUT',
+    body: bodyText,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
+  if (!res.ok) throw new Error(`R2 PutObject failed: ${res.status}`);
+}
+
+async function openaiCreateEmbedding(env, inputText) {
+  const apiKey = env.OPENAI_API_KEY;
+  const model = ragEmbeddingModel(env);
+  const dims = ragEmbeddingDims(env);
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+  if (!model) throw new Error('RAG_OPENAI_EMBEDDING_MODEL not configured');
+  if (!Number.isFinite(dims)) throw new Error('RAG_EMBEDDING_DIMENSIONS not configured');
+  const base = openaiEmbeddingsBaseUrl(env);
+  const res = await fetch(`${base}/embeddings`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input: inputText,
+      dimensions: dims,
+    }),
+  });
+  const raw = await res.text();
+  let data;
   try {
-    // Embed query using same model as stored embeddings (BGE base en v1.5)
-    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
-    const raw = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
-    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`OpenAI embeddings: non-JSON response (${res.status})`);
+  }
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `OpenAI embeddings HTTP ${res.status}`);
+  }
+  const vec = data?.data?.[0]?.embedding;
+  if (!Array.isArray(vec)) throw new Error('OpenAI embeddings: missing vector');
+  return vec;
+}
 
-    const vecLiteral = '[' + vector.join(',') + ']';
-    const { Client } = await import('pg');
-    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-    await client.connect();
-    try {
-      const res = await client.query(
-        `SELECT * FROM match_agent_memory($1::vector, $2::float, $3::int, NULL, 'agent-sam')`,
-        [vecLiteral, threshold, matchCount]
-      );
-      return { rows: res.rows || [], error: null };
-    } finally {
-      await client.end().catch(() => {});
-    }
-  } catch (e) {
-    console.warn('[rag] pgMatchAgentMemory error:', e?.message);
-    return { rows: [], error: e?.message };
+function vectorLiteral(vec) {
+  return `[${vec.join(',')}]`;
+}
+
+async function withPg(env, fn) {
+  const cs = env.HYPERDRIVE?.connectionString;
+  if (!cs) throw new Error('HYPERDRIVE not configured');
+  const { Client } = await import('pg');
+  const client = new Client({ connectionString: cs });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end().catch(() => {});
   }
 }
 
-async function pgSearchAllContext(env, queryText, opts = {}) {
-  const fail = (msg) => ({ rows: [], error: msg });
-  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
-  if (!env.AI) return fail('AI binding missing');
-  const q = String(queryText || '').trim();
-  if (!q) return fail('empty query');
+async function upsertDocument(env, { source, title, content, embedding, projectId, metadata }) {
+  const vecLit = vectorLiteral(embedding);
+  const metaJson = JSON.stringify(metadata ?? {});
 
-  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.7;
-  const matchCount = Math.min(Math.max(1, opts.match_count || 10), 30);
-  const agentId = typeof opts.filter_agent_id === 'string' ? opts.filter_agent_id : 'agent-sam';
-
-  try {
-    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
-    const raw = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
-    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
-
-    const vecLiteral = '[' + vector.join(',') + ']';
-    const { Client } = await import('pg');
-    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-    await client.connect();
-    try {
-      const res = await client.query(
-        `SELECT * FROM public.search_all_context($1::vector, $2::float, $3::int, $4::text)`,
-        [vecLiteral, threshold, matchCount, agentId]
+  return withPg(env, async (client) => {
+    const tryWithMeta = async () => {
+      const sel = await client.query(
+        `SELECT id FROM public.documents WHERE source = $1 AND project_id = $2 LIMIT 1`,
+        [source, projectId]
       );
-      return { rows: res.rows || [], error: null };
-    } finally {
-      await client.end().catch(() => {});
-    }
-  } catch (e) {
-    console.warn('[rag] pgSearchAllContext error:', e?.message);
-    return { rows: [], error: e?.message };
-  }
-}
-
-async function pgMatchSessionSummaries(env, queryText, opts = {}) {
-  const fail = (msg) => ({ rows: [], error: msg });
-  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
-  if (!env.AI) return fail('AI binding missing');
-  const q = String(queryText || '').trim();
-  if (!q) return fail('empty query');
-
-  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.7;
-  const matchCount = Math.min(Math.max(1, opts.match_count || 5), 20);
-  const agentId = typeof opts.filter_agent_id === 'string' ? opts.filter_agent_id : 'agent-sam';
-  const tenantId = typeof opts.filter_tenant_id === 'string' ? opts.filter_tenant_id : null;
-
-  try {
-    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
-    const raw = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
-    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
-
-    const vecLiteral = '[' + vector.join(',') + ']';
-    const { Client } = await import('pg');
-    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-    await client.connect();
-    try {
-      const res = await client.query(
-        `SELECT * FROM public.match_session_summaries($1::vector, $2::text, $3::text, $4::float, $5::int)`,
-        [vecLiteral, tenantId, agentId, threshold, matchCount]
-      );
-      return { rows: res.rows || [], error: null };
-    } finally {
-      await client.end().catch(() => {});
-    }
-  } catch (e) {
-    console.warn('[rag] pgMatchSessionSummaries error:', e?.message);
-    return { rows: [], error: e?.message };
-  }
-}
-
-export async function unifiedRagSearch(env, query, opts = {}) {
-  const q = String(query || '').trim();
-  if (!q || !env.DB || !env.AI) {
-    return { matches: [], results: [], count: 0, _error: 'missing_bindings' };
-  }
-  const topK = Math.min(Math.max(1, opts.topK || 8), 24);
-  const skipLogging = !!opts.skipLogging;
-  const likePct = `%${sanitizeUnifiedRagLike(q)}%`;
-  const _t0 = Date.now();
-
-  // 1. Generate Query Embedding
-  const emb = await env.AI.run(UNIFIED_RAG_EMBED_MODEL, { text: q });
-  const qVec = emb?.data?.[0] ?? emb?.result?.data?.[0];
-  if (!qVec || !Array.isArray(qVec)) return { matches: [], results: [], count: 0, _error: 'embedding_failed' };
-
-  // 2. Parallel Search
-  const [chunkRes, ctxRes, platRes, projRes, vecMatches] = await Promise.all([
-    env.DB.prepare(`SELECT id, content, embedding_vector, created_at, knowledge_id FROM ai_knowledge_chunks WHERE is_indexed = 1 LIMIT 300`).all().catch(() => ({ results: [] })),
-    env.DB.prepare(`SELECT id, title, summary, inline_content FROM context_index WHERE is_active = 1 AND (title LIKE ? OR summary LIKE ?) LIMIT 30`).bind(likePct, likePct).all().catch(() => ({ results: [] })),
-    env.DB.prepare(`SELECT id, memory_key, memory_value FROM agent_platform_context WHERE memory_value LIKE ? LIMIT 50`).bind(likePct).all().catch(() => ({ results: [] })),
-    env.DB.prepare(`SELECT id, project_key, description FROM agentsam_project_context WHERE status = 'active' AND description LIKE ? LIMIT 30`).bind(likePct).all().catch(() => ({ results: [] })),
-    env.VECTORIZE_INDEX ? env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all' }).catch(() => ([])) : Promise.resolve([])
-  ]);
-
-  const raw = [];
-
-  // Ranking Logic
-  for (const c of chunkRes.results || []) {
-    try {
-      const vec = JSON.parse(c.embedding_vector);
-      const score = unifiedRagCosine(qVec, vec) * 0.7 + unifiedRagRecency01(c.created_at) * 0.3;
-      raw.push({ text: c.content, source: c.knowledge_id || c.id, source_type: 'knowledge_chunks', score, doc_type: 'chunk' });
-    } catch (_) {}
-  }
-
-  // Leg: Supabase semantic search via Hyperdrive (single round-trip + session summaries)
-  if (env.HYPERDRIVE?.connectionString) {
-    try {
-      const [allCtx, sessSum] = await Promise.all([
-        pgSearchAllContext(env, q, { match_threshold: 0.7, match_count: 10, filter_agent_id: 'agent-sam' }),
-        pgMatchSessionSummaries(env, q, { match_threshold: 0.7, match_count: 5, filter_agent_id: 'agent-sam' }),
-      ]);
-
-      for (const row of allCtx.rows || []) {
-        const src = String(row.source || 'context');
-        const text = `[${src}] ${row.content || ''}`.trim();
-        if (!text) continue;
-        raw.push({
-          text,
-          source: row.id || null,
-          source_type: `supabase_${src}`,
-          score: Number(row.similarity ?? 0.5) * 0.95,
-          doc_type: src,
-        });
+      if (sel.rows?.length) {
+        await client.query(
+          `UPDATE public.documents SET title = $3, content = $4, embedding = $5::vector, metadata = $6::jsonb, updated_at = now()
+           WHERE source = $1 AND project_id = $2`,
+          [source, projectId, title, content, vecLit, metaJson]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO public.documents (source, title, content, embedding, project_id, metadata, created_at, updated_at)
+           VALUES ($1, $2, $3, $4::vector, $5, $6::jsonb, now(), now())`,
+          [source, title, content, vecLit, projectId, metaJson]
+        );
       }
-      for (const row of sessSum.rows || []) {
-        const text = `[session_summary] ${row.summary || ''}`.trim();
-        if (!text) continue;
-        raw.push({
-          text,
-          source: row.session_id || row.id || null,
-          source_type: 'supabase_session_summaries',
-          score: Number(row.similarity ?? 0.5) * 0.97,
-          doc_type: 'session_summary',
-        });
+    };
+    const tryBasic = async () => {
+      const sel = await client.query(
+        `SELECT id FROM public.documents WHERE source = $1 AND project_id = $2 LIMIT 1`,
+        [source, projectId]
+      );
+      if (sel.rows?.length) {
+        await client.query(
+          `UPDATE public.documents SET title = $3, content = $4, embedding = $5::vector WHERE source = $1 AND project_id = $2`,
+          [source, projectId, title, content, vecLit]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO public.documents (source, title, content, embedding, project_id, created_at)
+           VALUES ($1, $2, $3, $4::vector, $5, now())`,
+          [source, title, content, vecLit, projectId]
+        );
       }
-
-      if (allCtx.rows?.length) console.log('[rag] supabase search_all_context hits:', allCtx.rows.length);
-      if (sessSum.rows?.length) console.log('[rag] supabase session_summaries hits:', sessSum.rows.length);
+    };
+    try {
+      await tryWithMeta();
     } catch (e) {
-      console.warn('[rag] supabase leg error:', e?.message);
+      const msg = String(e?.message || '');
+      if (msg.includes('metadata') || msg.includes('updated_at')) {
+        await tryBasic();
+      } else {
+        throw e;
+      }
     }
-  }
+  });
+}
 
-  // Deduplicate and Sort
-  const byHash = new Map();
-  for (const item of raw) {
-    const h = unifiedRagContentHash(item.text);
-    const prev = byHash.get(h);
-    if (!prev || item.score > prev.score) byHash.set(h, item);
-  }
+async function documentSourceExists(env, source, projectId) {
+  return withPg(env, async (client) => {
+    const res = await client.query(
+      `SELECT 1 FROM public.documents WHERE source = $1 AND project_id = $2 LIMIT 1`,
+      [source, projectId]
+    );
+    return (res.rows || []).length > 0;
+  });
+}
 
-  const sorted = Array.from(byHash.values()).sort((a, b) => b.score - a.score).slice(0, topK);
+async function logSemanticSearch(env, row) {
+  try {
+    await withPg(env, async (client) => {
+      await client.query(
+        `INSERT INTO public.semantic_search_log (
+          search_fn, tenant_id, query_preview, match_threshold, match_count_requested,
+          match_count_returned, top_similarity, avg_similarity, sources_hit
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+        [
+          row.search_fn,
+          row.tenant_id,
+          row.query_preview,
+          row.match_threshold,
+          row.match_count_requested,
+          row.match_count_returned,
+          row.top_similarity,
+          row.avg_similarity,
+          JSON.stringify(Array.isArray(row.sources_hit) ? row.sources_hit : []),
+        ]
+      );
+    });
+  } catch (e) {
+    console.warn('[rag] semantic_search_log:', e?.message ?? e);
+  }
+}
+
+async function d1RagIngestLog(env, { source, status, chunks }) {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO rag_ingest_log (object_key, status, chunk_count, triggered_by) VALUES (?,?,?,?)`
+    )
+      .bind(String(source || '').slice(0, 2000), status, Number(chunks) || 0, 'rag_ingest')
+      .run();
+  } catch (e) {
+    console.warn('[rag] rag_ingest_log:', e?.message ?? e);
+  }
+}
+
+function normalizeSearchRow(row, origin) {
+  const similarity = Number(row.similarity ?? row.score ?? 0);
+  const text =
+    row.content ||
+    row.summary ||
+    row.body ||
+    row.text ||
+    '';
+  const source = row.source || row.source_type || origin;
   return {
-    matches: sorted.map(x => x.text),
-    results: sorted.map(x => ({ text: x.text, source: x.source, source_type: x.source_type, score: Math.round(x.score * 1000) / 1000 })),
-    count: sorted.length,
-    _meta: { duration_ms: Date.now() - _t0 }
+    id: row.id ?? row.session_id ?? null,
+    content: text,
+    source,
+    title: row.title ?? null,
+    similarity,
+    _origin: origin,
   };
 }
 
+function mergeDedupeSort(rows) {
+  const byHash = new Map();
+  for (const r of rows) {
+    const h = unifiedRagContentHash(r.content || JSON.stringify(r));
+    const prev = byHash.get(h);
+    if (!prev || r.similarity > prev.similarity) byHash.set(h, r);
+  }
+  return Array.from(byHash.values()).sort((a, b) => b.similarity - a.similarity);
+}
+
 /**
- * Chunk markdown text for vector indexing.
+ * Internal unified search (Hyperdrive RPCs + OpenAI embed).
  */
+export async function runUnifiedRagQuery(env, { query, tenantId, threshold, limit, includeSessions }) {
+  const agentId = ragAgentId(env);
+  if (!agentId) {
+    return { results: [], error: 'RAG_AGENT_ID not configured' };
+  }
+  const q = String(query || '').trim();
+  if (!q) return { results: [], error: 'empty query' };
+
+  const vec = await openaiCreateEmbedding(env, q);
+  const vecLit = vectorLiteral(vec);
+
+  const lim = Math.min(Math.max(1, limit || 10), 50);
+  const thr = typeof threshold === 'number' ? threshold : 0.7;
+
+  const ctxP = withPg(env, async (client) => {
+    const res = await client.query(
+      `SELECT * FROM public.search_all_context($1::vector, $2::float, $3::int, $4::text)`,
+      [vecLit, thr, lim, agentId]
+    );
+    return res.rows || [];
+  });
+
+  const sessP =
+    includeSessions && tenantId
+      ? withPg(env, async (client) => {
+          const res = await client.query(
+            `SELECT * FROM public.match_session_summaries($1::vector, $2::text, $3::text, $4::float, $5::int)`,
+            [vecLit, tenantId, agentId, thr, 5]
+          );
+          return res.rows || [];
+        })
+      : Promise.resolve([]);
+
+  const [ctxRows, sessRows] = await Promise.all([ctxP, sessP]);
+  const merged = [
+    ...(ctxRows || []).map((r) => normalizeSearchRow(r, 'context')),
+    ...(sessRows || []).map((r) => normalizeSearchRow(r, 'session')),
+  ];
+  const results = mergeDedupeSort(merged);
+  return { results, embeddingDims: vec.length };
+}
+
+/**
+ * Agent-facing RAG (replaces Vectorize / D1 chunk leg).
+ */
+export async function unifiedRagSearch(env, query, opts = {}) {
+  const q = String(query || '').trim();
+  if (!q || !env.HYPERDRIVE?.connectionString || !env.OPENAI_API_KEY) {
+    return { matches: [], results: [], count: 0, _error: 'missing_bindings' };
+  }
+  const topK = Math.min(Math.max(1, opts.topK || 8), 24);
+  const _t0 = Date.now();
+  const tenantId = tenantIdFromEnv(env);
+  const { results, error } = await runUnifiedRagQuery(env, {
+    query: q,
+    tenantId,
+    threshold: 0.7,
+    limit: Math.max(topK, 10),
+    includeSessions: true,
+  });
+  if (error) {
+    return { matches: [], results: [], count: 0, _error: error };
+  }
+  const sliced = results.slice(0, topK);
+  return {
+    matches: sliced.map((x) => {
+      const tag = x.source ? `[${x.source}] ` : '';
+      return `${tag}${x.content || ''}`.trim();
+    }),
+    results: sliced.map((x) => ({
+      text: x.content,
+      source: x.id,
+      source_type: x._origin === 'session' ? 'supabase_session_summaries' : `supabase_${x.source || 'context'}`,
+      score: Math.round(x.similarity * 1000) / 1000,
+    })),
+    count: sliced.length,
+    _meta: { duration_ms: Date.now() - _t0 },
+  };
+}
+
 export function chunkMarkdown(text, maxChars = RAG_CHUNK_MAX_CHARS, overlap = RAG_CHUNK_OVERLAP) {
   const chunks = [];
-  const sections = text.split(/(?=^##?\s)/m).map(s => s.trim()).filter(Boolean);
+  const sections = text.split(/(?=^##?\s)/m).map((s) => s.trim()).filter(Boolean);
   for (const section of sections) {
     if (section.length <= maxChars) {
       chunks.push(section);
@@ -288,7 +502,7 @@ export function chunkMarkdown(text, maxChars = RAG_CHUNK_MAX_CHARS, overlap = RA
     let start = 0;
     while (start < section.length) {
       const end = Math.min(start + maxChars, section.length);
-      let slice = section.slice(start, end);
+      const slice = section.slice(start, end);
       if (slice.trim()) chunks.push(slice.trim());
       start = end - (end < section.length ? overlap : 0);
     }
@@ -296,15 +510,270 @@ export function chunkMarkdown(text, maxChars = RAG_CHUNK_MAX_CHARS, overlap = RA
   return chunks.length ? chunks : [text.slice(0, maxChars)];
 }
 
-/**
- * Background chat compaction service.
- */
 export async function compactAgentChatsToR2(env) {
   if (!env.DB || !env.R2) return { error: 'DB or R2 missing' };
-  const cutoff = Math.floor(Date.now() / 1000) - (RAG_COMPACT_HOURS * 3600);
-  const out = await env.DB.prepare(`SELECT conversation_id, role, content FROM agent_messages WHERE created_at < ?`).bind(cutoff).all();
+  const cutoff = Math.floor(Date.now() / 1000) - RAG_COMPACT_HOURS * 3600;
+  const out = await env.DB.prepare(`SELECT conversation_id, role, content FROM agent_messages WHERE created_at < ?`)
+    .bind(cutoff)
+    .all();
   const rows = out?.results || [];
-  
-  // Compaction Logic (Aggregating messages by conversation)...
   return { conversations_compacted: rows.length };
+}
+
+/**
+ * POST /api/rag/ingest | /api/rag/search | /api/rag/sync | /api/search (POST)
+ */
+export async function handleRagApi(request, url, env, _ctx) {
+  const path = url.pathname.replace(/\/$/, '') || '/';
+  const method = request.method;
+
+  if (method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*' } });
+  }
+
+  try {
+    if (path === '/api/search' && method === 'POST') {
+      return handleRagSearchRoute(request, env);
+    }
+    if (path === '/api/rag/ingest' && method === 'POST') {
+      return handleRagIngest(request, env);
+    }
+    if (path === '/api/rag/search' && method === 'POST') {
+      return handleRagSearchRoute(request, env);
+    }
+    if (path === '/api/rag/sync' && method === 'POST') {
+      return handleRagSync(request, env);
+    }
+    return jsonResponse({ error: 'Not found' }, 404);
+  } catch (e) {
+    console.warn('[rag]', e?.message ?? e);
+    return jsonResponse({ error: e?.message || 'RAG error' }, 500);
+  }
+}
+
+async function handleRagIngest(request, env) {
+  const rawBody = await request.text();
+  const sig =
+    request.headers.get('x-supabase-signature') || request.headers.get('X-Supabase-Signature') || '';
+  const isWebhook = !!sig;
+  if (isWebhook) {
+    const secret = env.SUPABASE_WEBHOOK_SECRET;
+    if (!secret || !(await verifySupabaseWebhookSignature(secret, rawBody, sig))) {
+      return jsonResponse({ error: 'Invalid webhook signature' }, 401);
+    }
+  } else {
+    const user = await getAuthUser(request, env);
+    if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+  }
+
+  let body;
+  try {
+    body = JSON.parse(rawBody || '{}');
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+
+  const record = body.record || body;
+  const content = String(record.content ?? body.content ?? '').trim();
+  const source = String(record.source ?? body.source ?? '').trim();
+  const title = String(record.title ?? body.title ?? (source || 'untitled')).slice(0, 500);
+  const metadata =
+    typeof record.metadata === 'object' && record.metadata !== null
+      ? record.metadata
+      : typeof body.metadata === 'object' && body.metadata !== null
+        ? body.metadata
+        : {};
+
+  if (!content || !source) {
+    return jsonResponse({ error: 'content and source required' }, 400);
+  }
+
+  const projectId = ragDocumentsProjectId(env);
+  if (!projectId) return jsonResponse({ error: 'RAG_DOCUMENTS_PROJECT_ID not configured' }, 503);
+
+  const dims = ragEmbeddingDims(env);
+  if (!Number.isFinite(dims)) return jsonResponse({ error: 'RAG_EMBEDDING_DIMENSIONS not configured' }, 503);
+
+  try {
+    const embedding = await openaiCreateEmbedding(env, content);
+    await upsertDocument(env, { source, title, content, embedding, projectId, metadata });
+
+    const folder = resolveAutoragFolder(env, metadata);
+    const r2Key = `${folder}${safeObjectSuffix(source)}.txt`;
+    try {
+      await r2PutObjectText(env, r2Key, content);
+    } catch (e) {
+      console.warn('[rag] R2 put skipped:', e?.message ?? e);
+    }
+
+    await d1RagIngestLog(env, { source, status: 'success', chunks: 1 });
+
+    return jsonResponse({ ok: true, source, dims: embedding.length });
+  } catch (e) {
+    await d1RagIngestLog(env, { source, status: `error:${String(e?.message || e).slice(0, 80)}`, chunks: 0 });
+    throw e;
+  }
+}
+
+async function handleRagSearchRoute(request, env) {
+  const user = await getAuthUser(request, env);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+  const body = await request.json().catch(() => ({}));
+  const query = String(body.query || '').trim();
+  if (!query) return jsonResponse({ error: 'query required' }, 400);
+
+  const threshold = typeof body.threshold === 'number' ? body.threshold : 0.7;
+  const limit = typeof body.limit === 'number' ? body.limit : 10;
+  const includeSessions = !!body.include_sessions;
+  const tenantId = String(body.tenant_id || tenantIdFromEnv(env) || '').trim() || null;
+
+  const { results, error: searchErr } = await runUnifiedRagQuery(env, {
+    query,
+    tenantId,
+    threshold,
+    limit,
+    includeSessions,
+  });
+  if (searchErr) return jsonResponse({ error: searchErr }, searchErr === 'empty query' ? 400 : 503);
+
+  const sims = results.map((r) => r.similarity).filter((n) => Number.isFinite(n));
+  const topSim = sims.length ? Math.max(...sims) : null;
+  const avgSim = sims.length ? sims.reduce((a, b) => a + b, 0) / sims.length : null;
+  const sourcesHit = [...new Set(results.map((r) => String(r.source || '')).filter(Boolean))];
+
+  await logSemanticSearch(env, {
+    search_fn: 'unified',
+    tenant_id: tenantId,
+    query_preview: query.slice(0, 100),
+    match_threshold: threshold,
+    match_count_requested: limit,
+    match_count_returned: results.length,
+    top_similarity: topSim,
+    avg_similarity: avgSim,
+    sources_hit: sourcesHit,
+  });
+
+  return jsonResponse({
+    ok: true,
+    results,
+    count: results.length,
+    query_preview: query.slice(0, 100),
+  });
+}
+
+async function handleRagSync(request, env) {
+  if (!verifyInternalSecret(request, env)) {
+    return jsonResponse({ error: 'Unauthorized' }, 401);
+  }
+
+  const projectId = ragDocumentsProjectId(env);
+  if (!projectId) return jsonResponse({ error: 'RAG_DOCUMENTS_PROJECT_ID not configured' }, 503);
+
+  let keys;
+  try {
+    keys = await r2ListAllObjectKeys(env);
+  } catch (e) {
+    return jsonResponse({ ok: false, error: e?.message || 'list failed' }, 500);
+  }
+
+  const synced = [];
+  const skipped = [];
+  const errors = [];
+
+  const pending = [];
+  for (const key of keys) {
+    if (!key || key.endsWith('/')) continue;
+    pending.push(key);
+  }
+
+  const batchSize = 10;
+  for (let i = 0; i < pending.length; i += batchSize) {
+    const batch = pending.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (sourceKey) => {
+        try {
+          const exists = await documentSourceExists(env, sourceKey, projectId);
+          if (exists) {
+            skipped.push(sourceKey);
+            return;
+          }
+          const text = await r2GetObjectText(env, sourceKey);
+          const embedding = await openaiCreateEmbedding(env, text);
+          const title = sourceKey.split('/').pop() || sourceKey;
+          await upsertDocument(env, {
+            source: sourceKey,
+            title,
+            content: text,
+            embedding,
+            projectId,
+            metadata: { folder: sourceKey.includes('/') ? `${sourceKey.slice(0, sourceKey.lastIndexOf('/') + 1)}` : 'knowledge/' },
+          });
+          synced.push(sourceKey);
+          await d1RagIngestLog(env, { source: sourceKey, status: 'success', chunks: 1 });
+        } catch (e) {
+          errors.push({ key: sourceKey, error: e?.message || String(e) });
+        }
+      })
+    );
+  }
+
+  return jsonResponse({ ok: true, synced: synced.length, skipped: skipped.length, errors });
+}
+
+/**
+ * POST /api/agent/memory/sync — Supabase webhook: embed new/updated rows.
+ */
+export async function handleAgentMemorySync(request, env) {
+  if (request.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405);
+  const rawBody = await request.text();
+  const sig =
+    request.headers.get('x-supabase-signature') || request.headers.get('X-Supabase-Signature') || '';
+  const secret = env.SUPABASE_WEBHOOK_SECRET;
+  if (!secret || !(await verifySupabaseWebhookSignature(secret, rawBody, sig))) {
+    return jsonResponse({ error: 'Invalid webhook signature' }, 401);
+  }
+
+  let body;
+  try {
+    body = JSON.parse(rawBody || '{}');
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+
+  const record = body.record || body;
+  const id = record.id;
+  const content = String(record.content || '').trim();
+  if (!id || !content) {
+    return jsonResponse({ error: 'record.id and record.content required' }, 400);
+  }
+
+  const emb = record.embedding;
+  const needsEmbedding =
+    emb == null || (Array.isArray(emb) && emb.length === 0) || (typeof emb === 'string' && !emb.trim());
+
+  if (!needsEmbedding) {
+    await d1RagIngestLog(env, { source: `agent_memory:${id}`, status: 'skipped_has_embedding', chunks: 0 });
+    return jsonResponse({ ok: true });
+  }
+
+  try {
+    const embedding = await openaiCreateEmbedding(env, content);
+    const vecLit = vectorLiteral(embedding);
+    await withPg(env, async (client) => {
+      await client.query(`UPDATE public.agent_memory SET embedding = $1::vector WHERE id = $2::uuid`, [
+        vecLit,
+        id,
+      ]);
+    });
+    await d1RagIngestLog(env, { source: `agent_memory:${id}`, status: 'success', chunks: 1 });
+    return jsonResponse({ ok: true });
+  } catch (e) {
+    await d1RagIngestLog(env, {
+      source: `agent_memory:${id}`,
+      status: `error:${String(e?.message || e).slice(0, 80)}`,
+      chunks: 0,
+    });
+    return jsonResponse({ error: e?.message || 'sync failed' }, 500);
+  }
 }

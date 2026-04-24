@@ -45,7 +45,7 @@ bucket_name = "agent-sam"
 
 [[r2_buckets]]
 binding = "AUTORAG_BUCKET"
-bucket_name = "autorag"
+bucket_name = "inneranimalmedia-autorag"
 
 [[r2_buckets]]
 binding = "DOCS_BUCKET"
@@ -69,9 +69,10 @@ database_id = "cf87b717-d4e2-4cf8-bab0-a81268e32d49"
 binding = "HYPERDRIVE"
 id = "08183bb9d2914e87ac8395d7e4ecff60"
 
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "ai-search-inneranimalmedia-autorag"
+# RAG uses Supabase pgvector + OpenAI embeddings only (no Vectorize on this path).
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "ai-search-inneranimalmedia-autorag"
 
 [[kv_namespaces]]
 binding = "KV"
@@ -92,8 +93,9 @@ class_name = "ChessRoom"
 name = "AGENT_SESSION"
 class_name = "AgentChatSqlV1"
 
-[[vpc_services]]
-binding = "PTY_SERVICE"
+[[unsafe.bindings]]
+name = "PTY_SERVICE"
+type = "vpc-service"
 service_id = "019db639-7c70-7071-8ef3-32ec0392a9ff"
 
 [[migrations]]
@@ -138,6 +140,13 @@ crons = [
 ]
 
 [vars]
+OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+RAG_DOCUMENTS_PROJECT_ID = "inneranimalmedia"
+RAG_AGENT_ID = "agent-sam"
+RAG_OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
+RAG_EMBEDDING_DIMENSIONS = "1024"
+R2_AUTORAG_BUCKET_NAME = "inneranimalmedia-autorag"
+RAG_AUTORAG_FOLDER_PREFIXES = "knowledge/,memory/,context/,docs/,plans/,recipes/,roadmap/,workflows/"
 CLOUDFLARE_ACCOUNT_ID = "ede6590ac0d2fb7daf155b35653457b2"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "g7wf09fCONpnidkRnR_5vw"
 GITHUB_CLIENT_ID = "Ov23li6BZYxjVtGUWibX"

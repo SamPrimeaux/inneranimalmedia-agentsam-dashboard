@@ -206,8 +206,15 @@ export function resolveTelemetryTenantId(env, explicitTenantId) {
   return tenantIdFromEnv(env);
 }
 
+/**
+ * Tenant for anonymous / bootstrap worker paths only.
+ * When a session exists (authenticated), never fall back to env.TENANT_ID — that caused cross-tenant leaks.
+ */
 export function resolveTenantIdForWorker(session, env) {
-  if (session && session.tenant_id) return session.tenant_id;
+  if (session?.tenant_id != null && String(session.tenant_id).trim() !== '') {
+    return String(session.tenant_id).trim();
+  }
+  if (session?.user_id != null && String(session.user_id).trim() !== '') return null;
   return tenantIdFromEnv(env);
 }
 
@@ -251,7 +258,10 @@ export async function getSession(env, request) {
     if (env.SESSION_CACHE) {
       try {
         const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
-        if (data) return JSON.parse(data);
+        if (data) {
+          const parsed = JSON.parse(data);
+          return { ...parsed, session_id: sessionId };
+        }
       } catch (e) { }
     }
   }
@@ -269,7 +279,8 @@ export async function getSession(env, request) {
         if (row) {
           // Success: Repopulate KV so cache is warm for next request
           const payload = { 
-            v: 1, 
+            v: 1,
+            session_id: row.id,
             user_id: row.user_id, 
             tenant_id: row.tenant_id, 
             expires_at: row.expires_at 
@@ -295,7 +306,13 @@ export async function getSession(env, request) {
 export async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {
   if (!env.SESSION_CACHE || !sessionId || !userId) return;
   const tid = tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
-  const payload = { v: 1, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
+  const payload = {
+    v: 1,
+    session_id: sessionId,
+    user_id: userId,
+    tenant_id: tid,
+    expires_at: expiresAtIso || null,
+  };
   try {
     await env.SESSION_CACHE.put(IAM_KV_SESSION_KEY_PREFIX + sessionId, JSON.stringify(payload), {
       expirationTtl: ttlSecondsFromExpiresAtIso(expiresAtIso),
@@ -322,13 +339,38 @@ export async function fetchAuthUserTenantId(env, userKey) {
   } catch (e) {
     console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
   }
+  if (k.startsWith('usr_')) {
+    try {
+      const row = await env.DB
+        .prepare(
+          `SELECT au.tenant_id AS tenant_id
+           FROM users u
+           INNER JOIN auth_users au ON au.id = u.auth_id
+           WHERE u.id = ?
+           LIMIT 1`,
+        )
+        .bind(k)
+        .first();
+      if (row?.tenant_id != null && String(row.tenant_id).trim() !== '') return String(row.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId join]', e?.message ?? e);
+    }
+    try {
+      const only = await env.DB
+        .prepare(`SELECT tenant_id FROM users WHERE id = ? LIMIT 1`)
+        .bind(k)
+        .first();
+      if (only?.tenant_id != null && String(only.tenant_id).trim() !== '') return String(only.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId users]', e?.message ?? e);
+    }
+  }
   return null;
 }
 
+/** Tenant persisted on new auth_sessions rows — D1 only, never env.TENANT_ID (avoids stamping every login with the worker default tenant). */
 export async function resolveTenantAtLogin(env, userId) {
-  const fromUser = await fetchAuthUserTenantId(env, userId);
-  if (fromUser) return fromUser;
-  return resolveTenantIdForWorker(null, env);
+  return await fetchAuthUserTenantId(env, userId);
 }
 
 /** Hex string to Uint8Array for PBKDF2 salt. */
@@ -370,59 +412,77 @@ export async function writeIamSessionToKv_old(env, sessionId, userId, tenantId, 
     return writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 }
 
+function patchAuthSessionTenantIfMissing(env, sessionId, tenantId, userId, expiresAtIso) {
+  if (!env?.DB || !sessionId || tenantId == null || String(tenantId).trim() === '') return;
+  const tid = String(tenantId).trim();
+  env.DB
+    .prepare(
+      `UPDATE auth_sessions SET tenant_id = ? WHERE id = ? AND (tenant_id IS NULL OR TRIM(COALESCE(tenant_id,'')) = '')`,
+    )
+    .bind(tid, sessionId)
+    .run()
+    .catch((e) => console.warn('[auth_sessions tenant patch]', e?.message ?? e));
+  writeIamSessionToKv(env, sessionId, userId, tid, expiresAtIso).catch((e) =>
+    console.warn('[KV tenant patch]', e?.message ?? e),
+  );
+}
+
 export async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
 
   let userId = session.user_id;
   let email = session._session_user_id || session.user_id;
-  const tenantId = resolveTenantIdForWorker(session, env);
+  const sessionTenant =
+    session.tenant_id != null && String(session.tenant_id).trim() !== ''
+      ? String(session.tenant_id).trim()
+      : null;
 
-  // Resolve role and superadmin status via the correct join chain:
-  //   auth_sessions.user_id ('usr_*')
-  //     → users WHERE id = 'usr_*'         → email
-  //     → auth_users WHERE email = ?        → is_superadmin
-  //
-  // NOTE: auth_users uses 'au_*' IDs — never look up auth_users by the usr_* user_id directly.
-  // NOTE: Do NOT use auth_users.tenant_id for resolution (au_sam_inneranimalmedia has null).
   let role = 'user';
   let is_superadmin = 0;
+  let usersTenantId = null;
+  let resolvedEmail = null;
 
   if (env.DB && userId) {
     try {
-      // Step 1: Resolve canonical email from users table (works for both usr_* and email-keyed sessions)
-      let resolvedEmail = null;
-      if (userId.startsWith('usr_')) {
-        const userRow = await env.DB.prepare(
-          `SELECT email, tenant_id FROM users WHERE id = ? LIMIT 1`
-        ).bind(userId).first();
+      if (String(userId).startsWith('usr_')) {
+        const userRow = await env.DB.prepare(`SELECT email, tenant_id FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
         if (userRow) {
           resolvedEmail = userRow.email || null;
-          if (resolvedEmail && (!email || email === userId)) email = resolvedEmail;
-          // Prefer users.tenant_id over session tenant_id (auth_users.tenant_id may be null)
-          if (userRow.tenant_id && !tenantId) {
-            // Note: tenantId is const from above; rebuild below if needed
+          if (userRow.tenant_id != null && String(userRow.tenant_id).trim() !== '') {
+            usersTenantId = String(userRow.tenant_id).trim();
           }
+          if (resolvedEmail && (!email || email === userId)) email = resolvedEmail;
         }
       } else {
-        // Session user_id is already an email or au_* format — use directly
         resolvedEmail = email && email !== userId ? email : userId;
       }
 
-      // Step 2: Look up auth_users by email to get is_superadmin
       const lookupEmail = resolvedEmail || String(email || userId);
       if (lookupEmail) {
-        const authRow = await env.DB.prepare(
-          `SELECT email, COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users
-           WHERE LOWER(email) = LOWER(?) LIMIT 1`
-        ).bind(lookupEmail).first();
+        const authRow = await env.DB
+          .prepare(
+            `SELECT email, tenant_id, COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users
+             WHERE LOWER(email) = LOWER(?) LIMIT 1`,
+          )
+          .bind(lookupEmail)
+          .first();
+
+        const authTenant =
+          authRow?.tenant_id != null && String(authRow.tenant_id).trim() !== ''
+            ? String(authRow.tenant_id).trim()
+            : null;
 
         if (authRow && authRow.is_superadmin) {
           is_superadmin = 1;
           role = 'superadmin';
           if (authRow.email && (!email || email === userId)) email = authRow.email;
-          // Superadmins bypass all workspace membership checks — universal access
-          return { id: userId, email, tenant_id: tenantId, role, is_superadmin };
+          const effectiveTenant = sessionTenant || usersTenantId || authTenant || null;
+          const sid = session.session_id;
+          if (sid && effectiveTenant && !sessionTenant) {
+            patchAuthSessionTenantIfMissing(env, sid, effectiveTenant, userId, session.expires_at);
+          }
+          return { id: userId, email, tenant_id: effectiveTenant, role, is_superadmin };
         }
       }
     } catch (e) {
@@ -430,19 +490,42 @@ export async function getAuthUser(request, env) {
     }
   }
 
-  // Non-superadmin: resolve canonical email from the 'users' table for usr_-style IDs
-  if (env.DB && userId && userId.startsWith('usr_') && (!email || email === userId)) {
+  if (env.DB && userId && String(userId).startsWith('usr_') && (!email || email === userId)) {
     try {
-      const u = await env.DB.prepare(
-        `SELECT email FROM users WHERE id = ? LIMIT 1`
-      ).bind(userId).first();
+      const u = await env.DB.prepare(`SELECT email FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
       if (u && u.email) email = u.email;
     } catch (e) {
       console.warn('[getAuthUser User Lookup Error]', e.message);
     }
   }
 
-  return { id: userId, email, tenant_id: tenantId, role, is_superadmin };
+  const lookupEmail2 = resolvedEmail || String(email || userId);
+  let authTenant2 = null;
+  if (env.DB && lookupEmail2) {
+    try {
+      const ar = await env.DB
+        .prepare(`SELECT tenant_id FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`)
+        .bind(lookupEmail2)
+        .first();
+      if (ar?.tenant_id != null && String(ar.tenant_id).trim() !== '') {
+        authTenant2 = String(ar.tenant_id).trim();
+      }
+    } catch (e) {
+      console.warn('[getAuthUser auth tenant]', e?.message ?? e);
+    }
+  }
+  let fromKey = null;
+  if (env.DB && (!sessionTenant || !usersTenantId) && (!authTenant2)) {
+    fromKey = await fetchAuthUserTenantId(env, userId);
+  }
+
+  const effectiveTenant = sessionTenant || usersTenantId || authTenant2 || fromKey || null;
+  const sid = session.session_id;
+  if (sid && effectiveTenant && !sessionTenant) {
+    patchAuthSessionTenantIfMissing(env, sid, effectiveTenant, userId, session.expires_at);
+  }
+
+  return { id: userId, email, tenant_id: effectiveTenant, role, is_superadmin };
 }
 
 /**
@@ -461,10 +544,13 @@ export async function establishIamSession(request, env, userId, bodyObj = { ok: 
   const expiresAtIso = new Date(expiresTs).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`,
-  ).bind(sessionId, userId, expiresAtIso, ip, ua).run();
   const tid = await resolveTenantAtLogin(env, userId).catch(() => null);
+  await env.DB
+    .prepare(
+      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`,
+    )
+    .bind(sessionId, userId, expiresAtIso, ip, ua, tid)
+    .run();
   await writeIamSessionToKv(env, sessionId, userId, tid, expiresAtIso);
   const response = new Response(JSON.stringify(bodyObj), {
     status: 200,

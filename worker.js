@@ -26312,10 +26312,11 @@ async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, 
   ).bind(signalId, sessionId, signalType || 'heartbeat', source || 'dashboard', safePayload).run().catch(() => { });
 }
 
-/** Tenant for worker writes: session row first (from auth_users at login), then wrangler TENANT_ID for local/bootstrap only. Never hardcode a production tenant literal. */
+/** Tenant for anonymous/bootstrap only. If a session has a user_id, never fall back to env.TENANT_ID (cross-tenant leak). */
 function resolveTenantIdForWorker(session, env) {
   const st = session && session.tenant_id != null && String(session.tenant_id).trim();
   if (st) return String(session.tenant_id).trim();
+  if (session?.user_id != null && String(session.user_id).trim() !== '') return null;
   const et = env && env.TENANT_ID != null && String(env.TENANT_ID).trim();
   if (et) return et;
   return null;
@@ -26332,6 +26333,29 @@ async function fetchAuthUserTenantId(env, userKey) {
     if (u && u.tenant_id != null && String(u.tenant_id).trim() !== '') return String(u.tenant_id).trim();
   } catch (e) {
     console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
+  }
+  if (k.startsWith('usr_')) {
+    try {
+      const row = await env.DB
+        .prepare(
+          `SELECT au.tenant_id AS tenant_id
+           FROM users u
+           INNER JOIN auth_users au ON au.id = u.auth_id
+           WHERE u.id = ?
+           LIMIT 1`,
+        )
+        .bind(k)
+        .first();
+      if (row?.tenant_id != null && String(row.tenant_id).trim() !== '') return String(row.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId join]', e?.message ?? e);
+    }
+    try {
+      const only = await env.DB.prepare(`SELECT tenant_id FROM users WHERE id = ? LIMIT 1`).bind(k).first();
+      if (only?.tenant_id != null && String(only.tenant_id).trim() !== '') return String(only.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId users]', e?.message ?? e);
+    }
   }
   return null;
 }
@@ -26363,7 +26387,7 @@ async function readIamSessionFromKv(env, sessionId) {
 async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {
   if (!env.SESSION_CACHE || !sessionId || !userId) return;
   const tid = tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
-  const payload = { v: 1, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
+  const payload = { v: 1, session_id: sessionId, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
   try {
     await env.SESSION_CACHE.put(IAM_KV_SESSION_KEY_PREFIX + sessionId, JSON.stringify(payload), {
       expirationTtl: ttlSecondsFromExpiresAtIso(expiresAtIso),
@@ -26374,9 +26398,7 @@ async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIs
 }
 
 async function resolveTenantAtLogin(env, userId) {
-  const fromUser = await fetchAuthUserTenantId(env, userId);
-  if (fromUser) return fromUser;
-  return resolveTenantIdForWorker(null, env);
+  return await fetchAuthUserTenantId(env, userId);
 }
 
 async function finalizeSessionShape(env, sessionId, userKey, expiresAtIso, tenantResolved) {
@@ -26406,17 +26428,19 @@ async function getSession(env, request) {
 
   const kv = await readIamSessionFromKv(env, sessionId);
   if (kv) {
-    const tenantKv =
-      (kv.tenant_id != null && String(kv.tenant_id).trim()) || resolveTenantIdForWorker(null, env);
+    let tenantKv =
+      kv.tenant_id != null && String(kv.tenant_id).trim() !== '' ? String(kv.tenant_id).trim() : null;
+    if (!tenantKv) tenantKv = await fetchAuthUserTenantId(env, kv.user_id);
     return await finalizeSessionShape(env, sessionId, kv.user_id, kv.expires_at, tenantKv);
   }
 
   const row = await env.DB.prepare(
-    `SELECT id, user_id, expires_at FROM auth_sessions WHERE id = ? AND datetime(expires_at) > datetime('now')`
+    `SELECT id, user_id, expires_at, tenant_id FROM auth_sessions WHERE id = ? AND datetime(expires_at) > datetime('now')`
   ).bind(sessionId).first();
   if (!row) return null;
-  const tenantFromUser = await fetchAuthUserTenantId(env, row.user_id);
-  const tenantResolved = tenantFromUser || resolveTenantIdForWorker(null, env);
+  let tenantResolved =
+    row.tenant_id != null && String(row.tenant_id).trim() !== '' ? String(row.tenant_id).trim() : null;
+  if (!tenantResolved) tenantResolved = await fetchAuthUserTenantId(env, row.user_id);
   void writeIamSessionToKv(env, sessionId, row.user_id, tenantResolved, row.expires_at);
   return await finalizeSessionShape(env, sessionId, row.user_id, row.expires_at, tenantResolved);
 }
@@ -26426,7 +26450,25 @@ async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
   const sessionUserId = session._session_user_id || session.user_id;
-  const tenantId = resolveTenantIdForWorker(session, env);
+  let tenantId =
+    session.tenant_id != null && String(session.tenant_id).trim() !== ''
+      ? String(session.tenant_id).trim()
+      : null;
+  if (!tenantId) tenantId = await fetchAuthUserTenantId(env, session.user_id);
+  if (!tenantId && sessionUserId && sessionUserId !== session.user_id) {
+    tenantId = await fetchAuthUserTenantId(env, sessionUserId);
+  }
+  const sid = session.id || session.session_id;
+  if (sid && tenantId && (session.tenant_id == null || String(session.tenant_id).trim() === '')) {
+    env.DB
+      .prepare(
+        `UPDATE auth_sessions SET tenant_id = ? WHERE id = ? AND (tenant_id IS NULL OR TRIM(COALESCE(tenant_id,'')) = '')`,
+      )
+      .bind(tenantId, sid)
+      .run()
+      .catch((e) => console.warn('[auth_sessions tenant patch]', e?.message ?? e));
+    void writeIamSessionToKv(env, sid, session.user_id, tenantId, session.expires_at);
+  }
   return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
 }
 
@@ -30241,11 +30283,11 @@ async function handleEmailSignup(request, url, env) {
     ? (await env.DB.prepare(`SELECT id FROM users WHERE email = ? LIMIT 1`).bind(email).first())?.id || authUserId
     : authUserId;
 
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
-
   const tidSignup = await resolveTenantAtLogin(env, sessionUserId).catch(() => null);
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, sessionUserId, expiresAt, ip, ua, tidSignup).run();
+
   await writeIamSessionToKv(env, sessionId, sessionUserId, tidSignup, expiresAt);
 
   const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
@@ -30310,10 +30352,10 @@ async function handleEmailPasswordLogin(request, url, env) {
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const ip = request.headers.get('cf-connecting-ip') || '';
     const ua = request.headers.get('user-agent') || '';
-    await env.DB.prepare(
-      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-    ).bind(sessionId, userId, expiresAt, ip, ua).run();
     const tidLogin = await resolveTenantAtLogin(env, userId);
+    await env.DB.prepare(
+      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+    ).bind(sessionId, userId, expiresAt, ip, ua, tidLogin).run();
     await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
     const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
@@ -30444,10 +30486,10 @@ async function handleBackupCodeLogin(request, url, env) {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, email, expiresAt, ip, ua).run();
   const tidMfa = await resolveTenantAtLogin(env, email);
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, email, expiresAt, ip, ua, tidMfa).run();
   await writeIamSessionToKv(env, sessionId, email, tidMfa, expiresAt);
   const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -31046,14 +31088,14 @@ async function handleGoogleOAuthCallback(request, url, env) {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
+  const tidOauth = await resolveTenantAtLogin(env, sessionUserId).catch(() => null);
   await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, sessionUserId, expiresAt, ip, ua, tidOauth).run();
 
   // FIX: writeIamSessionToKv was missing — getSession() reads ONLY from KV,
   // so without this the session cookie was set but never resolvable → redirect loop.
-  const tidOauth = await resolveTenantAtLogin(env, userId).catch(() => null);
-  await writeIamSessionToKv(env, sessionId, userId, tidOauth, expiresAt);
+  await writeIamSessionToKv(env, sessionId, sessionUserId, tidOauth, expiresAt);
 
   // FIX: Skip globe_exit redirect — oauthPostLoginGlobeRedirectUrl sends to
   // /auth/login?globe_exit=1&next=... which was dropping users on the homepage
@@ -31196,9 +31238,19 @@ async function handleGitHubOAuthCallback(request, url, env) {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
+  let sessionUserIdGh = userId;
+  try {
+    const ur = await env.DB
+      .prepare(`SELECT id FROM users WHERE email = ? OR auth_id = ? LIMIT 1`)
+      .bind(email, userId)
+      .first();
+    if (ur?.id) sessionUserIdGh = ur.id;
+  } catch (_) {}
+  const tidGh = await resolveTenantAtLogin(env, sessionUserIdGh).catch(() => null);
   await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, userId, expiresAt, ip, ua).run();
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, sessionUserIdGh, expiresAt, ip, ua, tidGh).run();
+  await writeIamSessionToKv(env, sessionId, sessionUserIdGh, tidGh, expiresAt);
   const ghLogin = (userInfo.login || '').toString() || 'github';
   if (tokens.access_token && env.DB) {
     try {

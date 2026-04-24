@@ -653,7 +653,9 @@ export async function agentChatSseHandler(env, request, ctx, session) {
 
   const sessionId     = body.conversationId || body.session_id || body.sessionId || null;
   const requestedMode = String(body.mode || 'auto').toLowerCase().trim() || 'auto';
-  const tenantId      = session?.tenant_id || tenantIdFromEnv(env);
+  const tenantId =
+    session?.tenant_id?.trim() ||
+    (session?.user_id ? null : tenantIdFromEnv(env));
   const userId        = session?.user_id || null;
   const workspaceId   = body.workspace_id || session?.workspace_id || env.WORKSPACE_ID || '';
 
@@ -905,7 +907,6 @@ export async function handleAgentApi(request, url, env, ctx) {
       : null;
     if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
     if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
-    if (!tenantId) tenantId = tenantIdFromEnv(env);
 
     const userId = String(authUser.id || '').trim();
 
@@ -1066,7 +1067,12 @@ export async function handleAgentApi(request, url, env, ctx) {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
     if (!env.DB)   return jsonResponse({ tables: [], workflows: [], commands: [], memory_keys: [], workspaces: [] });
-    const tenantId = tenantIdFromEnv(env);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
     let tables = [], workflows = [], commands = [], memory_keys = [], workspaces = [];
     await Promise.allSettled([
       env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all().then(r => { tables = (r.results||[]).map(x=>x.name); }),
@@ -1083,7 +1089,12 @@ export async function handleAgentApi(request, url, env, ctx) {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
     if (!env.DB)   return jsonResponse({ items: [] });
-    const tenantId = tenantIdFromEnv(env);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
     if (!tenantId) return jsonResponse({ items: [] });
     const { results } = await env.DB.prepare(`SELECT key, memory_type, importance_score FROM agent_memory_index WHERE tenant_id = ? ORDER BY COALESCE(importance_score,0) DESC LIMIT 200`).bind(tenantId).all().catch(() => ({ results: [] }));
     return jsonResponse({ items: (results||[]).filter(r=>r.key) });
@@ -1155,8 +1166,13 @@ export async function handleAgentApi(request, url, env, ctx) {
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
     if (!env.DB)   return jsonResponse({ error: 'DB not configured' }, 503);
     const body       = await request.json().catch(() => ({}));
-    const tenantId   = tenantIdFromEnv(env);
-    if (!tenantId) return jsonResponse({ error: 'TENANT_ID not configured' }, 503);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) return jsonResponse({ error: 'Tenant not configured for this account' }, 403);
     const proposalId = 'prop_' + crypto.randomUUID().replace(/-/g,'').slice(0,16);
     const now        = Math.floor(Date.now() / 1000);
     const proposedBy = String(authUser.email || authUser.id || 'user').slice(0,200);
@@ -1226,6 +1242,15 @@ export async function handleAgentApi(request, url, env, ctx) {
   // ── /api/agent/sessions ───────────────────────────────────────────────────
   if (path === '/api/agent/sessions') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) return jsonResponse({ error: 'Tenant not configured for this account' }, 403);
     if (method === 'POST') {
       const body   = await request.json().catch(() => ({}));
       const id     = crypto.randomUUID();
@@ -1235,12 +1260,10 @@ export async function handleAgentApi(request, url, env, ctx) {
       const sessCtx = JSON.stringify({ session_id: id, name, created_at: Date.now(), message_count: 0, messages: [] });
       if (env.R2) await env.R2.put(r2Key, sessCtx, { httpMetadata: { contentType: 'application/json' } }).catch(() => {});
       if (env.SESSION_CACHE) await env.SESSION_CACHE.put(`sess_ctx:${id}`, sessCtx, { expirationTtl: 86400 }).catch(() => {});
-      const tenantId = tenantIdFromEnv(env);
-      await env.DB.prepare(`INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(id, tenantId || 'system', name, body.session_type||'chat', 'active', '{}', r2Key, now, now).run();
+      await env.DB.prepare(`INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(id, tenantId, name, body.session_type||'chat', 'active', '{}', r2Key, now, now).run();
       return jsonResponse({ id, status: 'active' });
     }
-    const tenantId = tenantIdFromEnv(env);
-    const { results } = await env.DB.prepare(`SELECT s.id, s.session_type, s.status, s.started_at, COALESCE(s.name,ac.name,ac.title,'New Conversation') as name, (SELECT COUNT(*) FROM agent_messages am WHERE am.conversation_id = s.id) as message_count FROM agent_sessions s LEFT JOIN agent_conversations ac ON ac.id = s.id WHERE s.tenant_id = ? ORDER BY s.updated_at DESC LIMIT 50`).bind(tenantId || 'system').all().catch(() => ({ results: [] }));
+    const { results } = await env.DB.prepare(`SELECT s.id, s.session_type, s.status, s.started_at, COALESCE(s.name,ac.name,ac.title,'New Conversation') as name, (SELECT COUNT(*) FROM agent_messages am WHERE am.conversation_id = s.id) as message_count FROM agent_sessions s LEFT JOIN agent_conversations ac ON ac.id = s.id WHERE s.tenant_id = ? ORDER BY s.updated_at DESC LIMIT 50`).bind(tenantId).all().catch(() => ({ results: [] }));
     return jsonResponse(results || []);
   }
 
@@ -1257,7 +1280,13 @@ export async function handleAgentApi(request, url, env, ctx) {
     if (method === 'GET') {
       try {
         const userId = String(authUser?.id || 'anonymous').trim();
-        const tid    = String(authUser?.tenant_id || tenantIdFromEnv(env) || 'system').trim();
+        let tid =
+          authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+            ? String(authUser.tenant_id).trim()
+            : '';
+        if (!tid) tid = (await fetchAuthUserTenantId(env, authUser.id)) || '';
+        if (!tid && authUser.email) tid = (await fetchAuthUserTenantId(env, authUser.email)) || '';
+        if (!tid) return jsonResponse({ error: 'Tenant not configured for this account' }, 403);
         const uwsId  = `uws:${tid}:${userId}:${wsId}`;
 
         // Attempt retrieval from both tables
@@ -1295,7 +1324,13 @@ export async function handleAgentApi(request, url, env, ctx) {
         const stateStr = typeof state === 'string' ? state : JSON.stringify(state || {});
         
         const userId = String(authUser?.id || 'anonymous').trim();
-        const tid    = String(authUser?.tenant_id || tenantIdFromEnv(env) || 'system').trim();
+        let tid =
+          authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+            ? String(authUser.tenant_id).trim()
+            : '';
+        if (!tid) tid = (await fetchAuthUserTenantId(env, authUser.id)) || '';
+        if (!tid && authUser.email) tid = (await fetchAuthUserTenantId(env, authUser.email)) || '';
+        if (!tid) return jsonResponse({ error: 'Tenant not configured for this account' }, 403);
         const uwsId  = `uws:${tid}:${userId}:${wsId}`;
 
         // Attempt update in both locations (idempotent for the relevant table)
@@ -1356,8 +1391,13 @@ export async function handleAgentApi(request, url, env, ctx) {
     const body        = await request.json().catch(() => ({}));
     const commandText = String(body.command_text || body.command || '').trim();
     if (!commandText) return jsonResponse({ error: 'command_text required' }, 400);
-    const tenantId   = tenantIdFromEnv(env);
-    if (!tenantId) return jsonResponse({ error: 'TENANT_ID not configured' }, 503);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) return jsonResponse({ error: 'Tenant not configured for this account' }, 403);
     const proposalId = 'prop_' + crypto.randomUUID().replace(/-/g,'').slice(0,16);
     const now        = Math.floor(Date.now() / 1000);
     const iamOrigin  = (env.IAM_ORIGIN || '').replace(/\/$/,'');

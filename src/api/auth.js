@@ -172,13 +172,13 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
 
-  // 1. D1 Persistence
+  // 1. D1 + KV: persist tenant_id on the session row (never rely on env.TENANT_ID for authenticated users)
+  const tenantId = await resolveTenantAtLogin(env, userId);
   await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, userId, expiresAtIso, ip, ua).run();
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, userId, expiresAtIso, ip, ua, tenantId).run();
 
   // 2. KV Cache
-  const tenantId = await resolveTenantAtLogin(env, userId);
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 
   // 3. Response: Construct host-only session cookie (removed Domain attribute)

@@ -123,7 +123,7 @@ async function exportToGitHub(db, userId, { bytes, filename, repo, path, existin
   const b64Content = btoa(String.fromCharCode(...bytes));
   const message   = commitMessage || `[IAM] Update ${filename}`;
 
-  const body: Record<string, string> = { message, content: b64Content };
+  const body = { message, content: b64Content };
   if (existingSha) body.sha = existingSha; // required for updates
 
   const res = await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, {
@@ -311,7 +311,7 @@ export async function handleDrawApi(request, url, env, ctx) {
       if (!parsed) return jsonResponse({ error: 'Invalid canvasData' }, 400);
 
       const pngFilename  = `${baseName}.png`;
-      const results: Record<string, any> = {};
+      const results = {};
 
       // ── 1. R2 (always) ──
       const r2Key = `draw/exports/${userId}/${crypto.randomUUID()}.png`;
@@ -321,7 +321,7 @@ export async function handleDrawApi(request, url, env, ctx) {
       results.r2 = { ok: true, r2_key: r2Key };
 
       // Also save scene JSON if provided
-      let sceneR2Key: string | null = null;
+      let sceneR2Key = null;
       if (body.scene && typeof body.scene === 'object') {
         sceneR2Key = `draw/scenes/${userId}/${crypto.randomUUID()}.excalidraw`;
         await env.DASHBOARD.put(sceneR2Key, JSON.stringify(body.scene), {
@@ -330,7 +330,7 @@ export async function handleDrawApi(request, url, env, ctx) {
       }
 
       // ── 2. Google Drive (optional) ──
-      let gdriveFileId: string | null = body.gdrive?.fileId || null;
+      let gdriveFileId = body.gdrive?.fileId || null;
       if (destinations.includes('gdrive')) {
         const gd = await exportToGDrive(env.DB, userId, {
           bytes:          parsed.bytes,
@@ -343,9 +343,9 @@ export async function handleDrawApi(request, url, env, ctx) {
       }
 
       // ── 3. GitHub (optional) ──
-      let githubSha:  string | null = body.github?.sha  || null;
-      let githubRepo: string | null = body.github?.repo || null;
-      let githubPath: string | null = null;
+      let githubSha  = body.github?.sha  || null;
+      let githubRepo = body.github?.repo || null;
+      let githubPath = null;
       if (destinations.includes('github') && body.github?.repo) {
         const gh = await exportToGitHub(env.DB, userId, {
           bytes:         parsed.bytes,
@@ -404,11 +404,11 @@ export async function handleDrawApi(request, url, env, ctx) {
         results,
         // Summarize what actually succeeded
         exported: Object.entries(results)
-          .filter(([, v]: [string, any]) => v?.ok)
+          .filter(([, v]) => v?.ok)
           .map(([k]) => k),
         errors: Object.entries(results)
-          .filter(([, v]: [string, any]) => !v?.ok)
-          .reduce((acc, [k, v]: [string, any]) => ({ ...acc, [k]: v.error }), {}),
+          .filter(([, v]) => !v?.ok)
+          .reduce((acc, [k, v]) => ({ ...acc, [k]: v.error }), {}),
       });
     }
 

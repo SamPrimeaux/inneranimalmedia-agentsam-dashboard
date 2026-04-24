@@ -5,6 +5,7 @@ import {
   FileText,
   AlignLeft,
   Circle,
+  Aperture,
   MonitorUp,
   ScreenShareOff,
   Layout,
@@ -18,6 +19,19 @@ import {
 export function MeetShellPanel() {
   const meet = useMeet();
   if (meet.phase !== 'in-call') return <MeetLobbyPanel />;
+
+  const handleScreenshot = () => {
+    const video = document.querySelector('.vtile-video') as HTMLVideoElement;
+    if (!video) { alert('No active video stream to capture.'); return; }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = `meet-screenshot-${Date.now()}.png`;
+    a.click();
+  };
 
   const allPeople = [
     { user_id: 'self', display_name: meet.displayName || 'You', role: 'Host', audioMuted: !meet.audioOn },
@@ -79,19 +93,23 @@ export function MeetShellPanel() {
             sub: meet.recording ? 'This call is being recorded' : 'Click to start recording',
           },
         ].map((item) => (
-          <button
-            key={item.id}
-            className={`msp-ai-row ${meet.aiStudioOpen === item.id ? 'active' : ''} ${
-              item.id === 'recording' && meet.recording ? 'recording' : ''
-            }`}
-            onClick={() => meet.runAiStudio(item.id)}
-          >
-            <span className="msp-ai-icon">{item.icon}</span>
-            <div className="msp-ai-text">
-              <span className="msp-ai-label">{item.label}</span>
-              <span className="msp-ai-sub">{item.sub}</span>
-            </div>
-          </button>
+          <div key={item.id}>
+            <button
+              className={`msp-ai-row ${meet.aiStudioOpen === item.id ? 'active' : ''} ${
+                item.id === 'recording' && meet.recording ? 'recording' : ''
+              }`}
+              onClick={() => meet.runAiStudio(item.id)}
+            >
+              <span className="msp-ai-icon">{item.icon}</span>
+              <div className="msp-ai-text">
+                <span className="msp-ai-label">{item.label}</span>
+                <span className="msp-ai-sub">{item.sub}</span>
+              </div>
+            </button>
+            {meet.aiStudioOpen === item.id && meet.aiStudioResult && (
+              <div className="msp-ai-result"><pre>{meet.aiStudioResult}</pre></div>
+            )}
+          </div>
         ))}
       </div>
 
@@ -100,7 +118,7 @@ export function MeetShellPanel() {
         <div className="msp-header">
           <span>Tools</span>
         </div>
-        <button className={`msp-tool-row ${meet.screenOn ? 'active' : ''}`} onClick={meet.toggleVideo}>
+        <button className={`msp-tool-row ${meet.screenOn ? 'active' : ''}`} onClick={meet.toggleScreen}>
           {meet.screenOn ? <ScreenShareOff size={13} /> : <MonitorUp size={13} />}
           <span>{meet.screenOn ? 'Stop sharing' : 'Share Screen'}</span>
         </button>
@@ -111,6 +129,9 @@ export function MeetShellPanel() {
           <Layout size={13} />
           <span>Draw</span>
           <span className="msp-tool-badge">Excalidraw</span>
+        </button>
+        <button className="msp-tool-row" onClick={handleScreenshot}>
+          <Aperture size={13} /><span>Screenshot</span>
         </button>
         {meet.showDraw && (
           <div className="msp-draw-opacity">
@@ -179,6 +200,8 @@ function MeetShellPanelStyles() {
     .msp-ai-label { display:block; font-size:12px; font-weight:500; color:var(--text-main,#c9d8d6); }
     .msp-ai-sub { display:block; font-size:10px; color:var(--text-muted,#4a7a75); }
     .msp-rec-dot { color:var(--danger,#f87171) !important; animation:pulse 1.5s infinite; }
+    .msp-ai-result { margin: 0 14px 8px; background: var(--bg-surface,#0d1e1c); border: 1px solid var(--border,#1a2e2c); border-radius: 6px; padding: 8px; max-height: 160px; overflow-y: auto; }
+    .msp-ai-result pre { font-size: 10px; color: var(--text-secondary,#6b9e99); white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit; }
     .msp-tool-row { display:flex; align-items:center; gap:10px; width:100%; padding:7px 14px; background:none; border:none; font-size:12px; font-family:inherit; color:var(--text-secondary,#6b9e99); cursor:pointer; transition:all .1s; text-align:left; }
     .msp-tool-row:hover { background:var(--bg-surface,#0d1e1c); color:var(--text-main,#c9d8d6); }
     .msp-tool-row.active { color:var(--primary,#2dd4bf); background:color-mix(in srgb,var(--primary,#2dd4bf) 8%,transparent); }

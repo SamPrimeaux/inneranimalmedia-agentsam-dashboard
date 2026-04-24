@@ -31,6 +31,7 @@ export interface MeetCtxValue {
   setRecording: (v: boolean) => void;
   toggleAudio: () => void;
   toggleVideo: () => void;
+  toggleScreen: () => void;
   endCall: () => void;
   // Draw
   showDraw: boolean;

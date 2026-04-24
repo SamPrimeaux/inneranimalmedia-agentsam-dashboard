@@ -10,8 +10,8 @@ import {
   PhoneOff, MessageSquare, Users, Sparkles, Copy, Send,
   Loader2, Radio, Video, Mail, Plus, ChevronDown,
   FileText, CheckSquare, AlignLeft, Circle, Settings,
-  BarChart2, Layout, Pin, Smile, MoreHorizontal,
-  Maximize2, Volume2, VolumeX, Bot, Calendar as CalendarIcon, Aperture,
+  BarChart2, Layout, Pin,
+  Maximize2, Volume2, VolumeX, Bot, Calendar as CalendarIcon,
 } from 'lucide-react';
 import { MeetCtxValue } from '../../src/MeetContext';
 import { ExcalidrawView } from '../../components/ExcalidrawView';
@@ -47,7 +47,7 @@ interface Poll {
 }
 
 type CallPhase  = 'lobby' | 'connecting' | 'in-call' | 'ended';
-type RightTab   = 'chat' | 'dm' | 'ai';
+type RightTab   = 'chat' | 'ai';
 type AiStudioItem = 'summary' | 'takeaways' | 'actions' | 'transcript' | 'recording';
 
 // ── API util ───────────────────────────────────────────────────────────────
@@ -248,6 +248,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
   const [showDraw, setShowDraw] = useState(false);
   const [drawOpacity, setDrawOpacity] = useState(70);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [messages, setMessages]   = useState<ChatMessage[]>([]);
@@ -279,6 +280,8 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
   const prevMsgCount    = useRef(0);
   const [preview, setPreview] = useState<MediaStream | null>(null);
   const previewRef      = useRef<HTMLVideoElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
+  const recognitionRef = useRef<any>(null);
   const callTimer       = useCallTimer(phase === 'in-call');
 
   useEffect(() => {
@@ -288,7 +291,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
       participants, audioOn, videoOn, screenOn, recording,
       setPhase, setRoomId, setRoomName, setDisplayName,
       setParticipants, setAudioOn, setVideoOn, setScreenOn, setRecording,
-      toggleAudio, toggleVideo,
+      toggleAudio, toggleVideo, toggleScreen,
       endCall: () => endCall(),
       showDraw, setShowDraw, drawOpacity, setDrawOpacity,
       runAiStudio,
@@ -315,13 +318,32 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
   // Unread badge
   useEffect(() => {
-    if (rightTab !== 'chat' && messages.length > prevMsgCount.current)
+    if ((!rightPanelOpen || rightTab !== 'chat') && messages.length > prevMsgCount.current)
       setUnread(u => u + messages.length - prevMsgCount.current);
     prevMsgCount.current = messages.length;
-  }, [messages, rightTab]);
-  useEffect(() => { if (rightTab === 'chat') setUnread(0); }, [rightTab]);
+  }, [messages, rightTab, rightPanelOpen]);
+  useEffect(() => { if (rightPanelOpen && rightTab === 'chat') setUnread(0); }, [rightTab, rightPanelOpen]);
 
   useEffect(() => { return () => { void endCall(true); }; }, []); // eslint-disable-line
+
+  useEffect(() => {
+    if (pipVideoRef.current && screenOn && localRef.current) {
+      pipVideoRef.current.srcObject = localRef.current;
+    }
+  }, [screenOn]);
+
+  useEffect(() => {
+    const el = document.getElementById('pip-camera');
+    if (!el) return;
+    let dragging = false, ox = 0, oy = 0;
+    const down = (e: MouseEvent) => { dragging = true; ox = e.clientX - el.offsetLeft; oy = e.clientY - el.offsetTop; el.style.cursor = 'grabbing'; };
+    const move = (e: MouseEvent) => { if (!dragging) return; el.style.left = `${e.clientX - ox}px`; el.style.top = `${e.clientY - oy}px`; el.style.right = 'auto'; el.style.bottom = 'auto'; };
+    const up = () => { dragging = false; el.style.cursor = 'grab'; };
+    el.addEventListener('mousedown', down);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => { el.removeEventListener('mousedown', down); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+  }, [screenOn]);
 
   // ── Join ──────────────────────────────────────────────────────────────
 
@@ -345,6 +367,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
       });
       const roomData = await roomRes.json();
       const rid = roomData.roomId;
+      if (!rid) throw new Error('Server returned no room ID — check worker deployment');
       setRoomId(rid); setRoomName(roomData.name);
 
       const sessRes  = await api(`/room/${rid}/session`, {
@@ -399,6 +422,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
   const startPolling = (rid: string) => {
     const poll = async () => {
+      if (!rid || rid === 'undefined') return;
       try {
         const res  = await api(`/room/${rid}`);
         const data = await res.json();
@@ -427,9 +451,10 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
     pollTimer.current = window.setInterval(poll, 2000);
   };
 
-  const startHb = (rid: string) => {
+  const startHb = (_rid: string) => {
     hbTimer.current = window.setInterval(() => {
-      api(`/room/${rid}/heartbeat`, { method: 'POST' }).catch(() => {});
+      if (!roomId || roomId === 'undefined') return;
+      api(`/room/${roomId}/heartbeat`, { method: 'POST' }).catch(() => {});
     }, 5000);
   };
 
@@ -584,6 +609,23 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
   const runAiStudio = async (item: AiStudioItem) => {
     setAiStudioOpen(item); setAiStudioResult(null);
+    if (item === 'transcript') {
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) { setAiStudioResult('Speech recognition not supported in this browser.'); setAiStudioOpen('transcript'); return; }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop(); recognitionRef.current = null;
+        setAiStudioResult('Transcription stopped.'); return;
+      }
+      const r = new SR();
+      r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+      r.onresult = (e: any) => {
+        const text = Array.from(e.results as any[]).map((res: any) => res[0].transcript).join(' ');
+        setAiStudioResult(text); setAiStudioOpen('transcript');
+      };
+      r.onerror = () => setAiStudioResult('Transcription error — check mic permissions.');
+      r.start(); recognitionRef.current = r; setAiStudioOpen('transcript');
+      return;
+    }
     const transcript = messages.map(m => `${m.display_name}: ${m.content}`).join('\n');
     const prompts: Record<AiStudioItem, string> = {
       summary:    `Summarize this meeting in 3-5 bullet points:\n\n${transcript}`,
@@ -754,9 +796,6 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
               </div>
             )}
             {error && <span className="tb-error">{error}</span>}
-            <button className="tb-leave" onClick={() => endCall()}>
-              <PhoneOff size={14} /> Leave
-            </button>
           </div>
         </div>
 
@@ -789,6 +828,12 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
                 ))}
               </div>
             )}
+            {screenOn && (
+              <div className="pip-camera-wrap" id="pip-camera">
+                <video ref={pipVideoRef} autoPlay muted playsInline className="pip-camera-video" />
+                <div className="pip-camera-label">You</div>
+              </div>
+            )}
           </div>
 
           {showDraw && (
@@ -798,115 +843,97 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
           )}
 
           {/* ── RIGHT PANEL ── */}
-          <div className="meet-right">
-            <div className="right-tabs">
-              {([
-                { id: 'chat', label: 'Chat' },
-                { id: 'dm',   label: 'Messages' },
-                { id: 'ai',   label: 'AI Assistant' },
-              ] as { id: RightTab; label: string }[]).map(tab => (
-                <button key={tab.id}
-                  className={`right-tab ${rightTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setRightTab(tab.id)}>
-                  {tab.label}
-                  {tab.id === 'chat' && unread > 0 && <span className="right-unread">{unread}</span>}
-                </button>
-              ))}
-            </div>
-
-            {/* Live Chat */}
-            {rightTab === 'chat' && (
-              <div className="right-panel-body">
-                <div className="chat-msgs">
-                  {messages.length === 0 && <div className="chat-empty">No messages yet.</div>}
-                  {messages.map(m => (
-                    <div key={m.id} className="chat-msg">
-                      <div className="chat-msg-meta">
-                        <div className="chat-msg-avatar">{m.display_name.slice(0, 2).toUpperCase()}</div>
-                        <span className="chat-msg-name">{m.display_name}</span>
-                        <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
-                      </div>
-                      <div className="chat-msg-body">{m.content}</div>
-                    </div>
-                  ))}
-                  <div ref={chatEnd} />
-                </div>
-                <div className="chat-input-row">
-                  <input className="chat-input" value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    placeholder="Send a message…"
-                    onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()} />
-                  <button className="chat-send" onClick={sendChat} disabled={!chatInput.trim()}>
-                    <Send size={14} />
+          {rightPanelOpen && (
+            <div className="meet-right">
+              <div className="right-tabs">
+                {([
+                  { id: 'chat', label: 'Chat' },
+                  { id: 'ai',   label: 'AI Assistant' },
+                ] as { id: RightTab; label: string }[]).map(tab => (
+                  <button key={tab.id}
+                    className={`right-tab ${rightTab === tab.id ? 'active' : ''}`}
+                    onClick={() => setRightTab(tab.id)}>
+                    {tab.label}
+                    {tab.id === 'chat' && unread > 0 && <span className="right-unread">{unread}</span>}
                   </button>
-                </div>
+                ))}
               </div>
-            )}
 
-            {/* DM placeholder */}
-            {rightTab === 'dm' && (
-              <div className="right-panel-body">
-                <div className="chat-msgs">
-                  {allTiles.filter(p => p.user_id !== 'self').length === 0
-                    ? <div className="chat-empty">No other participants yet.</div>
-                    : allTiles.filter(p => p.user_id !== 'self').map(p => (
-                      <div key={p.user_id} className="dm-person-row">
-                        <div className="person-avatar sm">{p.display_name.slice(0, 2).toUpperCase()}</div>
-                        <span className="person-name">{p.display_name}</span>
-                        <button className="dm-start-btn"><MessageSquare size={12} /></button>
-                      </div>
-                    ))
-                  }
-                </div>
-              </div>
-            )}
-
-            {/* AI Assistant */}
-            {rightTab === 'ai' && (
-              <div className="right-panel-body">
-                <div className="chat-msgs">
-                  {aiMessages.length === 0 && (
-                    <div className="ai-welcome">
-                      <Bot size={28} className="ai-welcome-icon" />
-                      <p>Agent Sam is ready. Ask anything about the meeting, request a summary, or get help with a decision.</p>
-                    </div>
-                  )}
-                  {aiMessages.map(m => (
-                    <div key={m.id} className={`chat-msg ${m.isAi ? 'chat-msg-ai' : ''}`}>
-                      <div className="chat-msg-meta">
-                        <div className={`chat-msg-avatar ${m.isAi ? 'ai-avatar' : ''}`}>
-                          {m.isAi ? <Bot size={12} /> : m.display_name.slice(0, 2).toUpperCase()}
+              {/* Live Chat */}
+              {rightTab === 'chat' && (
+                <div className="right-panel-body">
+                  <div className="chat-msgs">
+                    {messages.length === 0 && <div className="chat-empty">No messages yet.</div>}
+                    {messages.map(m => (
+                      <div key={m.id} className="chat-msg">
+                        <div className="chat-msg-meta">
+                          <div className="chat-msg-avatar">{m.display_name.slice(0, 2).toUpperCase()}</div>
+                          <span className="chat-msg-name">{m.display_name}</span>
+                          <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
                         </div>
-                        <span className="chat-msg-name">{m.display_name}</span>
-                        <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
+                        <div className="chat-msg-body">{m.content}</div>
                       </div>
-                      <div className="chat-msg-body">{m.content}</div>
-                    </div>
-                  ))}
-                  {aiLoading && (
-                    <div className="ai-typing"><Loader2 size={12} className="spin" /> Agent Sam is thinking…</div>
-                  )}
-                  <div ref={aiEnd} />
+                    ))}
+                    <div ref={chatEnd} />
+                  </div>
+                  <div className="chat-input-row">
+                    <input className="chat-input" value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      placeholder="Send a message…"
+                      onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()} />
+                    <button type="button" className="chat-send" onClick={sendChat} disabled={!chatInput.trim()}>
+                      <Send size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div className="chat-input-row">
-                  <input className="chat-input" value={aiInput}
-                    onChange={e => setAiInput(e.target.value)}
-                    placeholder="Ask Agent Sam…"
-                    onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendAiMessage()} />
-                  <button className="chat-send" onClick={sendAiMessage} disabled={!aiInput.trim() || aiLoading}>
-                    <Send size={14} />
-                  </button>
+              )}
+
+              {/* AI Assistant */}
+              {rightTab === 'ai' && (
+                <div className="right-panel-body">
+                  <div className="chat-msgs">
+                    {aiMessages.length === 0 && (
+                      <div className="ai-welcome">
+                        <Bot size={28} className="ai-welcome-icon" />
+                        <p>Agent Sam is ready. Ask anything about the meeting, request a summary, or get help with a decision.</p>
+                      </div>
+                    )}
+                    {aiMessages.map(m => (
+                      <div key={m.id} className={`chat-msg ${m.isAi ? 'chat-msg-ai' : ''}`}>
+                        <div className="chat-msg-meta">
+                          <div className={`chat-msg-avatar ${m.isAi ? 'ai-avatar' : ''}`}>
+                            {m.isAi ? <Bot size={12} /> : m.display_name.slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="chat-msg-name">{m.display_name}</span>
+                          <span className="chat-msg-time">{fmtTime(m.created_at)}</span>
+                        </div>
+                        <div className="chat-msg-body">{m.content}</div>
+                      </div>
+                    ))}
+                    {aiLoading && (
+                      <div className="ai-typing"><Loader2 size={12} className="spin" /> Agent Sam is thinking…</div>
+                    )}
+                    <div ref={aiEnd} />
+                  </div>
+                  <div className="chat-input-row">
+                    <input className="chat-input" value={aiInput}
+                      onChange={e => setAiInput(e.target.value)}
+                      placeholder="Ask Agent Sam…"
+                      onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendAiMessage()} />
+                    <button className="chat-send" onClick={sendAiMessage} disabled={!aiInput.trim() || aiLoading}>
+                      <Send size={14} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
         </div>{/* end body */}
 
         {/* ── BOTTOM TOOLBAR ── */}
         <div className="meet-toolbar">
-          <div />
-          <div className="toolbar-center">
+          <div className="toolbar-left">
             <button className={`ctrl ${!audioOn ? 'ctrl-off' : ''}`} onClick={toggleAudio}>
               {audioOn ? <Mic size={18} /> : <MicOff size={18} />}
               <span>{audioOn ? 'Mute' : 'Unmute'}</span>
@@ -919,21 +946,19 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
               {screenOn ? <ScreenShareOff size={18} /> : <MonitorUp size={18} />}
               <span>Screen</span>
             </button>
-            <button className="ctrl" onClick={() => {
-              fetch('/api/agent/playwright', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ url: window.location.href, job_type: 'screenshot', triggered_by: 'meet_toolbar' }),
-              }).catch(() => {});
-            }}>
-              <Aperture size={18} /><span>Screenshot</span>
+          </div>
+          <div className="toolbar-center">
+            <button
+              className={`ctrl ${rightPanelOpen ? 'ctrl-active' : ''}`}
+              onClick={() => { setRightPanelOpen(p => !p); setUnread(0); }}
+            >
+              <MessageSquare size={18} />
+              <span>Chat</span>
+              {unread > 0 && <span className="ctrl-unread">{unread}</span>}
             </button>
-            <button className="ctrl" onClick={() => {}}>
-              <Smile size={18} /><span>Reactions</span>
-            </button>
-            <button className="ctrl" onClick={() => setShowPoll(p => !p)}>
-              <MoreHorizontal size={18} /><span>More</span>
+            <button className={`ctrl ${showDraw ? 'ctrl-active' : ''}`} onClick={() => setShowDraw(v => !v)}>
+              <Layout size={18} />
+              <span>Draw</span>
             </button>
           </div>
           <div className="toolbar-right">
@@ -1143,7 +1168,19 @@ function MeetCSS() {
 
       /* ─ Video center ─ */
       .meet-center {
+        position: relative;
         flex: 1; display: flex; background: var(--bg-app, #07100f); overflow: hidden;
+      }
+      .pip-camera-wrap {
+        position: absolute; bottom: 16px; right: 16px;
+        width: 200px; height: 130px; border-radius: 10px; overflow: hidden;
+        border: 2px solid var(--primary, #2dd4bf); z-index: 30;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5); cursor: grab;
+      }
+      .pip-camera-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .pip-camera-label {
+        position: absolute; bottom: 5px; left: 8px;
+        font-size: 10px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
       }
       .video-grid {
         display: grid; width: 100%; height: 100%; gap: 4px; padding: 8px;
@@ -1295,14 +1332,22 @@ function MeetCSS() {
         background: var(--bg-panel, #0b1918);
         border-top: 1px solid var(--border, #1a2e2c);
       }
+      .toolbar-left { display: flex; align-items: center; gap: 6px; justify-content: flex-start; }
       .toolbar-center { display: flex; align-items: center; gap: 6px; justify-content: center; }
       .toolbar-right  { display: flex; align-items: center; justify-content: flex-end; }
       .ctrl {
+        position: relative;
         display: flex; flex-direction: column; align-items: center; gap: 3px;
         background: var(--bg-surface, #0d1e1c); border: 1px solid var(--border, #1a2e2c);
         border-radius: 10px; padding: 9px 16px; color: var(--text-secondary, #6b9e99);
         cursor: pointer; font-size: 11px; font-family: inherit; min-width: 66px;
         transition: all 0.15s;
+      }
+      .ctrl-unread {
+        position: absolute; top: 6px; right: 8px;
+        background: var(--danger, #f87171); color: #fff;
+        font-size: 9px; font-weight: 700; border-radius: 8px;
+        min-width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; padding: 0 3px;
       }
       .ctrl:hover { background: color-mix(in srgb, var(--primary, #2dd4bf) 8%, var(--bg-surface, #0d1e1c)); color: var(--primary, #2dd4bf); border-color: color-mix(in srgb, var(--primary, #2dd4bf) 30%, transparent); }
       .ctrl-off { background: color-mix(in srgb, var(--danger, #f87171) 8%, var(--bg-surface, #0d1e1c)); border-color: color-mix(in srgb, var(--danger, #f87171) 25%, transparent); color: var(--danger, #f87171); }

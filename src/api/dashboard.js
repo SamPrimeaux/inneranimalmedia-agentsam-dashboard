@@ -1,5 +1,5 @@
 import { jsonResponse } from '../core/responses.js';
-import { getAuthUser } from '../core/auth.js';
+import { getAuthUser, authUserIsSuperadmin } from '../core/auth.js';
 import { getIntegrationToken } from '../integrations/tokens.js';
 import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
 import { runTerminalCommand } from '../core/terminal.js';
@@ -101,21 +101,33 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false });
+        }
 
         const origin = new URL(request.url).origin;
         const wsOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
-        return jsonResponse({ url: `${wsOrigin}/api/agent/terminal/ws` });
+        return jsonResponse({ terminal_enabled: true, url: `${wsOrigin}/api/agent/terminal/ws` });
     }
 
     // ── /api/agent/terminal/config-status ────────────────────────────────────
     if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({
+                terminal_enabled: false,
+                terminal_configured: false,
+                control_plane_available: false,
+                direct_wss_available: false,
+            });
+        }
+
         const vpcPty = !!env.PTY_SERVICE;
         const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
         const secret = (env.TERMINAL_SECRET || '').trim();
         return jsonResponse({
+            terminal_enabled: true,
             terminal_configured: !!(vpcPty || (httpsUrl && secret)),
             control_plane_available: !!env.AGENT_SESSION,
             direct_wss_available: false,
@@ -127,6 +139,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/ws' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return new Response('Terminal disabled for this account', { status: 403 });
+        }
         if (!isWebSocketUpgrade) {
             return new Response('Worker expected Upgrade: websocket', { status: 426 });
         }
@@ -151,6 +166,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/status' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
         if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
         const executionModeRaw = (url.searchParams.get('execution_mode') || 'pty').trim().toLowerCase();
         const executionMode = ['pty', 'ssh', 'mcp'].includes(executionModeRaw) ? executionModeRaw : 'pty';
@@ -171,6 +189,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/exec' && method === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
         if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION binding missing' }, 503);
         const body = await request.json().catch(() => ({}));
         const executionModeRaw = String(body?.execution_mode || url.searchParams.get('execution_mode') || 'pty')
@@ -202,6 +223,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
         try {
             const body = await request.json().catch(() => ({}));
             const command = typeof body?.command === 'string' ? body.command.trim() : '';
@@ -233,6 +257,9 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/agent/terminal/complete' && method === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
         const body = await request.json().catch(() => ({}));
         const executionId = body?.execution_id;
         const status = body?.status;
@@ -251,7 +278,10 @@ export async function handleDashboardApi(request, url, env, ctx) {
     if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        
+        if (!authUserIsSuperadmin(authUser)) {
+            return jsonResponse({ terminal_enabled: false, resumable: false });
+        }
+
         if (!env.DB) return jsonResponse({ resumable: false });
         try {
             const session = await env.DB.prepare(

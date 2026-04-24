@@ -17,7 +17,8 @@ import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
          isIngestSecretAuthorized,
-         tenantIdFromEnv, fetchAuthUserTenantId }        from '../core/auth.js';
+         tenantIdFromEnv, fetchAuthUserTenantId,
+         authUserIsSuperadmin }        from '../core/auth.js';
 import { formatRelativeCheckedAgo, toUnixSeconds }     from './workspaces.js';
 import { notifySam }                                    from '../core/notifications.js';
 import { getAgentMetadata, logSkillInvocation,
@@ -1360,7 +1361,13 @@ export async function handleAgentApi(request, url, env, ctx) {
   if (path === '/api/agent/terminal/config-status' && method === 'GET') {
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB)   return jsonResponse({ terminal_configured: false });
+    if (!authUserIsSuperadmin(authUser)) {
+      return jsonResponse({
+        terminal_enabled: false,
+        terminal_configured: false,
+      });
+    }
+    if (!env.DB)   return jsonResponse({ terminal_enabled: true, terminal_configured: false });
     try {
       const row = await env.DB.prepare(
         `SELECT id, tunnel_url, shell, cwd, cols, rows
@@ -1369,8 +1376,9 @@ export async function handleAgentApi(request, url, env, ctx) {
            AND tunnel_url IS NOT NULL AND tunnel_url != ''
          ORDER BY updated_at DESC LIMIT 1`
       ).bind(String(authUser.id)).first().catch(() => null);
-      if (!row) return jsonResponse({ terminal_configured: false });
+      if (!row) return jsonResponse({ terminal_enabled: true, terminal_configured: false });
       return jsonResponse({
+        terminal_enabled: true,
         terminal_configured: true,
         tunnel_url: row.tunnel_url,
         shell:      row.shell || 'bash',
@@ -1379,7 +1387,7 @@ export async function handleAgentApi(request, url, env, ctx) {
         rows:       row.rows  || 50,
       });
     } catch (e) {
-      return jsonResponse({ terminal_configured: false, error: e.message });
+      return jsonResponse({ terminal_enabled: true, terminal_configured: false, error: e.message });
     }
   }
 

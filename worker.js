@@ -10,6 +10,7 @@ import { DurableObject } from "cloudflare:workers";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
 import { handleMeetApi } from "./src/api/meet.js";
+import { authUserIsSuperadmin } from "./src/core/auth.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -15702,6 +15703,9 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      if (!authUserIsSuperadmin(authUser)) {
+        return new Response(JSON.stringify({ terminal_enabled: false, resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       const userId = authUser.id;
       let session;
       try {
@@ -15712,15 +15716,6 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
            ORDER BY updated_at DESC
            LIMIT 1`
         ).bind(userId).first();
-        if (!session) {
-          session = await env.DB.prepare(
-            `SELECT id, tunnel_url, shell, cwd, cols, rows
-             FROM terminal_sessions
-             WHERE status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
-             ORDER BY updated_at DESC
-             LIMIT 1`
-          ).first();
-        }
       } catch (e) {
         console.error('[terminal/session/resume]', e.message);
         return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -15742,37 +15737,31 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       const session = await getSession(env, request);
       if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
       const authUser = await getAuthUser(request, env);
-      const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
-      const secret = (env.TERMINAL_SECRET || '').trim();
-      if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
-      let wssUrl = httpsUrl;
-      if (httpsUrl.startsWith('https://')) wssUrl = 'wss://' + httpsUrl.slice(8);
-      else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
-      else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
-      const sep = wssUrl.includes('?') ? '&' : '?';
-      let themeSlug = 'meaux-storm-gray';
-      if (authUser?.id && env.DB) {
-        try {
-          const row = await env.DB.prepare('SELECT theme FROM user_settings WHERE user_id = ? LIMIT 1').bind(authUser.id).first();
-          const t = row?.theme ? normalizeThemeSlug(row.theme) : null;
-          if (t) themeSlug = t;
-        } catch (_) { }
+      if (!authUser || !authUserIsSuperadmin(authUser)) {
+        return jsonResponse({ terminal_enabled: false });
       }
-      // Direct PTY connection — AGENT_SESSION DO proxy removed (DO has no terminal bridge)
-      const ptyToken = (env.PTY_AUTH_TOKEN || secret).trim();
-      const sep2 = wssUrl.includes('?') ? '&' : '?';
-      const finalUrl = `${wssUrl}${sep2}token=${encodeURIComponent(ptyToken)}&theme_slug=${encodeURIComponent(themeSlug)}`;
-      return jsonResponse({ url: finalUrl });
+      const origin = new URL(request.url).origin;
+      const wsOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
+      return jsonResponse({ terminal_enabled: true, url: `${wsOrigin}/api/agent/terminal/ws` });
     }
 
     if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
       const session = await getSession(env, request);
       if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const authUser = await getAuthUser(request, env);
+      if (!authUser || !authUserIsSuperadmin(authUser)) {
+        return jsonResponse({
+          terminal_enabled: false,
+          terminal_configured: false,
+          direct_wss_available: false,
+        });
+      }
       const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
       const secret = (env.TERMINAL_SECRET || '').trim();
       return jsonResponse({
+        terminal_enabled: true,
         terminal_configured: !!(httpsUrl && secret),
-        direct_wss_available: !!(httpsUrl && secret),
+        direct_wss_available: false,
       });
     }
 
@@ -15790,6 +15779,11 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
 
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
       try {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+          return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
         const body = await request.json().catch(() => ({}));
         const command = typeof body?.command === 'string' ? body.command.trim() : '';
         const session_id = body?.session_id ?? null;
@@ -26445,7 +26439,7 @@ async function getSession(env, request) {
   return await finalizeSessionShape(env, sessionId, row.user_id, row.expires_at, tenantResolved);
 }
 
-/** Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
+/** Returns { id: user_id, email?, tenant_id?, is_superadmin } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
 async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
@@ -26469,7 +26463,40 @@ async function getAuthUser(request, env) {
       .catch((e) => console.warn('[auth_sessions tenant patch]', e?.message ?? e));
     void writeIamSessionToKv(env, sid, session.user_id, tenantId, session.expires_at);
   }
-  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
+  let is_superadmin = 0;
+  if (env.DB && session.user_id != null) {
+    const uid = String(session.user_id).trim();
+    try {
+      if (uid.startsWith('usr_')) {
+        const row = await env.DB
+          .prepare(
+            `SELECT COALESCE(au.is_superadmin, 0) AS is_superadmin
+             FROM users u INNER JOIN auth_users au ON au.id = u.auth_id
+             WHERE u.id = ? LIMIT 1`,
+          )
+          .bind(uid)
+          .first();
+        if (row && (Number(row.is_superadmin) === 1 || row.is_superadmin === true)) is_superadmin = 1;
+      } else {
+        let row = await env.DB
+          .prepare(`SELECT COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users WHERE id = ? LIMIT 1`)
+          .bind(uid)
+          .first();
+        if (!row && sessionUserId && String(sessionUserId).includes('@')) {
+          row = await env.DB
+            .prepare(
+              `SELECT COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`,
+            )
+            .bind(sessionUserId)
+            .first();
+        }
+        if (row && (Number(row.is_superadmin) === 1 || row.is_superadmin === true)) is_superadmin = 1;
+      }
+    } catch (e) {
+      console.warn('[getAuthUser is_superadmin]', e?.message ?? e);
+    }
+  }
+  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId, is_superadmin };
 }
 
 /** IDE workspace API: conversation must belong to this user (agent_conversations.user_id) or tenant (agent_sessions). */

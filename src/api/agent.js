@@ -434,6 +434,15 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     sessionId, tenantId, userId,
   } = params;
 
+  const resolvePlatform = async (env, modelKey) => {
+    try {
+      const row = await env.DB?.prepare(`SELECT api_platform FROM ai_models WHERE model_key = ? LIMIT 1`).bind(modelKey).first();
+      return row?.api_platform || null;
+    } catch {
+      return null;
+    }
+  };
+
   const conversationMessages = [...messages];
   let toolCallsUsed = 0;
   let totalUsage    = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
@@ -443,15 +452,27 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     turnCount++;
     let stream;
     try {
-      // Provider resolved from ai_models.api_platform — no hardcoding
-      stream = await dispatchStream(env, null, {
-        modelKey,
-        systemPrompt,
-        messages:        conversationMessages,
-        tools,
-        reasoningEffort: modeConfig?.gate_reasoning_effort || null,
-        temperature,
-      });
+      // Provider resolved from ai_models.api_platform — no hardcoding.
+      // But Workers AI streaming must be consumed as a ReadableStream (not async iterable, not a wrapped Response).
+      const platform = await resolvePlatform(env, modelKey);
+      if (platform === 'workers_ai') {
+        const waiMessages = [
+          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+          ...conversationMessages,
+        ];
+        stream = await env.AI.run(modelKey, { messages: waiMessages, stream: true });
+        const ctor = stream && stream.constructor ? stream.constructor.name : typeof stream;
+        console.warn('[agent] workers_ai stream type:', ctor, stream && typeof stream);
+      } else {
+        stream = await dispatchStream(env, null, {
+          modelKey,
+          systemPrompt,
+          messages:        conversationMessages,
+          tools,
+          reasoningEffort: modeConfig?.gate_reasoning_effort || null,
+          temperature,
+        });
+      }
     } catch (e) {
       emit('error', { message: 'Model call failed', detail: e.message });
       break;
@@ -461,42 +482,96 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     let stopReason = null, turnUsage = null;
     const assistantContent = [];
 
-    for await (const chunk of stream) {
-      if (chunk.type === 'content_block_start') {
-        if (chunk.content_block?.type === 'thinking') emit('thinking_start', {});
-        if (chunk.content_block?.type === 'tool_use') {
-          pendingToolCalls.push({ id: chunk.content_block.id, name: chunk.content_block.name, _args: '' });
-          assistantContent.push({ type: 'tool_use', id: chunk.content_block.id, name: chunk.content_block.name, input: {} });
+    const consumeSseText = async (readable) => {
+      const reader = readable.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const part of parts) {
+          const lines = part.split('\n').map(l => l.trim()).filter(Boolean);
+          const dataLines = lines.filter(l => l.startsWith('data:')).map(l => l.slice(5).trim());
+          if (!dataLines.length) continue;
+          const payload = dataLines.join('\n');
+          if (payload === '[DONE]') return;
+          try {
+            const json = JSON.parse(payload);
+            const text =
+              json?.choices?.[0]?.delta?.content ??
+              json?.choices?.[0]?.text ??
+              json?.response ??
+              json?.text ??
+              '';
+            if (text) {
+              const last = assistantContent.findLast(b => b.type === 'text');
+              if (last) last.text += text;
+              emit('text', { text });
+            }
+          } catch {
+            // ignore non-JSON SSE frames
+          }
         }
-        if (chunk.content_block?.type === 'text') assistantContent.push({ type: 'text', text: '' });
       }
-      if (chunk.type === 'content_block_delta') {
-        const delta = chunk.delta;
-        if (delta.type === 'text_delta') {
-          const last = assistantContent.findLast(b => b.type === 'text');
-          if (last) last.text += delta.text;
-          emit('text', { text: delta.text });
+    };
+
+    if (stream instanceof Response) {
+      if (!stream.ok) {
+        const detail = await stream.text().catch(() => '');
+        emit('error', { message: 'Model stream failed', detail: detail || `HTTP ${stream.status}` });
+        break;
+      }
+      assistantContent.push({ type: 'text', text: '' });
+      if (stream.body) await consumeSseText(stream.body);
+      stopReason = 'end_turn';
+    } else if (stream && typeof stream.getReader === 'function') {
+      // Workers AI can return a ReadableStream; consume it directly.
+      assistantContent.push({ type: 'text', text: '' });
+      await consumeSseText(stream);
+      stopReason = 'end_turn';
+    } else {
+      const ctor = stream && stream.constructor ? stream.constructor.name : typeof stream;
+      console.warn('[agent] stream not iterable/reader/Response:', ctor, Object.prototype.toString.call(stream));
+      for await (const chunk of stream) {
+        if (chunk.type === 'content_block_start') {
+          if (chunk.content_block?.type === 'thinking') emit('thinking_start', {});
+          if (chunk.content_block?.type === 'tool_use') {
+            pendingToolCalls.push({ id: chunk.content_block.id, name: chunk.content_block.name, _args: '' });
+            assistantContent.push({ type: 'tool_use', id: chunk.content_block.id, name: chunk.content_block.name, input: {} });
+          }
+          if (chunk.content_block?.type === 'text') assistantContent.push({ type: 'text', text: '' });
         }
-        if (delta.type === 'thinking_delta') emit('thinking', { text: delta.thinking });
-        if (delta.type === 'input_json_delta') {
+        if (chunk.type === 'content_block_delta') {
+          const delta = chunk.delta;
+          if (delta.type === 'text_delta') {
+            const last = assistantContent.findLast(b => b.type === 'text');
+            if (last) last.text += delta.text;
+            emit('text', { text: delta.text });
+          }
+          if (delta.type === 'thinking_delta') emit('thinking', { text: delta.thinking });
+          if (delta.type === 'input_json_delta') {
+            const call = pendingToolCalls.findLast(c => !c._done);
+            if (call) call._args += delta.partial_json;
+          }
+          if (delta.type === 'signature_delta') emit('signature', { signature: delta.signature });
+        }
+        if (chunk.type === 'content_block_stop') {
           const call = pendingToolCalls.findLast(c => !c._done);
-          if (call) call._args += delta.partial_json;
+          if (call) {
+            call._done = true;
+            try { call.input = JSON.parse(call._args || '{}'); } catch { call.input = {}; }
+            const blk = assistantContent.find(b => b.type === 'tool_use' && b.id === call.id);
+            if (blk) blk.input = call.input;
+          }
         }
-        if (delta.type === 'signature_delta') emit('signature', { signature: delta.signature });
-      }
-      if (chunk.type === 'content_block_stop') {
-        const call = pendingToolCalls.findLast(c => !c._done);
-        if (call) {
-          call._done = true;
-          try { call.input = JSON.parse(call._args || '{}'); } catch { call.input = {}; }
-          const blk = assistantContent.find(b => b.type === 'tool_use' && b.id === call.id);
-          if (blk) blk.input = call.input;
+        if (chunk.type === 'message_start' && chunk.message?.id) emit('id', { id: chunk.message.id });
+        if (chunk.type === 'message_delta') {
+          if (chunk.usage) turnUsage = chunk.usage;
+          if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
         }
-      }
-      if (chunk.type === 'message_start' && chunk.message?.id) emit('id', { id: chunk.message.id });
-      if (chunk.type === 'message_delta') {
-        if (chunk.usage) turnUsage = chunk.usage;
-        if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
       }
     }
 
@@ -678,6 +753,36 @@ export async function agentChatSseHandler(env, request, ctx, session) {
           break;
         } catch (e) {
           console.warn('[agent] model fallback:', { provider: row?.provider, model_key: row?.model_key, error: e?.message });
+        }
+      }
+
+      if (!succeeded) {
+        // Final fallback: always attempt the mode's preferred model_key (often OpenAI) even if tier chain was misconfigured.
+        const finalKey = String(modeConfig?.model_preference_key || modeConfig?.gate_model || '').trim();
+        const alreadyTried = new Set(tried);
+        if (finalKey && !alreadyTried.has(finalKey)) {
+          tried.push(finalKey);
+          try {
+            let textEmitted = 0;
+            const emitWrapped = (type, payload) => {
+              if (type === 'text' && payload?.text) textEmitted += String(payload.text).length;
+              emit(type, payload);
+            };
+            await withTimeout(
+              runAgentToolLoop(env, ctx, emitWrapped, {
+                messages: body.messages || [{ role: 'user', content: gate.rewritten_query || message }],
+                tools, systemPrompt, modelKey: finalKey,
+                temperature:  modeConfig.temperature || 0.7,
+                maxToolCalls: modeConfig.max_tool_calls || 20,
+                mode: requestedMode, modeConfig, userPolicy,
+                sessionId, tenantId, userId,
+              }),
+              15000
+            );
+            if (textEmitted > 0) succeeded = true;
+          } catch (e) {
+            console.warn('[agent] final fallback failed:', { model_key: finalKey, error: e?.message });
+          }
         }
       }
 

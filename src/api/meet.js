@@ -9,6 +9,12 @@ import { getAuthUser } from '../core/auth.js';
 const CALLS_BASE = 'https://rtc.live.cloudflare.com/v1';
 const TURN_BASE  = 'https://rtc.live.cloudflare.com/v1/turn/keys';
 
+async function getUserId(request, env) {
+  const user = await getAuthUser(request, env);
+  const userId = user?.id || user?.userId || user?.user_id;
+  return { user, userId };
+}
+
 async function callsRequest(env, path, method = 'GET', body = null) {
   const url  = `${CALLS_BASE}/apps/${env.CLOUDFLARE_CALLS_APP_ID}${path}`;
   const opts = {
@@ -51,54 +57,51 @@ export async function handleMeetApi(request, env, ctx) {
   const parts  = url.pathname.replace('/api/meet', '').split('/').filter(Boolean);
   const method = request.method;
 
-  const user = await getAuthUser(request, env);
-  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
-
   if (parts[0] === 'turn' && method === 'POST')
-    return handleTurn(request, env, user);
+    return handleTurn(request, env);
 
   if (parts[0] === 'room' && !parts[1] && method === 'POST')
-    return handleRoomJoin(request, env, user);
+    return handleRoomJoin(request, env);
 
   if (parts[0] === 'room' && parts[1] && !parts[2] && method === 'GET')
-    return handleRoomPoll(request, env, user, parts[1]);
+    return handleRoomPoll(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'session' && method === 'POST')
-    return handleSession(request, env, user, parts[1]);
+    return handleSession(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'publish' && method === 'POST')
-    return handlePublish(request, env, user, parts[1]);
+    return handlePublish(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'subscribe' && method === 'POST')
-    return handleSubscribe(request, env, user, parts[1]);
+    return handleSubscribe(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'renegotiate' && method === 'POST')
-    return handleRenegotiate(request, env, user, parts[1]);
+    return handleRenegotiate(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'heartbeat' && method === 'POST')
-    return handleHeartbeat(request, env, user, parts[1]);
+    return handleHeartbeat(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'chat' && method === 'POST')
-    return handleChat(request, env, user, parts[1]);
+    return handleChat(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'leave' && method === 'POST')
-    return handleLeave(request, env, user, parts[1]);
+    return handleLeave(request, env, parts[1]);
 
   if (parts[0] === 'room' && parts[2] === 'invite' && method === 'POST')
-    return handleInvite(request, env, user, parts[1]);
+    return handleInvite(request, env, parts[1]);
 
   if (parts[0] === 'recording' && parts[1] === 'save' && method === 'POST')
-    return handleRecordingSave(request, env, user);
+    return handleRecordingSave(request, env);
 
   if (parts[0] === 'schedule' && method === 'POST')
-    return handleSchedule(request, env, user);
+    return handleSchedule(request, env);
 
   return jsonResponse({ error: 'Not found' }, 404);
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async function handleTurn(request, env, user) {
+async function handleTurn(request, env) {
   try {
     const tokenParts = (env.REALTIME_TURN_API_TOKEN || '').split(':');
     const keyId      = tokenParts[0];
@@ -130,12 +133,13 @@ async function handleTurn(request, env, user) {
   }
 }
 
-async function handleRoomJoin(request, env, user) {
+async function handleRoomJoin(request, env) {
   const body   = await request.json().catch(() => ({}));
   const roomId = body.roomId || crypto.randomUUID();
   const name   = body.name   || `Meeting ${new Date().toLocaleTimeString()}`;
-  const userId = user?.userId || user?.id || user?.user_id || user?.email;
-  if (!userId || !roomId) return jsonResponse({ error: 'Missing required fields' }, 400);
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!roomId) return jsonResponse({ error: 'Missing required fields' }, 400);
 
   await env.DB.prepare(`
     INSERT INTO meet_rooms (id, name, created_by, created_at, status)
@@ -146,7 +150,9 @@ async function handleRoomJoin(request, env, user) {
   return jsonResponse({ roomId, name }, 200);
 }
 
-async function handleRoomPoll(request, env, user, roomId) {
+async function handleRoomPoll(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const db = env.DB;
   await pruneStale(db, roomId);
 
@@ -173,14 +179,16 @@ async function handleRoomPoll(request, env, user, roomId) {
   }, 200);
 }
 
-async function handleSession(request, env, user, roomId) {
+async function handleSession(request, env, roomId) {
+  const { user, userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json().catch(() => ({}));
   const data = await callsRequest(env, '/sessions/new', 'POST');
 
   await upsertParticipant(env.DB, {
     roomId,
-    userId:      user.userId,
-    displayName: body.displayName || user.email || user.userId,
+    userId,
+    displayName: body.displayName || user?.email || userId,
     sessionId:   data.sessionId,
     tracksJson:  '[]',
   });
@@ -188,7 +196,9 @@ async function handleSession(request, env, user, roomId) {
   return jsonResponse({ sessionId: data.sessionId }, 200);
 }
 
-async function handlePublish(request, env, user, roomId) {
+async function handlePublish(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json();
   const { sessionId, offer, tracks } = body;
   if (!sessionId || !offer || !tracks?.length) return jsonResponse({ error: 'sessionId, offer, tracks required' }, 400);
@@ -201,12 +211,14 @@ async function handlePublish(request, env, user, roomId) {
   await env.DB.prepare(`
     UPDATE meet_participants SET tracks_json = ?, last_seen_at = datetime('now')
     WHERE room_id = ? AND user_id = ?
-  `).bind(JSON.stringify(trackNames), roomId, user.userId).run();
+  `).bind(JSON.stringify(trackNames), roomId, userId).run();
 
   return jsonResponse({ answer: data.sessionDescription, trackList: data.tracks }, 200);
 }
 
-async function handleSubscribe(request, env, user, roomId) {
+async function handleSubscribe(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json();
   const { sessionId, remoteTracks } = body;
   if (!sessionId || !remoteTracks?.length) return jsonResponse({ error: 'sessionId and remoteTracks required' }, 400);
@@ -225,7 +237,9 @@ async function handleSubscribe(request, env, user, roomId) {
   return jsonResponse({ answer: data.sessionDescription, tracks: data.tracks }, 200);
 }
 
-async function handleRenegotiate(request, env, user, roomId) {
+async function handleRenegotiate(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json();
   const { sessionId, offer } = body;
   if (!sessionId || !offer) return jsonResponse({ error: 'sessionId and offer required' }, 400);
@@ -236,37 +250,43 @@ async function handleRenegotiate(request, env, user, roomId) {
   return jsonResponse({ answer: data.sessionDescription }, 200);
 }
 
-async function handleHeartbeat(request, env, user, roomId) {
+async function handleHeartbeat(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   await env.DB.prepare(`
     UPDATE meet_participants SET last_seen_at = datetime('now')
     WHERE room_id = ? AND user_id = ?
-  `).bind(roomId, user.userId).run();
+  `).bind(roomId, userId).run();
   return jsonResponse({ ok: true }, 200);
 }
 
-async function handleChat(request, env, user, roomId) {
+async function handleChat(request, env, roomId) {
+  const { user, userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body    = await request.json().catch(() => ({}));
   const content = (body.content || '').trim().slice(0, 2000);
   if (!content) return jsonResponse({ error: 'content required' }, 400);
 
   const participant = await env.DB.prepare(`
     SELECT display_name FROM meet_participants WHERE room_id = ? AND user_id = ?
-  `).bind(roomId, user.userId).first();
+  `).bind(roomId, userId).first();
 
-  const displayName = participant?.display_name || user.email || user.userId;
+  const displayName = participant?.display_name || user?.email || userId;
 
   await env.DB.prepare(`
     INSERT INTO meet_messages (id, room_id, user_id, display_name, content, created_at)
     VALUES (?, ?, ?, ?, ?, datetime('now'))
-  `).bind(crypto.randomUUID(), roomId, user.userId, displayName, content).run();
+  `).bind(crypto.randomUUID(), roomId, userId, displayName, content).run();
 
   return jsonResponse({ ok: true }, 200);
 }
 
-async function handleLeave(request, env, user, roomId) {
+async function handleLeave(request, env, roomId) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   await env.DB.prepare(`
     DELETE FROM meet_participants WHERE room_id = ? AND user_id = ?
-  `).bind(roomId, user.userId).run();
+  `).bind(roomId, userId).run();
 
   const { count } = await env.DB.prepare(`
     SELECT COUNT(*) as count FROM meet_participants WHERE room_id = ?
@@ -279,7 +299,9 @@ async function handleLeave(request, env, user, roomId) {
   return jsonResponse({ ok: true }, 200);
 }
 
-async function handleInvite(request, env, user, roomId) {
+async function handleInvite(request, env, roomId) {
+  const { user, userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body  = await request.json().catch(() => ({}));
   const email = (body.email || '').trim();
   const link  = (body.link  || '').trim();
@@ -303,7 +325,7 @@ async function handleInvite(request, env, user, roomId) {
         <div style="font-family:monospace;background:#07100f;color:#c9d8d6;padding:32px;border-radius:12px;max-width:480px">
           <div style="color:#2dd4bf;font-weight:700;font-size:16px;margin-bottom:8px">InnerAnimalMedia</div>
           <h2 style="color:#e2efed;margin:0 0 12px">You're invited to join a meeting</h2>
-          <p style="color:#6b9e99">${user.email || user.userId} has invited you to <strong style="color:#c9d8d6">${meetingName}</strong>.</p>
+          <p style="color:#6b9e99">${user?.email || userId} has invited you to <strong style="color:#c9d8d6">${meetingName}</strong>.</p>
           <a href="${link}" style="display:inline-block;background:#2dd4bf;color:#07100f;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px">Join Meeting</a>
           <p style="color:#4a7a75;font-size:11px;margin-top:16px">Or copy this link: ${link}</p>
         </div>
@@ -319,20 +341,24 @@ async function handleInvite(request, env, user, roomId) {
   return jsonResponse({ ok: true }, 200);
 }
 
-async function handleRecordingSave(request, env, user) {
+async function handleRecordingSave(request, env) {
   const form = await request.formData().catch(() => null);
   if (!form) return jsonResponse({ error: 'FormData required' }, 400);
   const file = form.get('recording');
   const roomId = form.get('roomId') || 'unknown';
   if (!file || typeof file === 'string') return jsonResponse({ error: 'recording file required' }, 400);
-  const r2Key = `meet/recordings/${user.userId}/${roomId}_${Date.now()}.webm`;
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const r2Key = `meet/recordings/${userId}/${roomId}_${Date.now()}.webm`;
   await env.DASHBOARD.put(r2Key, file.stream(), {
     httpMetadata: { contentType: 'video/webm' },
   });
   return jsonResponse({ ok: true, r2_key: r2Key }, 200);
 }
 
-async function handleSchedule(request, env, user) {
+async function handleSchedule(request, env) {
+  const { userId } = await getUserId(request, env);
+  if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json().catch(() => ({}));
   const title = (body.title || '').trim();
   const sAt = (body.scheduledAt || '').trim();
@@ -342,7 +368,7 @@ async function handleSchedule(request, env, user) {
   await env.DB.prepare(`
     INSERT INTO meet_scheduled (id, created_by, title, scheduled_at, invite_emails, status, created_at)
     VALUES (?, ?, ?, ?, ?, 'scheduled', datetime('now'))
-  `).bind(id, user.userId, title, sAt, JSON.stringify(emails)).run();
+  `).bind(id, userId, title, sAt, JSON.stringify(emails)).run();
   if (emails.length && env.RESEND_API_KEY) {
     const link = `https://inneranimalmedia.com/dashboard/meet`;
     for (const email of emails) {

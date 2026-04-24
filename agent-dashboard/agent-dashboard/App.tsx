@@ -806,9 +806,7 @@ const App: React.FC = () => {
     [],
   );
 
-  const fetchLiveStatus = useCallback(async () => {
-    const cred = { credentials: 'same-origin' as const };
-
+  const fetchHealth = useCallback(async () => {
     try {
       const hr = await fetch('/api/health');
       const hj = await hr.json().catch(() => ({}));
@@ -817,6 +815,110 @@ const App: React.FC = () => {
     } catch {
       setHealthOk(false);
     }
+  }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const nr = await fetch('/api/agent/notifications', cred);
+      const nj = await nr.json().catch(() => ({}));
+      if (nr.ok && Array.isArray(nj.notifications)) {
+        setAgentNotifications(nj.notifications as AgentNotificationRow[]);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchGitAndProblems = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const gitRes = await fetch('/api/agent/git/status', cred);
+      const gitData = await gitRes.json().catch(() => ({}));
+      if (gitRes.ok && gitData.branch) setGitBranch(String(gitData.branch));
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const probRes = await fetch('/api/agent/problems', cred);
+      const probData = await probRes.json().catch(() => ({}));
+      if (probRes.ok && probData && typeof probData === 'object') {
+        setSystemProblems([]);
+        const mcp = Array.isArray(probData.mcp_tool_errors) ? probData.mcp_tool_errors.length : 0;
+        const audits = Array.isArray(probData.audit_failures) ? probData.audit_failures : [];
+        const wx = Array.isArray(probData.worker_errors) ? probData.worker_errors.length : 0;
+        const warnAudits = audits.filter((a: { event_type?: string }) =>
+          String(a?.event_type || '').toLowerCase().includes('warn'),
+        );
+        const errAudits = audits.length - warnAudits.length;
+        setErrorCount(mcp + wx + errAudits);
+        setWarningCount(warnAudits.length);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchTunnelAndTerminal = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const tr = await fetch('/api/tunnel/status', cred);
+      const tj = await tr.json().catch(() => ({}));
+      if (tr.ok && typeof tj.healthy === 'boolean') {
+        setTunnelHealthy(tj.healthy);
+        const st = tj.status != null ? String(tj.status) : '';
+        const n = typeof tj.connections === 'number' ? tj.connections : 0;
+        setTunnelLabel(st ? `${st} · ${n} conn` : `${n} conn`);
+      } else if (tr.status === 401) {
+        setTunnelHealthy(null);
+        setTunnelLabel(null);
+      } else {
+        setTunnelHealthy(false);
+        const err = tj && typeof tj === 'object' && 'error' in tj ? String((tj as { error?: string }).error || '') : '';
+        setTunnelLabel(err ? err.slice(0, 72) : `tunnel ${tr.status}`);
+      }
+    } catch {
+      setTunnelHealthy(null);
+      setTunnelLabel(null);
+    }
+
+    try {
+      const ter = await fetch('/api/agent/terminal/config-status', cred);
+      const tej = await ter.json().catch(() => ({}));
+      if (ter.ok) setTerminalOk(!!tej.terminal_configured);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchDeploymentsAndTelemetry = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const dr = await fetch('/api/overview/deployments', cred);
+      const dj = await dr.json().catch(() => ({}));
+      if (dr.ok && Array.isArray(dj.deployments) && dj.deployments[0]) {
+        const d = dj.deployments[0] as {
+          worker_name?: string;
+          environment?: string;
+          status?: string;
+        };
+        const bits = [d.worker_name, d.environment, d.status].filter(Boolean).map(String);
+        setLastDeployLine(bits.join(' · ') || null);
+      } else {
+        setLastDeployLine(null);
+      }
+    } catch {
+      setLastDeployLine(null);
+    }
+
+    fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
+  }, []);
+
+  const fetchLiveStatus = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+
+    void fetchHealth();
 
     try {
       const gitRes = await fetch('/api/agent/git/status', cred);
@@ -903,13 +1005,31 @@ const App: React.FC = () => {
     }
 
     fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
-  }, []);
+  }, [fetchHealth]);
 
   useEffect(() => {
-    void fetchLiveStatus();
-    const interval = window.setInterval(() => void fetchLiveStatus(), 300000);
-    return () => clearInterval(interval);
-  }, [fetchLiveStatus]);
+    // Tiered polling intervals (ms):
+    // health=60s, notifications=30s, git/problems=60s, tunnel/terminal=120s, deployments/telemetry=120s.
+    void fetchHealth();
+    void fetchNotifications();
+    void fetchGitAndProblems();
+    void fetchTunnelAndTerminal();
+    void fetchDeploymentsAndTelemetry();
+
+    const h = window.setInterval(() => void fetchHealth(), 60_000);
+    const n = window.setInterval(() => void fetchNotifications(), 30_000);
+    const gp = window.setInterval(() => void fetchGitAndProblems(), 60_000);
+    const tt = window.setInterval(() => void fetchTunnelAndTerminal(), 120_000);
+    const dt = window.setInterval(() => void fetchDeploymentsAndTelemetry(), 120_000);
+
+    return () => {
+      clearInterval(h);
+      clearInterval(n);
+      clearInterval(gp);
+      clearInterval(tt);
+      clearInterval(dt);
+    };
+  }, [fetchHealth, fetchNotifications, fetchGitAndProblems, fetchTunnelAndTerminal, fetchDeploymentsAndTelemetry]);
 
   const markNotificationRead = useCallback(async (id: string) => {
     try {

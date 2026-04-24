@@ -303,8 +303,10 @@ export class AgentChatSqlV1 extends DurableObject {
     const executionMode = normalizeExecutionMode(url.searchParams.get("execution_mode"));
     const sshTargets = parseSshTargets(this.env);
     const mcpToken = String(this.env?.MCP_AUTH_TOKEN || "").trim();
-    const ptyConfigured = !!String(this.env?.TERMINAL_WS_URL || "").trim() &&
-      !!String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
+    const ptyConfigured =
+      !!this.env?.PTY_SERVICE ||
+      (!!String(this.env?.TERMINAL_WS_URL || "").trim() &&
+        !!String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim());
     return {
       ok: true,
       control_plane: "worker_do",
@@ -389,51 +391,63 @@ export class AgentChatSqlV1 extends DurableObject {
   async connectPty() {
     const token = String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
 
-    // VPC Service path (private — preferred)
+    // VPC Service path (private — `PTY_SERVICE` tunnels to localhost:3099; no worker-side auth headers)
     if (this.env?.PTY_SERVICE) {
-      const resp = await this.env.PTY_SERVICE.fetch(
-        new Request("http://localhost:3099/ws", {
-          headers: {
-            "Upgrade": "websocket",
-            "Connection": "Upgrade",
-            "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
-            "Sec-WebSocket-Version": "13",
-            ...(token ? { "X-PTY-Token": token } : {})
-          }
-        })
-      );
-      if (resp.status !== 101 || !resp.webSocket) {
-        throw new Error(`PTY VPC connect failed: ${resp.status}`);
+      try {
+        const resp = await this.env.PTY_SERVICE.fetch(
+          new Request("http://localhost:3099/terminal", {
+            headers: {
+              Upgrade: "websocket",
+              Connection: "Upgrade",
+              "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
+              "Sec-WebSocket-Version": "13",
+            },
+          }),
+        );
+        if (resp.status === 101 && resp.webSocket) {
+          const pty = resp.webSocket;
+          pty.accept();
+          this.ptyWs = pty;
+          this.broadcastState("connected");
+          pty.addEventListener("message", (evt) => {
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                ws.send(evt.data);
+              } catch (_) {}
+            }
+          });
+          pty.addEventListener("close", () => {
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                this.sendStateToWebSocket(ws, "disconnected");
+              } catch (_) {}
+            }
+            if (this.ptyWs === pty) this.ptyWs = null;
+          });
+          pty.addEventListener("error", () => {
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error");
+              } catch (_) {}
+            }
+            if (this.ptyWs === pty) this.ptyWs = null;
+          });
+          return;
+        }
+      } catch (_) {
+        /* fall through to public tunnel */
       }
-      const pty = resp.webSocket;
-      pty.accept();
-      this.ptyWs = pty;
-      this.broadcastState("connected");
-      pty.addEventListener("message", (evt) => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { ws.send(evt.data); } catch (_) {}
-        }
-      });
-      pty.addEventListener("close", () => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { this.sendStateToWebSocket(ws, "disconnected"); } catch (_) {}
-        }
-        if (this.ptyWs === pty) this.ptyWs = null;
-      });
-      pty.addEventListener("error", () => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error"); } catch (_) {}
-        }
-        if (this.ptyWs === pty) this.ptyWs = null;
-      });
-      return;
     }
 
     // Fallback: public tunnel (TERMINAL_WS_URL secret)
     // Per-workspace URL takes priority over global secret
     const workspaceUrl = this.workspaceSettings?.terminal_ws_url;
     const rawUrl = workspaceUrl || String(this.env?.TERMINAL_WS_URL || "").trim();
-    if (!rawUrl || !token) throw new Error("PTY backend is not configured — set PTY_SERVICE binding or TERMINAL_WS_URL + PTY_AUTH_TOKEN");
+    if (!rawUrl || !token) {
+      throw new Error(
+        "PTY backend is not configured — set PTY_SERVICE (vpc_services) or TERMINAL_WS_URL + PTY_AUTH_TOKEN",
+      );
+    }
     let wsUrl = normalizeWebSocketUrl(rawUrl);
     const sep = wsUrl.includes("?") ? "&" : "?";
     wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
@@ -472,6 +486,28 @@ export class AgentChatSqlV1 extends DurableObject {
   }
 
   async executePtyCommand(command) {
+    if (this.env?.PTY_SERVICE) {
+      try {
+        const res = await this.env.PTY_SERVICE.fetch(
+          new Request("http://localhost:3099/exec", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command }),
+          }),
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return { error: String(data?.error || `PTY command failed (${res.status})`) };
+        }
+        const stdout = typeof data?.stdout === "string" ? data.stdout : "";
+        const stderr = typeof data?.stderr === "string" ? data.stderr : "";
+        const output = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim() || "(no output)";
+        return { output, exit_code: data?.exit_code ?? 0 };
+      } catch (e) {
+        return { error: e?.message || "PTY VPC exec failed" };
+      }
+    }
+
     const execUrl = normalizeExecHttpUrl(this.env?.TERMINAL_WS_URL || "");
     if (!execUrl) throw new Error("Terminal /exec endpoint is not configured");
     const tokens = Array.from(new Set([

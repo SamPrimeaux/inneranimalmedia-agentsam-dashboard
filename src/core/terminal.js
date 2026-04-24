@@ -74,32 +74,27 @@ export async function runTerminalCommandViaHttpExec(env, cmd) {
   pushTok(env.TERMINAL_SECRET);
   if (!tokens.length) return { ok: false };
 
-  // Prefer private VPC connector when present.
+  // Prefer private VPC connector when present (tunnel handles auth; no worker-side PTY headers).
   if (env?.PTY_SERVICE) {
     try {
-      for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        const res = await env.PTY_SERVICE.fetch(new Request('http://localhost:3099/exec', {
+      const res = await env.PTY_SERVICE.fetch(
+        new Request('http://localhost:3099/exec', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ' + token,
-            'X-PTY-Token': token,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: cmd }),
-        }));
-        if (res.status === 401 && i < tokens.length - 1) continue;
-        if (!res.ok) return { ok: false };
+        }),
+      );
+      if (res.ok) {
         const data = await res.json().catch(() => null);
-        if (!data || typeof data !== 'object') return { ok: false };
-        const stdout = typeof data.stdout === 'string' ? data.stdout : '';
-        const stderr = typeof data.stderr === 'string' ? data.stderr : '';
-        const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
-        return { ok: true, text, exitCode: data.exit_code ?? 0 };
+        if (data && typeof data === 'object') {
+          const stdout = typeof data.stdout === 'string' ? data.stdout : '';
+          const stderr = typeof data.stderr === 'string' ? data.stderr : '';
+          const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
+          return { ok: true, text, exitCode: data.exit_code ?? 0 };
+        }
       }
-      return { ok: false };
     } catch (_) {
-      // Fall through to TERMINAL_WS_URL-based HTTP /exec fallback.
+      /* fall through to TERMINAL_WS_URL-based HTTP /exec fallback */
     }
   }
 

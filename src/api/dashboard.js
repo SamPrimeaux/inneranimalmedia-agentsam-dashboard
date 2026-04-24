@@ -96,39 +96,6 @@ export async function handleDashboardApi(request, url, env, ctx) {
         }
     }
 
-    if (pathLower === '/api/agent/terminal/ws') {
-        try {
-            const authUser = await getAuthUser(request, env);
-            if (!authUser) return new Response('Unauthorized', { status: 401 });
-
-            const upgradeHeader = request.headers.get('Upgrade');
-            if (upgradeHeader !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
-
-            const token = encodeURIComponent(env.PTY_AUTH_TOKEN || '');
-            const upstream = await env.PTY_SERVICE.fetch(new Request(`http://localhost:3099/?token=${token}`, request));
-
-            if (upstream.status !== 101) {
-                return new Response('PTY upstream failed', { status: 502 });
-            }
-
-            const upstreamWs = upstream.webSocket;
-            upstreamWs.accept();
-
-            const { 0: client, 1: server } = new WebSocketPair();
-            server.accept();
-
-            server.addEventListener('message', e => upstreamWs.send(e.data));
-            server.addEventListener('close', () => upstreamWs.close());
-            upstreamWs.addEventListener('message', e => server.send(e.data));
-            upstreamWs.addEventListener('close', () => server.close());
-
-            return new Response(null, { status: 101, webSocket: client });
-        } catch (e) {
-            console.error('[PTY_WS_ERROR]', e?.message, e?.stack);
-            return new Response('PTY error: ' + (e?.message || 'unknown'), { status: 502 });
-        }
-    }
-
     // DEPRECATED PATH: kept for compatibility. ACTIVE PATH is /api/agent/terminal/ws.
     // ── /api/agent/terminal/socket-url ───────────────────────────────────────
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
@@ -145,10 +112,11 @@ export async function handleDashboardApi(request, url, env, ctx) {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         
+        const vpcPty = !!env.PTY_SERVICE;
         const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
         const secret = (env.TERMINAL_SECRET || '').trim();
         return jsonResponse({
-            terminal_configured: !!(httpsUrl && secret),
+            terminal_configured: !!(vpcPty || (httpsUrl && secret)),
             control_plane_available: !!env.AGENT_SESSION,
             direct_wss_available: false,
         });

@@ -76,6 +76,13 @@
       "id": "08183bb9d2914e87ac8395d7e4ecff60"
     }
   ],
+  "vpc_services": [
+    {
+      "binding": "PTY_SERVICE",
+      "service_id": "019db639-7c70-7071-8ef3-32ec0392a9ff",
+      "remote": true
+    }
+  ],
   "vectorize": [
     {
       "binding": "VECTORIZE",

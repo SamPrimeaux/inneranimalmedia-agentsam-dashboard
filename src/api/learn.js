@@ -4,7 +4,48 @@
  * All routes are auth-gated. All queries are scoped to authUser.id.
  * Zero cross-tenant data exposure.
  */
-import { getAuthUser, jsonResponse } from '../core/auth.js';
+import {
+  getAuthUser,
+  jsonResponse,
+  authUserIsSuperadmin,
+  fetchAuthUserTenantId,
+} from '../core/auth.js';
+
+/**
+ * User ids to match LMS enrollments / progress. Superadmins may have rows keyed by `auth_users.id`
+ * (e.g. `au_*`) while the session uses `users.id` (`usr_*`) — include tenant superadmin auth ids.
+ */
+async function learnEnrollmentUserIds(env, authUser) {
+  const ids = new Set();
+  const primary = String(authUser?.id || '').trim();
+  if (primary) ids.add(primary);
+  let tenantId =
+    authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+      ? String(authUser.tenant_id).trim()
+      : null;
+  if (authUserIsSuperadmin(authUser) && !tenantId && env?.DB) {
+    tenantId = (await fetchAuthUserTenantId(env, primary)) || null;
+    if (!tenantId && authUser.email) {
+      tenantId = (await fetchAuthUserTenantId(env, authUser.email)) || null;
+    }
+  }
+  if (authUserIsSuperadmin(authUser) && tenantId && env.DB) {
+    try {
+      const { results } = await env.DB
+        .prepare(
+          `SELECT id FROM auth_users WHERE tenant_id = ? AND COALESCE(is_superadmin, 0) = 1`,
+        )
+        .bind(tenantId)
+        .all();
+      for (const r of results || []) {
+        if (r?.id) ids.add(String(r.id).trim());
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return [...ids];
+}
 
 export async function handleLearnApi(request, url, env) {
   const authUser = await getAuthUser(request, env);
@@ -29,7 +70,21 @@ export async function handleLearnApi(request, url, env) {
 // ---------------------------------------------------------------------------
 async function handleLearnDashboard(_request, env, authUser) {
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 500);
-  const uid = authUser.id;
+  const uidScope = await learnEnrollmentUserIds(env, authUser);
+  if (!uidScope.length) {
+    return jsonResponse({
+      ok: true,
+      enrollments: [],
+      courses: [],
+      modules: [],
+      lessons: [],
+      progress: [],
+      assignments: [],
+      submissions: [],
+      grades: [],
+    });
+  }
+  const uidPh = uidScope.map(() => '?').join(',');
 
   // 1. Enrolled courses
   const enrollmentRows = await env.DB.prepare(`
@@ -50,9 +105,9 @@ async function handleLearnDashboard(_request, env, authUser) {
       c.metadata      AS course_meta
     FROM enrollments e
     JOIN courses c ON e.course_id = c.id
-    WHERE e.user_id = ? AND e.status = 'active'
+    WHERE e.user_id IN (${uidPh}) AND e.status = 'active'
     ORDER BY e.created_at ASC
-  `).bind(uid).all();
+  `).bind(...uidScope).all();
 
   const enrollments = enrollmentRows.results ?? [];
   if (enrollments.length === 0) {
@@ -97,8 +152,8 @@ async function handleLearnDashboard(_request, env, authUser) {
         SELECT lesson_id, module_id, course_id, status,
                completed_at, time_spent_minutes, token_spend
         FROM course_progress
-        WHERE user_id = ? AND course_id IN (${ph})
-      `).bind(uid, ...courseIds).all(),
+        WHERE user_id IN (${uidPh}) AND course_id IN (${ph})
+      `).bind(...uidScope, ...courseIds).all(),
 
       env.DB.prepare(`
         SELECT id, course_id, module_id, lesson_id, title, description,
@@ -111,16 +166,16 @@ async function handleLearnDashboard(_request, env, authUser) {
         SELECT id, assignment_id, course_id, status, evidence,
                submitted_at, time_spent_minutes, token_spend
         FROM course_submissions
-        WHERE user_id = ? AND course_id IN (${ph})
-      `).bind(uid, ...courseIds).all(),
+        WHERE user_id IN (${uidPh}) AND course_id IN (${ph})
+      `).bind(...uidScope, ...courseIds).all(),
 
       env.DB.prepare(`
         SELECT g.assignment_id, g.score, g.max_score, g.rubric_scores,
                g.time_score, g.efficiency_score, g.feedback,
                g.graded_at, g.graded_by
         FROM course_grades g
-        WHERE g.user_id = ?
-      `).bind(uid).all(),
+        WHERE g.user_id IN (${uidPh})
+      `).bind(...uidScope).all(),
     ]);
 
   return jsonResponse({
@@ -141,7 +196,9 @@ async function handleLearnDashboard(_request, env, authUser) {
 // ---------------------------------------------------------------------------
 async function handleLearnProgress(request, env, authUser) {
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 500);
-  const uid = authUser.id;
+  const uidScope = await learnEnrollmentUserIds(env, authUser);
+  if (!uidScope.length) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uidPh = uidScope.map(() => '?').join(',');
 
   let body;
   try { body = await request.json(); }
@@ -161,9 +218,9 @@ async function handleLearnProgress(request, env, authUser) {
   // Verify the user owns a progress row for this lesson (security check)
   const existing = await env.DB.prepare(`
     SELECT id FROM course_progress
-    WHERE user_id = ? AND lesson_id = ? AND course_id = ?
+    WHERE user_id IN (${uidPh}) AND lesson_id = ? AND course_id = ?
     LIMIT 1
-  `).bind(uid, lesson_id, course_id).first();
+  `).bind(...uidScope, lesson_id, course_id).first();
 
   if (!existing)
     return jsonResponse({ error: 'Progress row not found' }, 404);
@@ -176,19 +233,19 @@ async function handleLearnProgress(request, env, authUser) {
       token_spend        = token_spend + ?,
       completed_at       = CASE WHEN ? = 'completed' THEN unixepoch() ELSE completed_at END,
       updated_at         = unixepoch()
-    WHERE user_id = ? AND lesson_id = ? AND course_id = ?
-  `).bind(status, timeSpent, tokenSpend, status, uid, lesson_id, course_id).run();
+    WHERE user_id IN (${uidPh}) AND lesson_id = ? AND course_id = ?
+  `).bind(status, timeSpent, tokenSpend, status, ...uidScope, lesson_id, course_id).run();
 
   // Recalculate enrollment progress_percent
   const [completedRow, totalRow] = await Promise.all([
     env.DB.prepare(`
       SELECT COUNT(*) AS n FROM course_progress
-      WHERE user_id = ? AND course_id = ? AND status = 'completed'
-    `).bind(uid, course_id).first(),
+      WHERE user_id IN (${uidPh}) AND course_id = ? AND status = 'completed'
+    `).bind(...uidScope, course_id).first(),
     env.DB.prepare(`
       SELECT COUNT(*) AS n FROM course_progress
-      WHERE user_id = ? AND course_id = ?
-    `).bind(uid, course_id).first(),
+      WHERE user_id IN (${uidPh}) AND course_id = ?
+    `).bind(...uidScope, course_id).first(),
   ]);
 
   const completed = completedRow?.n ?? 0;
@@ -198,8 +255,8 @@ async function handleLearnProgress(request, env, authUser) {
   await env.DB.prepare(`
     UPDATE enrollments
     SET progress_percent = ?, updated_at = unixepoch()
-    WHERE user_id = ? AND course_id = ?
-  `).bind(newPercent, uid, course_id).run();
+    WHERE user_id IN (${uidPh}) AND course_id = ?
+  `).bind(newPercent, ...uidScope, course_id).run();
 
   return jsonResponse({ ok: true, progress_percent: newPercent });
 }
@@ -210,7 +267,9 @@ async function handleLearnProgress(request, env, authUser) {
 // ---------------------------------------------------------------------------
 async function handleLearnSubmit(request, env, authUser) {
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 500);
-  const uid = authUser.id;
+  const uidScope = await learnEnrollmentUserIds(env, authUser);
+  if (!uidScope.length) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const uidPh = uidScope.map(() => '?').join(',');
 
   let body;
   try { body = await request.json(); }
@@ -222,13 +281,15 @@ async function handleLearnSubmit(request, env, authUser) {
 
   // Verify user is enrolled in this course
   const enrollment = await env.DB.prepare(`
-    SELECT id FROM enrollments
-    WHERE user_id = ? AND course_id = ? AND status = 'active'
+    SELECT id, user_id FROM enrollments
+    WHERE user_id IN (${uidPh}) AND course_id = ? AND status = 'active'
     LIMIT 1
-  `).bind(uid, course_id).first();
+  `).bind(...uidScope, course_id).first();
 
   if (!enrollment)
     return jsonResponse({ error: 'Not enrolled in this course' }, 403);
+
+  const submissionUserId = String(enrollment.user_id || authUser.id || '').trim();
 
   // Verify assignment belongs to this course
   const assignment = await env.DB.prepare(`
@@ -241,8 +302,8 @@ async function handleLearnSubmit(request, env, authUser) {
   // Check for existing submission
   const existing = await env.DB.prepare(`
     SELECT id, status FROM course_submissions
-    WHERE user_id = ? AND assignment_id = ? LIMIT 1
-  `).bind(uid, assignment_id).first();
+    WHERE user_id IN (${uidPh}) AND assignment_id = ? LIMIT 1
+  `).bind(...uidScope, assignment_id).first();
 
   if (existing?.status === 'graded')
     return jsonResponse({ error: 'Already graded — cannot resubmit' }, 409);
@@ -279,7 +340,7 @@ async function handleLearnSubmit(request, env, authUser) {
       VALUES (?, ?, ?, ?, ?, 'submitted', ?, unixepoch(), ?, ?, unixepoch(), unixepoch())
     `).bind(
       submissionId, assignment_id, enrollment.id,
-      uid, course_id, evidenceJson, timeSpent, tokenSpend
+      submissionUserId, course_id, evidenceJson, timeSpent, tokenSpend
     ).run();
   }
 

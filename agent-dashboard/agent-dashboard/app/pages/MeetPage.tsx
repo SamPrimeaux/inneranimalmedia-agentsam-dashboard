@@ -11,8 +11,10 @@ import {
   Loader2, Radio, Video, Mail, Plus, ChevronDown,
   FileText, CheckSquare, AlignLeft, Circle, Settings,
   BarChart2, Layout, Pin, Smile, MoreHorizontal,
-  Maximize2, Volume2, VolumeX, Bot,
+  Maximize2, Volume2, VolumeX, Bot, Calendar as CalendarIcon, Aperture,
 } from 'lucide-react';
+import { MeetCtxValue } from '../../src/MeetContext';
+import { ExcalidrawView } from '../../components/ExcalidrawView';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -229,7 +231,7 @@ function PollPanel() {
 
 // ── Main Component ────────────────────────────────────────────────────────
 
-export default function MeetPage() {
+export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: MeetCtxValue) => void }) {
   const [phase, setPhase]         = useState<CallPhase>('lobby');
   const [roomId, setRoomId]       = useState('');
   const [roomName, setRoomName]   = useState('');
@@ -240,6 +242,12 @@ export default function MeetPage() {
   const [videoOn, setVideoOn]     = useState(true);
   const [screenOn, setScreenOn]   = useState(false);
   const [recording, setRecording] = useState(false);
+  const [screenStreamState, setScreenStreamState] = useState<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunks = useRef<Blob[]>([]);
+  const [showDraw, setShowDraw] = useState(false);
+  const [drawOpacity, setDrawOpacity] = useState(70);
+  const [showSchedule, setShowSchedule] = useState(false);
 
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [messages, setMessages]   = useState<ChatMessage[]>([]);
@@ -249,7 +257,6 @@ export default function MeetPage() {
   const [aiLoading, setAiLoading] = useState(false);
 
   const [rightTab, setRightTab]   = useState<RightTab>('chat');
-  const [showLeft, setShowLeft]   = useState(true);
   const [unread, setUnread]       = useState(0);
   const [pinnedId, setPinnedId]   = useState<string | null>(null);
   const [showInvite, setShowInvite] = useState(false);
@@ -273,6 +280,22 @@ export default function MeetPage() {
   const [preview, setPreview] = useState<MediaStream | null>(null);
   const previewRef      = useRef<HTMLVideoElement>(null);
   const callTimer       = useCallTimer(phase === 'in-call');
+
+  useEffect(() => {
+    if (!onContextReady) return;
+    onContextReady({
+      phase, roomId, roomName, displayName,
+      participants, audioOn, videoOn, screenOn, recording,
+      setPhase, setRoomId, setRoomName, setDisplayName,
+      setParticipants, setAudioOn, setVideoOn, setScreenOn, setRecording,
+      toggleAudio, toggleVideo,
+      endCall: () => endCall(),
+      showDraw, setShowDraw, drawOpacity, setDrawOpacity,
+      runAiStudio,
+      aiStudioOpen, aiStudioResult,
+      showInvite, setShowInvite,
+    });
+  }, [phase, roomId, participants, audioOn, videoOn, screenOn, recording, showDraw, drawOpacity, aiStudioOpen, aiStudioResult, showInvite]);
 
   // Preview camera
   useEffect(() => {
@@ -449,7 +472,7 @@ export default function MeetPage() {
     const pc = pcRef.current; if (!pc) return;
     if (screenOn) {
       screenRef.current?.getTracks().forEach(t => t.stop());
-      screenRef.current = null; setScreenOn(false); return;
+      screenRef.current = null; setScreenStreamState(null); setScreenOn(false); return;
     }
     try {
       const ss = await (navigator.mediaDevices as any).getDisplayMedia({ video: true });
@@ -458,10 +481,12 @@ export default function MeetPage() {
       if (sender) await sender.replaceTrack(st);
       st.onended = () => {
         setScreenOn(false);
+        setScreenStreamState(null);
         const cam = localRef.current?.getVideoTracks()[0];
         if (sender && cam) sender.replaceTrack(cam);
       };
       setScreenOn(true);
+      setScreenStreamState(ss);
     } catch { /* user cancelled */ }
   };
 
@@ -567,7 +592,36 @@ export default function MeetPage() {
       transcript: `Format this chat as a clean meeting transcript:\n\n${transcript}`,
       recording:  '',
     };
-    if (item === 'recording') { setRecording(r => !r); setAiStudioResult(recording ? 'Recording stopped.' : 'Recording started (Stream Live Input active).'); return; }
+    if (item === 'recording') {
+      if (recording) {
+        mediaRecorderRef.current?.stop();
+        setRecording(false);
+        setAiStudioResult('Recording stopped — saving…');
+        return;
+      }
+      const stream = screenStreamState || localRef.current;
+      if (!stream) { setAiStudioResult('No active stream to record.'); return; }
+      try {
+        const mr = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9,opus' });
+        recordingChunks.current = [];
+        mr.ondataavailable = e => { if ((e as any).data?.size > 0) recordingChunks.current.push((e as any).data); };
+        mr.onstop = async () => {
+          const blob = new Blob(recordingChunks.current, { type: 'video/webm' });
+          const form = new FormData();
+          form.append('recording', blob, `meet_${roomId}_${Date.now()}.webm`);
+          form.append('roomId', roomId);
+          const res = await fetch('/api/meet/recording/save', { method: 'POST', credentials: 'include', body: form }).catch(() => null);
+          setAiStudioResult(res?.ok ? 'Recording saved to R2 ✓' : 'Save failed — check console.');
+        };
+        mr.start(5000);
+        mediaRecorderRef.current = mr;
+        setRecording(true);
+        setAiStudioResult(null);
+      } catch (e: any) {
+        setAiStudioResult(`MediaRecorder error: ${e.message}`);
+      }
+      return;
+    }
     if (!transcript) { setAiStudioResult('No chat content yet to analyze.'); return; }
     try {
       const form = new FormData();
@@ -605,7 +659,7 @@ export default function MeetPage() {
   const selfP: Participant = {
     user_id: 'self', display_name: displayName || 'You',
     session_id: sessionRef.current || '', tracks: ['microphone', 'camera'],
-    stream: localRef.current || undefined, audioMuted: !audioOn, videoMuted: !videoOn,
+    stream: screenStreamState || localRef.current || undefined, audioMuted: !audioOn, videoMuted: !videoOn,
   };
   const allTiles = [selfP, ...participants.filter(p => p.user_id !== 'self')];
   const pinned   = pinnedId ? allTiles.find(p => p.user_id === pinnedId) : null;
@@ -646,9 +700,14 @@ export default function MeetPage() {
                 ? <><Loader2 size={15} className="spin" /> Connecting…</>
                 : <><Video size={15} /> Join Call</>}
             </button>
+            <div className="lobby-divider">or</div>
+            <button className="lobby-btn-secondary" onClick={() => setShowSchedule(true)}>
+              <CalendarIcon size={15} /> Schedule for later
+            </button>
           </div>
         </div>
       </div>
+      {showSchedule && <ScheduleMeetingModal onClose={() => setShowSchedule(false)} />}
     </>
   );
 
@@ -704,107 +763,19 @@ export default function MeetPage() {
         {/* ── BODY ── */}
         <div className="meet-body">
 
-          {/* ── LEFT PANEL ── */}
-          {showLeft && (
-            <div className="meet-left">
-
-              {/* People */}
-              <div className="left-section">
-                <div className="left-section-header">
-                  <span>People ({allTiles.length})</span>
-                  <button className="invite-btn" onClick={() => setShowInvite(true)}>
-                    <Plus size={12} /> Invite
-                  </button>
-                </div>
-                <div className="people-list">
-                  {allTiles.map(p => (
-                    <div key={p.user_id} className="person-row">
-                      <div className="person-avatar">{p.display_name.slice(0, 2).toUpperCase()}</div>
-                      <div className="person-info">
-                        <span className="person-name">{p.display_name}{p.user_id === 'self' ? ' (You)' : ''}</span>
-                        <span className="person-role">{p.user_id === 'self' ? 'Host' : 'Participant'}</span>
-                      </div>
-                      <div className="person-icons">
-                        {p.audioMuted
-                          ? <MicOff size={12} className="icon-muted" />
-                          : <Mic size={12} className="icon-active" />}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* AI Studio */}
-              <div className="left-section">
-                <div className="left-section-header">
-                  <span>AI Studio</span>
-                  <span className="badge-beta">BETA</span>
-                </div>
-                {([
-                  { id: 'summary',    icon: <Sparkles size={13} />,    label: 'Live Summary',    sub: 'AI is summarizing this call' },
-                  { id: 'takeaways',  icon: <CheckSquare size={13} />, label: 'Key Takeaways',   sub: messages.length > 0 ? `${Math.min(messages.length, 5)} highlights` : 'Waiting for content' },
-                  { id: 'actions',    icon: <FileText size={13} />,    label: 'Action Items',    sub: 'Track tasks & owners' },
-                  { id: 'transcript', icon: <AlignLeft size={13} />,   label: 'Transcription',   sub: 'Live captions on' },
-                  { id: 'recording',  icon: <Circle size={13} className={recording ? 'rec-dot' : ''} />, label: 'Recording', sub: recording ? 'This call is being recorded' : 'Click to start recording' },
-                ] as { id: AiStudioItem; icon: any; label: string; sub: string }[]).map(item => (
-                  <button key={item.id}
-                    className={`ai-studio-row ${aiStudioOpen === item.id ? 'active' : ''} ${item.id === 'recording' && recording ? 'recording' : ''}`}
-                    onClick={() => runAiStudio(item.id)}>
-                    <span className="ai-studio-icon">{item.icon}</span>
-                    <div className="ai-studio-text">
-                      <span className="ai-studio-label">{item.label}</span>
-                      <span className="ai-studio-sub">{item.sub}</span>
-                    </div>
-                  </button>
-                ))}
-                {aiStudioOpen && aiStudioResult && (
-                  <div className="ai-studio-result">
-                    <pre>{aiStudioResult}</pre>
-                    <button className="ai-result-close" onClick={() => { setAiStudioOpen(null); setAiStudioResult(null); }}>
-                      Dismiss
-                    </button>
-                  </div>
-                )}
-                {aiStudioOpen && !aiStudioResult && aiStudioOpen !== 'recording' && (
-                  <div className="ai-studio-loading"><Loader2 size={13} className="spin" /> Analyzing…</div>
-                )}
-              </div>
-
-              {/* Tools */}
-              <div className="left-section">
-                <div className="left-section-header"><span>Tools</span></div>
-                <button className={`tool-row ${screenOn ? 'active' : ''}`} onClick={toggleScreen}>
-                  {screenOn ? <ScreenShareOff size={13} /> : <MonitorUp size={13} />}
-                  <span>{screenOn ? 'Stop sharing' : 'Share Screen'}</span>
-                </button>
-                <button className="tool-row" onClick={() => window.open('/dashboard/designstudio', '_blank')}>
-                  <Layout size={13} /><span>Whiteboard</span><span className="tool-badge">Excalidraw</span>
-                </button>
-                <button className={`tool-row ${showPoll ? 'active' : ''}`} onClick={() => setShowPoll(p => !p)}>
-                  <BarChart2 size={13} /><span>Polls</span>
-                </button>
-                {showPoll && <PollPanel />}
-                <button className="tool-row" onClick={() => window.location.href = '/dashboard/settings'}>
-                  <Settings size={13} /><span>Settings</span>
-                </button>
-              </div>
-
-            </div>
-          )}
-
           {/* ── VIDEO GRID ── */}
           <div className="meet-center">
             {pinned ? (
               <div className="pinned-layout">
                 <div className="pinned-main">
                   <VideoTile p={pinned}
-                    stream={pinned.user_id === 'self' ? localRef.current ?? undefined : pinned.stream}
+                    stream={pinned.user_id === 'self' ? (screenStreamState || localRef.current) ?? undefined : pinned.stream}
                     isSelf={pinned.user_id === 'self'} pinned onPin={() => setPinnedId(null)} />
                 </div>
                 <div className="pinned-strip">
                   {others.map(p => (
                     <VideoTile key={p.user_id} p={p}
-                      stream={p.user_id === 'self' ? localRef.current ?? undefined : p.stream}
+                      stream={p.user_id === 'self' ? (screenStreamState || localRef.current) ?? undefined : p.stream}
                       isSelf={p.user_id === 'self'} pinned={false} onPin={() => setPinnedId(p.user_id)} />
                   ))}
                 </div>
@@ -813,12 +784,18 @@ export default function MeetPage() {
               <div className={`video-grid ${gridCls}`}>
                 {allTiles.map(p => (
                   <VideoTile key={p.user_id} p={p}
-                    stream={p.user_id === 'self' ? localRef.current ?? undefined : p.stream}
+                    stream={p.user_id === 'self' ? (screenStreamState || localRef.current) ?? undefined : p.stream}
                     isSelf={p.user_id === 'self'} pinned={false} onPin={() => setPinnedId(p.user_id)} />
                 ))}
               </div>
             )}
           </div>
+
+          {showDraw && (
+            <div className="draw-overlay" style={{ '--draw-opacity': `${drawOpacity / 100}` } as any}>
+              <ExcalidrawView />
+            </div>
+          )}
 
           {/* ── RIGHT PANEL ── */}
           <div className="meet-right">
@@ -928,7 +905,8 @@ export default function MeetPage() {
 
         {/* ── BOTTOM TOOLBAR ── */}
         <div className="meet-toolbar">
-          <div className="toolbar-left">
+          <div />
+          <div className="toolbar-center">
             <button className={`ctrl ${!audioOn ? 'ctrl-off' : ''}`} onClick={toggleAudio}>
               {audioOn ? <Mic size={18} /> : <MicOff size={18} />}
               <span>{audioOn ? 'Mute' : 'Unmute'}</span>
@@ -940,6 +918,16 @@ export default function MeetPage() {
             <button className={`ctrl ${screenOn ? 'ctrl-active' : ''}`} onClick={toggleScreen}>
               {screenOn ? <ScreenShareOff size={18} /> : <MonitorUp size={18} />}
               <span>Screen</span>
+            </button>
+            <button className="ctrl" onClick={() => {
+              fetch('/api/agent/playwright', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ url: window.location.href, job_type: 'screenshot', triggered_by: 'meet_toolbar' }),
+              }).catch(() => {});
+            }}>
+              <Aperture size={18} /><span>Screenshot</span>
             </button>
             <button className="ctrl" onClick={() => {}}>
               <Smile size={18} /><span>Reactions</span>
@@ -966,21 +954,23 @@ function MeetCSS() {
   return (
     <style>{`
       /* ─ Reset / root ─ */
-      .meet-root, .lobby-wrap, .ended-wrap {
-        all: initial;
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        height: 100vh;
-        max-height: 100vh;
-        overflow: hidden;
-        font-family: var(--font-sans, 'Nunito', system-ui, -apple-system, sans-serif);
+      .meet-root {
+        display: flex; flex-direction: column;
+        width: 100%; height: 100%;
+        overflow: hidden; box-sizing: border-box;
+        font-family: var(--font-sans, 'Nunito', system-ui, sans-serif);
         font-size: 13px;
         color: var(--text-main, #c9d8d6);
         background: var(--bg-app, #07100f);
-        box-sizing: border-box;
       }
-      *, *::before, *::after { box-sizing: inherit; }
+      .lobby-wrap, .ended-wrap {
+        display: flex; flex-direction: column;
+        width: 100%; min-height: 100%;
+        box-sizing: border-box;
+        font-family: var(--font-sans, 'Nunito', system-ui, sans-serif);
+        color: var(--text-main, #c9d8d6);
+        background: var(--bg-app, #07100f);
+      }
       /* mono only for code/pre output */
       .ai-studio-result pre, .chat-msg-body pre {
         font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace) !important;
@@ -1029,8 +1019,17 @@ function MeetCSS() {
 
       /* ─ Body ─ */
       .meet-body {
+        position: relative;
         display: flex; flex: 1; overflow: hidden;
       }
+
+      .draw-overlay {
+        position: absolute; inset: 0; z-index: 40;
+        opacity: var(--draw-opacity, 0.7);
+        pointer-events: auto;
+        background: transparent;
+      }
+      .draw-overlay > * { width: 100%; height: 100%; }
 
       /* ─ Left panel ─ */
       .meet-left {
@@ -1287,12 +1286,17 @@ function MeetCSS() {
 
       /* ─ Toolbar ─ */
       .meet-toolbar {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: 0 24px; height: 72px; flex-shrink: 0;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        padding: 0 24px;
+        height: 72px;
+        flex-shrink: 0;
         background: var(--bg-panel, #0b1918);
         border-top: 1px solid var(--border, #1a2e2c);
       }
-      .toolbar-left { display: flex; align-items: center; gap: 6px; }
+      .toolbar-center { display: flex; align-items: center; gap: 6px; justify-content: center; }
+      .toolbar-right  { display: flex; align-items: center; justify-content: flex-end; }
       .ctrl {
         display: flex; flex-direction: column; align-items: center; gap: 3px;
         background: var(--bg-surface, #0d1e1c); border: 1px solid var(--border, #1a2e2c);
@@ -1454,6 +1458,9 @@ function MeetCSS() {
       }
       .lobby-btn:hover:not(:disabled) { opacity: 0.85; }
       .lobby-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      .lobby-divider { text-align:center; font-size:11px; color:var(--text-muted,#4a7a75); margin:2px 0; }
+      .lobby-btn-secondary { display:flex; align-items:center; justify-content:center; gap:8px; background:var(--bg-surface,#0d1e1c); color:var(--text-secondary,#6b9e99); border:1px solid var(--border,#1a2e2c); border-radius:8px; padding:10px 16px; font-size:13px; font-family:inherit; cursor:pointer; width:100%; transition:all .15s; }
+      .lobby-btn-secondary:hover { border-color:var(--primary,#2dd4bf); color:var(--primary,#2dd4bf); }
 
       /* ─ Ended ─ */
       .ended-wrap { width: 100%; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg-app, #07100f); }
@@ -1469,6 +1476,82 @@ function MeetCSS() {
       .spin { animation: spin 1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+
+      @media (max-width: 900px) { .meet-right { width: 260px; } }
+      @media (max-width: 768px) {
+        .meet-right { position:absolute; bottom:72px; left:0; right:0; width:100%; height:300px; z-index:10; border-left:none; border-top:1px solid var(--border,#1a2e2c); }
+      }
+      @media (max-width: 480px) {
+        .meet-toolbar { height:60px; padding:0 8px; }
+        .ctrl span { display:none; }
+        .ctrl { min-width:42px; padding:10px; }
+      }
     `}</style>
+  );
+}
+
+function ScheduleMeetingModal({ onClose }: { onClose: () => void }) {
+  const [title, setTitle] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [inviteEmails, setInviteEmails] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [doneId, setDoneId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!title.trim() || !scheduledAt.trim()) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const emails = inviteEmails
+        .split(/[\n,]+/g)
+        .map((e) => e.trim())
+        .filter(Boolean);
+      const res = await api('/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ title: title.trim(), scheduledAt: scheduledAt.trim(), inviteEmails: emails }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error(data?.error || 'Schedule failed');
+      setDoneId(String(data.id || 'scheduled'));
+    } catch (e: any) {
+      setErr(e.message || 'Schedule failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">
+          <CalendarIcon size={15} /> Schedule meeting
+        </h3>
+        <p className="modal-sub">Create a scheduled meeting (stored in D1). Optionally email invites.</p>
+        {err && <div className="lobby-error">{err}</div>}
+        {!doneId ? (
+          <>
+            <label className="lobby-label">Title</label>
+            <input className="modal-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Weekly sync" />
+            <label className="lobby-label">Scheduled for</label>
+            <input className="modal-input" type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+            <label className="lobby-label">Invite emails (comma or newline separated)</label>
+            <textarea
+              className="modal-input"
+              value={inviteEmails}
+              onChange={(e) => setInviteEmails(e.target.value)}
+              placeholder="alex@example.com, sam@example.com"
+              rows={3}
+            />
+            <button className="modal-send-btn" onClick={submit} disabled={saving || !title.trim() || !scheduledAt.trim()}>
+              {saving ? <><Loader2 size={13} className="spin" /> Scheduling…</> : <>Schedule</>}
+            </button>
+          </>
+        ) : (
+          <div className="modal-sent">✓ Scheduled ({doneId})</div>
+        )}
+        <button className="modal-close" onClick={onClose}>Close</button>
+      </div>
+    </div>
   );
 }

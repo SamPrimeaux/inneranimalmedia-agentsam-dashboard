@@ -55,6 +55,8 @@ import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
 import MeetPage from './app/pages/MeetPage';
+import { MeetProvider, MeetCtxValue } from './src/MeetContext';
+import { MeetShellPanel } from './components/MeetShellPanel';
 import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -164,6 +166,8 @@ const App: React.FC = () => {
   const [topChromeMoreOpen, setTopChromeMoreOpen] = useState(false);
   const topChromeMoreRef = useRef<HTMLDivElement>(null);
   const [isWorkspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false);
+
+  const [meetCtxValue, setMeetCtxValue] = useState<MeetCtxValue | null>(null);
 
   const [isNarrowViewport, setIsNarrowViewport] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 768,
@@ -1495,6 +1499,10 @@ const App: React.FC = () => {
                         onClose={() => setActiveActivity(null)}
                         activeConversationId={agentChatConversationId}
                       />
+                  ) : location.pathname === '/dashboard/meet' && meetCtxValue ? (
+                      <MeetProvider value={meetCtxValue}>
+                        <MeetShellPanel />
+                      </MeetProvider>
                   ) : activeActivity === 'files' && location.pathname !== '/dashboard/meet' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
@@ -1585,9 +1593,9 @@ const App: React.FC = () => {
                           onExplorerJumpConsumed={() => setDbExplorerJump(null)}
                           onClose={() => setActiveActivity(null)}
                       />
-                  ) : (
+                  ) : location.pathname !== '/dashboard/meet' ? (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>
-                  )}
+                  ) : null}
               </div>
           </div>
 
@@ -1616,7 +1624,14 @@ const App: React.FC = () => {
                     <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
                     <Route path="/dashboard/storage" element={<StoragePage />} />
-                    <Route path="/dashboard/meet" element={<MeetPage />} />
+                    <Route
+                      path="/dashboard/meet"
+                      element={
+                        <MeetProvider value={meetCtxValue || ({} as MeetCtxValue)}>
+                          {React.createElement(MeetPage as any, { onContextReady: setMeetCtxValue })}
+                        </MeetProvider>
+                      }
+                    />
                     <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
                   </Routes>
                 </div>

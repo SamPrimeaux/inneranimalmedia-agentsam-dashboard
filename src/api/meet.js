@@ -87,6 +87,12 @@ export async function handleMeetApi(request, env, ctx) {
   if (parts[0] === 'room' && parts[2] === 'invite' && method === 'POST')
     return handleInvite(request, env, user, parts[1]);
 
+  if (parts[0] === 'recording' && parts[1] === 'save' && method === 'POST')
+    return handleRecordingSave(request, env, user);
+
+  if (parts[0] === 'schedule' && method === 'POST')
+    return handleSchedule(request, env, user);
+
   return jsonNotFound('Meet endpoint not found');
 }
 
@@ -309,4 +315,46 @@ async function handleInvite(request, env, user, roomId) {
   }
 
   return jsonOk({ ok: true });
+}
+
+async function handleRecordingSave(request, env, user) {
+  const form = await request.formData().catch(() => null);
+  if (!form) return jsonError('FormData required', 400);
+  const file = form.get('recording');
+  const roomId = form.get('roomId') || 'unknown';
+  if (!file || typeof file === 'string') return jsonError('recording file required', 400);
+  const r2Key = `meet/recordings/${user.userId}/${roomId}_${Date.now()}.webm`;
+  await env.DASHBOARD.put(r2Key, file.stream(), {
+    httpMetadata: { contentType: 'video/webm' },
+  });
+  return jsonOk({ ok: true, r2_key: r2Key });
+}
+
+async function handleSchedule(request, env, user) {
+  const body = await request.json().catch(() => ({}));
+  const title = (body.title || '').trim();
+  const sAt = (body.scheduledAt || '').trim();
+  const emails = Array.isArray(body.inviteEmails) ? body.inviteEmails : [];
+  if (!title || !sAt) return jsonError('title and scheduledAt required', 400);
+  const id = `msched_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  await env.DB.prepare(`
+    INSERT INTO meet_scheduled (id, created_by, title, scheduled_at, invite_emails, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'scheduled', datetime('now'))
+  `).bind(id, user.userId, title, sAt, JSON.stringify(emails)).run();
+  if (emails.length && env.RESEND_API_KEY) {
+    const link = `https://inneranimalmedia.com/dashboard/meet`;
+    for (const email of emails) {
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: 'InnerAnimalMedia Meet <meet@inneranimalmedia.com>',
+          to: [email],
+          subject: `Meeting scheduled: ${title}`,
+          html: `<p>${title} — ${sAt}</p><a href="${link}">Join when ready</a>`,
+        }),
+      }).catch(() => {});
+    }
+  }
+  return jsonOk({ ok: true, id });
 }

@@ -204,6 +204,7 @@ function extractContent(chunk: unknown): string | null {
     const s = String(o.response).trim();
     if (s) return s;
   }
+  if (typeof o.text === 'string' && o.text.length > 0) return o.text;
   return null;
 }
 
@@ -212,7 +213,6 @@ function extractSseAssistantDelta(parsed: unknown): string {
   if (direct != null && direct !== '') return direct;
   if (!parsed || typeof parsed !== 'object') return '';
   const o = parsed as Record<string, unknown>;
-  if (typeof o.text === 'string') return o.text;
   if (o.type === 'content_block_delta') {
     const delta = o.delta as Record<string, unknown> | undefined;
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') return delta.text;

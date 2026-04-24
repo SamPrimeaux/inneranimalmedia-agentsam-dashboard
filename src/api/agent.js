@@ -316,37 +316,55 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
 }
 
-async function ensureAgentsamModelTierSeed(env, workspaceId, session) {
-  if (!env.DB) return;
+let modelTierMigrationStarted = false;
+async function runModelTierMigration(env) {
+  if (!env?.DB) return;
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS agentsam_model_tier_v2 (
+      id TEXT PRIMARY KEY DEFAULT ('tier_' || lower(hex(randomblob(6)))),
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      tier_level INTEGER NOT NULL CHECK(tier_level BETWEEN 0 AND 4),
+      tier_name TEXT NOT NULL,
+      model_id TEXT,
+      api_platform TEXT,
+      role_description TEXT NOT NULL,
+      escalate_if_confidence_below REAL DEFAULT 0.75,
+      escalate_after_failures INTEGER DEFAULT 1,
+      max_context_tokens INTEGER DEFAULT 4096,
+      max_output_tokens INTEGER DEFAULT 1024,
+      cost_tier TEXT DEFAULT 'free' CHECK(cost_tier IN ('free','low','standard','high')),
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(workspace_id, tier_level)
+    );`
+  ).run();
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO agentsam_model_tier_v2
+      (id, workspace_id, tier_level, tier_name, model_id, api_platform,
+       role_description, escalate_if_confidence_below, escalate_after_failures,
+       max_context_tokens, max_output_tokens, cost_tier, is_active, sort_order)
+    VALUES
+      ('tier_0_ollama',     'ws_inneranimalmedia', 0, 'Local Free',  'ollama-qwen2.5-coder-7b',    'ollama',     'Primary — free local Ollama. Best for code/shell. Escalates if offline or low confidence.', 0.70, 1,  8192,  2048, 'free',     1, 0),
+      ('tier_1_workers_ai', 'ws_inneranimalmedia', 1, 'Edge Free',   'mdl_cf_granite_4_0_h_micro', 'workers_ai', 'Workers AI edge fallback — near-zero cost, always available. Handles Ollama failures.',      0.72, 1,  4096,  1024, 'free',     1, 1),
+      ('tier_2_nano',       'ws_inneranimalmedia', 2, 'OpenAI Nano', 'gpt-5.4-nano',               'openai',     'GPT-5.4 Nano — cheapest 5.4-era OpenAI. Fast, low cost. Fires when edge models fail.',      0.80, 1, 16384,  4096, 'low',      1, 2),
+      ('tier_3_mini',       'ws_inneranimalmedia', 3, 'OpenAI Mini', 'gpt-5.4-mini',               'openai',     'GPT-5.4 Mini — mid-tier. Multi-step reasoning and agentic tool use.',                       0.88, 1, 32768,  8192, 'standard', 1, 3),
+      ('tier_4_full',       'ws_inneranimalmedia', 4, 'OpenAI Full', 'gpt-5.4',                    'openai',     'GPT-5.4 — full power, final fallback. No escalation.',                                      1.00, 1, 65536, 16384, 'high',     1, 4);`
+  ).run();
+}
+
+function kickoffModelTierMigration(env, ctx) {
+  if (modelTierMigrationStarted) return;
+  modelTierMigrationStarted = true;
   try {
-    const row = await env.DB.prepare(`SELECT COUNT(*) as c FROM agentsam_model_tier`).first();
-    const c = Number(row?.c ?? row?.count ?? 0);
-    if (!Number.isFinite(c) || c > 0) return;
-
-    const ws =
-      (workspaceId && String(workspaceId).trim()) ||
-      (session?.workspace_id && String(session.workspace_id).trim()) ||
-      (env.WORKSPACE_ID && String(env.WORKSPACE_ID).trim()) ||
-      null;
-
-    const now = Math.floor(Date.now() / 1000);
-    await env.DB.prepare(
-      `INSERT INTO agentsam_model_tier (tier, label, model_key, cost_type, escalation_if_confidence_below, workspace_id, created_at)
-       VALUES
-         (0, 'no_ai', NULL, 'free', NULL, ?, ?),
-         (1, 'tier_1', ?, 'free', 0.75, ?, ?),
-         (2, 'tier_2', ?, 'low_cost', 0.80, ?, ?),
-         (3, 'tier_3', ?, 'standard', 0.85, ?, ?),
-         (4, 'tier_4', ?, 'high', NULL, ?, ?)`
-    ).bind(
-      ws, now,
-      'qwen2.5-coder:7b', ws, now,
-      'gpt-5.4-nano', ws, now,
-      'gpt-5.4-mini', ws, now,
-      'gpt-5.4', ws, now,
-    ).run();
+    const p = runModelTierMigration(env).catch((e) => {
+      console.warn('[agent] model tier migration failed:', e?.message);
+    });
+    ctx?.waitUntil?.(p);
   } catch (e) {
-    console.warn('[agent] agentsam_model_tier seed skipped:', e?.message);
+    console.warn('[agent] model tier migration kickoff failed:', e?.message);
   }
 }
 
@@ -583,7 +601,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     body.agentId ? getAgentMetadata(env, body.agentId) : Promise.resolve(null),
   ]);
 
-  await ensureAgentsamModelTierSeed(env, workspaceId, session);
+  kickoffModelTierMigration(env, ctx);
 
   const gate = await gateRewriteAndClassify(env, modeConfig, message);
   const intentSlug = String(gate.intent || 'auto').toLowerCase().trim() || 'auto';

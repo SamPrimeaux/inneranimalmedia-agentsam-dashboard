@@ -110,6 +110,79 @@ async function pgMatchAgentMemory(env, queryText, opts = {}) {
   }
 }
 
+async function pgSearchAllContext(env, queryText, opts = {}) {
+  const fail = (msg) => ({ rows: [], error: msg });
+  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
+  if (!env.AI) return fail('AI binding missing');
+  const q = String(queryText || '').trim();
+  if (!q) return fail('empty query');
+
+  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.7;
+  const matchCount = Math.min(Math.max(1, opts.match_count || 10), 30);
+  const agentId = typeof opts.filter_agent_id === 'string' ? opts.filter_agent_id : 'agent-sam';
+
+  try {
+    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
+    const raw = modelResp?.data ?? modelResp;
+    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
+
+    const vecLiteral = '[' + vector.join(',') + ']';
+    const { Client } = await import('pg');
+    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+    await client.connect();
+    try {
+      const res = await client.query(
+        `SELECT * FROM public.search_all_context($1::vector, $2::float, $3::int, $4::text)`,
+        [vecLiteral, threshold, matchCount, agentId]
+      );
+      return { rows: res.rows || [], error: null };
+    } finally {
+      await client.end().catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[rag] pgSearchAllContext error:', e?.message);
+    return { rows: [], error: e?.message };
+  }
+}
+
+async function pgMatchSessionSummaries(env, queryText, opts = {}) {
+  const fail = (msg) => ({ rows: [], error: msg });
+  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
+  if (!env.AI) return fail('AI binding missing');
+  const q = String(queryText || '').trim();
+  if (!q) return fail('empty query');
+
+  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.7;
+  const matchCount = Math.min(Math.max(1, opts.match_count || 5), 20);
+  const agentId = typeof opts.filter_agent_id === 'string' ? opts.filter_agent_id : 'agent-sam';
+  const tenantId = typeof opts.filter_tenant_id === 'string' ? opts.filter_tenant_id : null;
+
+  try {
+    const modelResp = await env.AI.run('@cf/baai/bge-base-en-v1.5', { text: [q] });
+    const raw = modelResp?.data ?? modelResp;
+    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+    if (!vector || !Array.isArray(vector)) return fail('embedding failed');
+
+    const vecLiteral = '[' + vector.join(',') + ']';
+    const { Client } = await import('pg');
+    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+    await client.connect();
+    try {
+      const res = await client.query(
+        `SELECT * FROM public.match_session_summaries($1::vector, $2::text, $3::text, $4::float, $5::int)`,
+        [vecLiteral, tenantId, agentId, threshold, matchCount]
+      );
+      return { rows: res.rows || [], error: null };
+    } finally {
+      await client.end().catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[rag] pgMatchSessionSummaries error:', e?.message);
+    return { rows: [], error: e?.message };
+  }
+}
+
 export async function unifiedRagSearch(env, query, opts = {}) {
   const q = String(query || '').trim();
   if (!q || !env.DB || !env.AI) {
@@ -145,21 +218,40 @@ export async function unifiedRagSearch(env, query, opts = {}) {
     } catch (_) {}
   }
 
-  // Leg: Supabase agent_memory semantic search via Hyperdrive
+  // Leg: Supabase semantic search via Hyperdrive (single round-trip + session summaries)
   if (env.HYPERDRIVE?.connectionString) {
     try {
-      const memRes = await pgMatchAgentMemory(env, q, { match_threshold: 0.5, match_count: 6 });
-      for (const row of memRes.rows || []) {
-        const text = `[${row.role || 'assistant'} memory] ${row.content}`;
+      const [allCtx, sessSum] = await Promise.all([
+        pgSearchAllContext(env, q, { match_threshold: 0.7, match_count: 10, filter_agent_id: 'agent-sam' }),
+        pgMatchSessionSummaries(env, q, { match_threshold: 0.7, match_count: 5, filter_agent_id: 'agent-sam' }),
+      ]);
+
+      for (const row of allCtx.rows || []) {
+        const src = String(row.source || 'context');
+        const text = `[${src}] ${row.content || ''}`.trim();
+        if (!text) continue;
         raw.push({
           text,
-          source: row.session_id || row.id,
-          source_type: 'supabase_agent_memory',
-          score: (row.similarity ?? 0.5) * 0.85, // slight discount vs direct knowledge
-          doc_type: 'memory',
+          source: row.id || null,
+          source_type: `supabase_${src}`,
+          score: Number(row.similarity ?? 0.5) * 0.95,
+          doc_type: src,
         });
       }
-      if (memRes.rows?.length) console.log('[rag] supabase memory leg:', memRes.rows.length, 'hits');
+      for (const row of sessSum.rows || []) {
+        const text = `[session_summary] ${row.summary || ''}`.trim();
+        if (!text) continue;
+        raw.push({
+          text,
+          source: row.session_id || row.id || null,
+          source_type: 'supabase_session_summaries',
+          score: Number(row.similarity ?? 0.5) * 0.97,
+          doc_type: 'session_summary',
+        });
+      }
+
+      if (allCtx.rows?.length) console.log('[rag] supabase search_all_context hits:', allCtx.rows.length);
+      if (sessSum.rows?.length) console.log('[rag] supabase session_summaries hits:', sessSum.rows.length);
     } catch (e) {
       console.warn('[rag] supabase leg error:', e?.message);
     }

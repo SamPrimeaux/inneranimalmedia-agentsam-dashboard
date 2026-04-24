@@ -41,6 +41,7 @@ import { handleGitStatusApi }        from '../api/git-status.js';
 import { handleAdminApi }            from '../api/admin.js';
 import { handleGithubApi }           from '../api/github.js';
 import { handleLearnApi }            from '../api/learn.js';
+import { handleOnboardingApi }       from '../api/onboarding.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -298,6 +299,10 @@ export async function handleRequest(request, env, ctx) {
     return handleIntegrationsRequest(request, url, env, ctx);
   }
 
+  if (path.startsWith('/api/onboarding')) {
+    return handleOnboardingApi(request, url, env, ctx);
+  }
+
   // ── Auth ───────────────────────────────────────────────────────────────────
   if (
     path.startsWith('/api/auth') ||
@@ -308,6 +313,27 @@ export async function handleRequest(request, env, ctx) {
     path.startsWith('/oauth')
   ) {
     return handleAuthApi(request, url, env, ctx);
+  }
+
+  // ── Onboarding SPA (same Vite bundle as dashboard; no shell injection) ─────
+  if (path === '/onboarding' || path.startsWith('/onboarding/')) {
+    if (env.DASHBOARD) {
+      try {
+        const index =
+          (await env.DASHBOARD.get('static/dashboard/agent.html')) || (await env.DASHBOARD.get('index.html'));
+        if (index) {
+          return new Response(index.body, {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            },
+          });
+        }
+      } catch (e) {
+        console.error('[router] onboarding SPA load failed:', e?.message);
+      }
+    }
+    return serveStaticPage(env, 'source/public/agent.html');
   }
 
   // ── Dashboard Shell ────────────────────────────────────────────────────────

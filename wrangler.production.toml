@@ -6,6 +6,11 @@ workers_dev = true
 preview_urls = true
 no_bundle = false
 
+[[rules]]
+type = "Text"
+globs = [ "src/email-templates/**/*.html" ]
+fallthrough = true
+
 [build]
 command = ""
 

@@ -30,6 +30,7 @@ import { runIntegritySnapshot } from './api/integrity';
 import { handleDashboardApi } from './api/dashboard';
 import { handleMailApi } from './api/mail';
 import { handleLearnApi } from './api/learn';
+import { handleOnboardingApi } from './api/onboarding';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -205,6 +206,10 @@ export default {
         return handleLearnApi(request, url, env, ctx);
       }
 
+      if (pathLower.startsWith('/api/onboarding')) {
+        return handleOnboardingApi(request, url, env);
+      }
+
       if (pathLower.startsWith('/api/auth') || pathLower === '/api/settings/profile') {
         return handleAuthApi(request, url, env);
       }
@@ -239,7 +244,7 @@ export default {
                      || await env.DASHBOARD.get(`static/dashboard/agent/${assetKey}`);
             if (obj) return new Response(obj.body, { headers: { 'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream' } });
 
-            if (pathLower.startsWith('/dashboard/')) {
+            if (pathLower.startsWith('/dashboard/') || pathLower === '/onboarding' || pathLower.startsWith('/onboarding/')) {
               const index = await env.DASHBOARD.get('static/dashboard/agent.html') || await env.DASHBOARD.get('index.html');
               if (index) return withSessionHealing(new Response(index.body, { headers: { 'Content-Type': 'text/html' } }));
             }

@@ -64,6 +64,7 @@ import { AuthSignInPage } from './components/auth/AuthSignInPage';
 import { AuthSignUpPage } from './components/auth/AuthSignUpPage';
 import { AuthForgotPage } from './components/auth/AuthForgotPage';
 import { AuthResetPage } from './components/auth/AuthResetPage';
+import { OnboardingPage } from './components/onboarding/OnboardingPage';
 import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -131,6 +132,7 @@ const App: React.FC = () => {
   if (!location.pathname.startsWith('/dashboard')) {
     return (
       <Routes>
+        <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/login" element={<AuthSignInPage />} />
         <Route path="/signup" element={<AuthSignUpPage />} />
         <Route path="/forgot-password" element={<AuthForgotPage />} />

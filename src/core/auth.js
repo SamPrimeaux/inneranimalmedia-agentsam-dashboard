@@ -445,6 +445,45 @@ export async function getAuthUser(request, env) {
   return { id: userId, email, tenant_id: tenantId, role, is_superadmin };
 }
 
+/**
+ * Create D1 + KV session for a platform user id and return JSON + session cookies.
+ * Used when a user completes a trusted, token-gated step (e.g. onboarding intake).
+ */
+export async function establishIamSession(request, env, userId, bodyObj = { ok: true }) {
+  if (!env.DB) {
+    return new Response(JSON.stringify({ error: 'Database not configured' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  const sessionId = crypto.randomUUID();
+  const expiresTs = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const expiresAtIso = new Date(expiresTs).toISOString();
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const ua = request.headers.get('user-agent') || '';
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`,
+  ).bind(sessionId, userId, expiresAtIso, ip, ua).run();
+  const tid = await resolveTenantAtLogin(env, userId).catch(() => null);
+  await writeIamSessionToKv(env, sessionId, userId, tid, expiresAtIso);
+  const response = new Response(JSON.stringify(bodyObj), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  response.headers.append(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`,
+  );
+  response.headers.append(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`,
+  );
+  response.headers.append(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`,
+  );
+  return response;
+}
 
 /**
  * True when X-Ingest-Secret matches vault/env INGEST_SECRET (MCP / trusted automation).

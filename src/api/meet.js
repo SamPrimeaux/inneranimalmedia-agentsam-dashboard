@@ -134,12 +134,14 @@ async function handleRoomJoin(request, env, user) {
   const body   = await request.json().catch(() => ({}));
   const roomId = body.roomId || crypto.randomUUID();
   const name   = body.name   || `Meeting ${new Date().toLocaleTimeString()}`;
+  const userId = user?.userId || user?.id || user?.user_id || user?.email;
+  if (!userId || !roomId) return jsonResponse({ error: 'Missing required fields' }, 400);
 
   await env.DB.prepare(`
     INSERT INTO meet_rooms (id, name, created_by, created_at, status)
     VALUES (?, ?, ?, datetime('now'), 'active')
     ON CONFLICT(id) DO NOTHING
-  `).bind(roomId, name, user.userId).run();
+  `).bind(roomId, name, userId).run();
 
   return jsonResponse({ roomId, name }, 200);
 }

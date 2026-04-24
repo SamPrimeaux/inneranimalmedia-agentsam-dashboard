@@ -1161,6 +1161,8 @@ export async function handleAgentApi(request, url, env, ctx) {
   if (workspaceMatch) {
     const wsId = decodeURIComponent(workspaceMatch[1] || '').trim();
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     // ── /api/agent/workspace/:id ────────────────────────────────────────────
     // ── /api/agent/workspace/:id ────────────────────────────────────────────

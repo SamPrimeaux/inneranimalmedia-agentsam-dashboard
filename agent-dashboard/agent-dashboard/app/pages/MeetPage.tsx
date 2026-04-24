@@ -555,7 +555,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
       // Use the same FormData + SSE endpoint as ChatAssistant.tsx
       const form = new FormData();
       form.append('message', c);
-      form.append('mode', 'default');
+      form.append('mode', 'auto');
       form.append('conversationId', `meet_${roomId}`);
       form.append('contextMode', 'false');
 
@@ -668,7 +668,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
     try {
       const form = new FormData();
       form.append('message', prompts[item]);
-      form.append('mode', 'default');
+      form.append('mode', 'auto');
       form.append('conversationId', `meet_studio_${roomId}`);
       form.append('contextMode', 'false');
       const res = await fetch('/api/agent/chat', { method: 'POST', credentials: 'include', body: form });

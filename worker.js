@@ -9,6 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
+import { handleMeetApi } from "./src/api/meet.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -3991,6 +3992,8 @@ const worker = {
         if (pathLower === '/api/models') url.pathname = '/api/agent/models';
         return handleAgentApi(request, url, env, ctx, secret);
       }
+
+      if (url.pathname.startsWith('/api/meet')) return handleMeetApi(request, env, ctx);
 
       // ----- API: Core Generation / Drive Sync -----
       if (pathLower === '/api/generate' && methodUpper === 'POST') {

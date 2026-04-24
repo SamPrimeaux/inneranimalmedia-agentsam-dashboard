@@ -1,7 +1,7 @@
 /**
  * Onboarding API — external intake, profile setup, invite email (Resend).
+ * Transactional HTML templates load from R2 binding `EMAIL` (inneranimalmedia-email-archive).
  */
-import ONBOARDING_INVITE_HTML from '../email-templates/onboarding-invite.html';
 import {
   getAuthUser,
   jsonResponse,
@@ -12,6 +12,83 @@ import {
 } from '../core/auth.js';
 
 const ONBOARDING_STEPS = ['intake', 'profile_setup', 'agent_calibration', 'environment_setup'];
+
+/** LMS `onboarding_steps` catalog rows (INSERT OR IGNORE). */
+const IAM_ONBOARDING_CATALOG = [
+  {
+    step_key: 'iam_intake',
+    title: 'Intake',
+    description: 'Skill level, stack, tools, goals, and published work.',
+    route: '/onboarding?step=intake',
+    order_index: 1,
+  },
+  {
+    step_key: 'iam_profile_setup',
+    title: 'Profile setup',
+    description: 'Recovery codes, avatar, GitHub, and contact details.',
+    route: '/onboarding?step=profile_setup',
+    order_index: 2,
+  },
+  {
+    step_key: 'iam_agent_calibration',
+    title: 'Agent calibration',
+    description: 'Agent Sam preferences from intake.',
+    route: '/dashboard/agent',
+    order_index: 3,
+  },
+  {
+    step_key: 'iam_environment_setup',
+    title: 'Environment setup',
+    description: 'Local access and workspace tooling.',
+    route: '/dashboard/overview',
+    order_index: 4,
+  },
+  {
+    step_key: 'iam_activation_review',
+    title: 'Activation review',
+    description: 'Tenant activation and onboarding completion.',
+    route: '/dashboard/settings',
+    order_index: 5,
+  },
+];
+
+const ORG_INNERANIMALMEDIA = 'org-inneranimalmedia';
+
+async function loadEmailTemplate(env, templateName) {
+  if (!env.EMAIL) throw new Error('EMAIL R2 binding not configured');
+  const obj = await env.EMAIL.get(`templates/${templateName}.html`);
+  if (!obj) throw new Error(`Email template not found: ${templateName}`);
+  return await obj.text();
+}
+
+function renderTemplate(html, tokens) {
+  return Object.entries(tokens).reduce((out, [key, val]) => {
+    return out.replaceAll(`{{${key}}}`, val != null ? String(val) : '');
+  }, html);
+}
+
+async function archiveSentEmail(env, messageId, renderedHtml) {
+  if (!env.EMAIL || !messageId) return;
+  const date = new Date().toISOString().slice(0, 10);
+  const key = `archive/${date}/${messageId}.html`;
+  await env.EMAIL.put(key, renderedHtml, { httpMetadata: { contentType: 'text/html' } });
+}
+
+function stripHtmlToText(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 8000);
+}
+
+async function warnDb(label, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    console.warn(`[onboarding:${label}]`, e?.message ?? e);
+  }
+}
 
 function randomHex32() {
   const b = new Uint8Array(32);
@@ -177,22 +254,247 @@ async function upsertAgentProfile(env, { userId, displayName, description, perso
   }
 }
 
-async function sendOnboardingInviteEmail(env, { to, name, onboardingUrl, personalMessage }) {
+/**
+ * Secondary D1 writes after fatal `user_intake_profiles` update. Each sub-step is warn-only.
+ */
+async function runIntakeD1SideEffects(env, ctx) {
+  const {
+    prof,
+    platformUserId,
+    aspirations,
+    goals_json,
+    timezone,
+    primaryEmail,
+    displayName,
+    now,
+    description,
+    personalityTone,
+    avatarUrl,
+  } = ctx;
+  const tenantId = prof.tenant_id;
+
+  await warnDb('onboarding_steps_catalog', async () => {
+    for (const row of IAM_ONBOARDING_CATALOG) {
+      await env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO onboarding_steps (step_key, title, description, route, order_index, required, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        )
+        .bind(row.step_key, row.title, row.description, row.route, row.order_index, now, now)
+        .run();
+    }
+  });
+
+  await warnDb('onboarding_state_tenant', async () => {
+    for (const row of IAM_ONBOARDING_CATALOG) {
+      const id = `obst_${tenantId}_${row.step_key}`.slice(0, 120);
+      const completed = row.step_key === 'iam_intake' ? now : null;
+      const status = row.step_key === 'iam_intake' ? 'completed' : 'pending';
+      await env.DB
+        .prepare(
+          `INSERT OR REPLACE INTO onboarding_state (id, tenant_id, step_key, status, meta_json, completed_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          id,
+          tenantId,
+          row.step_key,
+          status,
+          JSON.stringify({ user_id: platformUserId, email: primaryEmail }),
+          completed,
+          now,
+          now,
+        )
+        .run();
+    }
+  });
+
+  await warnDb('tenant_activation', async () => {
+    await bumpTenantActivationProgress(env, tenantId, 20);
+  });
+
+  const urow = await env.DB
+    .prepare(`SELECT default_workspace_id FROM users WHERE id = ? LIMIT 1`)
+    .bind(platformUserId)
+    .first();
+  const workspaceId =
+    String(urow?.default_workspace_id || '').trim() ||
+    `ws_${String(platformUserId).replace(/^au_/, '').slice(0, 28)}`;
+
+  await warnDb('agentsam_bootstrap', async () => {
+    const bid = `asb_${platformUserId}`.slice(0, 80);
+    await env.DB
+      .prepare(
+        `INSERT OR IGNORE INTO agentsam_bootstrap (
+           id, workspace_id, tenant_id, user_id, email, display_name,
+           environment, is_active, capabilities_json, governance_roles_json, approval_required_json,
+           allowed_execution_modes_json, default_execution_mode, runtime_status_json, backend_health_json,
+           feature_flags_json, ui_preferences_json, created_at, updated_at
+         ) VALUES (?,?,?,?,?,?,
+           'production', 1, '{}','[]','[]','[\"pty\"]','pty','{}','{}','{}','{}',
+           datetime('now'), datetime('now'))`,
+      )
+      .bind(bid, workspaceId, tenantId, platformUserId, primaryEmail, displayName)
+      .run();
+  });
+
+  await warnDb('agentsam_user_policy', async () => {
+    await env.DB
+      .prepare(`INSERT OR IGNORE INTO agentsam_user_policy (user_id, workspace_id) VALUES (?, '')`)
+      .bind(platformUserId)
+      .run();
+  });
+
+  await warnDb('agentsam_subagent_profile', async () => {
+    await upsertAgentProfile(env, {
+      userId: platformUserId,
+      displayName,
+      description,
+      personalityTone,
+    });
+  });
+
+  await warnDb('agentsam_project_context', async () => {
+    const ctxId = `ctx_intake_${platformUserId.replace(/[^a-z0-9_]/gi, '_').slice(0, 40)}`;
+    const goalsStr = JSON.stringify(jsonSafe(goals_json, []));
+    await env.DB
+      .prepare(
+        `INSERT OR IGNORE INTO agentsam_project_context (
+           id, project_key, project_name, project_type, status, priority, description, goals, notes, created_at, updated_at
+         ) VALUES (?,?,?,?,?,?,?,?,?, unixepoch(), unixepoch())`,
+      )
+      .bind(
+        ctxId,
+        `intake_${platformUserId}`,
+        `Onboarding — ${displayName}`,
+        'student',
+        'active',
+        40,
+        String(aspirations || '').slice(0, 4000) || 'Student onboarding context.',
+        goalsStr,
+        'Seeded from POST /api/onboarding/intake.',
+      )
+      .run();
+  });
+
+  await warnDb('program_goals', async () => {
+    const goals = jsonSafe(goals_json, []);
+    const list = Array.isArray(goals) ? goals.filter((g) => typeof g === 'string' && g.trim()).slice(0, 5) : [];
+    let i = 0;
+    for (const g of list) {
+      i += 1;
+      const gid = `pg_intake_${platformUserId}_${i}`.replace(/[^a-z0-9_]/gi, '_').slice(0, 80);
+      await env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO program_goals (id, tenant_id, program_name, goal_title, description, category, status, created_at, updated_at)
+           VALUES (?,?,?,?,?,?, 'active', unixepoch(), unixepoch())`,
+        )
+        .bind(gid, tenantId, 'Inner Animal intake', g.slice(0, 200), g.slice(0, 500), 'onboarding')
+        .run();
+    }
+  });
+
+  await warnDb('org_users', async () => {
+    const ouid = `ou_${ORG_INNERANIMALMEDIA}_${platformUserId}`.replace(/[^a-z0-9_]/gi, '_').slice(0, 120);
+    await env.DB
+      .prepare(
+        `INSERT OR IGNORE INTO org_users (id, org_id, user_id, role, joined_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?)`,
+      )
+      .bind(ouid, ORG_INNERANIMALMEDIA, platformUserId, 'student', now, now, now)
+      .run();
+  });
+
+  await warnDb('course_users', async () => {
+    const cuid = `cu_${crypto.randomUUID().replace(/-/g, '')}`;
+    await env.DB
+      .prepare(
+        `INSERT INTO course_users (id, email, name, avatar_url, timezone, language, is_active, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,1,?,?)
+         ON CONFLICT(email) DO UPDATE SET
+           name = excluded.name,
+           avatar_url = COALESCE(excluded.avatar_url, course_users.avatar_url),
+           timezone = excluded.timezone,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(cuid, primaryEmail, displayName, avatarUrl || null, timezone, 'en', now, now)
+      .run();
+  });
+
+  await warnDb('notification_outbox', async () => {
+    const oid = `nox_intake_${crypto.randomUUID().replace(/-/g, '')}`;
+    const subject = 'Welcome — intake received';
+    const plain = `Your Inner Animal Media intake was saved for ${primaryEmail}. Continue with profile setup when you are ready.`;
+    const payload = JSON.stringify({ kind: 'intake_complete', user_id: platformUserId });
+    await env.DB
+      .prepare(
+        `INSERT INTO notification_outbox (id, tenant_id, channel, to_address, subject, body_text, payload_json, status, priority, attempts, max_attempts, created_by, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .bind(
+        oid,
+        tenantId,
+        'email',
+        primaryEmail,
+        subject,
+        plain,
+        payload,
+        'pending',
+        3,
+        0,
+        5,
+        'onboarding_intake',
+        now,
+        now,
+      )
+      .run();
+  });
+
+  await warnDb('notifications', async () => {
+    const nid = crypto.randomUUID();
+    const subj = 'Intake complete';
+    const msg = 'Your workspace intake was submitted. Finish profile setup to unlock Agent Sam.';
+    await env.DB
+      .prepare(
+        `INSERT INTO notifications (id, recipient_id, recipient_type, channel, subject, message, status)
+         VALUES (?,?, 'user', 'dashboard', ?, ?, 'pending')`,
+      )
+      .bind(nid, platformUserId, subj, msg)
+      .run();
+  });
+}
+
+async function sendOnboardingInviteEmail(env, { to, name, intakeToken, personalMessage }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, error: 'RESEND_API_KEY not configured' };
-  let html = String(ONBOARDING_INVITE_HTML)
-    .replaceAll('{{ONBOARDING_URL}}', onboardingUrl)
-    .replaceAll('{{USER_EMAIL}}', to)
-    .replaceAll('{{USER_NAME}}', (name || to.split('@')[0] || 'there').replace(/</g, ''));
+  if (!env.EMAIL) return { ok: false, error: 'EMAIL R2 bucket not configured' };
+
+  const onboardingUrl = `https://inneranimalmedia.com/onboarding?token=${encodeURIComponent(intakeToken)}&step=intake`;
+  const displayName = (name || to.split('@')[0] || 'there').replace(/</g, '');
+
+  let templateHtml;
+  try {
+    templateHtml = await loadEmailTemplate(env, 'onboarding-invite');
+  } catch (e) {
+    return { ok: false, error: e?.message ?? 'template_load_failed' };
+  }
+
+  let renderedHtml = renderTemplate(templateHtml, {
+    USER_NAME: displayName,
+    USER_EMAIL: to,
+    ONBOARDING_URL: onboardingUrl,
+  });
+
   const msg = (personalMessage || '').trim();
   if (msg) {
     const esc = msg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    html = html.replace(
+    renderedHtml = renderedHtml.replace(
       '</body>',
       `<table width="100%" cellpadding="0" cellspacing="0" style="background:#001a22;padding:0 16px 32px;"><tr><td align="center"><table width="580" style="max-width:580px;"><tr><td style="padding:16px 24px;border:1px solid #1e3e4a;border-radius:8px;background:#00212b;"><p style="margin:0;color:#7a9aaa;font-family:'Courier New',monospace;font-size:12px;line-height:1.7;">${esc}</p></td></tr></table></td></tr></table></body>`,
     );
   }
-  const res = await fetch('https://api.resend.com/emails', {
+
+  const resendRes = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${key}`,
@@ -202,14 +504,26 @@ async function sendOnboardingInviteEmail(env, { to, name, onboardingUrl, persona
       from: env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>',
       to: [to],
       subject: 'Your Inner Animal Media workspace is ready',
-      html,
+      html: renderedHtml,
     }),
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    return { ok: false, error: t || `resend_${res.status}` };
+
+  let resendData = {};
+  try {
+    resendData = await resendRes.json();
+  } catch {
+    resendData = {};
   }
-  return { ok: true };
+
+  if (!resendRes.ok) {
+    return { ok: false, error: resendData?.message || JSON.stringify(resendData) || `resend_${resendRes.status}` };
+  }
+
+  if (resendData?.id) {
+    await archiveSentEmail(env, resendData.id, renderedHtml).catch((e) => console.warn('[email archive]', e?.message));
+  }
+
+  return { ok: true, onboardingUrl };
 }
 
 async function ensureAuthUserForInvite(env, { email, name, tenantId }) {
@@ -403,19 +717,17 @@ export async function handleOnboardingApi(request, url, env, _ctx = null) {
 
     await seedOnboardingSteps(env, tenantId, platformUserId);
 
-    const onboardingBase =
-      (typeof env.ONBOARDING_PUBLIC_ORIGIN === 'string' && env.ONBOARDING_PUBLIC_ORIGIN.trim()) ||
-      'https://inneranimalmedia.com';
-    const onboardingUrl = `${onboardingBase.replace(/\/$/, '')}/onboarding?token=${encodeURIComponent(intakeToken)}&step=intake`;
+    if (!env.EMAIL) return jsonResponse({ error: 'EMAIL R2 bucket not configured' }, 503);
+
     const send = await sendOnboardingInviteEmail(env, {
       to: email,
       name: name || email.split('@')[0],
-      onboardingUrl,
+      intakeToken,
       personalMessage: message,
     });
     if (!send.ok) return jsonResponse({ error: send.error || 'email_failed' }, 502);
 
-    return jsonResponse({ ok: true, email, intake_url: onboardingUrl });
+    return jsonResponse({ ok: true, email, intake_url: send.onboardingUrl });
   }
 
   // ── GET /api/onboarding/intake ───────────────────────────────────────────
@@ -500,46 +812,43 @@ export async function handleOnboardingApi(request, url, env, _ctx = null) {
     const portfolio_url = String(body.portfolio_url || '').trim().slice(0, 500);
     const communication_pref = String(body.communication_pref || 'email').slice(0, 64);
     const timezone = String(body.timezone || 'America/Chicago').slice(0, 120);
+    const avatar_url =
+      body.avatar_url != null ? String(body.avatar_url).trim().slice(0, 2000) : '';
 
     const completedAt = now;
-    await env.DB
-      .prepare(
-        `UPDATE user_intake_profiles SET
-           skill_level = ?, current_stack = ?, favorite_tools = ?, favorite_ai = ?,
-           favorite_platforms = ?, aspirations = ?, goals_json = ?, published_work_json = ?,
-           github_username = ?, portfolio_url = ?, communication_pref = ?, timezone = ?,
-           intake_completed = 1, intake_completed_at = ?, intake_token = NULL, intake_token_expires_at = NULL,
-           agent_profile_built = 1, updated_at = unixepoch()
-         WHERE id = ?`,
-      )
-      .bind(
-        skill,
-        current_stack,
-        favorite_tools,
-        favorite_ai,
-        favorite_platforms,
-        aspirations,
-        goals_json,
-        published_work_json,
-        github_username,
-        portfolio_url,
-        communication_pref,
-        timezone,
-        completedAt,
-        prof.id,
-      )
-      .run();
+    try {
+      await env.DB
+        .prepare(
+          `UPDATE user_intake_profiles SET
+             skill_level = ?, current_stack = ?, favorite_tools = ?, favorite_ai = ?,
+             favorite_platforms = ?, aspirations = ?, goals_json = ?, published_work_json = ?,
+             github_username = ?, portfolio_url = ?, communication_pref = ?, timezone = ?,
+             intake_completed = 1, intake_completed_at = ?, intake_token = NULL, intake_token_expires_at = NULL,
+             agent_profile_built = 1, updated_at = unixepoch()
+           WHERE id = ?`,
+        )
+        .bind(
+          skill,
+          current_stack,
+          favorite_tools,
+          favorite_ai,
+          favorite_platforms,
+          aspirations,
+          goals_json,
+          published_work_json,
+          github_username,
+          portfolio_url,
+          communication_pref,
+          timezone,
+          completedAt,
+          prof.id,
+        )
+        .run();
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? 'intake_profile_update_failed' }, 500);
+    }
 
     const platformUserId = (await resolvePlatformUserId(env, prof.email)) || prof.auth_user_id;
-
-    await env.DB
-      .prepare(
-        `UPDATE iam_user_onboarding_step SET status = 'completed', updated_at = ? WHERE tenant_id = ? AND user_id = ? AND step = 'intake'`,
-      )
-      .bind(now, prof.tenant_id, platformUserId)
-      .run();
-
-    await bumpTenantActivationProgress(env, prof.tenant_id, 25);
 
     const displayName = prof.email.split('@')[0];
     const description = buildAgentDescription({
@@ -548,11 +857,28 @@ export async function handleOnboardingApi(request, url, env, _ctx = null) {
       current_stack,
     });
     const personalityTone = personalityForSkill(skill);
-    await upsertAgentProfile(env, {
-      userId: platformUserId,
+
+    await runIntakeD1SideEffects(env, {
+      prof,
+      platformUserId,
+      aspirations,
+      goals_json,
+      timezone,
+      primaryEmail: prof.email,
       displayName,
+      now,
       description,
       personalityTone,
+      avatarUrl: avatar_url || null,
+    });
+
+    await warnDb('iam_user_onboarding_step_intake', async () => {
+      await env.DB
+        .prepare(
+          `UPDATE iam_user_onboarding_step SET status = 'completed', updated_at = ? WHERE tenant_id = ? AND user_id = ? AND step = 'intake'`,
+        )
+        .bind(now, prof.tenant_id, platformUserId)
+        .run();
     });
 
     const settingsUid = platformUserId;

@@ -37,8 +37,9 @@ async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
     return { screenshot_url, job_id: id };
   }
   if (env.DASHBOARD) {
+    const ts = Date.now();
     const id = crypto.randomUUID();
-    const key = `screenshots/${id}.png`;
+    const key = `screenshots/agent/${ts}-${id}.png`;
     await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: ct } });
     const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
     void insertAiGenerationLog(env, {
@@ -49,8 +50,9 @@ async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
     return { screenshot_url, job_id: id };
   }
   if (env.R2) {
+    const ts = Date.now();
     const id = crypto.randomUUID();
-    const key = `screenshots/${id}.png`;
+    const key = `screenshots/agent/${ts}-${id}.png`;
     await env.R2.put(key, buf, { httpMetadata: { contentType: ct } });
     const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
     void insertAiGenerationLog(env, {
@@ -6013,14 +6015,22 @@ async function handleBrowserRequest(request, url, env) {
     const targetUrl = url.searchParams.get('url');
     const forceRefresh = url.searchParams.get('refresh') === 'true';
     if (!targetUrl) return new Response('url required', { status: 400 });
-    const cacheKey = 'screenshots/' + btoa(targetUrl).replace(/[^a-z0-9]/gi, '').slice(0, 64);
-    const kv = env.KV || env['agent-sam'];
-    if (!forceRefresh && kv) {
+
+    // MCP_TOKENS KV is reserved for MCP auth tokens only.
+    // Screenshot caching uses R2 screenshots/ prefix exclusively.
+    const bucket = env.DOCS_BUCKET || env.DASHBOARD || env.R2;
+    if (!bucket) return new Response(JSON.stringify({ error: 'No R2 bucket for screenshots' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+
+    const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(targetUrl));
+    const sha = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const objectKey = `screenshots/browser/${sha}.jpg`;
+
+    if (!forceRefresh) {
       try {
-        const cached = await kv.get(cacheKey, { type: 'arrayBuffer' });
-        if (cached) {
-          return new Response(cached, {
-            headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'HIT', 'Cache-Control': 'public, max-age=86400' },
+        const cached = await bucket.get(objectKey);
+        if (cached?.body) {
+          return new Response(cached.body, {
+            headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'HIT', 'X-Storage': 'r2', 'Cache-Control': 'public, max-age=86400' },
           });
         }
       } catch (_) { }
@@ -6040,11 +6050,11 @@ async function handleBrowserRequest(request, url, env) {
       }
       const img = await page.screenshot({ type: 'jpeg', quality: 80 });
       await browser.close();
-      if (kv && img) {
-        kv.put(cacheKey, img, { httpMetadata: { contentType: 'image/jpeg' } }).catch(() => { });
+      if (img) {
+        bucket.put(objectKey, img, { httpMetadata: { contentType: 'image/jpeg' } }).catch(() => { });
       }
       return new Response(img, {
-        headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'MISS', 'Cache-Control': 'public, max-age=86400' },
+        headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'MISS', 'X-Storage': 'r2', 'Cache-Control': 'public, max-age=86400' },
       });
     } catch (err) {
       return new Response(JSON.stringify({ error: String(err?.message || err) }), {

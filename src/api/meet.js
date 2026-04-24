@@ -3,8 +3,8 @@
  * Cloudflare Calls SFU proxy + room signaling + chat + invite
  */
 
-import { jsonOk, jsonError, jsonNotFound } from '../core/responses.js';
-import { requireAuth } from '../core/auth.js';
+import { jsonResponse } from '../core/responses.js';
+import { getAuthUser } from '../core/auth.js';
 
 const CALLS_BASE = 'https://rtc.live.cloudflare.com/v1';
 const TURN_BASE  = 'https://rtc.live.cloudflare.com/v1/turn/keys';
@@ -51,8 +51,8 @@ export async function handleMeetApi(request, env, ctx) {
   const parts  = url.pathname.replace('/api/meet', '').split('/').filter(Boolean);
   const method = request.method;
 
-  const user = await requireAuth(request, env);
-  if (!user) return jsonError('Unauthorized', 401);
+  const user = await getAuthUser(request, env);
+  if (!user) return jsonResponse({ error: 'Unauthorized' }, 401);
 
   if (parts[0] === 'turn' && method === 'POST')
     return handleTurn(request, env, user);
@@ -93,7 +93,7 @@ export async function handleMeetApi(request, env, ctx) {
   if (parts[0] === 'schedule' && method === 'POST')
     return handleSchedule(request, env, user);
 
-  return jsonNotFound('Meet endpoint not found');
+  return jsonResponse({ error: 'Not found' }, 404);
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ async function handleTurn(request, env, user) {
     const keyToken   = tokenParts.slice(1).join(':');
 
     if (!keyId || !keyToken) {
-      return jsonOk({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+      return jsonResponse({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] }, 200);
     }
 
     // Correct CF endpoint: generate-ice-servers (not generate)
@@ -119,14 +119,14 @@ async function handleTurn(request, env, user) {
     });
 
     if (!res.ok) {
-      return jsonOk({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+      return jsonResponse({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] }, 200);
     }
 
     const data = await res.json();
     // CF returns { iceServers: [...] } directly
-    return jsonOk({ iceServers: data.iceServers });
+    return jsonResponse({ iceServers: data.iceServers }, 200);
   } catch {
-    return jsonOk({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+    return jsonResponse({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] }, 200);
   }
 }
 
@@ -141,7 +141,7 @@ async function handleRoomJoin(request, env, user) {
     ON CONFLICT(id) DO NOTHING
   `).bind(roomId, name, user.userId).run();
 
-  return jsonOk({ roomId, name });
+  return jsonResponse({ roomId, name }, 200);
 }
 
 async function handleRoomPoll(request, env, user, roomId) {
@@ -160,15 +160,15 @@ async function handleRoomPoll(request, env, user, roomId) {
     db.prepare(`SELECT id, name, created_by FROM meet_rooms WHERE id = ?`).bind(roomId).first(),
   ]);
 
-  if (!room) return jsonNotFound('Room not found');
+  if (!room) return jsonResponse({ error: 'Not found' }, 404);
 
-  return jsonOk({
+  return jsonResponse({
     room,
     participants: (participants.results || []).map(p => ({
       ...p, tracks: JSON.parse(p.tracks_json || '[]'),
     })),
     messages: (messages.results || []).reverse(),
-  });
+  }, 200);
 }
 
 async function handleSession(request, env, user, roomId) {
@@ -183,13 +183,13 @@ async function handleSession(request, env, user, roomId) {
     tracksJson:  '[]',
   });
 
-  return jsonOk({ sessionId: data.sessionId });
+  return jsonResponse({ sessionId: data.sessionId }, 200);
 }
 
 async function handlePublish(request, env, user, roomId) {
   const body = await request.json();
   const { sessionId, offer, tracks } = body;
-  if (!sessionId || !offer || !tracks?.length) return jsonError('sessionId, offer, tracks required', 400);
+  if (!sessionId || !offer || !tracks?.length) return jsonResponse({ error: 'sessionId, offer, tracks required' }, 400);
 
   const data = await callsRequest(env, `/sessions/${sessionId}/tracks/new`, 'POST', {
     sessionDescription: offer, tracks,
@@ -201,13 +201,13 @@ async function handlePublish(request, env, user, roomId) {
     WHERE room_id = ? AND user_id = ?
   `).bind(JSON.stringify(trackNames), roomId, user.userId).run();
 
-  return jsonOk({ answer: data.sessionDescription, trackList: data.tracks });
+  return jsonResponse({ answer: data.sessionDescription, trackList: data.tracks }, 200);
 }
 
 async function handleSubscribe(request, env, user, roomId) {
   const body = await request.json();
   const { sessionId, remoteTracks } = body;
-  if (!sessionId || !remoteTracks?.length) return jsonError('sessionId and remoteTracks required', 400);
+  if (!sessionId || !remoteTracks?.length) return jsonResponse({ error: 'sessionId and remoteTracks required' }, 400);
 
   const data = await callsRequest(env, `/sessions/${sessionId}/tracks/new`, 'POST', {
     tracks: remoteTracks.map(t => ({
@@ -218,20 +218,20 @@ async function handleSubscribe(request, env, user, roomId) {
   });
 
   if (data.requiresImmediateRenegotiation) {
-    return jsonOk({ requiresRenegotiation: true, tracks: data.tracks });
+    return jsonResponse({ requiresRenegotiation: true, tracks: data.tracks }, 200);
   }
-  return jsonOk({ answer: data.sessionDescription, tracks: data.tracks });
+  return jsonResponse({ answer: data.sessionDescription, tracks: data.tracks }, 200);
 }
 
 async function handleRenegotiate(request, env, user, roomId) {
   const body = await request.json();
   const { sessionId, offer } = body;
-  if (!sessionId || !offer) return jsonError('sessionId and offer required', 400);
+  if (!sessionId || !offer) return jsonResponse({ error: 'sessionId and offer required' }, 400);
 
   const data = await callsRequest(env, `/sessions/${sessionId}/renegotiate`, 'PUT', {
     sessionDescription: offer,
   });
-  return jsonOk({ answer: data.sessionDescription });
+  return jsonResponse({ answer: data.sessionDescription }, 200);
 }
 
 async function handleHeartbeat(request, env, user, roomId) {
@@ -239,13 +239,13 @@ async function handleHeartbeat(request, env, user, roomId) {
     UPDATE meet_participants SET last_seen_at = datetime('now')
     WHERE room_id = ? AND user_id = ?
   `).bind(roomId, user.userId).run();
-  return jsonOk({ ok: true });
+  return jsonResponse({ ok: true }, 200);
 }
 
 async function handleChat(request, env, user, roomId) {
   const body    = await request.json().catch(() => ({}));
   const content = (body.content || '').trim().slice(0, 2000);
-  if (!content) return jsonError('content required', 400);
+  if (!content) return jsonResponse({ error: 'content required' }, 400);
 
   const participant = await env.DB.prepare(`
     SELECT display_name FROM meet_participants WHERE room_id = ? AND user_id = ?
@@ -258,7 +258,7 @@ async function handleChat(request, env, user, roomId) {
     VALUES (?, ?, ?, ?, ?, datetime('now'))
   `).bind(crypto.randomUUID(), roomId, user.userId, displayName, content).run();
 
-  return jsonOk({ ok: true });
+  return jsonResponse({ ok: true }, 200);
 }
 
 async function handleLeave(request, env, user, roomId) {
@@ -274,7 +274,7 @@ async function handleLeave(request, env, user, roomId) {
     await env.DB.prepare(`UPDATE meet_rooms SET status = 'ended' WHERE id = ?`)
       .bind(roomId).run();
   }
-  return jsonOk({ ok: true });
+  return jsonResponse({ ok: true }, 200);
 }
 
 async function handleInvite(request, env, user, roomId) {
@@ -282,7 +282,7 @@ async function handleInvite(request, env, user, roomId) {
   const email = (body.email || '').trim();
   const link  = (body.link  || '').trim();
 
-  if (!email || !link) return jsonError('email and link required', 400);
+  if (!email || !link) return jsonResponse({ error: 'email and link required' }, 400);
 
   const room = await env.DB.prepare(`SELECT name FROM meet_rooms WHERE id = ?`).bind(roomId).first();
   const meetingName = room?.name || 'a meeting';
@@ -311,23 +311,23 @@ async function handleInvite(request, env, user, roomId) {
 
   if (!res.ok) {
     const err = await res.text();
-    return jsonError(`Resend failed: ${err}`, 500);
+    return jsonResponse({ error: `Resend failed: ${err}` }, 500);
   }
 
-  return jsonOk({ ok: true });
+  return jsonResponse({ ok: true }, 200);
 }
 
 async function handleRecordingSave(request, env, user) {
   const form = await request.formData().catch(() => null);
-  if (!form) return jsonError('FormData required', 400);
+  if (!form) return jsonResponse({ error: 'FormData required' }, 400);
   const file = form.get('recording');
   const roomId = form.get('roomId') || 'unknown';
-  if (!file || typeof file === 'string') return jsonError('recording file required', 400);
+  if (!file || typeof file === 'string') return jsonResponse({ error: 'recording file required' }, 400);
   const r2Key = `meet/recordings/${user.userId}/${roomId}_${Date.now()}.webm`;
   await env.DASHBOARD.put(r2Key, file.stream(), {
     httpMetadata: { contentType: 'video/webm' },
   });
-  return jsonOk({ ok: true, r2_key: r2Key });
+  return jsonResponse({ ok: true, r2_key: r2Key }, 200);
 }
 
 async function handleSchedule(request, env, user) {
@@ -335,7 +335,7 @@ async function handleSchedule(request, env, user) {
   const title = (body.title || '').trim();
   const sAt = (body.scheduledAt || '').trim();
   const emails = Array.isArray(body.inviteEmails) ? body.inviteEmails : [];
-  if (!title || !sAt) return jsonError('title and scheduledAt required', 400);
+  if (!title || !sAt) return jsonResponse({ error: 'title and scheduledAt required' }, 400);
   const id = `msched_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
   await env.DB.prepare(`
     INSERT INTO meet_scheduled (id, created_by, title, scheduled_at, invite_emails, status, created_at)
@@ -356,5 +356,5 @@ async function handleSchedule(request, env, user) {
       }).catch(() => {});
     }
   }
-  return jsonOk({ ok: true, id });
+  return jsonResponse({ ok: true, id }, 200);
 }

@@ -28,6 +28,8 @@ import { handleHealthCheck } from './api/health';
 import { handleVaultApi } from './api/vault';
 import { runIntegritySnapshot } from './api/integrity';
 import { handleDashboardApi } from './api/dashboard';
+import { handleMailApi } from './api/mail';
+import { handleLearnApi } from './api/learn';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -193,6 +195,14 @@ export default {
 
       if (pathLower.startsWith('/api/overview')) {
         return handleOverviewApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/mail')) {
+        return handleMailApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/learn')) {
+        return handleLearnApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/auth') || pathLower === '/api/settings/profile') {

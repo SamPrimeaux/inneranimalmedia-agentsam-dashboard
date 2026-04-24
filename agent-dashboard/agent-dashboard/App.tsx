@@ -60,6 +60,10 @@ import { MailPage } from './components/MailPage';
 import MeetPage from './app/pages/MeetPage';
 import { MeetProvider, MeetCtxValue } from './src/MeetContext';
 import { MeetShellPanel } from './components/MeetShellPanel';
+import { AuthSignInPage } from './components/auth/AuthSignInPage';
+import { AuthSignUpPage } from './components/auth/AuthSignUpPage';
+import { AuthForgotPage } from './components/auth/AuthForgotPage';
+import { AuthResetPage } from './components/auth/AuthResetPage';
 import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
@@ -123,6 +127,18 @@ const App: React.FC = () => {
   const navigate = useNavigate();
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
+
+  if (!location.pathname.startsWith('/dashboard')) {
+    return (
+      <Routes>
+        <Route path="/login" element={<AuthSignInPage />} />
+        <Route path="/signup" element={<AuthSignUpPage />} />
+        <Route path="/forgot-password" element={<AuthForgotPage />} />
+        <Route path="/reset-password" element={<AuthResetPage />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
   
   const [activeProject] = useState<ProjectType>(ProjectType.SANDBOX);
 
@@ -135,6 +151,7 @@ const App: React.FC = () => {
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
   );
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [terminalDrawerH, setTerminalDrawerH] = useState(288);
   /** Mirrored from Lab shell for Output tab (build / r2 / help). */
   const [shellOutputLines, setShellOutputLines] = useState<string[]>([]);
 
@@ -493,6 +510,36 @@ const App: React.FC = () => {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   };
+
+  const terminalResizeRef = useRef<{ startY: number; startH: number } | null>(null);
+  const clampTerminalH = useCallback((h: number) => {
+    const min = 160;
+    // Keep at least 160px for the content above the drawer.
+    const max = Math.max(min, window.innerHeight - 10 /* topbar */ - 32 /* tabs */ - 84 /* status/mobile */ - 160);
+    return Math.max(min, Math.min(max, Math.round(h)));
+  }, []);
+
+  const beginTerminalResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    terminalResizeRef.current = { startY: e.clientY, startH: terminalDrawerH };
+
+    const onMove = (pe: PointerEvent) => {
+      const s = terminalResizeRef.current;
+      if (!s) return;
+      const next = clampTerminalH(s.startH + (s.startY - pe.clientY));
+      setTerminalDrawerH(next);
+      // Let xterm FitAddon recompute.
+      window.dispatchEvent(new Event('resize'));
+    };
+    const onUp = () => {
+      terminalResizeRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [terminalDrawerH, clampTerminalH]);
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>(() => [
     { role: 'assistant', content: buildAgentSamGreeting(formatWorkspaceStatusLine({ source: 'none' })) },
   ]);
@@ -1940,21 +1987,6 @@ const App: React.FC = () => {
                   )}
                   </div>
 
-                  {isTerminalOpen && (
-                      <XTermShell
-                          ref={terminalRef}
-                          onClose={() => setIsTerminalOpen(false)}
-                          problems={systemProblems ?? []}
-                          iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
-                          workspaceLabel={workspaceDisplayLine}
-                          workspaceId={authWorkspaceId || undefined}
-                          productLabel={PRODUCT_NAME}
-                          outputLines={shellOutputLines}
-                          onOutputLine={(line) =>
-                            setShellOutputLines((prev) => [...prev.slice(-250), line])
-                          }
-                      />
-                  )}
               </div>
           </>
               )}
@@ -2015,32 +2047,45 @@ const App: React.FC = () => {
               </>
           )}
       </div>
-
-      {/* Global persistent terminal — mounted once, survives all page navigation */}
+      {/* Global persistent terminal drawer — mounted once, resizable, survives navigation */}
       {/* display:none preserves PTY WebSocket — never use conditional rendering here */}
       <div
         style={{
-          display: isTerminalOpen && location.pathname !== '/dashboard/agent' ? 'flex' : 'none',
+          display: isTerminalOpen ? 'flex' : 'none',
           flexDirection: 'column',
-          height: '288px',
+          height: `${terminalDrawerH}px`,
           flexShrink: 0,
           borderTop: '1px solid var(--border-subtle)',
           background: 'var(--bg-panel)',
           position: 'relative',
-          zIndex: 50,
+          zIndex: 60,
         }}
       >
-        <XTermShell
-          ref={terminalRef}
-          iamOrigin={window.location.origin}
-          workspaceLabel={workspaceDisplayName || ''}
-          workspaceId={authWorkspaceId || ''}
-          productLabel="IAM"
-          outputLines={shellOutputLines}
-          onOutputLine={(line) => setShellOutputLines((prev) => [...prev, line])}
-          problems={systemProblems ?? []}
-          onClose={() => setIsTerminalOpen(false)}
+        {/* Drag handle (vertical resize) */}
+        <div
+          onPointerDown={beginTerminalResize}
+          style={{
+            height: 8,
+            cursor: 'row-resize',
+            background: 'transparent',
+            borderBottom: '1px solid var(--border-subtle)',
+          }}
+          title="Drag to resize terminal"
+          aria-label="Resize terminal"
         />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <XTermShell
+            ref={terminalRef}
+            iamOrigin={window.location.origin}
+            workspaceLabel={workspaceDisplayName || ''}
+            workspaceId={authWorkspaceId || ''}
+            productLabel="IAM"
+            outputLines={shellOutputLines}
+            onOutputLine={(line) => setShellOutputLines((prev) => [...prev.slice(-250), line])}
+            problems={systemProblems ?? []}
+            onClose={() => setIsTerminalOpen(false)}
+          />
+        </div>
       </div>
       
       {/* 8. STATUS BAR (FOOTER) */}

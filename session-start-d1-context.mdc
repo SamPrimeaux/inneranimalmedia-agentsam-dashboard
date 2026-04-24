@@ -10,7 +10,7 @@ Ship the dashboard with `cd agent-dashboard && npm run build:vite-only`, upload 
 
 ## project_memory bootstrap (mandatory at session start)
 
-On every new session, **before any code changes**, run this query against D1 and read the output (canonical URLs, worker names, and deploy rules live here; `SANDBOX_WORKER_CANONICAL` and related keys use `importance_score=1.0` and surface in this result set):
+On every new session, **before any code changes**, run this query against D1 and read the output (canonical URLs, worker names, and deploy rules live here; high-`importance_score` keys surface first):
 
 ```sql
 SELECT key, value FROM project_memory

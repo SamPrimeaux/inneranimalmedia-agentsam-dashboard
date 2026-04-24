@@ -189,6 +189,11 @@ export function sessionIsPlatformSuperadmin(session) {
   return !!(session && (session.is_superadmin === 1 || session.is_superadmin === true));
 }
 
+/** True when the resolved auth user is a platform superadmin (D1 `is_superadmin`). */
+export function authUserIsSuperadmin(authUser) {
+  return !!(authUser && (authUser.is_superadmin === 1 || authUser.is_superadmin === true));
+}
+
 /**
  * Legacy Tenant Mapping
  */
@@ -260,7 +265,18 @@ export async function getSession(env, request) {
         const data = await env.SESSION_CACHE.get(IAM_KV_SESSION_KEY_PREFIX + sessionId);
         if (data) {
           const parsed = JSON.parse(data);
-          return { ...parsed, session_id: sessionId };
+          const merged = { ...parsed, session_id: sessionId };
+          if (
+            env.DB &&
+            merged.user_id &&
+            (merged.tenant_id == null || String(merged.tenant_id).trim() === '')
+          ) {
+            void fetchAuthUserTenantId(env, merged.user_id).then((tid) => {
+              if (!tid) return;
+              patchAuthSessionTenantIfMissing(env, sessionId, tid, merged.user_id, merged.expires_at);
+            });
+          }
+          return merged;
         }
       } catch (e) { }
     }
@@ -277,6 +293,15 @@ export async function getSession(env, request) {
         ).bind(sessionId).first();
 
         if (row) {
+          if (
+            (row.tenant_id == null || String(row.tenant_id).trim() === '') &&
+            row.user_id
+          ) {
+            void fetchAuthUserTenantId(env, row.user_id).then((tid) => {
+              if (!tid) return;
+              patchAuthSessionTenantIfMissing(env, row.id, tid, row.user_id, row.expires_at);
+            });
+          }
           // Success: Repopulate KV so cache is warm for next request
           const payload = { 
             v: 1,

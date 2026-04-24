@@ -169,29 +169,31 @@ async function dispatchToolCall(env, toolName, input, context = {}) {
 // ─── Request-scoped Context Loaders ──────────────────────────────────────────
 
 async function loadModeConfig(env, modeSlug) {
-  const slug = modeSlug || 'ask';
-  const defaults = { slug, temperature: 0.7, auto_run: 0, max_tool_calls: 15, system_prompt_fragment: null, context_strategy: 'standard' };
+  const slug = (modeSlug || 'auto').toLowerCase();
+  const defaults = {
+    slug,
+    temperature: 0.7,
+    auto_run: 0,
+    max_tool_calls: 15,
+    system_prompt_fragment: null,
+    context_strategy: 'standard',
+    tool_policy_json: null,
+    gate_model: null,
+    gate_reasoning_effort: null,
+    model_preference: null,
+    escalation_model: null,
+    escalation_threshold: 0,
+  };
   if (!env.DB) return defaults;
-
-  const cacheKey = `mode_cfg:${slug}`;
-  if (env.KV) {
-    try {
-      const cached = await env.KV.get(cacheKey);
-      if (cached) return JSON.parse(cached);
-    } catch (_) {}
-  }
 
   try {
     const row = await env.DB.prepare(
-      `SELECT slug, display_name, temperature, auto_run, max_tool_calls,
-              system_prompt_fragment, context_strategy, tool_policy_json,
-              model_preference, gate_model, gate_reasoning_effort,
-              escalation_model, escalation_threshold
+      `SELECT gate_model, gate_reasoning_effort, model_preference,
+              escalation_model, escalation_threshold, tool_policy_json, system_prompt_fragment
        FROM agent_mode_configs WHERE slug = ? AND is_active = 1 LIMIT 1`
     ).bind(slug).first();
-    const config = row || defaults;
-    if (env.KV) env.KV.put(cacheKey, JSON.stringify(config), { expirationTtl: 300 }).catch(() => {});
-    return config;
+    const cfg = row || {};
+    return { ...defaults, ...cfg, slug };
   } catch (_) { return defaults; }
 }
 
@@ -218,6 +220,134 @@ async function resolveDefaultModel(env) {
     ).first();
     return row?.model_key || null;
   } catch (_) { return null; }
+}
+
+async function resolveAiModelRowById(env, id) {
+  if (!env.DB || id == null || id === '') return null;
+  try {
+    return await env.DB.prepare(
+      `SELECT provider, model_key, api_platform, secret_key_name
+       FROM ai_models WHERE id = ? AND is_active = 1 LIMIT 1`
+    ).bind(id).first();
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeGateParseFailure(originalMessage) {
+  return { intent: 'auto', rewritten_query: originalMessage, confidence: 0 };
+}
+
+async function gateRewriteAndClassify(env, modeConfig, message) {
+  const gateId = modeConfig?.gate_model ?? null;
+  const gateMeta = await resolveAiModelRowById(env, gateId);
+  if (!gateMeta?.model_key) return normalizeGateParseFailure(message);
+
+  const gatePrompt =
+    "Classify the intent of this message into one word (sql/shell/question/deploy/github/file/kv/infra/search/mixed) and rewrite it as a precise technical query. Respond JSON: {intent, rewritten_query, confidence}";
+
+  try {
+    const res = await dispatchComplete(env, {
+      modelKey: gateMeta.model_key,
+      systemPrompt: gatePrompt,
+      messages: [{ role: 'user', content: message }],
+      tools: [],
+      options: { reasoningEffort: modeConfig?.gate_reasoning_effort || 'none' },
+    });
+    const text = typeof res === 'string'
+      ? res
+      : (typeof res?.text === 'string' ? res.text : JSON.stringify(res));
+    const parsed = parseJsonSafe(text, null);
+    const intent = typeof parsed?.intent === 'string' ? parsed.intent : 'auto';
+    const rewritten_query =
+      typeof parsed?.rewritten_query === 'string' && parsed.rewritten_query.trim()
+        ? parsed.rewritten_query.trim()
+        : message;
+    const confidence = Number(parsed?.confidence);
+    return { intent, rewritten_query, confidence: Number.isFinite(confidence) ? confidence : 0 };
+  } catch (_) {
+    return normalizeGateParseFailure(message);
+  }
+}
+
+async function loadIntentPattern(env, intentSlug) {
+  if (!env.DB || !intentSlug) return null;
+  try {
+    return await env.DB.prepare(
+      `SELECT workflow_agent, tools_json FROM agent_intent_patterns
+       WHERE intent_slug = ? AND is_active = 1 LIMIT 1`
+    ).bind(String(intentSlug).trim().toLowerCase()).first();
+  } catch (_) {
+    return null;
+  }
+}
+
+function dedupeModelsByKey(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const r of rows || []) {
+    const k = r?.model_key;
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(r);
+  }
+  return out;
+}
+
+async function loadLastResortModels(env) {
+  if (!env.DB) return [];
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, provider, model_key, api_platform, secret_key_name
+       FROM ai_models WHERE is_active = 1 AND supports_tools = 1
+       ORDER BY input_rate_per_mtok ASC LIMIT 3`
+    ).all();
+    return results || [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function withTimeout(promise, ms) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`timeout_after_${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+async function ensureAgentsamModelTierSeed(env, workspaceId, session) {
+  if (!env.DB) return;
+  try {
+    const row = await env.DB.prepare(`SELECT COUNT(*) as c FROM agentsam_model_tier`).first();
+    const c = Number(row?.c ?? row?.count ?? 0);
+    if (!Number.isFinite(c) || c > 0) return;
+
+    const ws =
+      (workspaceId && String(workspaceId).trim()) ||
+      (session?.workspace_id && String(session.workspace_id).trim()) ||
+      (env.WORKSPACE_ID && String(env.WORKSPACE_ID).trim()) ||
+      null;
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      `INSERT INTO agentsam_model_tier (tier, label, model_key, cost_type, escalation_if_confidence_below, workspace_id, created_at)
+       VALUES
+         (0, 'no_ai', NULL, 'free', NULL, ?, ?),
+         (1, 'tier_1', ?, 'free', 0.75, ?, ?),
+         (2, 'tier_2', ?, 'low_cost', 0.80, ?, ?),
+         (3, 'tier_3', ?, 'standard', 0.85, ?, ?),
+         (4, 'tier_4', ?, 'high', NULL, ?, ?)`
+    ).bind(
+      ws, now,
+      'qwen2.5-coder:7b', ws, now,
+      'gpt-5.4-nano', ws, now,
+      'gpt-5.4-mini', ws, now,
+      'gpt-5.4', ws, now,
+    ).run();
+  } catch (e) {
+    console.warn('[agent] agentsam_model_tier seed skipped:', e?.message);
+  }
 }
 
 // ─── Approval Gate ────────────────────────────────────────────────────────────
@@ -442,25 +572,42 @@ export async function agentChatSseHandler(env, request, ctx, session) {
   if (!message) return jsonResponse({ error: 'message required' }, 400);
 
   const sessionId     = body.conversationId || body.session_id || body.sessionId || null;
-  const requestedMode = String(body.mode || 'ask').toLowerCase();
+  const requestedMode = String(body.mode || 'auto').toLowerCase().trim() || 'auto';
   const tenantId      = session?.tenant_id || tenantIdFromEnv(env);
   const userId        = session?.user_id || null;
-  const workspaceId   = body.workspace_id || '';
+  const workspaceId   = body.workspace_id || session?.workspace_id || env.WORKSPACE_ID || '';
 
-  const [modeConfig, userPolicy, intentResult, agentMeta] = await Promise.all([
+  const [modeConfig, userPolicy, agentMeta] = await Promise.all([
     loadModeConfig(env, requestedMode),
     loadUserPolicy(env, userId, workspaceId),
-    classifyIntent(env, message),
     body.agentId ? getAgentMetadata(env, body.agentId) : Promise.resolve(null),
   ]);
 
-  const { tools: dbTools } = await loadToolsForRequest(env, requestedMode, intentResult.intent, { limit: modeConfig.max_tool_calls || 20, includeSchemas: true });
-  const tools = dbTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema || { type: 'object', properties: {} } }));
+  await ensureAgentsamModelTierSeed(env, workspaceId, session);
 
-  let modelKey = modeConfig.model_preference || body.model || null;
-  if (!modelKey) {
-    const agentModel = agentMeta?.model_policy?.model_key;
-    modelKey = agentModel || await resolveDefaultModel(env);
+  const gate = await gateRewriteAndClassify(env, modeConfig, message);
+  const intentSlug = String(gate.intent || 'auto').toLowerCase().trim() || 'auto';
+  const intentPattern = await loadIntentPattern(env, intentSlug);
+
+  const { tools: dbTools } = await loadToolsForRequest(env, requestedMode, intentSlug, { limit: modeConfig.max_tool_calls || 20, includeSchemas: true });
+  let tools = dbTools.map(t => ({ name: t.name, description: t.description, input_schema: t.input_schema || { type: 'object', properties: {} } }));
+  const toolsFromPattern = parseJsonSafe(intentPattern?.tools_json, null);
+  if (Array.isArray(toolsFromPattern) && toolsFromPattern.length) {
+    const allow = new Set(toolsFromPattern.map((x) => String(x || '').trim()).filter(Boolean));
+    tools = tools.filter((t) => allow.has(t.name));
+  }
+
+  const confidence = Number(gate.confidence || 0);
+  const threshold = Number(modeConfig?.escalation_threshold);
+  const escalationThreshold = Number.isFinite(threshold) ? threshold : 0;
+
+  const primaryRow = await resolveAiModelRowById(env, modeConfig?.model_preference ?? null);
+  const escalationRow = await resolveAiModelRowById(env, modeConfig?.escalation_model ?? null);
+  const lastResort = await loadLastResortModels(env);
+  const chainRows = dedupeModelsByKey([primaryRow, escalationRow, ...(lastResort || [])].filter(Boolean));
+  const fallbackModelKeys = chainRows.map((r) => r.model_key).filter(Boolean);
+  if (!fallbackModelKeys.length) {
+    return jsonResponse({ error: 'All providers exhausted', tried: [] }, 503);
   }
 
   const ragResult    = await unifiedRagSearch(env, message, { topK: modeConfig.context_strategy === 'minimal' ? 3 : 8 });
@@ -478,18 +625,47 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     try { writer.write(encoder.encode(`data: ${JSON.stringify({ type, ...payload })}\n\n`)); } catch (_) {}
   };
 
-  emit('context', { intent: intentResult.intent, mode: requestedMode, model: modelKey, tool_count: tools.length });
+  emit('context', { intent: intentSlug, mode: requestedMode, model: fallbackModelKeys[0] || null, tool_count: tools.length });
 
   ;(async () => {
     try {
-      await runAgentToolLoop(env, ctx, emit, {
-        messages: body.messages || [{ role: 'user', content: message }],
-        tools, systemPrompt, modelKey,
-        temperature:  modeConfig.temperature || 0.7,
-        maxToolCalls: modeConfig.max_tool_calls || 20,
-        mode: requestedMode, modeConfig, userPolicy,
-        sessionId, tenantId, userId,
-      });
+      const tried = [];
+      const startIdx = (confidence < escalationThreshold && fallbackModelKeys.length > 1) ? 1 : 0;
+      let succeeded = false;
+
+      for (let i = startIdx; i < chainRows.length; i++) {
+        const row = chainRows[i];
+        const modelKey = row?.model_key;
+        if (!modelKey) continue;
+        tried.push(modelKey);
+        try {
+          let textEmitted = 0;
+          const emitWrapped = (type, payload) => {
+            if (type === 'text' && payload?.text) textEmitted += String(payload.text).length;
+            emit(type, payload);
+          };
+          await withTimeout(
+            runAgentToolLoop(env, ctx, emitWrapped, {
+              messages: body.messages || [{ role: 'user', content: gate.rewritten_query || message }],
+              tools, systemPrompt, modelKey,
+              temperature:  modeConfig.temperature || 0.7,
+              maxToolCalls: modeConfig.max_tool_calls || 20,
+              mode: requestedMode, modeConfig, userPolicy,
+              sessionId, tenantId, userId,
+            }),
+            15000
+          );
+          if (textEmitted <= 0) throw new Error('empty_stream');
+          succeeded = true;
+          break;
+        } catch (e) {
+          console.warn('[agent] model fallback:', { provider: row?.provider, model_key: row?.model_key, error: e?.message });
+        }
+      }
+
+      if (!succeeded) {
+        emit('error', { message: 'All providers exhausted', tried });
+      }
     } catch (e) {
       emit('error', { message: 'Agent loop failed', detail: e.message });
     } finally {

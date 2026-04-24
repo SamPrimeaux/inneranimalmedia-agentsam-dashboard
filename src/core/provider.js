@@ -118,7 +118,11 @@ async function dispatchOllama(env, request, params) {
   try {
     const upstream = await fetch(`${base}/api/chat`, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Access-Client-Id': env.OLLAMA_CF_CLIENT_ID,
+        'CF-Access-Client-Secret': env.OLLAMA_CF_CLIENT_SECRET,
+      },
       body: JSON.stringify({ model: modelKey, messages: ollamaMessages, stream: true, keep_alive: '10m' }),
     });
     if (!upstream.ok) throw new Error(`Ollama ${upstream.status}`);

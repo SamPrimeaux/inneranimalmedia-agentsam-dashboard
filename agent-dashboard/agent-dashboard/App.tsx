@@ -54,7 +54,8 @@ import { McpPage } from './components/McpPage';
 import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
-import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench } from 'lucide-react';
+import MeetPage from './app/pages/MeetPage';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -1423,6 +1424,7 @@ const App: React.FC = () => {
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
+              <ActivityIcon icon={Camera} title="Meet" active={location.pathname === '/dashboard/meet'} onClick={() => navigate('/dashboard/meet')} />
               <ActivityIcon icon={Settings} title="Settings" active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
           </div>
 
@@ -1493,7 +1495,7 @@ const App: React.FC = () => {
                         onClose={() => setActiveActivity(null)}
                         activeConversationId={agentChatConversationId}
                       />
-                  ) : activeActivity === 'files' ? (
+                  ) : activeActivity === 'files' && location.pathname !== '/dashboard/meet' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
                           onWorkspaceRootChange={({ folderName }) => {
@@ -1614,6 +1616,7 @@ const App: React.FC = () => {
                     <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
                     <Route path="/dashboard/storage" element={<StoragePage />} />
+                    <Route path="/dashboard/meet" element={<MeetPage />} />
                     <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
                   </Routes>
                 </div>

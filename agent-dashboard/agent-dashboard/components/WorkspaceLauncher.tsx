@@ -247,20 +247,24 @@ export const WorkspaceLauncher: React.FC<WorkspaceLauncherProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = (await r.json().catch(() => ({}))) as AgentsamWorkspaceRow & { error?: string };
+      const data = (await r.json().catch(() => ({}))) as {
+        workspace?: AgentsamWorkspaceRow;
+        error?: string;
+      } & AgentsamWorkspaceRow;
       if (!r.ok) {
         setCreateError(typeof data.error === 'string' ? data.error : 'Create failed');
         setCreating(false);
         return;
       }
+      const row = data.workspace ?? data;
       const ws: AgentsamWorkspaceRow = {
-        id: String(data.id),
-        display_name: String(data.display_name || name),
-        slug: String(data.slug || slug),
-        workspace_type: data.workspace_type ?? undefined,
-        r2_prefix: data.r2_prefix ?? null,
-        github_repo: data.github_repo ?? null,
-        updated_at: data.updated_at != null ? Number(data.updated_at) : undefined,
+        id: String(row.id),
+        display_name: String(row.display_name || name),
+        slug: String(row.slug || slug),
+        workspace_type: row.workspace_type ?? undefined,
+        r2_prefix: row.r2_prefix ?? null,
+        github_repo: row.github_repo ?? null,
+        updated_at: row.updated_at != null ? Number(row.updated_at) : undefined,
       };
       setRows((prev) => [ws, ...prev.filter((x) => x.id !== ws.id)]);
       await activateWorkspace(ws);

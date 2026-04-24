@@ -8,6 +8,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { handleStorageApi } from "./src/api/storage.js";
+import { handleWorkspaceApi } from "./src/api/workspace.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -13415,74 +13416,10 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     }
   }
 
-  if (pathLower === '/api/workspaces/list' && method === 'GET') {
+  if (pathLower.startsWith('/api/workspaces') || pathLower.startsWith('/api/workspace')) {
     const authUser = await getAuthUser(request, env);
-    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    try {
-      const { results } = await env.DB.prepare(
-        `SELECT w.id, w.name, w.domain, w.status, w.theme_id, w.handle,
-          (SELECT p.id FROM workspace_projects p WHERE p.workspace_id = w.id LIMIT 1) AS project_id
-         FROM workspaces w WHERE COALESCE(w.is_archived, 0) = 0 ORDER BY w.created_at DESC`
-      ).all();
-      const rows = (results || []).map((r) => ({ ...r, worker_id: null }));
-      return jsonResponse({ workspaces: rows });
-    } catch (e) {
-      return jsonResponse({ error: String(e?.message || e) }, 500);
-    }
-  }
-
-  const wsIdMatch = path.match(/^\/api\/workspaces\/([^/]+)$/i);
-  if (wsIdMatch && (method === 'GET' || method === 'PATCH')) {
-    const wsId = decodeURIComponent(wsIdMatch[1] || '').trim();
-    if (!wsId || wsId === 'current') {
-      return jsonResponse({ error: 'Not found' }, 404);
-    }
-    const authUser = await getAuthUser(request, env);
-    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    if (method === 'GET') {
-      try {
-        const row = await env.DB.prepare(
-          `SELECT w.*, ws.settings_json AS workspace_settings_json, ws.theme_id AS settings_theme_id
-           FROM workspaces w
-           LEFT JOIN workspace_settings ws ON ws.workspace_id = w.id
-           WHERE w.id = ?`
-        ).bind(wsId).first();
-        if (!row) return jsonResponse({ error: 'Not found' }, 404);
-        return jsonResponse({ workspace: row });
-      } catch (e) {
-        return jsonResponse({ error: String(e?.message || e) }, 500);
-      }
-    }
-    if (method === 'PATCH') {
-      try {
-        const body = await request.json().catch(() => ({}));
-        const name = body.name != null ? String(body.name) : undefined;
-        const theme_id = body.theme_id != null ? body.theme_id : undefined;
-        const status = body.status != null ? String(body.status) : undefined;
-        const sets = [];
-        const binds = [];
-        if (name !== undefined) {
-          sets.push('name = ?');
-          binds.push(name);
-        }
-        if (theme_id !== undefined) {
-          sets.push('theme_id = ?');
-          binds.push(theme_id);
-        }
-        if (status !== undefined) {
-          sets.push('status = ?');
-          binds.push(status);
-        }
-        if (sets.length === 0) return jsonResponse({ error: 'No patchable fields (name, theme_id, status)' }, 400);
-        binds.push(wsId);
-        await env.DB.prepare(`UPDATE workspaces SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...binds).run();
-        return jsonResponse({ ok: true, id: wsId });
-      } catch (e) {
-        return jsonResponse({ error: String(e?.message || e) }, 500);
-      }
-    }
+    const modularWs = await handleWorkspaceApi(request, url, env, ctx, authUser);
+    if (modularWs) return modularWs;
   }
 
   if (pathLower === '/api/r2/list' && method === 'GET') {

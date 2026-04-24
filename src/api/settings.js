@@ -344,28 +344,38 @@ export async function handleSettingsRequest(request, env, ctx) {
     }
   }
 
-  // ── POST /api/settings/workspaces/active — touch agentsam_workspace (sort order) ──
+  // ── POST /api/settings/workspaces/active — touch workspaces (sort order) ──
   if (pathLower === '/api/settings/workspaces/active' && method === 'POST') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
     try {
       const tenantId = await resolveAuthTenantId(env, authUser);
-      if (!tenantId) return jsonResponse({ error: 'Tenant required' }, 403);
+      const isSuper = Number(authUser.is_superadmin) === 1;
+      if (!tenantId && !isSuper) return jsonResponse({ error: 'Tenant required' }, 403);
       const body = await request.json().catch(() => ({}));
       const id = body.id != null ? String(body.id).trim() : '';
       if (!id) return jsonResponse({ error: 'id required' }, 400);
 
       const row = await env.DB.prepare(
-        `SELECT id, display_name, slug FROM agentsam_workspace WHERE id = ? AND tenant_id = ? LIMIT 1`,
+        `SELECT w.id, w.display_name, w.slug, w.workspace_type, w.r2_prefix, w.github_repo, w.settings_json,
+                w.tenant_id
+         FROM workspaces w
+         WHERE w.id = ?
+           AND (
+             w.tenant_id = ?
+             OR EXISTS (
+               SELECT 1 FROM workspace_members wm
+               WHERE wm.workspace_id = w.id AND wm.user_id = ?
+                 AND COALESCE(wm.is_active, 1) = 1
+             )
+             OR (? = 1)
+           )
+         LIMIT 1`,
       )
-        .bind(id, tenantId)
+        .bind(id, tenantId ?? '', userId, isSuper ? 1 : 0)
         .first();
       if (!row) return jsonResponse({ error: 'Workspace not found' }, 404);
 
-      await env.DB.prepare(
-        `UPDATE agentsam_workspace SET updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`,
-      )
-        .bind(id, tenantId)
-        .run();
+      await env.DB.prepare(`UPDATE workspaces SET updated_at = datetime('now') WHERE id = ?`).bind(id).run();
 
       try {
         await env.DB.prepare(
@@ -383,6 +393,10 @@ export async function handleSettingsRequest(request, env, ctx) {
           id: row.id,
           display_name: row.display_name,
           slug: row.slug,
+          workspace_type: row.workspace_type ?? null,
+          r2_prefix: row.r2_prefix ?? null,
+          github_repo: row.github_repo ?? null,
+          settings_json: row.settings_json ?? null,
         },
         ok: true,
         current: id,

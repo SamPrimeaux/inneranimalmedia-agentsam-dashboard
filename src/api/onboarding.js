@@ -123,6 +123,29 @@ function jsonSafe(val, fallback) {
   return typeof val === 'object' ? val : fallback;
 }
 
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatPublishedWorkHtml(publishedWorkJsonStr) {
+  const arr = jsonSafe(publishedWorkJsonStr, []);
+  if (!Array.isArray(arr) || !arr.length) return '—';
+  return arr
+    .map((w) => {
+      if (w && typeof w === 'object') {
+        const t = escapeHtml(String(w.title ?? ''));
+        const u = escapeHtml(String(w.url ?? ''));
+        return `${t} — ${u}`;
+      }
+      return escapeHtml(String(w));
+    })
+    .join('<br>');
+}
+
 async function provisionInviteUser(env, { email, name, authUserId }) {
   if (!env.DB || !email) return null;
   const localPart = email
@@ -871,6 +894,71 @@ export async function handleOnboardingApi(request, url, env, _ctx = null) {
       personalityTone,
       avatarUrl: avatar_url || null,
     });
+
+    // Notify Sam with full intake summary + meet link (fire-and-forget)
+    if (env.RESEND_API_KEY) {
+      const meetUrl = 'https://inneranimalmedia.com/dashboard/meet';
+      const tenantId = prof.tenant_id;
+      const userId = platformUserId;
+      const namePlain = String(body.name || body.display_name || displayName || 'Student')
+        .trim()
+        .slice(0, 200);
+      const emailPlain = prof.email;
+      const arrJoin = (jsonStr, sep) => {
+        const a = jsonSafe(jsonStr, []);
+        if (!Array.isArray(a) || !a.length) return '—';
+        const out = a.map((x) => escapeHtml(String(x))).join(sep);
+        return out || '—';
+      };
+      const intakeSummary = `
+<div style="font-family:'Courier New',monospace;background:#00212b;color:#b0c4ce;padding:32px;border:1px solid #1e3e4a;">
+  <div style="color:#2dd4bf;font-size:14px;margin-bottom:24px;">&#x25B8; New intake completed — ${escapeHtml(namePlain)}</div>
+
+  <table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <tr><td style="color:#4a6a7a;padding:6px 0;width:160px;">Name</td><td style="color:#e8f4f8;">${escapeHtml(namePlain)}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Email</td><td style="color:#e8f4f8;">${escapeHtml(emailPlain)}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Skill level</td><td style="color:#e8f4f8;">${escapeHtml(skill) || '—'}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Stack</td><td style="color:#e8f4f8;">${arrJoin(current_stack, ', ')}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Favorite tools</td><td style="color:#e8f4f8;">${arrJoin(favorite_tools, ', ')}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Favorite AI</td><td style="color:#e8f4f8;">${arrJoin(favorite_ai, ', ')}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Platforms</td><td style="color:#e8f4f8;">${arrJoin(favorite_platforms, ', ')}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Aspirations</td><td style="color:#e8f4f8;">${escapeHtml(aspirations).replace(/\n/g, '<br>') || '—'}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Goals</td><td style="color:#e8f4f8;">${arrJoin(goals_json, ' · ')}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">GitHub</td><td style="color:#e8f4f8;">${github_username ? `@${escapeHtml(github_username)}` : '—'}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Portfolio</td><td style="color:#e8f4f8;">${portfolio_url ? escapeHtml(portfolio_url) : '—'}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Published work</td><td style="color:#e8f4f8;">${formatPublishedWorkHtml(published_work_json)}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">Tenant ID</td><td style="color:#2dd4bf;font-size:11px;">${escapeHtml(tenantId)}</td></tr>
+    <tr><td style="color:#4a6a7a;padding:6px 0;">User ID</td><td style="color:#2dd4bf;font-size:11px;">${escapeHtml(userId)}</td></tr>
+  </table>
+
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #1e3e4a;">
+    <div style="color:#4a6a7a;font-size:11px;margin-bottom:12px;">JOIN A CALL</div>
+    <a href="${meetUrl}" style="display:inline-block;padding:10px 24px;background:#2dd4bf;color:#00212b;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;text-decoration:none;border-radius:4px;">Open Meet — ${escapeHtml(meetUrl)}</a>
+    <p style="margin-top:12px;color:#4a6a7a;font-size:11px;">Share this link with the student: <span style="color:#7a9aaa;">${escapeHtml(meetUrl)}</span></p>
+  </div>
+
+  <div style="margin-top:24px;color:#2a4a5a;font-size:10px;">
+    Inner Animal Media · Submitted ${escapeHtml(
+      new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }),
+    )} CT
+  </div>
+</div>
+`.trim();
+
+      fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>',
+          to: ['sam@inneranimalmedia.com'],
+          subject: `[IAM] ${namePlain}'s intake is in — ${new Date().toLocaleDateString()}`,
+          html: intakeSummary,
+        }),
+      }).catch((e) => console.warn('[sam-notify]', e?.message));
+    }
 
     await warnDb('iam_user_onboarding_step_intake', async () => {
       await env.DB

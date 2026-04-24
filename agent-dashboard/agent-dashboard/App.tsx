@@ -1987,9 +1987,73 @@ const App: React.FC = () => {
                   )}
                   </div>
 
+                  {/* Agent page keeps integrated terminal mount (existing behavior). */}
+                  {isTerminalOpen && (
+                      <XTermShell
+                          ref={terminalRef}
+                          onClose={() => setIsTerminalOpen(false)}
+                          problems={systemProblems ?? []}
+                          iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
+                          workspaceLabel={workspaceDisplayLine}
+                          workspaceId={authWorkspaceId || undefined}
+                          productLabel={PRODUCT_NAME}
+                          outputLines={shellOutputLines}
+                          onOutputLine={(line) =>
+                            setShellOutputLines((prev) => [...prev.slice(-250), line])
+                          }
+                      />
+                  )}
               </div>
           </>
               )}
+
+              {/* Global persistent terminal drawer — mounted once, resizable, survives navigation */}
+              {/* display:none preserves PTY WebSocket — never use conditional rendering here */}
+              <div
+                style={{
+                  display: isTerminalOpen && location.pathname !== '/dashboard/agent' ? 'flex' : 'none',
+                  flexDirection: 'column',
+                  height: `${terminalDrawerH}px`,
+                  flexShrink: 0,
+                  borderTop: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-panel)',
+                  position: 'relative',
+                  zIndex: 60,
+                  width: '100%',
+                }}
+              >
+                {/* Drag handle (vertical resize) */}
+                <div
+                  onPointerDown={beginTerminalResize}
+                  style={{
+                    height: 4,
+                    cursor: 'ns-resize',
+                    background: 'transparent',
+                    borderBottom: '1px solid var(--border-subtle)',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.background = 'var(--solar-cyan)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+                  }}
+                  title="Drag to resize terminal"
+                  aria-label="Resize terminal"
+                />
+                <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+                  <XTermShell
+                    ref={terminalRef}
+                    iamOrigin={window.location.origin}
+                    workspaceLabel={workspaceDisplayName || ''}
+                    workspaceId={authWorkspaceId || ''}
+                    productLabel="IAM"
+                    outputLines={shellOutputLines}
+                    onOutputLine={(line) => setShellOutputLines((prev) => [...prev.slice(-250), line])}
+                    problems={systemProblems ?? []}
+                    onClose={() => setIsTerminalOpen(false)}
+                  />
+                </div>
+              </div>
           </main>
 
           {/* 6. Optional Right Agent Panel */}
@@ -2047,47 +2111,6 @@ const App: React.FC = () => {
               </>
           )}
       </div>
-      {/* Global persistent terminal drawer — mounted once, resizable, survives navigation */}
-      {/* display:none preserves PTY WebSocket — never use conditional rendering here */}
-      <div
-        style={{
-          display: isTerminalOpen ? 'flex' : 'none',
-          flexDirection: 'column',
-          height: `${terminalDrawerH}px`,
-          flexShrink: 0,
-          borderTop: '1px solid var(--border-subtle)',
-          background: 'var(--bg-panel)',
-          position: 'relative',
-          zIndex: 60,
-        }}
-      >
-        {/* Drag handle (vertical resize) */}
-        <div
-          onPointerDown={beginTerminalResize}
-          style={{
-            height: 8,
-            cursor: 'row-resize',
-            background: 'transparent',
-            borderBottom: '1px solid var(--border-subtle)',
-          }}
-          title="Drag to resize terminal"
-          aria-label="Resize terminal"
-        />
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          <XTermShell
-            ref={terminalRef}
-            iamOrigin={window.location.origin}
-            workspaceLabel={workspaceDisplayName || ''}
-            workspaceId={authWorkspaceId || ''}
-            productLabel="IAM"
-            outputLines={shellOutputLines}
-            onOutputLine={(line) => setShellOutputLines((prev) => [...prev.slice(-250), line])}
-            problems={systemProblems ?? []}
-            onClose={() => setIsTerminalOpen(false)}
-          />
-        </div>
-      </div>
-      
       {/* 8. STATUS BAR (FOOTER) */}
       {toastMsg && (
         <div

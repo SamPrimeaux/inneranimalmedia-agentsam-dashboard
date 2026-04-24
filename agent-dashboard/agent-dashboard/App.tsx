@@ -55,10 +55,11 @@ import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
 import ImagesPage from './components/ImagesPage';
+import { MailPage } from './components/MailPage';
 import MeetPage from './app/pages/MeetPage';
 import { MeetProvider, MeetCtxValue } from './src/MeetContext';
 import { MeetShellPanel } from './components/MeetShellPanel';
-import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image } from 'lucide-react';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -1556,6 +1557,12 @@ const App: React.FC = () => {
                 active={location.pathname === '/dashboard/images'}
                 onClick={() => navigate('/dashboard/images')}
               />
+              <ActivityIcon
+                icon={Mail}
+                title="Mail"
+                active={location.pathname === '/dashboard/mail'}
+                onClick={() => navigate('/dashboard/mail')}
+              />
               <ActivityIcon icon={Settings} title="Settings" active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
           </div>
 
@@ -1752,6 +1759,7 @@ const App: React.FC = () => {
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
                     <Route path="/dashboard/storage" element={<StoragePage />} />
                     <Route path="/dashboard/images" element={<ImagesPage />} />
+                    <Route path="/dashboard/mail" element={<MailPage />} />
                     <Route
                       path="/dashboard/meet"
                       element={

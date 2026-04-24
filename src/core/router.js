@@ -36,6 +36,7 @@ import { handleWorkspaceApi }        from '../api/workspace.js';
 import { handleHubApi }              from '../api/hub.js';
 import { handleHealthApi }           from '../api/health.js';
 import { handleDrawApi }             from '../api/draw.js';
+import { handleMailApi }             from '../api/mail.js';
 import { handleGitStatusApi }        from '../api/git-status.js';
 import { handleAdminApi }            from '../api/admin.js';
 import { handleGithubApi }           from '../api/github.js';
@@ -501,6 +502,8 @@ export async function handleRequest(request, env, ctx) {
   if (path.startsWith('/api/draw') || path.startsWith('/api/canvas')) {
     return handleDrawApi(request, url, env, ctx);
   }
+
+  if (path.startsWith('/api/mail')) return handleMailApi(request, url, env, ctx);
 
   // ── Admin ──────────────────────────────────────────────────────────────────
   if (path.startsWith('/api/admin')) {

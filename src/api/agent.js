@@ -451,6 +451,7 @@ async function runAgentToolLoop(env, ctx, emit, params) {
   while (turnCount < 10) {
     turnCount++;
     let stream;
+    let isWorkersAiStream = false;
     try {
       // Provider resolved from ai_models.api_platform — no hardcoding.
       // But Workers AI streaming must be consumed as a ReadableStream (not async iterable, not a wrapped Response).
@@ -461,6 +462,7 @@ async function runAgentToolLoop(env, ctx, emit, params) {
           ...conversationMessages,
         ];
         stream = await env.AI.run(modelKey, { messages: waiMessages, stream: true });
+        isWorkersAiStream = true;
         const ctor = stream && stream.constructor ? stream.constructor.name : typeof stream;
         console.warn('[agent] workers_ai stream type:', ctor, stream && typeof stream);
       } else {
@@ -481,6 +483,20 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     const pendingToolCalls = [];
     let stopReason = null, turnUsage = null;
     const assistantContent = [];
+
+    const consumeWorkersAiText = async (readable) => {
+      const reader = readable.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        if (!text || !text.trim()) continue;
+        const last = assistantContent.findLast(b => b.type === 'text');
+        if (last) last.text += text;
+        emit('text', { text });
+      }
+    };
 
     const consumeSseText = async (readable) => {
       const reader = readable.getReader();
@@ -528,9 +544,12 @@ async function runAgentToolLoop(env, ctx, emit, params) {
       if (stream.body) await consumeSseText(stream.body);
       stopReason = 'end_turn';
     } else if (stream && typeof stream.getReader === 'function') {
-      // Workers AI can return a ReadableStream; consume it directly.
       assistantContent.push({ type: 'text', text: '' });
-      await consumeSseText(stream);
+      if (isWorkersAiStream) {
+        await consumeWorkersAiText(stream);
+      } else {
+        await consumeSseText(stream);
+      }
       stopReason = 'end_turn';
     } else {
       const ctor = stream && stream.constructor ? stream.constructor.name : typeof stream;

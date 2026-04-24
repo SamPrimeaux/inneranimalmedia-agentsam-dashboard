@@ -33,6 +33,19 @@ async function callsRequest(env, path, method = 'GET', body = null) {
   return res.json();
 }
 
+async function ensureMeetMessagesTable(db) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS meet_messages (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+      room_id TEXT NOT NULL,
+      user_id TEXT,
+      display_name TEXT,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `).run();
+}
+
 async function upsertParticipant(db, { roomId, userId, displayName, sessionId, tracksJson }) {
   await db.prepare(`
     INSERT INTO meet_participants (room_id, user_id, display_name, session_id, tracks_json, joined_at, last_seen_at)
@@ -154,6 +167,7 @@ async function handleRoomPoll(request, env, roomId) {
   const { userId } = await getUserId(request, env);
   if (!userId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const db = env.DB;
+  await ensureMeetMessagesTable(db);
   await pruneStale(db, roomId);
 
   const [participants, messages, room] = await Promise.all([
@@ -163,7 +177,7 @@ async function handleRoomPoll(request, env, roomId) {
     `).bind(roomId).all(),
     db.prepare(`
       SELECT id, user_id, display_name, content, created_at
-      FROM meet_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 50
+      FROM meet_messages WHERE room_id = ? ORDER BY created_at ASC
     `).bind(roomId).all(),
     db.prepare(`SELECT id, name, created_by FROM meet_rooms WHERE id = ?`).bind(roomId).first(),
   ]);
@@ -175,7 +189,10 @@ async function handleRoomPoll(request, env, roomId) {
     participants: (participants.results || []).map(p => ({
       ...p, tracks: JSON.parse(p.tracks_json || '[]'),
     })),
-    messages: (messages.results || []).reverse(),
+    messages: (messages.results || []).map((m) => ({
+      ...m,
+      created_at: m?.created_at ? new Date(`${String(m.created_at).replace(' ', 'T')}Z`).toISOString() : null,
+    })),
   }, 200);
 }
 
@@ -266,6 +283,7 @@ async function handleChat(request, env, roomId) {
   const body    = await request.json().catch(() => ({}));
   const content = (body.content || '').trim().slice(0, 2000);
   if (!content) return jsonResponse({ error: 'content required' }, 400);
+  await ensureMeetMessagesTable(env.DB);
 
   const participant = await env.DB.prepare(`
     SELECT display_name FROM meet_participants WHERE room_id = ? AND user_id = ?

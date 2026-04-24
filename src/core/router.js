@@ -40,6 +40,7 @@ import { handleMailApi }             from '../api/mail.js';
 import { handleGitStatusApi }        from '../api/git-status.js';
 import { handleAdminApi }            from '../api/admin.js';
 import { handleGithubApi }           from '../api/github.js';
+import { handleLearnApi }            from '../api/learn.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -504,6 +505,8 @@ export async function handleRequest(request, env, ctx) {
   }
 
   if (path.startsWith('/api/mail')) return handleMailApi(request, url, env, ctx);
+
+  if (path.startsWith('/api/learn')) return handleLearnApi(request, url, env, ctx);
 
   // ── Admin ──────────────────────────────────────────────────────────────────
   if (path.startsWith('/api/admin')) {

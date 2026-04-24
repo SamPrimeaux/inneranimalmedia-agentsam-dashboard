@@ -30,6 +30,7 @@ import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
 import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { SourcePanel } from './components/SourcePanel';
+import LearnPage from './components/LearnPage';
 import { ProjectType, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
 import {
@@ -59,7 +60,7 @@ import { MailPage } from './components/MailPage';
 import MeetPage from './app/pages/MeetPage';
 import { MeetProvider, MeetCtxValue } from './src/MeetContext';
 import { MeetShellPanel } from './components/MeetShellPanel';
-import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail } from 'lucide-react';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -712,6 +713,7 @@ const App: React.FC = () => {
       if (!d?.cmd) return;
       
       setIsTerminalOpen(true);
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       // Give terminal a frame to mount if it's currently closed
       requestAnimationFrame(() => {
         if (terminalRef.current) {
@@ -724,8 +726,13 @@ const App: React.FC = () => {
       const d = (e as CustomEvent<{ open?: boolean }>).detail;
       if (d && typeof d.open === 'boolean') {
         setIsTerminalOpen(d.open);
+        if (d.open) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       } else {
-        setIsTerminalOpen(o => !o);
+        setIsTerminalOpen((p) => {
+          const next = !p;
+          if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+          return next;
+        });
       }
     };
 
@@ -736,6 +743,15 @@ const App: React.FC = () => {
       window.removeEventListener('iam-run-command', onRun as EventListener);
       window.removeEventListener('iam-terminal-toggle', onToggle as EventListener);
     };
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      setIsTerminalOpen(true);
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+    };
+    window.addEventListener('iam:open-terminal', handler);
+    return () => window.removeEventListener('iam:open-terminal', handler);
   }, []);
 
   const toggleActivity = (
@@ -1341,7 +1357,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
-            setIsTerminalOpen(p => !p);
+            setIsTerminalOpen((p) => {
+              const next = !p;
+              if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+              return next;
+            });
             e.preventDefault();
         }
     };
@@ -1450,7 +1470,13 @@ const App: React.FC = () => {
                   type="button"
                   title="Terminal (Cmd+J)"
                   className={`p-1.5 rounded transition-colors ${isTerminalOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => setIsTerminalOpen((p) => !p)}
+                  onClick={() =>
+                    setIsTerminalOpen((p) => {
+                      const next = !p;
+                      if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+                      return next;
+                    })
+                  }
               >
                   <TermIcon size={15} strokeWidth={1.75} />
               </button>
@@ -1530,6 +1556,7 @@ const App: React.FC = () => {
           <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-3 border-r border-[var(--border-subtle)] shrink-0 z-50">
               <ActivityIcon icon={Home} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
               <ActivityIcon icon={Bot} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
+              <ActivityIcon icon={GraduationCap} title="Learn" active={location.pathname === '/dashboard/learn'} onClick={() => navigate('/dashboard/learn')} />
               <ActivityIcon
                   icon={Palette}
                   title="Design Studio"
@@ -1753,6 +1780,7 @@ const App: React.FC = () => {
                   <Routes>
                     <Route path="/dashboard/calendar" element={<CalendarPage />} />
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
+                    <Route path="/dashboard/learn" element={<LearnPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
                     <Route path="/dashboard/mcp" element={<McpPage />} />
                     <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
@@ -1918,7 +1946,6 @@ const App: React.FC = () => {
                           onClose={() => setIsTerminalOpen(false)}
                           problems={systemProblems ?? []}
                           iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
-                          workspaceCdCommand="cd /Users/samprimeaux/inneranimalmedia"
                           workspaceLabel={workspaceDisplayLine}
                           workspaceId={authWorkspaceId || undefined}
                           productLabel={PRODUCT_NAME}
@@ -1987,6 +2014,33 @@ const App: React.FC = () => {
                 </div>
               </>
           )}
+      </div>
+
+      {/* Global persistent terminal — mounted once, survives all page navigation */}
+      {/* display:none preserves PTY WebSocket — never use conditional rendering here */}
+      <div
+        style={{
+          display: isTerminalOpen && location.pathname !== '/dashboard/agent' ? 'flex' : 'none',
+          flexDirection: 'column',
+          height: '288px',
+          flexShrink: 0,
+          borderTop: '1px solid var(--border-subtle)',
+          background: 'var(--bg-panel)',
+          position: 'relative',
+          zIndex: 50,
+        }}
+      >
+        <XTermShell
+          ref={terminalRef}
+          iamOrigin={window.location.origin}
+          workspaceLabel={workspaceDisplayName || ''}
+          workspaceId={authWorkspaceId || ''}
+          productLabel="IAM"
+          outputLines={shellOutputLines}
+          onOutputLine={(line) => setShellOutputLines((prev) => [...prev, line])}
+          problems={systemProblems ?? []}
+          onClose={() => setIsTerminalOpen(false)}
+        />
       </div>
       
       {/* 8. STATUS BAR (FOOTER) */}

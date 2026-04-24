@@ -61,6 +61,12 @@ interface XTermShellProps {
   workspaceLabel?: string;
   workspaceId?: string;
   productLabel?: string;
+  /**
+   * Layout mode:
+   * - page: component owns its height (resizable + collapsible)
+   * - drawer: parent container owns height (global terminal drawer)
+   */
+  layout?: 'page' | 'drawer';
 }
 
 const MIN_HEIGHT = 140;
@@ -246,9 +252,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       workspaceLabel = '',
       workspaceId,
       productLabel = DEFAULT_PRODUCT,
+      layout = 'page',
     },
     ref,
   ) => {
+    const isDrawer = layout === 'drawer';
     const [resolvedOrigin, setResolvedOrigin] = useState(
       iamOrigin ?? (typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'),
     );
@@ -293,6 +301,12 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const intentionalCloseRef             = useRef(false);
     const activeConnectRef                = useRef<() => void>(() => {});
     const connectInFlightRef              = useRef(false);
+
+    // In global drawer mode, the parent owns the height; keep the shell expanded
+    // and disable internal collapse/resize to avoid nested sizing conflicts.
+    useEffect(() => {
+      if (isDrawer) setIsCollapsed(false);
+    }, [isDrawer]);
 
     const refreshBootstrap = useCallback(async () => {
       cachedBootstrapRef.current = null;
@@ -845,16 +859,17 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         <div
           className="iam-scanlines relative flex flex-col border-t shadow-[0_-4px_20px_rgba(0,0,0,0.3)] shrink-0"
           style={{
-            height: isCollapsed ? '36px' : `${height}px`,
+            height: isDrawer ? '100%' : (isCollapsed ? '36px' : `${height}px`),
             background: 'var(--terminal-chrome)',
             borderColor: 'var(--solar-cyan, #2aa198)',
             borderTopWidth: '1px',
-            transition: 'height 0.2s ease-out',
+            transition: isDrawer ? 'none' : 'height 0.2s ease-out',
             zIndex: 40,
+            ...(isDrawer ? { flex: '1 1 0%', minHeight: 0 } : null),
           }}
         >
           {/* Resize handle */}
-          {!isCollapsed && (
+          {!isDrawer && !isCollapsed && (
             <div
               className="h-1 w-full shrink-0 cursor-ns-resize group flex items-center justify-center"
               onMouseDown={handleDragStart}
@@ -993,14 +1008,16 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   <TerminalIcon size={12} />
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
-                title={isCollapsed ? 'Expand' : 'Minimize'}
-              >
-                {isCollapsed ? <ChevronUp size={15} strokeWidth={2} /> : <ChevronDown size={15} strokeWidth={2} />}
-              </button>
+              {!isDrawer && (
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed(!isCollapsed)}
+                  className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
+                  title={isCollapsed ? 'Expand' : 'Minimize'}
+                >
+                  {isCollapsed ? <ChevronUp size={15} strokeWidth={2} /> : <ChevronDown size={15} strokeWidth={2} />}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}

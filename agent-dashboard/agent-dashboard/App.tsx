@@ -1997,6 +1997,7 @@ const App: React.FC = () => {
                           workspaceLabel={workspaceDisplayLine}
                           workspaceId={authWorkspaceId || undefined}
                           productLabel={PRODUCT_NAME}
+                          layout="page"
                           outputLines={shellOutputLines}
                           onOutputLine={(line) =>
                             setShellOutputLines((prev) => [...prev.slice(-250), line])
@@ -2047,6 +2048,7 @@ const App: React.FC = () => {
                     workspaceLabel={workspaceDisplayName || ''}
                     workspaceId={authWorkspaceId || ''}
                     productLabel="IAM"
+                    layout="drawer"
                     outputLines={shellOutputLines}
                     onOutputLine={(line) => setShellOutputLines((prev) => [...prev.slice(-250), line])}
                     problems={systemProblems ?? []}

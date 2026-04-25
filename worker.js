@@ -351,10 +351,9 @@ async function getSuperadminAuthIds(env) {
   }
   try {
     const result = await env.DB.prepare(
-      `SELECT au.id AS auth_id, au.email, u.id AS user_id
-       FROM auth_users au
-       LEFT JOIN users u ON u.auth_id = au.id
-       WHERE COALESCE(au.is_superadmin, 0) = 1`
+      `SELECT superadmin_uuid AS auth_id, superadmin_uuid AS user_id, email
+       FROM superadmin_identity
+       WHERE COALESCE(is_enabled, 0) = 1`
     ).all();
     const cache = { authIds: new Set(), userIds: new Set(), emails: new Set() };
     for (const row of result.results || []) {
@@ -376,7 +375,7 @@ async function isSuperadminEmail(env, email) {
   if (!em || !env?.DB) return false;
   try {
     const row = await env.DB.prepare(
-      `SELECT 1 FROM auth_users WHERE LOWER(email) = ? AND COALESCE(is_superadmin, 0) = 1 LIMIT 1`
+      `SELECT 1 FROM superadmin_identity WHERE LOWER(email) = ? AND COALESCE(is_enabled, 0) = 1 LIMIT 1`
     ).bind(em).first();
     return !!row;
   } catch (e) {
@@ -406,6 +405,42 @@ async function isSuperadminSessionUserKey(env, userKey) {
 async function buildSuperadminContext(env, sessionId, sessionUserKey) {
   const key = String(sessionUserKey || '').trim();
   if (!key) throw new Error('empty session user key');
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, superadmin_uuid, email, name, tenant_id, permissions_json
+       FROM superadmin_identity
+       WHERE (LOWER(email) = LOWER(?) OR superadmin_uuid = ?)
+         AND COALESCE(is_enabled, 0) = 1
+       LIMIT 1`
+    ).bind(key, key).first();
+    if (row?.superadmin_uuid) {
+      await env.DB.prepare(
+        `UPDATE superadmin_identity SET last_login_at = unixepoch() WHERE id = ?`
+      ).bind(row.id).run();
+      let permissions = {};
+      try {
+        permissions = JSON.parse(row.permissions_json || '{}');
+      } catch (_) {
+        permissions = {};
+      }
+      return {
+        id: sessionId,
+        email: String(row.email || key).toLowerCase(),
+        user_id: row.superadmin_uuid,
+        _session_user_id: String(row.email || key).toLowerCase(),
+        name: row.name || 'User',
+        role: 'superadmin',
+        permissions,
+        tenant_id: row.tenant_id || null,
+        workspace_id: 'ws_inneranimalmedia',
+        is_active: 1,
+        is_superadmin: 1,
+        superadmin_uuid: row.superadmin_uuid,
+      };
+    }
+  } catch (e) {
+    console.warn('[buildSuperadminContext] superadmin_identity', e?.message ?? e);
+  }
   let authRow = null;
   if (key.includes('@')) {
     authRow = await env.DB.prepare(
@@ -25901,13 +25936,27 @@ async function handleUnifiedSearchTrack(request, env) {
   if (!qtext) return jsonResponse({ error: 'query required' }, 400);
   const resultKind = (body?.result_kind || body?.kind || '').toString().trim() || 'open';
   const openedId = body?.opened_id != null ? String(body.opened_id).slice(0, 200) : null;
+  const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+  const workspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
+  const sessionId = authUser.session_id || null;
   const id = crypto.randomUUID();
   try {
     await env.DB.prepare(
-      `INSERT INTO ai_search_analytics (id, user_id, query, result_kind, opened_id, created_at)
-       VALUES (?, ?, ?, ?, ?, unixepoch())`
+      `INSERT INTO ai_search_analytics
+        (id, tenant_id, workspace_id, user_id, query, results_count, clicked_result_id,
+         search_type, provider, model, latency_ms, session_id, source, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL, 0, ?, 'unified_search', unixepoch())`
     )
-      .bind(id, uid || null, qtext.slice(0, 2000), resultKind.slice(0, 64), openedId)
+      .bind(
+        id,
+        tenantId || null,
+        workspaceId || null,
+        uid || null,
+        qtext.slice(0, 2000),
+        openedId,
+        resultKind.slice(0, 64),
+        sessionId
+      )
       .run();
     return jsonResponse({ ok: true, id });
   } catch (e) {
@@ -26456,6 +26505,28 @@ async function getAuthUser(request, env) {
   if (!tenantId && sessionUserId && sessionUserId !== session.user_id) {
     tenantId = await fetchAuthUserTenantId(env, sessionUserId);
   }
+  let superadminIdentity = null;
+  if (env.DB && sessionUserId) {
+    const loginEmail = String(sessionUserId || '').trim().toLowerCase();
+    if (loginEmail.includes('@')) {
+      try {
+        superadminIdentity = await env.DB.prepare(
+          `SELECT id, superadmin_uuid, email, name, tenant_id, permissions_json
+           FROM superadmin_identity
+           WHERE LOWER(email) = ? AND COALESCE(is_enabled, 0) = 1
+           LIMIT 1`
+        ).bind(loginEmail).first();
+        if (superadminIdentity) {
+          await env.DB.prepare(
+            `UPDATE superadmin_identity SET last_login_at = unixepoch() WHERE id = ?`
+          ).bind(superadminIdentity.id).run();
+          tenantId = superadminIdentity.tenant_id || tenantId;
+        }
+      } catch (e) {
+        console.warn('[getAuthUser superadmin_identity]', e?.message ?? e);
+      }
+    }
+  }
   const sid = session.id || session.session_id;
   if (sid && tenantId && (session.tenant_id == null || String(session.tenant_id).trim() === '')) {
     env.DB
@@ -26467,7 +26538,7 @@ async function getAuthUser(request, env) {
       .catch((e) => console.warn('[auth_sessions tenant patch]', e?.message ?? e));
     void writeIamSessionToKv(env, sid, session.user_id, tenantId, session.expires_at);
   }
-  let is_superadmin = 0;
+  let is_superadmin = superadminIdentity ? 1 : 0;
   if (env.DB && session.user_id != null) {
     const uid = String(session.user_id).trim();
     try {
@@ -26500,7 +26571,26 @@ async function getAuthUser(request, env) {
       console.warn('[getAuthUser is_superadmin]', e?.message ?? e);
     }
   }
-  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId, is_superadmin };
+  if (superadminIdentity) {
+    let permissions = {};
+    try {
+      permissions = JSON.parse(superadminIdentity.permissions_json || '{}');
+    } catch (_) {
+      permissions = {};
+    }
+    return {
+      id: superadminIdentity.superadmin_uuid || session.user_id,
+      email: superadminIdentity.email || sessionUserId,
+      tenant_id: tenantId,
+      workspace_id: session.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID,
+      is_superadmin: 1,
+      superadmin_uuid: superadminIdentity.superadmin_uuid,
+      permissions,
+      session_id: sid || null,
+      _session_user_id: sessionUserId,
+    };
+  }
+  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId, is_superadmin, session_id: sid || null };
 }
 
 /** IDE workspace API: conversation must belong to this user (agent_conversations.user_id) or tenant (agent_sessions). */
@@ -26599,11 +26689,22 @@ function vaultErr(message, status = 400) {
   return vaultJson({ error: message }, status);
 }
 
+function vaultMasterKeyOrResponse(env) {
+  const vaultKey = env?.VAULT_MASTER_KEY;
+  if (!vaultKey) {
+    console.warn('[vault] VAULT_MASTER_KEY not configured');
+    return { response: vaultJson({ success: false, error: 'Vault not configured' }, 503) };
+  }
+  return { vaultKey };
+}
+
 async function vaultCreateSecret(request, env) {
   const body = await request.json();
   const { secret_name, secret_value, service_name, description, project_label, project_id, tags, scopes_json, expires_at } = body;
   if (!secret_name || !secret_value) return vaultErr('secret_name and secret_value are required');
-  const encrypted = await vaultEncrypt(secret_value, env.VAULT_MASTER_KEY);
+  const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
+  const encrypted = await vaultEncrypt(secret_value, vaultKey);
   const id = vaultNewId('sec');
   const last4val = vaultLast4(secret_value);
   const metadata = JSON.stringify({ last4: last4val });
@@ -26641,7 +26742,9 @@ async function vaultRevealSecret(id, eventType, request, env) {
   if (!row) return vaultErr('Secret not found or inactive', 404);
   let plaintext;
   try {
-    plaintext = await vaultDecrypt(row.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+    if (response) return response;
+    plaintext = await vaultDecrypt(row.secret_value_encrypted, vaultKey);
   } catch {
     return vaultErr('Decryption failed — master key may have changed', 500);
   }
@@ -26669,11 +26772,13 @@ async function vaultRotateSecret(id, request, env) {
   const existing = await env.DB.prepare(`SELECT * FROM user_secrets WHERE id = ? AND user_id = ?`).bind(id, VAULT_USER_ID).first();
   if (!existing) return vaultErr('Secret not found', 404);
   let oldLast4 = '????';
+  const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
   try {
-    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, vaultKey);
     oldLast4 = vaultLast4(oldPlain);
   } catch { }
-  const newEncrypted = await vaultEncrypt(new_value, env.VAULT_MASTER_KEY);
+  const newEncrypted = await vaultEncrypt(new_value, vaultKey);
   const newLast4 = vaultLast4(new_value);
   const newMeta = JSON.stringify({ ...JSON.parse(existing.metadata_json || '{}'), last4: newLast4 });
   await env.DB.prepare(`UPDATE user_secrets SET secret_value_encrypted = ?, metadata_json = ?, updated_at = unixepoch() WHERE id = ?`).bind(newEncrypted, newMeta, id).run();
@@ -26771,7 +26876,8 @@ function vaultRegistry() {
 }
 
 async function handleVaultRequest(request, env) {
-  if (!env.VAULT_MASTER_KEY) return vaultErr('VAULT_MASTER_KEY not configured. Run: wrangler secret put VAULT_MASTER_KEY', 500);
+  const { response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;

@@ -42,13 +42,14 @@ import { handleGitStatusApi }        from '../api/git-status.js';
 import { handleAdminApi }            from '../api/admin.js';
 import { handleLearnApi }            from '../api/learn.js';
 import { handleOnboardingApi }       from '../api/onboarding.js';
+import { handleAccessEvaluate }      from '../api/access.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Terminal-Secret, X-Internal-Secret',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cf-Access-Jwt-Assertion, X-Terminal-Secret, X-Internal-Secret',
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -261,6 +262,11 @@ export async function handleRequest(request, env, ctx) {
 
   // ── CORS Preflight ─────────────────────────────────────────────────────────
   if (method === 'OPTIONS') return corsPreFlight();
+
+  // ── Cloudflare Access External Evaluation (no app session) ────────────────
+  if (path === '/api/access/evaluate/mcp') {
+    return handleAccessEvaluate(request, env);
+  }
 
   // ── Collab WebSocket (must be before auth — WebSocket upgrade can't send JSON) ─
   if (path.startsWith('/api/collab/room/')) {

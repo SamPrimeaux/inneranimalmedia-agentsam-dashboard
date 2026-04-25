@@ -17361,6 +17361,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
  */
 async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run) {
   const MCP_WF_TENANT = tenantIdFromEnv(env) || 'global';
+  await ensureMcpWorkflowStepDefaults(env);
   const sid = session_id != null ? String(session_id) : null;
   const trig = triggered_by != null ? String(triggered_by) : 'manual';
   const wf = await env.DB.prepare(
@@ -17396,20 +17397,59 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
     return { error: 'Async execution context not available' };
   }
 
-  const run = await env.DB.prepare(
+  const runId = `wfr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  await env.DB.prepare(
     `INSERT INTO mcp_workflow_runs
-       (workflow_id, session_id, tenant_id, status, triggered_by, started_at)
-     VALUES (?, ?, ?, 'running', ?, unixepoch())
-     RETURNING *`
-  ).bind(workflow_id, sid, MCP_WF_TENANT, trig).first();
+       (id, workflow_id, session_id, tenant_id, status, triggered_by, started_at)
+     VALUES (?, ?, ?, ?, 'running', ?, unixepoch())`
+  ).bind(runId, workflow_id, sid, MCP_WF_TENANT, trig).run();
 
   await env.DB.prepare(
     `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
      updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
   ).bind(workflow_id, MCP_WF_TENANT).run();
 
-  ctx.waitUntil(executeWorkflowSteps(env, wf, run.id, sid));
-  return { run_id: run.id, status: 'running' };
+  ctx.waitUntil(executeWorkflowSteps(env, wf, runId, sid));
+  return { run_id: runId, status: 'running' };
+}
+
+const MCP_WORKFLOW_STEP_DEFAULTS = {
+  wf_d1_schema_audit: [
+    { tool: 'd1_query', params: { sql: "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name" } },
+  ],
+  wf_cost_telemetry_report: [
+    { tool: 'd1_query', params: { sql: 'SELECT provider, SUM(total_cost_usd) as cost, COUNT(*) as calls FROM agent_telemetry GROUP BY provider ORDER BY cost DESC' } },
+  ],
+  wf_table_health_report: [
+    { tool: 'd1_query', params: { sql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name" } },
+    { tool: 'd1_query', params: { sql: "SELECT COUNT(*) as rows, 'terminal_sessions' as tbl FROM terminal_sessions UNION ALL SELECT COUNT(*), 'mcp_tool_calls' FROM mcp_tool_calls UNION ALL SELECT COUNT(*), 'agent_telemetry' FROM agent_telemetry" } },
+  ],
+  wf_db_cleanup: [
+    { tool: 'd1_query', params: { sql: "UPDATE terminal_sessions SET status='closed' WHERE user_id='system_terminal' AND created_at < (unixepoch()-3600)" } },
+    { tool: 'd1_query', params: { sql: "DELETE FROM mcp_tool_calls WHERE created_at < datetime('now','-30 days')" } },
+  ],
+  wf_mcp_auth_token_rotate: [
+    { tool: 'terminal_execute', params: { command: 'npx wrangler secret put MCP_AUTH_TOKEN --name inneranimalmedia' }, requires_approval: true },
+  ],
+};
+
+let mcpWorkflowDefaultsEnsured = false;
+
+async function ensureMcpWorkflowStepDefaults(env) {
+  if (mcpWorkflowDefaultsEnsured || !env?.DB) return;
+  mcpWorkflowDefaultsEnsured = true;
+  for (const [id, steps] of Object.entries(MCP_WORKFLOW_STEP_DEFAULTS)) {
+    try {
+      await env.DB.prepare(
+        `UPDATE mcp_workflows
+         SET steps_json = ?
+         WHERE id = ?
+           AND (steps_json IS NULL OR TRIM(steps_json) = '' OR TRIM(steps_json) = '[]')`
+      ).bind(JSON.stringify(steps), id).run();
+    } catch (e) {
+      console.warn('[mcp workflow defaults]', id, e?.message ?? e);
+    }
+  }
 }
 
 const AGENTSAM_DB_QUERY_DEFAULTS = {
@@ -22557,6 +22597,46 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       let input_template =
         (step.input_template && typeof step.input_template === 'object' ? step.input_template : null) ||
         (step.params && typeof step.params === 'object' ? step.params : {});
+      try {
+        const toolRow = await env.DB.prepare(
+          `SELECT tool_name, tool_category, handler_config, input_schema, requires_approval, is_degraded, failure_rate
+           FROM mcp_registered_tools
+           WHERE tool_name = ? AND enabled = 1
+           LIMIT 1`
+        ).bind(tool_name).first();
+        if (!toolRow) {
+          failed = true;
+          lastError = `Tool not found: ${tool_name}`;
+          break;
+        }
+        if (Number(toolRow.requires_approval || 0) === 1 || step.requires_approval === true) {
+          failed = true;
+          lastError = `Tool requires approval: ${tool_name}`;
+          break;
+        }
+        if (Number(toolRow.is_degraded || 0) === 1) {
+          failed = true;
+          lastError = `Tool degraded: ${tool_name}`;
+          break;
+        }
+        if (toolRow.handler_config) {
+          try {
+            const handlerConfig = typeof toolRow.handler_config === 'string'
+              ? JSON.parse(toolRow.handler_config)
+              : toolRow.handler_config;
+            if (handlerConfig && typeof handlerConfig === 'object' && !Array.isArray(handlerConfig)) {
+              input_template = { ...handlerConfig, ...input_template };
+            }
+          } catch (_) { }
+        }
+        if (toolRow.tool_category != null && step.tool_category == null) {
+          step.tool_category = String(toolRow.tool_category);
+        }
+      } catch (toolLookupErr) {
+        failed = true;
+        lastError = String(toolLookupErr?.message || toolLookupErr);
+        break;
+      }
       // Inject accumulated step outputs if requested
       if (input_template.inject_step_results === true && stepOutputs.length > 0) {
         input_template = { ...input_template, step_results: JSON.stringify(stepOutputs).slice(0, 8000) };
@@ -22631,7 +22711,11 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
 
       if (callStatus === 'failed') {
         failed = true;
-        break;
+        if (step.continue_on_error === true) {
+          failed = false;
+        } else {
+          break;
+        }
       }
     }
 

@@ -3,7 +3,7 @@
  * Handles PTY workshops, WebSocket runs, and workspace path resolution.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, tenantIdFromEnv } from './auth';
+import { getAuthUser, fetchAuthUserTenantId } from './auth';
 import { notifySam } from './notifications';
 
 export const HEADLESS_TERMINAL_SESSION_ID = 'term_headless_sam';
@@ -136,7 +136,7 @@ export async function runTerminalCommandViaControlPlane(env, request, command, e
   try {
     const authUser = await getAuthUser(request, env);
     const userId = String(authUser?.id || 'anonymous');
-    const workspaceId = String(extra.workspace_id || authUser?.tenant_id || tenantIdFromEnv(env) || 'default').trim();
+    const workspaceId = String(extra.workspace_id || authUser?.tenant_id || 'default').trim();
     const mode = ['pty', 'ssh', 'mcp'].includes(String(executionMode || '').toLowerCase())
       ? String(executionMode).toLowerCase()
       : 'pty';
@@ -177,7 +177,11 @@ export async function runTerminalCommandViaControlPlane(env, request, command, e
 async function writeTerminalHistory(env, request, sessionId, commandText, outputText, exitCode) {
   if (!env.DB) return;
   const terminalSessionId = await resolveTerminalSessionIdForHistory(env, request);
-  const tenantId = tenantIdFromEnv(env);
+  const authUser = await getAuthUser(request, env).catch(() => null);
+  let tenantId = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== '' ? String(authUser.tenant_id).trim() : null;
+  if (!tenantId && authUser?.id) {
+    tenantId = await fetchAuthUserTenantId(env, authUser.id).catch(() => null);
+  }
   if (!terminalSessionId || !tenantId) return;
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
@@ -268,8 +272,7 @@ export async function resolveTerminalSessionIdForHistory(env, request) {
 
 export async function ensureHeadlessTerminalSessionForHistory(env) {
   if (!env.DB) return;
-  const tid = tenantIdFromEnv(env);
-  if (!tid) return;
+  const tid = 'system';
   await env.DB.prepare(
     `INSERT OR IGNORE INTO terminal_sessions (id, tenant_id, user_id, status, shell, created_at, updated_at) VALUES (?, ?, 'headless_session', 'active', '/bin/zsh', unixepoch(), unixepoch())`
   ).bind(HEADLESS_TERMINAL_SESSION_ID, tid).run();

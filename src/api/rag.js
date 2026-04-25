@@ -4,7 +4,7 @@
  */
 import { AwsClient } from 'aws4fetch';
 import { jsonResponse } from '../core/responses.js';
-import { getAuthUser, tenantIdFromEnv } from '../core/auth.js';
+import { getAuthUser, fetchAuthUserTenantId } from '../core/auth.js';
 
 export const RAG_CHUNK_MAX_CHARS = 600;
 export const RAG_CHUNK_OVERLAP = 80;
@@ -463,7 +463,7 @@ export async function unifiedRagSearch(env, query, opts = {}) {
   }
   const topK = Math.min(Math.max(1, opts.topK || 8), 24);
   const _t0 = Date.now();
-  const tenantId = tenantIdFromEnv(env);
+  const tenantId = opts.tenantId != null && String(opts.tenantId).trim() !== '' ? String(opts.tenantId).trim() : null;
   const { results, error } = await runUnifiedRagQuery(env, {
     query: q,
     tenantId,
@@ -626,7 +626,12 @@ async function handleRagSearchRoute(request, env) {
   const threshold = typeof body.threshold === 'number' ? body.threshold : 0.7;
   const limit = typeof body.limit === 'number' ? body.limit : 10;
   const includeSessions = !!body.include_sessions;
-  const tenantId = String(body.tenant_id || tenantIdFromEnv(env) || '').trim() || null;
+  let tenantId = String(body.tenant_id || '').trim() || null;
+  if (!tenantId && user.tenant_id) tenantId = String(user.tenant_id).trim();
+  if (!tenantId && user.id) {
+    const fromDb = await fetchAuthUserTenantId(env, user.id);
+    if (fromDb) tenantId = fromDb;
+  }
 
   const { results, error: searchErr } = await runUnifiedRagQuery(env, {
     query,

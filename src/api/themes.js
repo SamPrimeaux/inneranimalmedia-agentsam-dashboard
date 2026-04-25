@@ -3,7 +3,7 @@
  * Handles theme gallery, active theme resolution, and applying new themes.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, jsonResponse, tenantIdFromEnv } from '../core/auth.js';
+import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
 
 /**
  * Builds `/api/themes/active` payload from a cms_themes row.
@@ -49,7 +49,13 @@ export async function handleThemesApi(request, url, env, ctx) {
         // ── GET /api/themes/active ──
         if (pathLower === '/api/themes/active' && method === 'GET') {
             const workspaceId = url.searchParams.get('workspace_id') || url.searchParams.get('workspace');
-            const tid = tenantIdFromEnv(env); // Simplified for modularity
+            const authUser = await getAuthUser(request, env).catch(() => null);
+            let tid = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+              ? String(authUser.tenant_id).trim()
+              : null;
+            if (!tid && authUser?.id) {
+              tid = await fetchAuthUserTenantId(env, authUser.id).catch(() => null);
+            }
             
             // Try loading from settings
             let themeRow = null;
@@ -85,14 +91,17 @@ export async function handleThemesApi(request, url, env, ctx) {
             const theme = await env.DB.prepare('SELECT slug FROM cms_themes WHERE id = ?').bind(themeId).first();
             if (!theme) return jsonResponse({ error: 'Theme not found' }, 404);
 
-            const tid = tenantIdFromEnv(env);
-            if (tid) {
-                await env.DB.prepare(
+            let tid = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+              ? String(authUser.tenant_id).trim()
+              : null;
+            if (!tid) tid = await fetchAuthUserTenantId(env, authUser.id);
+            if (!tid) return jsonResponse({ error: 'Tenant could not be resolved' }, 403);
+
+            await env.DB.prepare(
                     `INSERT INTO settings (tenant_id, setting_key, setting_value, updated_at)
                      VALUES (?, 'appearance.theme', ?, unixepoch())
                      ON CONFLICT(tenant_id, setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = unixepoch()`
                 ).bind(tid, theme.slug).run();
-            }
 
             return jsonResponse({ ok: true, theme: theme.slug });
         }

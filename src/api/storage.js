@@ -6,7 +6,6 @@ import {
   getAuthUser,
   jsonResponse,
   fetchAuthUserTenantId,
-  tenantIdFromEnv,
 } from '../core/auth.js';
 import { getR2Binding, listBoundR2BucketNames, r2LiveBucketStats } from './r2-api.js';
 
@@ -21,8 +20,6 @@ async function resolveTenantId(env, authUser) {
     tid = await fetchAuthUserTenantId(env, authUser.email);
     if (tid) return tid;
   }
-  const envTid = tenantIdFromEnv(env);
-  if (envTid) return envTid;
   return `user:${String(authUser.id || authUser.email || 'unknown').trim()}`;
 }
 

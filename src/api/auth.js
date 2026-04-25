@@ -8,7 +8,7 @@ import {
   writeIamSessionToKv, 
   resolveTenantAtLogin,
   AUTH_COOKIE_NAME,
-  getAuthUser
+  getAuthUser,
 } from '../core/auth';
 
 /**
@@ -205,16 +205,83 @@ async function finishLogin(request, url, env, userId, redirectPath) {
 async function handleSettingsProfileRequest(request, env) {
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) {
+    const email = String(authUser.email || authUser.id || '').trim();
+    return jsonResponse({
+      display_name: email ? email.split('@')[0] : '',
+      email: email || '',
+      plan: 'free',
+      profile: null,
+      flat: {
+        display_name: email ? email.split('@')[0] : '',
+        primary_email: email,
+        role: 'admin',
+        timezone: 'America/Chicago',
+        language: 'en',
+      },
+    });
+  }
 
-  // Simplified profile response to satisfy dashboard load checks
-  return jsonResponse({
-    profile: null,
-    flat: {
-      display_name: authUser.email.split('@')[0],
-      primary_email: authUser.email,
-      role: 'admin',
-      timezone: 'America/Chicago',
-      language: 'en'
-    }
-  });
+  const sessionKey = String(authUser.email || authUser.id || '').trim();
+  try {
+    const authRow = await env.DB.prepare(
+      `SELECT * FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`,
+    )
+      .bind(authUser.id, authUser.email)
+      .first();
+
+    const usRow = await env.DB.prepare(
+      `SELECT * FROM user_settings WHERE user_id = ? OR user_id = ? LIMIT 1`,
+    )
+      .bind(sessionKey, authUser.id)
+      .first()
+      .catch(() => null);
+
+    const email = String(authRow?.email || authUser.email || authUser.id || '').trim();
+    const nameFromAuth = String(authRow?.name || '').trim();
+    const dnFromSettings = String(usRow?.display_name || usRow?.full_name || '').trim();
+    const display_name = (dnFromSettings || nameFromAuth || (email.includes('@') ? email.split('@')[0] : email) || '').trim();
+
+    const rawPlan =
+      authRow && (authRow.plan ?? authRow.billing_plan ?? authRow.subscription_tier ?? authRow.tier);
+    const plan =
+      rawPlan != null && String(rawPlan).trim() !== '' ? String(rawPlan).trim().toLowerCase() : 'free';
+
+    const flat = {
+      full_name: String(usRow?.full_name ?? nameFromAuth ?? '').trim() || display_name,
+      display_name,
+      avatar_url: String(usRow?.avatar_url || '').trim(),
+      bio: String(usRow?.bio || '').trim(),
+      primary_email: email,
+      primary_email_verified: Number(usRow?.primary_email_verified || 0),
+      backup_email: String(usRow?.backup_email || '').trim(),
+      phone: String(usRow?.phone || '').trim(),
+      timezone: String(usRow?.timezone || 'America/Chicago'),
+      language: String(usRow?.language || 'en'),
+    };
+
+    return jsonResponse({
+      display_name,
+      email,
+      plan,
+      profile: usRow || null,
+      flat,
+    });
+  } catch (e) {
+    console.warn('[settings/profile]', e?.message ?? e);
+    const email = String(authUser.email || authUser.id || '').trim();
+    return jsonResponse({
+      display_name: email ? email.split('@')[0] : '',
+      email: email || '',
+      plan: 'free',
+      profile: null,
+      flat: {
+        display_name: email ? email.split('@')[0] : '',
+        primary_email: email,
+        role: 'admin',
+        timezone: 'America/Chicago',
+        language: 'en',
+      },
+    });
+  }
 }

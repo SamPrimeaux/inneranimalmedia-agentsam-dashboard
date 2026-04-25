@@ -195,32 +195,37 @@ export function authUserIsSuperadmin(authUser) {
 }
 
 /**
- * Legacy Tenant Mapping
+ * Deprecated: worker plaintext TENANT_ID removed — tenant always from session / D1 user rows.
  */
-export function tenantIdFromEnv(env) {
-  if (!env || env.TENANT_ID == null) return null;
-  const s = String(env.TENANT_ID).trim();
-  return s || null;
+export function tenantIdFromEnv(_env) {
+  return null;
 }
 
-/** Prefer session/routing tenant, then env TENANT_ID. */
-export function resolveTelemetryTenantId(env, explicitTenantId) {
+/** Telemetry tenant: explicit routing value only (no env fallback). */
+export function resolveTelemetryTenantId(_env, explicitTenantId) {
   if (explicitTenantId != null && String(explicitTenantId).trim() !== '') {
     return String(explicitTenantId).trim();
   }
-  return tenantIdFromEnv(env);
+  return null;
 }
 
 /**
  * Tenant for anonymous / bootstrap worker paths only.
- * When a session exists (authenticated), never fall back to env.TENANT_ID — that caused cross-tenant leaks.
+ * Authenticated requests must carry tenant_id on the session (or resolve via fetchAuthUserTenantId at login).
  */
-export function resolveTenantIdForWorker(session, env) {
+export function resolveTenantIdForWorker(session, _env) {
   if (session?.tenant_id != null && String(session.tenant_id).trim() !== '') {
     return String(session.tenant_id).trim();
   }
   if (session?.user_id != null && String(session.user_id).trim() !== '') return null;
-  return tenantIdFromEnv(env);
+  return null;
+}
+
+/** Session + auth user for handlers that need both (replaces env-based tenant defaults). */
+export async function getSamContext(request, env) {
+  const session = await getSession(env, request).catch(() => null);
+  const authUser = await getAuthUser(request, env);
+  return { session, authUser };
 }
 
 /**

@@ -193,19 +193,17 @@ function variablesFromCmsThemeConfig(cfg) {
   return variables;
 }
 
-/** Plaintext wrangler `TENANT_ID` — never substitute a literal tenant string. */
-function tenantIdFromEnv(env) {
-  if (!env || env.TENANT_ID == null) return null;
-  const s = String(env.TENANT_ID).trim();
-  return s || null;
+/** Legacy wrangler `TENANT_ID` removed — always null (tenant from session / D1). */
+function tenantIdFromEnv(_env) {
+  return null;
 }
 
-/** Prefer session/routing tenant, then env `TENANT_ID` (may be null). */
-function resolveTelemetryTenantId(env, explicitTenantId) {
+/** Telemetry tenant: explicit routing value only. */
+function resolveTelemetryTenantId(_env, explicitTenantId) {
   if (explicitTenantId != null && String(explicitTenantId).trim() !== '') {
     return String(explicitTenantId).trim();
   }
-  return tenantIdFromEnv(env) || null;
+  return null;
 }
 
 /** Default D1 workspace_id for prod telemetry rows (resolve per-user later). */
@@ -3363,6 +3361,25 @@ const worker = {
       // ----- API: Billing -----
       if (pathLower === '/api/billing/summary') {
         return handleBillingSummary(request, url, env);
+      }
+
+      const ASSET_ROUTES = {
+        '/work': 'work.html',
+        '/about': 'about.html',
+        '/services': 'services.html',
+        '/contact': 'contact.html',
+        '/terms': 'terms-of-service.html',
+        '/privacy': 'privacy-policy.html',
+        '/pricing': 'pricing.html',
+        '/start': 'start-project.html',
+      };
+      const _assetHtmlKey = ASSET_ROUTES[path] || ASSET_ROUTES[pathLower];
+      if (_assetHtmlKey && env.ASSETS) {
+        const _assetObj = await env.ASSETS.get(_assetHtmlKey);
+        if (!_assetObj) return new Response('Not found', { status: 404 });
+        return new Response(_assetObj.body, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
       }
 
       // ----- OAuth: Google -----
@@ -7417,7 +7434,7 @@ async function insertAiGenerationLog(env, opts) {
   } = opts;
   const tenantId =
     (rawTenantId != null && String(rawTenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   if (!tenantId) {
     console.warn('[insertAiGenerationLog] missing tenant_id; skip');
@@ -7658,7 +7675,7 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
       ? String(chatUserId).trim()
       : 'sam_primeaux';
   const now = Math.floor(Date.now() / 1000);
-  const tenant = (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'system';
+  const tenant =  'system';
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at)
@@ -7726,7 +7743,7 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   try {
     await env.DB.prepare(
       "INSERT INTO agent_messages (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, token_count, cost_usd, tenant_id, user_id, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())"
-    ).bind(msgId, conversationId, role, fullContent.slice(0, 500), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? env.TENANT_ID ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 500), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
@@ -11162,7 +11179,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
     const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
     const tenantForIntent =
       (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-      (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+      null ||
       null;
     const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
     const intentForFilter = opts._intent || 'auto';
@@ -11762,12 +11779,14 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           new Promise((_, rej) => setTimeout(() => rej(new Error('Workers AI timeout after 25s')), WAI_TIMEOUT_MS))
         ]);
       } catch (e) {
-        await emit({ type: 'error', error: e?.message ?? String(e) });
+        console.warn('[streamWorkersAI]', e?.message ?? e);
+        await emit({ type: 'error', error: 'model_error' });
         return;
       }
 
       if (!result) {
-        await emit({ type: 'error', error: 'Workers AI returned null' });
+        console.warn('[streamWorkersAI] null result');
+        await emit({ type: 'error', error: 'model_error' });
         return;
       }
 
@@ -11777,7 +11796,10 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           await emit({ type: 'tool_use', name: tc.name, input: tc.arguments || {} });
           const toolResult = await invokeMcpToolFromChat(env, tc.name, tc.arguments || {}, {
             agent_id, conversationId, skipApprovalCheck: false, suppressTelemetry: false
-          }).catch(e => ({ error: e?.message || String(e) }));
+          }).catch((e) => {
+            console.warn('[streamWorkersAI] tool', tc.name, e?.message ?? e);
+            return { error: 'tool_error' };
+          });
           await emit({ type: 'tool_result', name: tc.name, result: toolResult?.result || toolResult?.error || '' });
         }
       }
@@ -11815,7 +11837,8 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
-      await emit({ type: 'error', error: e?.message ?? String(e) }).catch(() => { });
+      console.warn('[streamWorkersAI] fatal', e?.message ?? e);
+      await emit({ type: 'error', error: 'model_error' }).catch(() => { });
     } finally {
       await writer.close().catch(() => { });
     }
@@ -12308,7 +12331,7 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const chatSseRunId = crypto.randomUUID();
 
   const tenantIdChatSse = ingestBypass
-    ? (env.TENANT_ID ? String(env.TENANT_ID).trim() : null)
+    ? null
     : resolveTenantIdForWorker(chatSseSession, env);
   const skillWorkspaceKey = chatSseSession?.workspace_id ?? tenantIdChatSse ?? null;
   const IAM_SSE_BRAND_OUTPUT_POLICY = `## Brand and output policy (Inner Animal Media)
@@ -16318,11 +16341,11 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         }
         await env.DB.prepare(
           "INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(id, env.TENANT_ID || 'system', sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
+        ).bind(id, 'system', sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
         if (env.SESSION_CACHE) await env.SESSION_CACHE.put(`session:${id}`, JSON.stringify({ id, status: 'active' }), { expirationTtl: 86400 });
         return jsonResponse({ id, status: 'active' });
       }
-      const tenantId = env.TENANT_ID || 'system';
+      const tenantId = 'system';
       const { results } = await env.DB.prepare(
         `SELECT s.id, s.session_type, s.status, s.state_json, s.started_at, s.r2_key,
          COALESCE(s.name, ac.name, ac.title, 'New Conversation') as name,
@@ -16820,7 +16843,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const payload = body.payload != null ? body.payload : {};
         const planId = body.plan_id || null;
         if (!sessionId) return jsonResponse({ error: 'session_id or conversation_id required' }, 400);
-        const tenantId = env.TENANT_ID || 'system';
+        const tenantId = 'system';
         const { results: existing } = await env.DB.prepare(
           'SELECT COALESCE(MAX(position), 0) as max_pos FROM agent_request_queue WHERE session_id = ?'
         ).bind(sessionId).all();
@@ -19537,7 +19560,7 @@ async function upsertMcpAgentSession(env, conversationId, panelAgentId, tenantId
   if (!env.DB || !conversationId) return;
   const tid =
     (tenantId != null && String(tenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   if (!tid) {
     console.warn('[upsertMcpAgentSession] missing tenant_id');
@@ -19827,7 +19850,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   const suppressTelemetry = !!opts.suppressTelemetry;
   const defaultTenantForMcp =
     (opts.tenantId != null && String(opts.tenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   const rec = async (o) => {
     if (suppressTelemetry) return;
@@ -20610,7 +20633,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const steps = Array.isArray(params.steps) ? params.steps : [];
     try {
       const planId = crypto.randomUUID();
-      const tenantId = env.TENANT_ID || 'system';
+      const tenantId = 'system';
       const planJson = JSON.stringify({ summary, steps });
       await env.DB.prepare(
         `INSERT INTO agent_execution_plans (id, tenant_id, session_id, plan_json, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', unixepoch(), unixepoch())`
@@ -20637,7 +20660,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         conversationId,
         tenantId:
           (opts.tenantId != null && String(opts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+          null,
       });
       if (out && out.error) {
         await rec({ conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: null, error: out.error, serviceName: 'builtin' });
@@ -21445,7 +21468,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       query,
       search_engine: 'perplexity'
     });
-    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) || (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'tenant_default';
+    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) ||  'tenant_default';
     
     await env.DB.prepare(`
         INSERT INTO playwright_jobs
@@ -22990,7 +23013,7 @@ async function uploadImgxToDashboard(env, bytes, contentType, baseName, logCtx =
       responseText: logCtx.responseText ?? `DASHBOARD:${key}`,
       tenantId:
         (logCtx.tenantId != null && String(logCtx.tenantId).trim()) ||
-        (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+        null,
       createdBy: logCtx.createdBy || 'worker',
       metadataJson: {
         r2_key: key,
@@ -23795,7 +23818,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
       try {
         const tenantForIntent =
           (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+          null ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
         const intentForFilter = opts._intent || 'auto';
@@ -24444,7 +24467,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       try {
         const tenantForIntent =
           (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+          null ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
         const intentForFilter = opts._intent || 'auto';
@@ -25642,7 +25665,7 @@ async function handleUnifiedSearchDashboard(request, env) {
 
   const conversations = [];
   try {
-    const tenantId = env.TENANT_ID || 'system';
+    const tenantId = 'system';
     const sq = await env.DB.prepare(
       `SELECT s.id,
               COALESCE(s.name, ac.name, ac.title, 'Chat') AS name
@@ -25670,7 +25693,7 @@ async function handleUnifiedSearchDashboard(request, env) {
 
   const convoMessages = [];
   try {
-    const tenantId = env.TENANT_ID || 'system';
+    const tenantId = 'system';
     const mq = await env.DB.prepare(
       `SELECT am.conversation_id AS id, am.content, am.created_at
        FROM agent_messages am
@@ -26308,12 +26331,10 @@ async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, 
 }
 
 /** Tenant for anonymous/bootstrap only. If a session has a user_id, never fall back to env.TENANT_ID (cross-tenant leak). */
-function resolveTenantIdForWorker(session, env) {
+function resolveTenantIdForWorker(session, _env) {
   const st = session && session.tenant_id != null && String(session.tenant_id).trim();
   if (st) return String(session.tenant_id).trim();
   if (session?.user_id != null && String(session.user_id).trim() !== '') return null;
-  const et = env && env.TENANT_ID != null && String(env.TENANT_ID).trim();
-  if (et) return et;
   return null;
 }
 
@@ -26528,13 +26549,18 @@ function agentIdeWorkspaceStorageId(authUser, conversationId) {
   return `ws_ide_${u.replace(/[^a-z0-9_]/gi, "_").toLowerCase()}`;
 }
 
-/** Tenant for theme APIs: session user (KV/auth_sessions) then wrangler TENANT_ID. */
+/** Tenant for theme APIs: session user (KV/auth_sessions) then D1 auth_users.tenant_id. */
 async function resolveTenantIdForThemeApi(request, env) {
   const authUser = await getAuthUser(request, env);
   const fromAuth = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
     ? String(authUser.tenant_id).trim()
     : null;
-  return fromAuth || tenantIdFromEnv(env) || null;
+  if (fromAuth) return fromAuth;
+  if (authUser?.id) {
+    const tid = await fetchAuthUserTenantId(env, authUser.id);
+    if (tid) return tid;
+  }
+  return null;
 }
 
 // ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----
@@ -26600,7 +26626,7 @@ async function vaultCreateSecret(request, env) {
   const last4val = vaultLast4(secret_value);
   const metadata = JSON.stringify({ last4: last4val });
   const tid = tenantIdFromEnv(env);
-  if (!tid) return vaultErr('TENANT_ID not configured on worker', 503);
+  if (!tid) return vaultErr('Tenant not configured for this account', 503);
   await env.DB.prepare(
     `INSERT INTO user_secrets (id, user_id, tenant_id, secret_name, secret_value_encrypted, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, expires_at, is_active)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
@@ -26746,7 +26772,6 @@ function vaultRegistry() {
     { name: 'R2_ACCESS_KEY_ID', type: 'secret', description: 'R2 storage' },
     { name: 'R2_SECRET_ACCESS_KEY', type: 'secret', description: 'R2 storage' },
     { name: 'RESEND_API_KEY', type: 'secret', description: 'Transactional email' },
-    { name: 'TENANT_ID', type: 'plaintext', description: 'Tenant identifier' },
     { name: 'TERMINAL_SECRET', type: 'secret', description: 'Terminal auth' },
     { name: 'TERMINAL_WS_URL', type: 'secret', description: 'Terminal WebSocket URL' },
     { name: 'VAULT_MASTER_KEY', type: 'secret', description: 'Vault encryption' },

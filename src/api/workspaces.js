@@ -7,7 +7,6 @@
 import {
   jsonResponse,
   fetchAuthUserTenantId,
-  tenantIdFromEnv,
 } from '../core/auth.js';
 
 /** @param {any} env */
@@ -21,8 +20,6 @@ async function resolveAuthTenantId(env, authUser) {
     tid = await fetchAuthUserTenantId(env, authUser.email);
     if (tid) return tid;
   }
-  const envTid = tenantIdFromEnv(env);
-  if (envTid) return envTid;
   return null;
 }
 

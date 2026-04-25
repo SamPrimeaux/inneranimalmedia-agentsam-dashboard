@@ -2,7 +2,7 @@
  * API Service: Overview & Analytics
  * Handles activity strips, deployment history, and stats.
  */
-import { getAuthUser, jsonResponse, tenantIdFromEnv } from '../core/auth.js';
+import { getAuthUser, jsonResponse } from '../core/auth.js';
 
 export async function handleOverviewApi(request, url, env, ctx) {
   const pathLower = url.pathname.toLowerCase().replace(/\/$/, '') || '/';

@@ -2,7 +2,7 @@
  * API Service: Model Context Protocol (MCP) Manager
  * Handles agent session tracking, tool registration listings, and intent-based routing.
  */
-import { getAuthUser, jsonResponse, tenantIdFromEnv } from '../core/auth.js';
+import { getAuthUser, jsonResponse } from '../core/auth.js';
 
 const MCP_CARD_AGENT_IDS = [
   'mcp_agent_architect',
@@ -17,11 +17,11 @@ function normalizeMcpAgentId(agentId) {
   return s;
 }
 
-function resolveMcpTenantId(authUser, env) {
+function resolveMcpTenantId(authUser, _env) {
   if (authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== '') {
     return String(authUser.tenant_id).trim();
   }
-  return tenantIdFromEnv(env) || 'iam';
+  return 'iam';
 }
 
 async function resolveWorkflowTimeoutSeconds(env, tenantId) {

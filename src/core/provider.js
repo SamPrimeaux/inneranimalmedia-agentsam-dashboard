@@ -10,6 +10,9 @@ import { chatWithToolsGemini } from '../integrations/gemini.js';
 import { chatWithToolsVertex } from '../integrations/vertex.js';
 import { jsonResponse }        from './responses.js';
 
+/** Thrown when Ollama is skipped so the agent model chain can try the next provider (no SSE error text). */
+export const OLLAMA_SKIP_MESSAGE = 'ollama_skip';
+
 export async function resolveModelMeta(env, modelKey) {
   if (!env.DB || !modelKey) return null;
   try {
@@ -186,11 +189,12 @@ async function dispatchWorkersAI(env, request, params) {
             if (value?.byteLength) await writer.write(value);
           }
         } else if (fb instanceof Response) {
-          const errTxt = await fb.text().catch(() => '');
-          await writer.write(encoder.encode(`data: ${JSON.stringify({ error: errTxt || fb.status })}\n\n`));
+          console.warn('[provider] Workers AI OpenAI fallback HTTP', fb.status);
+          await writer.write(encoder.encode(`data: ${JSON.stringify({ error: 'stream_unavailable' })}\n\n`));
         }
       } catch (e2) {
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ error: e2.message || 'fallback failed' })}\n\n`));
+        console.warn('[provider] Workers AI OpenAI fallback threw', e2?.message ?? e2);
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ error: 'stream_unavailable' })}\n\n`));
       }
     } finally {
       await writer.close().catch(() => {});
@@ -203,35 +207,49 @@ async function dispatchWorkersAI(env, request, params) {
 }
 
 async function dispatchOllama(env, request, params) {
-  const base = env.OLLAMA_TUNNEL_URL || 'http://localhost:11434';
+  const base =
+    (env.OLLAMA_BASE_URL && String(env.OLLAMA_BASE_URL).trim()) ||
+    (env.OLLAMA_TUNNEL_URL && String(env.OLLAMA_TUNNEL_URL).trim()) ||
+    'https://ollama.inneranimalmedia.com';
   const { modelKey, systemPrompt, messages } = params;
   const ollamaMessages = [
     ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
     ...messages,
   ];
   try {
-    const upstream = await fetch(`${base}/api/chat`, {
+    const upstream = await fetch(`${base.replace(/\/$/, '')}/api/chat`, {
       method:  'POST',
       headers: {
         'Content-Type': 'application/json',
-        'CF-Access-Client-Id': env.OLLAMA_CF_CLIENT_ID,
-        'CF-Access-Client-Secret': env.OLLAMA_CF_CLIENT_SECRET,
+        ...(env.OLLAMA_CF_CLIENT_ID && env.OLLAMA_CF_CLIENT_SECRET
+          ? {
+              'CF-Access-Client-Id': env.OLLAMA_CF_CLIENT_ID,
+              'CF-Access-Client-Secret': env.OLLAMA_CF_CLIENT_SECRET,
+            }
+          : {}),
       },
       body: JSON.stringify({ model: modelKey, messages: ollamaMessages, stream: true, keep_alive: '10m' }),
     });
-    if (!upstream.ok) throw new Error(`Ollama ${upstream.status}`);
+    if (!upstream.ok) {
+      if (upstream.status === 403) {
+        console.warn('[provider] Ollama upstream 403; continuing provider chain');
+        throw new Error(OLLAMA_SKIP_MESSAGE);
+      }
+      console.warn('[provider] Ollama upstream error', upstream.status);
+      throw new Error(OLLAMA_SKIP_MESSAGE);
+    }
     return new Response(upstream.body, {
       headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' },
     });
   } catch (e) {
-    console.error('[provider] Ollama unavailable:', e.message);
-    // Fallback to cheapest OpenAI model
-    try {
-      const fallback = await env.DB.prepare(
-        `SELECT model_key FROM ai_models WHERE api_platform='openai' AND supports_tools=1 AND is_active=1 ORDER BY input_rate_per_mtok ASC LIMIT 1`
-      ).first();
-      if (fallback?.model_key) return dispatchStream(env, request, { ...params, modelKey: fallback.model_key });
-    } catch (_) {}
-    return jsonResponse({ error: 'Ollama unavailable', detail: e.message }, 503);
+    if (String(e?.message || '') === OLLAMA_SKIP_MESSAGE) throw e;
+    const msg = String(e?.message || e || '');
+    const refused = /ECONNREFUSED|connection refused|Failed to fetch|NetworkError/i.test(msg);
+    if (refused) {
+      console.warn('[provider] Ollama connection refused or unreachable; continuing provider chain');
+    } else {
+      console.warn('[provider] Ollama unavailable; continuing provider chain');
+    }
+    throw new Error(OLLAMA_SKIP_MESSAGE);
   }
 }

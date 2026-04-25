@@ -12,13 +12,13 @@
  *  - Tool execution delegated to src/tools/ai-dispatch.js
  */
 import { chatWithAnthropic }                            from '../integrations/anthropic.js';
-import { dispatchStream }                              from '../core/provider.js';
+import { dispatchStream, OLLAMA_SKIP_MESSAGE }         from '../core/provider.js';
 import { unifiedRagSearch, handleAgentMemorySync }      from './rag.js';
 import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
          isIngestSecretAuthorized,
-         tenantIdFromEnv, fetchAuthUserTenantId,
+         fetchAuthUserTenantId,
          authUserIsSuperadmin }        from '../core/auth.js';
 import { formatRelativeCheckedAgo, toUnixSeconds }     from './workspaces.js';
 import { notifySam }                                    from '../core/notifications.js';
@@ -404,15 +404,6 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     sessionId, tenantId, userId,
   } = params;
 
-  const resolvePlatform = async (env, modelKey) => {
-    try {
-      const row = await env.DB?.prepare(`SELECT api_platform FROM ai_models WHERE model_key = ? LIMIT 1`).bind(modelKey).first();
-      return row?.api_platform || null;
-    } catch {
-      return null;
-    }
-  };
-
   const conversationMessages = [...messages];
   let toolCallsUsed = 0;
   let totalUsage    = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
@@ -423,30 +414,20 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     let stream;
     let isWorkersAiStream = false;
     try {
-      // Provider resolved from ai_models.api_platform — no hardcoding.
-      // But Workers AI streaming must be consumed as a ReadableStream (not async iterable, not a wrapped Response).
-      const platform = await resolvePlatform(env, modelKey);
-      if (platform === 'workers_ai') {
-        const waiMessages = [
-          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-          ...conversationMessages,
-        ];
-        stream = await env.AI.run(modelKey, { messages: waiMessages, stream: true });
-        isWorkersAiStream = true;
-        const ctor = stream && stream.constructor ? stream.constructor.name : typeof stream;
-        console.warn('[agent] workers_ai stream type:', ctor, stream && typeof stream);
-      } else {
-        stream = await dispatchStream(env, null, {
-          modelKey,
-          systemPrompt,
-          messages:        conversationMessages,
-          tools,
-          reasoningEffort: modeConfig?.gate_reasoning_effort || null,
-          temperature,
-        });
-      }
+      // Provider resolved inside dispatchStream from ai_models.api_platform (Workers AI → OAI-shaped SSE).
+      stream = await dispatchStream(env, null, {
+        modelKey,
+        systemPrompt,
+        messages: conversationMessages,
+        tools,
+        reasoningEffort: modeConfig?.gate_reasoning_effort || null,
+        temperature,
+      });
+      isWorkersAiStream = false;
     } catch (e) {
-      emit('error', { message: 'Model call failed', detail: e.message });
+      if (String(e?.message || '') === OLLAMA_SKIP_MESSAGE) throw e;
+      console.warn('[agent] model call failed:', e?.message ?? e);
+      emit('error', { message: 'Model call failed' });
       break;
     }
 
@@ -546,7 +527,8 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     if (stream instanceof Response) {
       if (!stream.ok) {
         const detail = await stream.text().catch(() => '');
-        emit('error', { message: 'Model stream failed', detail: detail || `HTTP ${stream.status}` });
+        console.warn('[agent] model stream HTTP error', stream.status);
+        emit('error', { message: 'Model stream failed' });
         break;
       }
       assistantContent.push({ type: 'text', text: '' });
@@ -643,7 +625,8 @@ async function runAgentToolLoop(env, ctx, emit, params) {
         toolOutput = typeof execResult === 'string' ? execResult : JSON.stringify(execResult);
       } catch (e) {
         toolOutput = `Tool execution failed: ${e.message}`;
-        emit('tool_error', { tool: call.name, error: e.message });
+        console.warn('[agent] tool_error', call.name, e?.message ?? e);
+      emit('tool_error', { tool: call.name, error: 'Tool execution failed' });
       }
       emit('tool_result', { tool: call.name, output: toolOutput.slice(0, 2000) });
       toolResults.push({ type: 'tool_result', tool_use_id: call.id, content: toolOutput });
@@ -694,9 +677,12 @@ export async function agentChatSseHandler(env, request, ctx, session) {
 
   const sessionId     = body.conversationId || body.session_id || body.sessionId || null;
   const requestedMode = String(body.mode || 'auto').toLowerCase().trim() || 'auto';
-  const tenantId =
-    session?.tenant_id?.trim() ||
-    (session?.user_id ? null : tenantIdFromEnv(env));
+  let tenantId = session?.tenant_id != null && String(session.tenant_id).trim() !== ''
+    ? String(session.tenant_id).trim()
+    : null;
+  if (!tenantId && session?.user_id) {
+    tenantId = await fetchAuthUserTenantId(env, session.user_id);
+  }
   const userId        = session?.user_id || null;
   const workspaceId   = body.workspace_id || session?.workspace_id || env.WORKSPACE_ID || '';
 
@@ -733,7 +719,10 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     return jsonResponse({ error: 'All providers exhausted', tried: [] }, 503);
   }
 
-  const ragResult    = await unifiedRagSearch(env, message, { topK: modeConfig.context_strategy === 'minimal' ? 3 : 8 });
+  const ragResult    = await unifiedRagSearch(env, message, {
+    topK: modeConfig.context_strategy === 'minimal' ? 3 : 8,
+    tenantId,
+  });
   const ragContext   = (ragResult.matches || []).join('\n\n');
   const basePrompt   = agentMeta?.system_prompt || 'You are Agent Sam, an autonomous AI coding and operations assistant for Inner Animal Media.';
   const modeFragment = modeConfig.system_prompt_fragment ? `\n\n${modeConfig.system_prompt_fragment}` : '';
@@ -782,7 +771,11 @@ export async function agentChatSseHandler(env, request, ctx, session) {
           succeeded = true;
           break;
         } catch (e) {
-          console.warn('[agent] model fallback:', { provider: row?.provider, model_key: row?.model_key, error: e?.message });
+          if (String(e?.message || '') === OLLAMA_SKIP_MESSAGE) {
+            console.warn('[agent] ollama skipped; trying next model');
+          } else {
+            console.warn('[agent] model fallback:', { provider: row?.provider, model_key: row?.model_key, error: e?.message });
+          }
         }
       }
 
@@ -820,7 +813,8 @@ export async function agentChatSseHandler(env, request, ctx, session) {
         emit('error', { message: 'All providers exhausted', tried });
       }
     } catch (e) {
-      emit('error', { message: 'Agent loop failed', detail: e.message });
+      console.warn('[agent] Agent loop failed', e?.message ?? e);
+      emit('error', { message: 'Agent loop failed' });
     } finally {
       await writer.close().catch(() => {});
     }
@@ -841,6 +835,33 @@ export async function agentChatSseHandler(env, request, ctx, session) {
 export async function handleAgentApi(request, url, env, ctx) {
   const path   = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
   const method = request.method.toUpperCase();
+
+  // GET /api/agent/todo — multi-tenant agentsam_todo
+  if (path === '/api/agent/todo' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) return jsonResponse({ error: 'Tenant could not be resolved' }, 403);
+    try {
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM agentsam_todo
+         WHERE tenant_id = ? AND (status IS NULL OR LOWER(TRIM(status)) != 'done')
+         ORDER BY priority ASC`,
+      )
+        .bind(tenantId)
+        .all();
+      return jsonResponse({ todos: results || [] });
+    } catch (e) {
+      console.warn('[agent/todo]', e?.message ?? e);
+      return jsonResponse({ error: 'Failed to load todos' }, 500);
+    }
+  }
 
   // GET /api/agent/health — first thing Agent Sam queries on session start
   if (path === '/api/agent/health' && method === 'GET') {
@@ -1499,8 +1520,13 @@ export async function handleAgentApi(request, url, env, ctx) {
     const body         = await request.json().catch(() => ({}));
     const workflowName = String(body.workflow_name || '').trim();
     if (!workflowName) return jsonResponse({ error: 'workflow_name required' }, 400);
-    const tenantId     = tenantIdFromEnv(env);
-    if (!tenantId) return jsonResponse({ error: 'TENANT_ID not configured' }, 503);
+    let tenantId =
+      authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+    if (!tenantId) tenantId = await fetchAuthUserTenantId(env, authUser.id);
+    if (!tenantId && authUser.email) tenantId = await fetchAuthUserTenantId(env, authUser.email);
+    if (!tenantId) return jsonResponse({ error: 'Tenant could not be resolved' }, 403);
     const runId        = 'wfr_' + crypto.randomUUID().replace(/-/g,'').slice(0,16);
     await env.DB.prepare(`INSERT INTO workflow_runs (id, tenant_id, workflow_id, workflow_name, trigger_source, triggered_by, status, input_data, created_at, updated_at) VALUES (?,?,?,?,'api','agent-sam','pending',?,datetime('now'),datetime('now'))`).bind(runId, tenantId, body.workflow_id||null, workflowName, body.input_data ? JSON.stringify(body.input_data) : null).run();
     return jsonResponse({ ok: true, run_id: runId, status: 'pending' });

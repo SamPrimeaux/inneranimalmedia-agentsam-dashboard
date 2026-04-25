@@ -85,6 +85,25 @@ export default {
         return handleHealthCheck(request, env);
       }
 
+      const ASSET_ROUTES = {
+        '/work': 'work.html',
+        '/about': 'about.html',
+        '/services': 'services.html',
+        '/contact': 'contact.html',
+        '/terms': 'terms-of-service.html',
+        '/privacy': 'privacy-policy.html',
+        '/pricing': 'pricing.html',
+        '/start': 'start-project.html',
+      };
+      const assetHtmlKey = ASSET_ROUTES[pathLower] || ASSET_ROUTES[path];
+      if (assetHtmlKey && env.ASSETS) {
+        const obj = await env.ASSETS.get(assetHtmlKey);
+        if (!obj) return new Response('Not found', { status: 404 });
+        return new Response(obj.body, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
       if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
         return await legacyWorker.fetch(request, env, ctx);
@@ -110,6 +129,17 @@ export default {
 
       // 2. Global Request Context
       const authUser = await getAuthUser(request, env);
+
+      // 2b. Dashboard shell: require session before HTML/SPA
+      if (!pathLower.startsWith('/api/')) {
+        const needsDashAuth =
+          pathLower === '/dashboard' ||
+          pathLower.startsWith('/dashboard/');
+        if (needsDashAuth && !authUser) {
+          const next = encodeURIComponent(`${path}${url.search || ''}`);
+          return Response.redirect(`${url.origin}/auth/login?next=${next}`, 302);
+        }
+      }
 
       // 3. Domain Dispatching (Surgical Delegation)
       if (pathLower.startsWith('/api/agentsam/time')) {

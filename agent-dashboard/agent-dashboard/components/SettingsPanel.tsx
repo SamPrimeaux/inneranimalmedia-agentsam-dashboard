@@ -89,6 +89,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     GEMINI_API_KEY: '',
   });
   const [llmBusy, setLlmBusy] = useState<string | null>(null);
+  const [profileDisplayName, setProfileDisplayName] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profilePlan, setProfilePlan] = useState('free');
 
   const refreshLlmKeys = () => {
     fetch('/api/vault/llm-keys', { credentials: 'same-origin' })
@@ -100,6 +103,23 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
   // Worker routes: /api/mcp/tools, /api/ai/models, /api/integrations/github/repos
   useEffect(() => {
     const opt = { credentials: 'same-origin' as const };
+
+    fetch('/api/settings/profile', opt)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { display_name?: string; email?: string; plan?: string; flat?: { display_name?: string; primary_email?: string } } | null) => {
+        if (!d || typeof d !== 'object') return;
+        const email = String(d.email ?? d.flat?.primary_email ?? '').trim();
+        const dn = String(d.display_name ?? d.flat?.display_name ?? '').trim();
+        const planRaw = d.plan != null && String(d.plan).trim() !== '' ? String(d.plan).trim().toLowerCase() : 'free';
+        setProfileEmail(email);
+        setProfileDisplayName(dn || (email.includes('@') ? email.split('@')[0] : email) || '');
+        setProfilePlan(planRaw);
+      })
+      .catch(() => {
+        setProfileEmail('');
+        setProfileDisplayName('');
+        setProfilePlan('free');
+      });
 
     fetch('/api/mcp/tools', opt)
       .then(r => r.json())
@@ -314,10 +334,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
         <div className="w-44 shrink-0 border-r border-[var(--border-subtle)] flex flex-col overflow-hidden">
           {/* User pill */}
           <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[var(--border-subtle)]">
-            <div className="w-7 h-7 rounded-full bg-[var(--solar-blue)] flex items-center justify-center text-[var(--toggle-knob)] font-bold text-[11px] shrink-0">S</div>
+            <div className="w-7 h-7 rounded-full bg-[var(--solar-blue)] flex items-center justify-center text-[var(--toggle-knob)] font-bold text-[11px] shrink-0">
+              {(profileDisplayName || profileEmail || '?').slice(0, 1).toUpperCase()}
+            </div>
             <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-semibold text-[var(--text-heading)] truncate">sam_primeaux</span>
-              <span className="text-[10px] text-[var(--solar-cyan)]">Pro Plan</span>
+              <span className="text-[11px] font-semibold text-[var(--text-heading)] truncate">{profileDisplayName || profileEmail || '—'}</span>
+              <span className="text-[10px] text-[var(--solar-cyan)] capitalize">{profilePlan}</span>
             </div>
           </div>
 

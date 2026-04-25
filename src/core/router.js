@@ -3,14 +3,14 @@
  * Main request dispatcher and path normalizer.
  *
  * Resolution hierarchy (no hardcoded values anywhere):
- *   tenant_id   → auth session → env.TENANT_ID   → D1 domain lookup → 503
+ *   tenant_id   → auth session → D1 auth_users / fetchAuthUserTenantId → D1 domain lookup → null
  *   workspace_id→ auth session → env.WORKSPACE_ID → null (overview renders without it)
  *   version     → env.CF_VERSION_METADATA.id → env.SHELL_VERSION → Date.now()
  */
 
 import { jsonResponse }              from './responses.js';
 import { renderShell }               from './shells.js';
-import { getAuthUser }               from '../core/auth.js';
+import { getAuthUser, fetchAuthUserTenantId } from '../core/auth.js';
 
 // ── API Handlers ──────────────────────────────────────────────────────────────
 import { handleAuthApi }             from '../api/auth.js';
@@ -65,15 +65,18 @@ function corsPreFlight() {
 
 /**
  * Resolve the current request's tenant ID.
- * Order: auth session → env.TENANT_ID → D1 domain lookup → null
+ * Order: auth session → D1 user tenant → D1 domain lookup → null
  * Never falls back to a hardcoded string.
  */
 async function resolveTenantId(request, env, authUser) {
   // 1. Authenticated session carries tenant_id
   if (authUser?.tenant_id) return authUser.tenant_id;
 
-  // 2. Wrangler env var (set in wrangler.production.toml / secrets)
-  if (env.TENANT_ID && typeof env.TENANT_ID === 'string') return env.TENANT_ID;
+  // 2. Tenant from auth_users (OAuth / password users)
+  if (authUser?.id && env.DB) {
+    const tid = await fetchAuthUserTenantId(env, authUser.id);
+    if (tid) return tid;
+  }
 
   // 3. D1 lookup by request hostname
   if (env.DB) {
@@ -394,6 +397,7 @@ export async function handleRequest(request, env, ctx) {
     return handleAgentSamApi(request, url, env, ctx);
   }
 
+  // Agent API surface (health, models, chat SSE, GET /api/agent/todo, …)
   if (path.startsWith('/api/agent')) {
     return handleAgentApi(request, url, env, ctx);
   }

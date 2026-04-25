@@ -8,7 +8,6 @@
 import { jsonResponse }      from '../core/responses.js';
 import { dispatchComplete,
          dispatchStream }    from '../core/provider.js';
-import { tenantIdFromEnv }   from '../core/auth.js';
 
 // ── Token validation ───────────────────────────────────────────────────────────
 export async function handleTerminalApi(request, url, env, ctx) {
@@ -43,7 +42,7 @@ export async function handleTerminalApi(request, url, env, ctx) {
       return jsonResponse({
         valid:    true,
         userId:   'sam',
-        tenantId: tenantIdFromEnv(env),
+        tenantId: null,
         role:     'owner',
       });
     }
@@ -66,7 +65,7 @@ export async function handleTerminalApi(request, url, env, ctx) {
     if (!session_id) return jsonResponse({ error: 'session_id required' }, 400);
 
     const now = Math.floor(Date.now() / 1000);
-    const tenantId = tenantIdFromEnv(env);
+    const tenantId = 'system';
 
     await env.DB?.prepare(
       `INSERT INTO terminal_sessions

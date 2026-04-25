@@ -7,7 +7,6 @@ import {
   jsonResponse,
   hashPassword,
   fetchAuthUserTenantId,
-  tenantIdFromEnv,
   establishIamSession,
 } from '../core/auth.js';
 
@@ -106,8 +105,7 @@ async function resolveInviteTenantId(env, authUser) {
     tid = await fetchAuthUserTenantId(env, authUser.email);
     if (tid) return tid;
   }
-  const envTid = tenantIdFromEnv(env);
-  return envTid || null;
+  return null;
 }
 
 function jsonSafe(val, fallback) {

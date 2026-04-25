@@ -72,10 +72,10 @@ database_id = "cf87b717-d4e2-4cf8-bab0-a81268e32d49"
 binding = "HYPERDRIVE"
 id = "08183bb9d2914e87ac8395d7e4ecff60"
 
-# RAG uses Supabase pgvector + OpenAI embeddings only (no Vectorize on this path).
-# [[vectorize]]
-# binding = "VECTORIZE"
-# index_name = "ai-search-inneranimalmedia-autorag"
+# Vectorize index for Workers AI vector queries (dashboard Storage → Vectors reports binding status).
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ai-search-inneranimalmedia-autorag"
 
 [[kv_namespaces]]
 binding = "KV"

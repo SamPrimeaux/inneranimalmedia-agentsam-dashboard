@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import Editor from '@monaco-editor/react';
 import { 
-  Search, ExternalLink, Globe, Bot, Database, Box, Code2, Wrench,
-  GitBranch, Network, Zap, CheckCircle2, XCircle, AlertCircle,
-  ChevronRight, ToggleLeft, ToggleRight, Eye, Settings2, Package,
+  Search, ExternalLink, Bot, Database, Box, Code2, Wrench,
+  GitBranch, Network, Zap,
+  ChevronRight, Settings2, Package,
   Cloud, BarChart2, BookOpen, Bell, Layers, Cpu, Shield, Palette
 } from 'lucide-react';
 import { ThemeSwitcher } from './ThemeSwitcher';
@@ -28,7 +29,39 @@ interface AIModel {
   output_rate_per_mtok?: number | null;
 }
 
-type LlmVaultRow = { id: string; key_name: string; masked: string };
+type LlmVaultRow = {
+  id: string;
+  key_name: string;
+  masked: string;
+  provider?: string;
+  created_at?: string | number | null;
+};
+
+function initialsFromDisplayName(displayName: string): string {
+  const t = displayName.trim();
+  if (!t) return '?';
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return t.length >= 2 ? t.slice(0, 2).toUpperCase() : t[0].toUpperCase();
+}
+
+function formatPlanLabel(plan: string | null): string {
+  if (plan == null || String(plan).trim() === '') return '—';
+  const p = String(plan).trim().toLowerCase();
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+function formatVaultCreated(at: string | number | null | undefined): string {
+  if (at == null || at === '') return '—';
+  const n = typeof at === 'string' ? Number.parseInt(at, 10) : Number(at);
+  if (Number.isFinite(n) && n > 0 && n < 1e12) {
+    return new Date(n * 1000).toLocaleString();
+  }
+  const d = new Date(String(at));
+  return Number.isFinite(d.getTime()) ? d.toLocaleString() : '—';
+}
 interface GitRepo {
   id: number; repo_full_name: string; repo_url: string; default_branch: string;
   cloudflare_worker_name: string; is_active: number;
@@ -83,22 +116,27 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [defaultModelKey, setDefaultModelKey] = useState<string | null>(null);
   const [llmKeys, setLlmKeys] = useState<LlmVaultRow[]>([]);
-  const [llmForm, setLlmForm] = useState<Record<string, string>>({
-    OPENAI_API_KEY: '',
-    ANTHROPIC_API_KEY: '',
-    GEMINI_API_KEY: '',
-  });
   const [llmBusy, setLlmBusy] = useState<string | null>(null);
   const [profileDisplayName, setProfileDisplayName] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
-  const [profilePlan, setProfilePlan] = useState('free');
+  const [profilePlan, setProfilePlan] = useState<string | null>(null);
+  const [workerBaseUrl, setWorkerBaseUrl] = useState('');
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
+  const [mcpModalToolName, setMcpModalToolName] = useState('');
+  const [mcpModalText, setMcpModalText] = useState('');
+  const [mcpModalSaving, setMcpModalSaving] = useState(false);
+  const [mcpModalError, setMcpModalError] = useState<string | null>(null);
+  const [vaultProvider, setVaultProvider] = useState<'OPENAI_API_KEY' | 'ANTHROPIC_API_KEY' | 'GEMINI_API_KEY'>(
+    'OPENAI_API_KEY',
+  );
+  const [vaultKeyValue, setVaultKeyValue] = useState('');
 
-  const refreshLlmKeys = () => {
+  const refreshLlmKeys = useCallback(() => {
     fetch('/api/vault/llm-keys', { credentials: 'same-origin' })
       .then((r) => r.json())
       .then((d: { keys?: LlmVaultRow[] }) => setLlmKeys(Array.isArray(d.keys) ? d.keys : []))
       .catch(() => setLlmKeys([]));
-  };
+  }, []);
 
   // Worker routes: /api/mcp/tools, /api/ai/models, /api/integrations/github/repos
   useEffect(() => {
@@ -106,19 +144,30 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
 
     fetch('/api/settings/profile', opt)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { display_name?: string; email?: string; plan?: string; flat?: { display_name?: string; primary_email?: string } } | null) => {
-        if (!d || typeof d !== 'object') return;
-        const email = String(d.email ?? d.flat?.primary_email ?? '').trim();
-        const dn = String(d.display_name ?? d.flat?.display_name ?? '').trim();
-        const planRaw = d.plan != null && String(d.plan).trim() !== '' ? String(d.plan).trim().toLowerCase() : 'free';
-        setProfileEmail(email);
-        setProfileDisplayName(dn || (email.includes('@') ? email.split('@')[0] : email) || '');
-        setProfilePlan(planRaw);
-      })
+      .then(
+        (d: {
+          display_name?: string;
+          email?: string;
+          plan?: string | null;
+          worker_base_url?: string;
+          flat?: { display_name?: string; primary_email?: string };
+        } | null) => {
+          if (!d || typeof d !== 'object') return;
+          const email = String(d.email ?? d.flat?.primary_email ?? '').trim();
+          const dn = String(d.display_name ?? d.flat?.display_name ?? '').trim();
+          const planRaw =
+            d.plan != null && String(d.plan).trim() !== '' ? String(d.plan).trim().toLowerCase() : null;
+          setProfileEmail(email);
+          setProfileDisplayName(dn || (email.includes('@') ? email.split('@')[0] : email) || '');
+          setProfilePlan(planRaw);
+          setWorkerBaseUrl(typeof d.worker_base_url === 'string' ? d.worker_base_url.trim() : '');
+        },
+      )
       .catch(() => {
         setProfileEmail('');
         setProfileDisplayName('');
-        setProfilePlan('free');
+        setProfilePlan(null);
+        setWorkerBaseUrl('');
       });
 
     fetch('/api/mcp/tools', opt)
@@ -234,28 +283,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     }
   };
 
-  const storeLlmKey = async (keyName: keyof typeof llmForm) => {
-    const value = (llmForm[keyName] || '').trim();
-    if (!value) return;
-    setLlmBusy(keyName);
-    try {
-      const r = await fetch('/api/vault/store', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key_name: keyName, value }),
-      });
-      if (r.ok) {
-        setLlmForm((p) => ({ ...p, [keyName]: '' }));
-        refreshLlmKeys();
-      }
-    } catch {
-      /* ignore */
-    } finally {
-      setLlmBusy(null);
-    }
-  };
-
   const removeLlmKey = async (id: string) => {
     setLlmBusy(id);
     try {
@@ -271,6 +298,28 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     }
   };
 
+  const saveVaultKeyFromSecurity = async () => {
+    const value = vaultKeyValue.trim();
+    if (!value) return;
+    setLlmBusy(vaultProvider);
+    try {
+      const r = await fetch('/api/vault/store', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key_name: vaultProvider, value }),
+      });
+      if (r.ok) {
+        setVaultKeyValue('');
+        refreshLlmKeys();
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLlmBusy(null);
+    }
+  };
+
   const toggleMcp = async (id: string, val: boolean) => {
     setMcpToggles(p => ({ ...p, [id]: val }));
     setLoading(p => ({ ...p, [id]: true }));
@@ -278,21 +327,66 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     setLoading(p => ({ ...p, [id]: false }));
   };
 
-  const openMcpInMonaco = (mcp: MCP) => {
-    const config = {
-      id: mcp.id,
-      tool_name: mcp.tool_name,
-      tool_category: mcp.tool_category,
-      description: mcp.description,
-      mcp_service_url: mcp.mcp_service_url,
-      enabled: mcpToggles[mcp.id] ? 1 : 0,
-      requires_approval: mcp.requires_approval,
-      input_schema: mcp.input_schema ? JSON.parse(mcp.input_schema) : {}
-    };
-    onFileSelect?.({
-      name: `${mcp.id}.mcp.json`,
-      content: JSON.stringify(config, null, 2)
-    });
+  const openMcpConfigModal = async (toolName: string) => {
+    setMcpModalError(null);
+    setMcpModalToolName(toolName);
+    try {
+      const r = await fetch(`/api/mcp/tools/${encodeURIComponent(toolName)}`, { credentials: 'same-origin' });
+      if (!r.ok) {
+        setMcpModalError(`Could not load tool (${r.status})`);
+        return;
+      }
+      const row = await r.json();
+      setMcpModalText(JSON.stringify(row, null, 2));
+      setMcpModalOpen(true);
+    } catch {
+      setMcpModalError('Network error loading tool config');
+    }
+  };
+
+  const saveMcpConfigModal = async () => {
+    if (!mcpModalToolName) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(mcpModalText || '{}') as Record<string, unknown>;
+    } catch {
+      setMcpModalError('Invalid JSON');
+      return;
+    }
+    setMcpModalSaving(true);
+    setMcpModalError(null);
+    try {
+      const body: Record<string, unknown> = {};
+      for (const k of [
+        'tool_category',
+        'mcp_service_url',
+        'description',
+        'input_schema',
+        'requires_approval',
+        'enabled',
+      ] as const) {
+        if (k in parsed) body[k] = parsed[k] as unknown;
+      }
+      const r = await fetch(`/api/mcp/tools/${encodeURIComponent(mcpModalToolName)}/config`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        setMcpModalError(await r.text());
+        return;
+      }
+      const fresh = await fetch(`/api/mcp/tools/${encodeURIComponent(mcpModalToolName)}`, {
+        credentials: 'same-origin',
+      }).then((x) => x.json());
+      setMcpModalText(JSON.stringify(fresh, null, 2));
+      setMcpModalOpen(false);
+    } catch (e) {
+      setMcpModalError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setMcpModalSaving(false);
+    }
   };
 
   const menu = [
@@ -335,11 +429,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
           {/* User pill */}
           <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[var(--border-subtle)]">
             <div className="w-7 h-7 rounded-full bg-[var(--solar-blue)] flex items-center justify-center text-[var(--toggle-knob)] font-bold text-[11px] shrink-0">
-              {(profileDisplayName || profileEmail || '?').slice(0, 1).toUpperCase()}
+              {initialsFromDisplayName(profileDisplayName)}
             </div>
             <div className="flex flex-col min-w-0">
               <span className="text-[11px] font-semibold text-[var(--text-heading)] truncate">{profileDisplayName || profileEmail || '—'}</span>
-              <span className="text-[10px] text-[var(--solar-cyan)] capitalize">{profilePlan}</span>
+              <span className="text-[10px] text-[var(--solar-cyan)]">{formatPlanLabel(profilePlan)}</span>
             </div>
           </div>
 
@@ -474,53 +568,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
                   </div>
                 );
               })}
-
-              <div className="border-t border-[var(--border-subtle)] pt-5 mt-2">
-                <h3 className="text-[12px] font-bold text-[var(--text-heading)] uppercase tracking-widest mb-3">Your API Keys</h3>
-                <p className="text-[11px] text-[var(--text-muted)] mb-4">
-                  Stored encrypted in the vault. Used when your workspace routes requests with your tenant keys.
-                </p>
-                {(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY'] as const).map((kn) => {
-                  const existing = llmKeys.find((k) => k.key_name === kn);
-                  return (
-                    <div key={kn} className="mb-4 p-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
-                      <div className="text-[11px] font-semibold text-[var(--text-main)] mb-2">{kn}</div>
-                      {existing ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <code className="text-[11px] text-[var(--solar-cyan)] font-sans">{existing.masked}</code>
-                          <button
-                            type="button"
-                            disabled={llmBusy === existing.id}
-                            onClick={() => void removeLlmKey(existing.id)}
-                            className="text-[10px] px-2 py-1 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-red-400 hover:border-red-400/40"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <input
-                            type="password"
-                            autoComplete="off"
-                            placeholder="Paste key…"
-                            value={llmForm[kn]}
-                            onChange={(e) => setLlmForm((p) => ({ ...p, [kn]: e.target.value }))}
-                            className="flex-1 min-w-0 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[11px] text-[var(--text-main)]"
-                          />
-                          <button
-                            type="button"
-                            disabled={llmBusy === kn || !llmForm[kn].trim()}
-                            onClick={() => void storeLlmKey(kn)}
-                            className="shrink-0 px-3 py-2 rounded-lg bg-[var(--solar-cyan)]/20 text-[11px] font-semibold text-[var(--solar-cyan)] border border-[var(--solar-cyan)]/30 hover:bg-[var(--solar-cyan)]/30 disabled:opacity-40"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           )}
 
@@ -603,7 +650,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
                                 </div>
                               </div>
                               <button
-                                onClick={() => openMcpInMonaco(mcp)}
+                                type="button"
+                                onClick={() => void openMcpConfigModal(mcp.tool_name)}
                                 className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-panel)] border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)]/50 rounded-lg text-[11px] text-[var(--text-main)] hover:text-[var(--solar-cyan)] transition-colors mt-1 w-fit"
                               >
                                 <Code2 size={12} /> Open Config in Monaco
@@ -669,13 +717,21 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
           {activeSection === 'Network' && (
             <div className="flex flex-col gap-4 max-w-xl">
               <h2 className="text-[13px] font-bold text-[var(--text-heading)] uppercase tracking-widest">Network</h2>
+              <p className="text-[11px] text-[var(--text-muted)]">
+                Worker base URL is resolved from your bootstrap preferences, the{' '}
+                <code className="font-mono text-[var(--solar-cyan)]">WORKER_BASE_URL</code> worker var, or the production site default.
+              </p>
               {[
                 { label: 'MCP Endpoint', val: 'https://mcp.inneranimalmedia.com/mcp', color: 'text-[var(--solar-cyan)]' },
-                { label: 'Worker Base URL', val: 'https://meauxcad.meauxbility.workers.dev', color: 'text-[var(--solar-blue)]' },
-              ].map(row => (
+                {
+                  label: 'Worker Base URL',
+                  val: workerBaseUrl || 'https://inneranimalmedia.com',
+                  color: 'text-[var(--solar-blue)]',
+                },
+              ].map((row) => (
                 <div key={row.label} className="flex flex-col gap-1 py-3 border-b border-[var(--border-subtle)]/50">
                   <span className="text-[11px] text-[var(--text-muted)] uppercase tracking-wider">{row.label}</span>
-                  <code className={`text-[12px] font-mono ${row.color}`}>{row.val}</code>
+                  <code className={`text-[12px] font-mono break-all ${row.color}`}>{row.val}</code>
                 </div>
               ))}
             </div>
@@ -711,8 +767,112 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
             </div>
           )}
 
+          {activeSection === 'Security' && (
+            <div className="flex flex-col gap-6 max-w-2xl">
+              <h2 className="text-[13px] font-bold text-[var(--text-heading)] uppercase tracking-widest">Security &amp; vault</h2>
+
+              <section className="space-y-3">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Your API keys</h3>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  Keys are encrypted in the vault and scoped to your session. Removing a key revokes it for this account.
+                </p>
+                {llmKeys.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-app)] p-6 text-[12px] text-[var(--text-muted)]">
+                    No keys stored yet.
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Provider</th>
+                          <th className="px-3 py-2 font-semibold">Masked</th>
+                          <th className="px-3 py-2 font-semibold">Added</th>
+                          <th className="px-3 py-2 font-semibold w-24" />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--border-subtle)]">
+                        {llmKeys.map((k) => (
+                          <tr key={k.id}>
+                            <td className="px-3 py-2 text-[var(--text-main)]">{k.provider || k.key_name}</td>
+                            <td className="px-3 py-2 font-mono text-[var(--solar-cyan)]">{k.masked}</td>
+                            <td className="px-3 py-2 text-[var(--text-muted)]">{formatVaultCreated(k.created_at)}</td>
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                disabled={llmBusy === k.id}
+                                onClick={() => void removeLlmKey(k.id)}
+                                className="text-[10px] px-2 py-1 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-red-400 hover:border-red-400/40"
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-3 p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Add key</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1 text-[11px]">
+                    <span className="text-[var(--text-muted)]">Provider</span>
+                    <select
+                      value={vaultProvider}
+                      onChange={(e) =>
+                        setVaultProvider(e.target.value as typeof vaultProvider)
+                      }
+                      className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[12px] text-[var(--text-main)]"
+                    >
+                      <option value="OPENAI_API_KEY">OpenAI</option>
+                      <option value="ANTHROPIC_API_KEY">Anthropic</option>
+                      <option value="GEMINI_API_KEY">Gemini</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px] sm:col-span-2">
+                    <span className="text-[var(--text-muted)]">Key name (vault slot)</span>
+                    <input
+                      type="text"
+                      readOnly
+                      value={vaultProvider}
+                      className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[12px] font-mono text-[var(--text-muted)]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-[11px] sm:col-span-2">
+                    <span className="text-[var(--text-muted)]">API key</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={vaultKeyValue}
+                      onChange={(e) => setVaultKeyValue(e.target.value)}
+                      className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[12px] text-[var(--text-main)]"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  disabled={llmBusy === vaultProvider || !vaultKeyValue.trim()}
+                  onClick={() => void saveVaultKeyFromSecurity()}
+                  className="px-4 py-2 rounded-lg bg-[var(--solar-cyan)]/20 text-[11px] font-semibold text-[var(--solar-cyan)] border border-[var(--solar-cyan)]/30 hover:bg-[var(--solar-cyan)]/30 disabled:opacity-40"
+                >
+                  Save
+                </button>
+              </section>
+
+              <section className="space-y-2 p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
+                <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Active sessions</h3>
+                <div className="rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-app)] p-8 text-center text-[12px] text-[var(--text-muted)]">
+                  Session management coming soon.
+                </div>
+              </section>
+            </div>
+          )}
+
           {/* ── Other sections — placeholder ── */}
-          {!['General','AI Models','Tools & MCP','GitHub','CI/CD','Network','Themes','Storage'].includes(activeSection) && (
+          {!['General','AI Models','Tools & MCP','GitHub','CI/CD','Network','Themes','Storage','Security'].includes(activeSection) && (
             <div className="flex flex-col items-center justify-center h-40 gap-3 text-[var(--text-muted)]">
               <Package size={28} className="opacity-30" />
               <p className="text-[12px]">{activeSection} settings coming soon.</p>
@@ -721,6 +881,55 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
 
         </div>
       </div>
+
+      {mcpModalOpen ? (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4">
+          <div className="flex flex-col w-full max-w-3xl max-h-[90vh] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
+              <span className="text-[12px] font-semibold text-[var(--text-heading)]">
+                MCP tool config — <code className="font-mono text-[var(--solar-cyan)]">{mcpModalToolName}</code>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMcpModalOpen(false)}
+                className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)]"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 min-h-[280px]">
+              <Editor
+                height="360px"
+                defaultLanguage="json"
+                theme="vs-dark"
+                value={mcpModalText}
+                onChange={(v) => setMcpModalText(v || '')}
+                options={{ minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false }}
+              />
+            </div>
+            {mcpModalError ? (
+              <div className="px-4 py-2 text-[11px] text-red-400 border-t border-[var(--border-subtle)]">{mcpModalError}</div>
+            ) : null}
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-[var(--border-subtle)] bg-[var(--bg-app)]">
+              <button
+                type="button"
+                onClick={() => setMcpModalOpen(false)}
+                className="px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={mcpModalSaving}
+                onClick={() => void saveMcpConfigModal()}
+                className="px-3 py-1.5 rounded-lg bg-[var(--solar-cyan)]/20 text-[11px] font-semibold text-[var(--solar-cyan)] border border-[var(--solar-cyan)]/30 disabled:opacity-40"
+              >
+                {mcpModalSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

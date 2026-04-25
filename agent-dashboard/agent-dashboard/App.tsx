@@ -1916,7 +1916,15 @@ const App: React.FC = () => {
                         </MeetProvider>
                       }
                     />
-                    <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
+                    <Route
+                      path="/dashboard/settings"
+                      element={
+                        <SettingsPanel
+                          onClose={() => navigate(-1)}
+                          workspaceId={authWorkspaceId || undefined}
+                        />
+                      }
+                    />
                   </Routes>
                 </div>
               ) : (

@@ -10,18 +10,34 @@ import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.j
  */
 function activeThemeJsonFromCmsRow(row) {
     if (!row) return null;
-    let data = {};
+    let configObj = {};
     try {
-        if (typeof row.config === 'string') data = JSON.parse(row.config);
-        else if (row.config && typeof row.config === 'object') data = row.config;
-    } catch (_) { }
+        if (typeof row.config === 'string') configObj = JSON.parse(row.config);
+        else if (row.config && typeof row.config === 'object') configObj = row.config;
+    } catch (_) {
+        configObj = {};
+    }
+    const rawVars = configObj.variables ?? configObj.data ?? configObj ?? {};
+    const themeVars = {};
+    if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+        for (const [k, v] of Object.entries(rawVars)) {
+            if (v == null || k == null) continue;
+            if (k === 'mode' || k === 'is_dark' || k === 'slug' || k === 'name') continue;
+            const key = String(k).startsWith('--') ? String(k) : `--${String(k).replace(/_/g, '-')}`;
+            themeVars[key] = String(v);
+        }
+    }
+    const is_dark =
+        configObj.mode === 'dark' ||
+        configObj.is_dark === true ||
+        String(row.slug || '').includes('dark');
     return {
         id: row.id,
         name: row.name || 'Custom Theme',
         slug: row.slug || 'custom',
-        is_dark: data.mode === 'dark' || data.is_dark === true || String(row.slug).includes('dark'),
+        is_dark,
         css_url: row.css_url || null,
-        data: data,
+        data: themeVars,
         theme_family: row.theme_family || 'custom',
         wcag_scores: row.wcag_scores || null,
     };

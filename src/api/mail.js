@@ -144,8 +144,12 @@ export async function handleMailApi(request, url, env, ctx) {
     // GET /api/mail/sent
     if (method === 'GET' && p === '/api/mail/sent') {
       const { results } = await env.DB.prepare(
-        `SELECT id, from_address, to_address, subject, status, created_at
+        `SELECT id,
+                COALESCE(from_email, from_address) AS from_address,
+                COALESCE(to_email, to_address) AS to_address,
+                subject, status, created_at
          FROM email_logs
+         WHERE status = 'sent'
          ORDER BY created_at DESC
          LIMIT 100`
       ).all();
@@ -175,9 +179,10 @@ export async function handleMailApi(request, url, env, ctx) {
 
       let body = null;
       const r2Key = email?.r2_key ? String(email.r2_key).trim() : '';
-      if (r2Key && env.EMAIL_ARCHIVE) {
+      const emailArchive = env.EMAIL || env.EMAIL_ARCHIVE;
+      if (r2Key && emailArchive) {
         try {
-          const obj = await env.EMAIL_ARCHIVE.get(r2Key);
+          const obj = await emailArchive.get(r2Key);
           if (obj) {
             body = await obj.text();
           }
@@ -392,13 +397,42 @@ export async function handleMailApi(request, url, env, ctx) {
       }
 
       const resendId = typeof data?.id === 'string' && data.id.trim() ? data.id.trim() : (crypto?.randomUUID?.() || 'sent');
+      const logId = crypto.randomUUID();
+      const archive = env.EMAIL || env.EMAIL_ARCHIVE;
+      const archivePayload = JSON.stringify({
+        id: logId,
+        resend_id: resendId,
+        from,
+        to,
+        subject,
+        html: html || null,
+        text: text || null,
+        sent_at: new Date().toISOString(),
+      });
 
-      env.DB.prepare(
-        `INSERT INTO email_logs (id, from_address, to_address, subject, status, created_at)
-         VALUES (?, ?, ?, ?, 'sent', datetime('now'))`
-      ).bind(resendId, from, to, subject).run().catch(() => {});
+      try {
+        const ins = await env.DB.prepare(
+          `INSERT INTO email_logs (id, to_email, from_email, subject, status, resend_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'sent', ?, datetime('now'), datetime('now'))`,
+        ).bind(logId, to, from, subject, resendId).run();
+        if (!(ins.meta?.changes > 0)) {
+          console.warn('[mail/send] email_logs insert reported 0 changes');
+        }
+      } catch (e) {
+        console.warn('[mail/send] email_logs insert failed', e?.message ?? e);
+      }
 
-      return jsonResponse({ ok: true, id: resendId });
+      if (archive) {
+        try {
+          await archive.put(`sent/${logId}.json`, archivePayload, {
+            httpMetadata: { contentType: 'application/json' },
+          });
+        } catch (e) {
+          console.warn('[mail/send] R2 archive put failed', e?.message ?? e);
+        }
+      }
+
+      return jsonResponse({ ok: true, id: resendId, log_id: logId });
     }
 
     // POST /api/mail/draft
@@ -412,17 +446,17 @@ export async function handleMailApi(request, url, env, ctx) {
       let id = null;
       try {
         const row = await env.DB.prepare(
-          `INSERT INTO email_logs (id, from_address, to_address, subject, status, created_at)
-           VALUES (lower(hex(randomblob(16))), ?, ?, ?, 'draft', datetime('now'))
+          `INSERT INTO email_logs (id, to_email, from_email, subject, status, created_at, updated_at)
+           VALUES (lower(hex(randomblob(16))), ?, ?, ?, 'draft', datetime('now'), datetime('now'))
            RETURNING id`
-        ).bind(from, to, subject).first();
+        ).bind(to, from, subject).first();
         id = row?.id ? String(row.id) : null;
       } catch {
         id = crypto?.randomUUID?.() || String(Date.now());
         await env.DB.prepare(
-          `INSERT INTO email_logs (id, from_address, to_address, subject, status, created_at)
-           VALUES (?, ?, ?, ?, 'draft', datetime('now'))`
-        ).bind(id, from, to, subject).run();
+          `INSERT INTO email_logs (id, to_email, from_email, subject, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))`
+        ).bind(id, to, from, subject).run();
       }
 
       return jsonResponse({ ok: true, id });

@@ -363,11 +363,21 @@ async function vaultListUserLlmKeys(request, env) {
           : kn === 'GEMINI_API_KEY'
             ? `AIza...${last4}`
             : `••••${last4}`;
+    const provider =
+      kn === 'OPENAI_API_KEY'
+        ? 'OpenAI'
+        : kn === 'ANTHROPIC_API_KEY'
+          ? 'Anthropic'
+          : kn === 'GEMINI_API_KEY'
+            ? 'Gemini'
+            : 'Other';
     return {
       id: r.id,
       key_name: kn,
+      provider,
       masked,
       last4,
+      created_at: r.created_at ?? null,
     };
   });
   return vaultJson({ keys: rows });

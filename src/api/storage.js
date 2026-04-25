@@ -311,15 +311,21 @@ export async function handleStorageApi(request, url, env) {
       }
     }
 
+    const vectorizeBinding =
+      env.VECTORIZE ||
+      env.vectorize ||
+      env.Vectors ||
+      env.VECTORIZE_INDEX ||
+      null;
     const vectorize = {
-      binding_configured: !!env.VECTORIZE,
+      binding_configured: !!vectorizeBinding,
       index_name:
         env.VECTORIZE_INDEX_NAME ||
         (typeof env.VECTORIZE_METADATA === 'string' ? env.VECTORIZE_METADATA : null) ||
         'ai-search-inneranimalmedia-autorag',
-      note:
-        env.VECTORIZE &&
-        'Vectorize index is bound as VECTORIZE; use Workers AI Vectorize APIs for queries.',
+      note: vectorizeBinding
+        ? 'Vectorize index is bound; use Workers AI Vectorize APIs for queries.'
+        : 'No Vectorize binding on this Worker (expected env.VECTORIZE from wrangler [[vectorize]]).',
     };
 
     return jsonResponse({

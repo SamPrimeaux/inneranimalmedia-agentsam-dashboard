@@ -202,15 +202,59 @@ async function finishLogin(request, url, env, userId, redirectPath) {
  * GET /api/settings/profile
  * Essential for SPA session verification on load.
  */
+function parseJsonObject(str) {
+  if (str == null || str === '') return {};
+  try {
+    const o = typeof str === 'string' ? JSON.parse(str) : str;
+    return typeof o === 'object' && o !== null && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+async function resolveWorkerBaseUrl(env, authUser) {
+  const fromEnv =
+    typeof env.WORKER_BASE_URL === 'string' && env.WORKER_BASE_URL.trim() !== ''
+      ? env.WORKER_BASE_URL.trim().replace(/\/$/, '')
+      : '';
+  if (fromEnv) return fromEnv;
+  if (!env.DB) return 'https://inneranimalmedia.com';
+  try {
+    let row = null;
+    if (authUser?.id) {
+      row = await env.DB.prepare(
+        `SELECT ui_preferences_json FROM agentsam_bootstrap WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      )
+        .bind(authUser.id)
+        .first();
+    }
+    if (!row?.ui_preferences_json && authUser?.email) {
+      row = await env.DB.prepare(
+        `SELECT ui_preferences_json FROM agentsam_bootstrap WHERE LOWER(email) = LOWER(?) ORDER BY updated_at DESC LIMIT 1`,
+      )
+        .bind(authUser.email)
+        .first();
+    }
+    const prefs = parseJsonObject(row?.ui_preferences_json);
+    const u = prefs.worker_base_url;
+    if (typeof u === 'string' && u.trim() !== '') return u.trim().replace(/\/$/, '');
+  } catch (_) {
+    /* non-fatal */
+  }
+  return 'https://inneranimalmedia.com';
+}
+
 async function handleSettingsProfileRequest(request, env) {
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const worker_base_url = await resolveWorkerBaseUrl(env, authUser);
   if (!env.DB) {
     const email = String(authUser.email || authUser.id || '').trim();
     return jsonResponse({
       display_name: email ? email.split('@')[0] : '',
       email: email || '',
-      plan: 'free',
+      plan: null,
+      worker_base_url,
       profile: null,
       flat: {
         display_name: email ? email.split('@')[0] : '',
@@ -230,27 +274,70 @@ async function handleSettingsProfileRequest(request, env) {
       .bind(authUser.id, authUser.email)
       .first();
 
-    const usRow = await env.DB.prepare(
-      `SELECT * FROM user_settings WHERE user_id = ? OR user_id = ? LIMIT 1`,
-    )
-      .bind(sessionKey, authUser.id)
-      .first()
-      .catch(() => null);
+    let usersRow = null;
+    try {
+      if (String(authUser.id || '').startsWith('usr_')) {
+        usersRow = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(authUser.id).first();
+      } else {
+        usersRow = await env.DB
+          .prepare(
+            `SELECT u.* FROM users u
+             INNER JOIN auth_users au ON u.auth_id = au.id
+             WHERE au.id = ? OR LOWER(COALESCE(u.email, '')) = LOWER(?) OR LOWER(au.email) = LOWER(?)
+             LIMIT 1`,
+          )
+          .bind(authUser.id, sessionKey, authUser.email || sessionKey)
+          .first();
+      }
+    } catch (_) {
+      usersRow = null;
+    }
 
-    const email = String(authRow?.email || authUser.email || authUser.id || '').trim();
+    let usRow = null;
+    for (const key of [authUser.id, usersRow?.id, authRow?.id, sessionKey].filter(Boolean)) {
+      try {
+        usRow = await env.DB.prepare(`SELECT * FROM user_settings WHERE user_id = ? LIMIT 1`).bind(key).first();
+      } catch {
+        usRow = null;
+      }
+      if (usRow) break;
+    }
+
+    const email = String(
+      usersRow?.email || authRow?.email || authUser.email || authUser.id || '',
+    ).trim();
     const nameFromAuth = String(authRow?.name || '').trim();
+    const nameFromUsers = String(
+      usersRow?.display_name || usersRow?.full_name || usersRow?.name || '',
+    ).trim();
     const dnFromSettings = String(usRow?.display_name || usRow?.full_name || '').trim();
-    const display_name = (dnFromSettings || nameFromAuth || (email.includes('@') ? email.split('@')[0] : email) || '').trim();
+    const display_name = (
+      nameFromUsers ||
+      dnFromSettings ||
+      nameFromAuth ||
+      (email.includes('@') ? email.split('@')[0] : email) ||
+      ''
+    ).trim();
 
     const rawPlan =
-      authRow && (authRow.plan ?? authRow.billing_plan ?? authRow.subscription_tier ?? authRow.tier);
+      usersRow &&
+      (usersRow.plan ??
+        usersRow.billing_plan ??
+        usersRow.subscription_tier ??
+        usersRow.tier);
+    const rawPlanAuth =
+      authRow &&
+      (authRow.plan ?? authRow.billing_plan ?? authRow.subscription_tier ?? authRow.tier);
+    const planSource = rawPlan != null && String(rawPlan).trim() !== '' ? rawPlan : rawPlanAuth;
     const plan =
-      rawPlan != null && String(rawPlan).trim() !== '' ? String(rawPlan).trim().toLowerCase() : 'free';
+      planSource != null && String(planSource).trim() !== ''
+        ? String(planSource).trim().toLowerCase()
+        : null;
 
     const flat = {
-      full_name: String(usRow?.full_name ?? nameFromAuth ?? '').trim() || display_name,
+      full_name: String(usRow?.full_name ?? nameFromUsers ?? nameFromAuth ?? '').trim() || display_name,
       display_name,
-      avatar_url: String(usRow?.avatar_url || '').trim(),
+      avatar_url: String(usRow?.avatar_url || usersRow?.avatar_url || '').trim(),
       bio: String(usRow?.bio || '').trim(),
       primary_email: email,
       primary_email_verified: Number(usRow?.primary_email_verified || 0),
@@ -264,7 +351,9 @@ async function handleSettingsProfileRequest(request, env) {
       display_name,
       email,
       plan,
+      worker_base_url,
       profile: usRow || null,
+      canonical_user: usersRow || null,
       flat,
     });
   } catch (e) {
@@ -273,7 +362,8 @@ async function handleSettingsProfileRequest(request, env) {
     return jsonResponse({
       display_name: email ? email.split('@')[0] : '',
       email: email || '',
-      plan: 'free',
+      plan: null,
+      worker_base_url,
       profile: null,
       flat: {
         display_name: email ? email.split('@')[0] : '',

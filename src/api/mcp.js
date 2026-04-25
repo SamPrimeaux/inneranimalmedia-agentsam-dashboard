@@ -2,7 +2,7 @@
  * API Service: Model Context Protocol (MCP) Manager
  * Handles agent session tracking, tool registration listings, and intent-based routing.
  */
-import { getAuthUser, jsonResponse } from '../core/auth.js';
+import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
 
 const MCP_CARD_AGENT_IDS = [
   'mcp_agent_architect',
@@ -364,6 +364,86 @@ export async function handleMcpApi(request, url, env, ctx) {
         } catch (__) {}
       }
       return jsonResponse({ tools });
+    }
+
+    const toolDetailMatch = pathLower.match(/^\/api\/mcp\/tools\/([^/]+)$/);
+    if (toolDetailMatch && method === 'GET') {
+      const toolName = decodeURIComponent(toolDetailMatch[1] || '').trim();
+      if (!toolName) return jsonResponse({ error: 'tool_name required' }, 400);
+      let row = null;
+      try {
+        row = await env.DB.prepare(`SELECT * FROM mcp_registered_tools WHERE tool_name = ? LIMIT 1`)
+          .bind(toolName)
+          .first();
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
+      }
+      if (!row) return jsonResponse({ error: 'Tool not found' }, 404);
+      return jsonResponse(row);
+    }
+
+    const toolConfigMatch = pathLower.match(/^\/api\/mcp\/tools\/([^/]+)\/config$/);
+    if (toolConfigMatch && method === 'POST') {
+      let tid = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+        ? String(authUser.tenant_id).trim()
+        : null;
+      if (!tid) tid = await fetchAuthUserTenantId(env, authUser.id);
+      const isSuper = Number(authUser.is_superadmin) === 1;
+      if (!tid && !isSuper) return jsonResponse({ error: 'Tenant required' }, 403);
+
+      const toolName = decodeURIComponent(toolConfigMatch[1] || '').trim();
+      if (!toolName) return jsonResponse({ error: 'tool_name required' }, 400);
+      const body = await request.json().catch(() => ({}));
+      if (!body || typeof body !== 'object') return jsonResponse({ error: 'JSON body required' }, 400);
+
+      const existing = await env.DB.prepare(
+        `SELECT tool_name FROM mcp_registered_tools WHERE tool_name = ? LIMIT 1`,
+      )
+        .bind(toolName)
+        .first();
+      if (!existing) return jsonResponse({ error: 'Tool not found' }, 404);
+
+      const sets = [];
+      const binds = [];
+      const push = (col, val) => {
+        sets.push(`${col} = ?`);
+        binds.push(val);
+      };
+      if (body.tool_category != null) push('tool_category', String(body.tool_category));
+      if (body.mcp_service_url != null) push('mcp_service_url', String(body.mcp_service_url));
+      if (body.description != null) push('description', String(body.description));
+      if (body.input_schema != null) {
+        const s =
+          typeof body.input_schema === 'string'
+            ? body.input_schema
+            : JSON.stringify(body.input_schema);
+        push('input_schema', s);
+      }
+      if (body.requires_approval != null) {
+        const n = Number(body.requires_approval);
+        push('requires_approval', Number.isFinite(n) ? n : body.requires_approval ? 1 : 0);
+      }
+      if (body.enabled != null) {
+        const n = Number(body.enabled);
+        push('enabled', Number.isFinite(n) ? n : body.enabled ? 1 : 0);
+      }
+
+      if (sets.length === 0) return jsonResponse({ error: 'No allowed fields to update' }, 400);
+      sets.push('updated_at = unixepoch()');
+      binds.push(toolName);
+      try {
+        await env.DB.prepare(
+          `UPDATE mcp_registered_tools SET ${sets.join(', ')} WHERE tool_name = ?`,
+        )
+          .bind(...binds)
+          .run();
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
+      }
+      const updated = await env.DB.prepare(`SELECT * FROM mcp_registered_tools WHERE tool_name = ? LIMIT 1`)
+        .bind(toolName)
+        .first();
+      return jsonResponse({ ok: true, tool: updated });
     }
 
     if (pathLower === '/api/mcp/commands' && method === 'GET') {

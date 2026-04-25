@@ -41,33 +41,23 @@ export const ThemeSwitcher: React.FC<ThemeSwitcherProps> = ({ workspaceId }) => 
 
   const applyTheme = async (theme: Theme) => {
     try {
-      // Keep backward-compat endpoint for other pages that depend on it
-      await fetch('/api/themes/apply', {
+      const applyRes = await fetch('/api/themes/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ theme_id: String(theme.id) }),
       });
+      if (!applyRes.ok) return;
 
-      // New collaborative endpoint — broadcasts to all connected clients
-      const collabRes = await fetch(`/api/collab/canvas/theme?workspace_id=${COLLAB_WORKSPACE_ID}`, {
+      await fetch(`/api/collab/canvas/theme?workspace_id=${COLLAB_WORKSPACE_ID}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ theme_slug: theme.slug }),
-      });
+      }).catch(() => {});
 
-      if (collabRes.ok) {
-        const data = await collabRes.json() as { ok: boolean; theme_slug?: string };
-        // Apply cssVars from the canonical theme broadcast (received via WebSocket in App.tsx)
-        // Also fetch and apply locally so this tab updates immediately
-        const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
-        if (payload?.slug) setActiveSlug(payload.slug);
-      } else {
-        // Collab endpoint unavailable — still apply locally via existing mechanism
-        const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
-        if (payload?.slug) setActiveSlug(payload.slug);
-      }
+      const payload = await fetchAndApplyActiveCmsTheme(workspaceId);
+      if (payload?.slug) setActiveSlug(payload.slug);
     } catch (e) {
       console.error(e);
     }

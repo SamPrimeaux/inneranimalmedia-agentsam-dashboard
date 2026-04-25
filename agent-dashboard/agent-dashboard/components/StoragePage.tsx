@@ -1,7 +1,7 @@
 /**
  * Storage admin — tenant-scoped via session cookies on all API calls (credentials: same-origin).
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   HardDrive,
   BarChart3,
@@ -19,9 +19,38 @@ import {
   Server,
   History,
 } from 'lucide-react';
+import {
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 
 type NavKey = 'files' | 'analytics' | 'vectors' | 's3';
 type FilesTab = 'buckets' | 'settings' | 'policies';
+
+const CHART_BUCKET_COLORS = [
+  'var(--solar-cyan)',
+  'var(--solar-blue)',
+  'var(--solar-violet)',
+  'var(--solar-magenta)',
+  'var(--solar-green)',
+  'var(--solar-yellow)',
+  'var(--solar-orange)',
+];
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '0 B';
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<{ ok: boolean; data: T | null; status: number }> => {
   try {
@@ -34,6 +63,122 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<{ ok: boo
     return { ok: false, data: null, status: 0 };
   }
 };
+
+function StorageAnalyticsCharts({ analytics }: { analytics: Record<string, unknown> }) {
+  const byBucket = useMemo(() => {
+    const raw = analytics.by_bucket;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((row, i) => {
+      const r = row as Record<string, unknown>;
+      const name = String(r.bucket ?? r.name ?? r.binding ?? `bucket_${i}`);
+      const object_count = Number(r.object_count ?? r.count ?? 0) || 0;
+      const total_bytes = Number(r.total_bytes ?? r.bytes ?? 0) || 0;
+      return { name, object_count, total_bytes };
+    });
+  }, [analytics]);
+
+  const summary = analytics.summary as { object_count?: number; size_bytes?: number } | undefined;
+  const total_objects =
+    Number(analytics.total_objects ?? summary?.object_count ?? 0) ||
+    byBucket.reduce((s, x) => s + x.object_count, 0);
+  const total_bytes =
+    Number(analytics.total_bytes ?? summary?.size_bytes ?? 0) ||
+    byBucket.reduce((s, x) => s + x.total_bytes, 0);
+
+  const pieData = byBucket.map((b) => ({ name: b.name, value: b.total_bytes }));
+  const barData = byBucket.map((b) => ({ name: b.name, objects: b.object_count }));
+
+  const tipStyle = {
+    background: 'var(--bg-panel)',
+    border: '1px solid var(--border-subtle)',
+    borderRadius: 8,
+    fontSize: 11,
+    color: 'var(--text-main)',
+  };
+
+  return (
+    <div className="space-y-8 max-w-5xl">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Total objects</p>
+          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
+            {total_objects.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Total size</p>
+          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
+            {formatBytes(total_bytes)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Buckets</p>
+          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
+            {byBucket.length.toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 min-h-[280px]">
+          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3">
+            Storage by bucket (size)
+          </h3>
+          {pieData.length === 0 ? (
+            <p className="text-[12px] text-[var(--text-muted)]">No bucket breakdown.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={56}
+                  outerRadius={88}
+                  paddingAngle={2}
+                >
+                  {pieData.map((_, i) => (
+                    <Cell key={i} fill={CHART_BUCKET_COLORS[i % CHART_BUCKET_COLORS.length]} stroke="var(--border-subtle)" />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={tipStyle}
+                  formatter={(value: number | string) => formatBytes(Number(value))}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 min-h-[280px]">
+          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3">
+            Objects per bucket
+          </h3>
+          {barData.length === 0 ? (
+            <p className="text-[12px] text-[var(--text-muted)]">No bucket breakdown.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                <XAxis
+                  dataKey="name"
+                  tick={{ fill: 'var(--text-muted)', fontSize: 10 }}
+                  interval={0}
+                  angle={-24}
+                  textAnchor="end"
+                  height={56}
+                />
+                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} width={40} />
+                <Tooltip contentStyle={tipStyle} />
+                <Bar dataKey="objects" fill="var(--solar-cyan)" radius={[4, 4, 0, 0]} stroke="var(--border-subtle)" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export const StoragePage: React.FC = () => {
   const [nav, setNav] = useState<NavKey>('files');
@@ -463,9 +608,7 @@ export const StoragePage: React.FC = () => {
                 No analytics data yet. Connect <code className="text-[var(--text-main)]">GET /api/storage/analytics</code> or check back after traffic is recorded.
               </div>
             ) : (
-              <pre className="text-[12px] font-mono p-4 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] overflow-auto max-w-4xl">
-                {JSON.stringify(analytics, null, 2)}
-              </pre>
+              <StorageAnalyticsCharts analytics={analytics} />
             )}
           </div>
         )}

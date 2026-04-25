@@ -15,7 +15,15 @@ Historical note: the table below was first sourced from R2 keys `dashboard/agent
 | Default model for a user | **`agentsam_bootstrap.ui_preferences_json`** → **`default_model`** | **`GET` / `POST /api/settings/default-model`**. |
 | User-owned LLM API keys (encrypted) | **`user_secrets`** (`project_label = iam_user_llm_keys`, `user_id` = auth user) | **`POST /api/vault/store`**, **`GET /api/vault/llm-keys`**, **`DELETE /api/vault/llm-keys/:id`**. |
 
-**Schema migration:** `migrations/237_ai_models_picker_eligible_picker_group.sql` — adds **`picker_eligible`**, **`picker_group`**. Apply to D1 **before** deploying Worker builds that select these columns.
+**Schema migration:** `migrations/237_ai_models_picker_eligible_picker_group.sql` — adds **`picker_eligible`**, **`picker_group`**. Apply to D1 **before** deploying Worker builds that select these columns:
+
+```bash
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
+  --remote -c wrangler.production.toml \
+  --file=./migrations/237_ai_models_picker_eligible_picker_group.sql
+```
+
+**Remote D1 — `migrations apply` is intentionally unused:** `wrangler d1 migrations apply … --remote` attempts a **full linear replay** from the oldest pending migration; replay fails (e.g. **107** / **`cloudflare_deployments`** missing). **Do not waste time on `apply` for this DB** until the ledger is repaired (unlikely). Use **`d1 execute --file=./migrations/…sql`** per change — see **`docs/DEPLOY_AND_AGENT_GUIDE.md` §3**.
 
 ---
 

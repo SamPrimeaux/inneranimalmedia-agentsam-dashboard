@@ -48,6 +48,12 @@ From repo root (requires Cloudflare token via `with-cloudflare-env.sh`):
 
 Replace the filename with the migration you intend to run. **Never** run against production without Sam approval for schema-destroying changes; these CI/CD migrations are INSERT-heavy only.
 
+### Why we do not use `wrangler d1 migrations apply` on remote `inneranimalmedia-business`
+
+**Option A (permanent until ledger repair):** `migrations apply` walks Wrangler’s **ordered migration list** from the first “pending” entry. On production, replay **fails early** (historical migrations reference objects that no longer exist — e.g. **`cloudflare_deployments`** around migration **107**). The live database was evolved with **`d1 execute --file=…`** and other paths, so the **ledger and disk files do not match a clean linear history**.
+
+**Do not run** `wrangler d1 migrations apply inneranimalmedia-business --remote …` expecting it to succeed. **Keep using** `d1 execute --file=./migrations/<name>.sql` for each intentional schema change. Full write-up: **`docs/DEPLOY_AND_AGENT_GUIDE.md` §3**.
+
 ---
 
 ## Runtime writers (worker)

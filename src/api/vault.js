@@ -1,5 +1,21 @@
 import { jsonResponse } from '../core/responses.js';
-import { tenantIdFromEnv } from '../core/auth.js';
+import { tenantIdFromEnv, getAuthUser, fetchAuthUserTenantId } from '../core/auth.js';
+
+const LLM_VAULT_PROJECT = 'iam_user_llm_keys';
+const LLM_ALLOWED_NAMES = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY']);
+
+async function resolveUserTenantId(env, authUser) {
+  if (authUser.tenant_id != null && String(authUser.tenant_id).trim() !== '') {
+    return String(authUser.tenant_id).trim();
+  }
+  let tid = await fetchAuthUserTenantId(env, authUser.id);
+  if (tid) return tid;
+  if (authUser.email) {
+    tid = await fetchAuthUserTenantId(env, authUser.email);
+    if (tid) return tid;
+  }
+  return tenantIdFromEnv(env) || null;
+}
 
 function vaultJson(data, status = 200) {
   return jsonResponse(data, status);
@@ -223,11 +239,152 @@ function vaultRegistry() {
   return vaultJson({ secrets, domains });
 }
 
-export async function handleVaultApi(request, env) {
+async function vaultStoreUserKey(request, env) {
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return vaultErr('Unauthorized', 401);
+  const body = await request.json().catch(() => ({}));
+  const keyName = String(body.key_name || body.secret_name || '').trim();
+  const value = String(body.value ?? body.secret_value ?? '');
+  if (!keyName || !value) return vaultErr('key_name and value are required', 400);
+  if (!LLM_ALLOWED_NAMES.has(keyName)) return vaultErr('key_name must be one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY', 400);
+  const tenantId = (await resolveUserTenantId(env, authUser)) || tenantIdFromEnv(env);
+  if (!tenantId) return vaultErr('Tenant could not be resolved', 403);
+  const encrypted = await vaultEncrypt(value, env.VAULT_MASTER_KEY);
+  const last4val = vaultLast4(value);
+  const metadata = JSON.stringify({ last4: last4val });
+  const uid = String(authUser.id || '').trim();
+  if (!uid) return vaultErr('Invalid session', 401);
+
+  const existing = await env.DB.prepare(
+    `SELECT id FROM user_secrets WHERE user_id = ? AND secret_name = ? AND project_label = ? AND is_active = 1 LIMIT 1`,
+  )
+    .bind(uid, keyName, LLM_VAULT_PROJECT)
+    .first();
+
+  if (existing?.id) {
+    await env.DB.prepare(
+      `UPDATE user_secrets SET secret_value_encrypted = ?, metadata_json = ?, service_name = 'llm', updated_at = unixepoch() WHERE id = ?`,
+    )
+      .bind(encrypted, metadata, existing.id)
+      .run();
+    await vaultWriteAudit(env.DB, {
+      secret_id: existing.id,
+      event_type: 'rotated',
+      new_last4: last4val,
+      notes: `User LLM key updated: ${keyName}`,
+      request,
+      env,
+    });
+    return vaultJson({
+      success: true,
+      id: existing.id,
+      key_name: keyName,
+      masked: maskApiKeyPreview(value, last4val),
+    });
+  }
+
+  const id = vaultNewId('sec');
+  await env.DB.prepare(
+    `INSERT INTO user_secrets (id, user_id, tenant_id, secret_name, secret_value_encrypted, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, expires_at, is_active)
+     VALUES (?, ?, ?, ?, ?, 'llm', NULL, ?, NULL, NULL, '[]', ?, NULL, 1)`,
+  )
+    .bind(id, uid, tenantId, keyName, encrypted, LLM_VAULT_PROJECT, metadata)
+    .run();
+  await vaultWriteAudit(env.DB, {
+    secret_id: id,
+    event_type: 'created',
+    new_last4: last4val,
+    notes: `User LLM key stored: ${keyName}`,
+    request,
+    env,
+  });
+  return vaultJson({
+    success: true,
+    id,
+    key_name: keyName,
+    masked: maskApiKeyPreview(value, last4val),
+  });
+}
+
+function maskApiKeyPreview(plain, last4) {
+  const l4 = last4 || '????';
+  const p = String(plain || '');
+  if (!p) return `stored…${l4}`;
+  if (p.startsWith('sk-ant')) return `sk-ant-...${l4}`;
+  if (p.startsWith('sk-')) return `sk-...${l4}`;
+  if (p.length > 8) return `${p.slice(0, 4)}...${l4}`;
+  return `••••${l4}`;
+}
+
+async function vaultListUserLlmKeys(request, env) {
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return vaultErr('Unauthorized', 401);
+  const uid = String(authUser.id || '').trim();
+  const { results } = await env.DB.prepare(
+    `SELECT id, secret_name, metadata_json, is_active, created_at, updated_at
+     FROM user_secrets WHERE user_id = ? AND project_label = ? AND is_active = 1
+     ORDER BY secret_name ASC`,
+  )
+    .bind(uid, LLM_VAULT_PROJECT)
+    .all();
+  const rows = (results || []).map((r) => {
+    let last4 = '????';
+    try {
+      const m = JSON.parse(r.metadata_json || '{}');
+      if (m.last4) last4 = String(m.last4);
+    } catch {
+      /* ignore */
+    }
+    const kn = String(r.secret_name || '');
+    const masked =
+      kn === 'OPENAI_API_KEY'
+        ? `sk-...${last4}`
+        : kn === 'ANTHROPIC_API_KEY'
+          ? `sk-ant-...${last4}`
+          : kn === 'GEMINI_API_KEY'
+            ? `AIza...${last4}`
+            : `••••${last4}`;
+    return {
+      id: r.id,
+      key_name: kn,
+      masked,
+      last4,
+    };
+  });
+  return vaultJson({ keys: rows });
+}
+
+async function vaultDeleteUserLlmKey(request, env, id) {
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return vaultErr('Unauthorized', 401);
+  const uid = String(authUser.id || '').trim();
+  const row = await env.DB.prepare(
+    `SELECT id FROM user_secrets WHERE id = ? AND user_id = ? AND project_label = ? AND is_active = 1 LIMIT 1`,
+  )
+    .bind(id, uid, LLM_VAULT_PROJECT)
+    .first();
+  if (!row) return vaultErr('Not found', 404);
+  await env.DB.prepare(`UPDATE user_secrets SET is_active = 0, updated_at = unixepoch() WHERE id = ?`).bind(id).run();
+  await vaultWriteAudit(env.DB, {
+    secret_id: id,
+    event_type: 'revoked',
+    notes: 'User removed LLM API key',
+    request,
+    env,
+  });
+  return vaultJson({ success: true });
+}
+
+export async function handleVaultApi(request, urlIn, env, _ctx) {
   if (!env.VAULT_MASTER_KEY) return vaultErr('VAULT_MASTER_KEY not configured. Run: wrangler secret put VAULT_MASTER_KEY', 500);
-  const url = new URL(request.url);
+  const url = urlIn instanceof URL ? urlIn : new URL(request.url);
   const path = url.pathname;
-  const method = request.method;
+  const method = request.method.toUpperCase();
+
+  if (path === '/api/vault/store' && method === 'POST') return vaultStoreUserKey(request, env);
+  if (path === '/api/vault/llm-keys' && method === 'GET') return vaultListUserLlmKeys(request, env);
+  const llmDel = path.match(/^\/api\/vault\/llm-keys\/([^/]+)$/);
+  if (llmDel && method === 'DELETE') return vaultDeleteUserLlmKey(request, env, llmDel[1]);
 
   if (path === '/api/vault/registry' && method === 'GET') return vaultRegistry();
   if (path === '/api/vault/projects' && method === 'GET') return vaultListProjects(env);

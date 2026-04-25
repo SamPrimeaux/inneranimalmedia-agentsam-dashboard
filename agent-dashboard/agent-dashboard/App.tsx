@@ -149,6 +149,18 @@ const App: React.FC = () => {
   const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
+  const LS_SIDEBAR_RAIL = 'iam_sidebar_expanded';
+  const [sidebarRailExpanded, setSidebarRailExpanded] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const v = localStorage.getItem(LS_SIDEBAR_RAIL);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch {
+      /* ignore */
+    }
+    return true;
+  });
   const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
   );
@@ -806,6 +818,12 @@ const App: React.FC = () => {
   const toggleActivity = (
     activity: 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database',
   ) => {
+    if (activity === 'files' && typeof window !== 'undefined') {
+      const p = window.location.pathname;
+      if (p !== '/dashboard/agent' && p !== '/dashboard/meet') {
+        navigate('/dashboard/agent');
+      }
+    }
     setActiveActivity((prev) => {
       if (prev === activity) return null;
       if (activity === 'debug') {
@@ -1113,6 +1131,25 @@ const App: React.FC = () => {
     if (!isNarrowViewport || activeActivity == null) return;
     setAgentPosition('off');
   }, [activeActivity, isNarrowViewport]);
+
+  useEffect(() => {
+    if (activeActivity === 'files' && location.pathname !== '/dashboard/agent') {
+      setActiveActivity(null);
+    }
+  }, [location.pathname, activeActivity]);
+
+  useEffect(() => {
+    const onSidebarToggle = (e: Event) => {
+      const act = (e as CustomEvent<{ activity?: string }>).detail?.activity;
+      if (!act) return;
+      if (act === 'files' && location.pathname !== '/dashboard/agent' && location.pathname !== '/dashboard/meet') {
+        navigate('/dashboard/agent');
+      }
+      setActiveActivity(act as typeof activeActivity);
+    };
+    window.addEventListener('iam-sidebar-toggle', onSidebarToggle as EventListener);
+    return () => window.removeEventListener('iam-sidebar-toggle', onSidebarToggle as EventListener);
+  }, [location.pathname, navigate]);
 
   const cycleAgentPosition = useCallback(() => {
     setAgentPosition((p) => (p === 'right' ? 'left' : p === 'left' ? 'off' : 'right'));
@@ -1466,11 +1503,22 @@ const App: React.FC = () => {
               />
               <button
                 type="button"
-                onClick={() => toggleActivity(activeActivity ? activeActivity : 'files')}
+                onClick={() => {
+                  setSidebarRailExpanded((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem(LS_SIDEBAR_RAIL, next ? '1' : '0');
+                    } catch {
+                      /* ignore */
+                    }
+                    return next;
+                  });
+                }}
                 className="shrink-0 p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors ml-1"
-                title={activeActivity ? "Close sidebar" : "Open sidebar"}
+                title={sidebarRailExpanded ? 'Collapse navigation' : 'Expand navigation'}
+                aria-expanded={sidebarRailExpanded}
               >
-                {activeActivity ? <PanelLeftClose size={18} strokeWidth={1.75} /> : <PanelLeft size={18} strokeWidth={1.75} />}
+                {sidebarRailExpanded ? <PanelLeftClose size={18} strokeWidth={1.75} /> : <PanelLeft size={18} strokeWidth={1.75} />}
               </button>
           </div>
 
@@ -1601,45 +1649,53 @@ const App: React.FC = () => {
 
       <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
           {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
-          {/* Activity bar: exactly 8 icons (v3 rail) */}
-          <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-3 border-r border-[var(--border-subtle)] shrink-0 z-50">
-              <ActivityIcon icon={Home} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
-              <ActivityIcon icon={Bot} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
-              <ActivityIcon icon={GraduationCap} title="Learn" active={location.pathname === '/dashboard/learn'} onClick={() => navigate('/dashboard/learn')} />
-              <ActivityIcon
+          {/* Activity bar: icon rail (width toggled via ☰ — localStorage iam_sidebar_expanded) */}
+          <div
+            className="hidden md:flex flex-col py-3 gap-1 px-1 bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] shrink-0 z-50 overflow-x-hidden overflow-y-auto transition-[width] duration-200 ease-in-out"
+            style={{ width: sidebarRailExpanded ? 180 : 48 }}
+          >
+              <ActivityRailItem icon={Home} label="Overview" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
+              <ActivityRailItem icon={Bot} label="Agent" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
+              <ActivityRailItem icon={GraduationCap} label="Learn" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/learn'} onClick={() => navigate('/dashboard/learn')} />
+              <ActivityRailItem
                   icon={Palette}
-                  title="Design Studio"
+                  label="Design Studio"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/designstudio'}
                   onClick={() => navigate('/dashboard/designstudio')}
               />
-              <ActivityIcon
+              <ActivityRailItem
                   icon={HardDrive}
-                  title="Storage"
+                  label="Storage"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/storage'}
                   onClick={() => navigate('/dashboard/storage')}
               />
-              <ActivityIcon icon={Wrench} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
-              <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
-              <ActivityIcon
+              <ActivityRailItem icon={Wrench} label="Integrations" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
+              <ActivityRailItem icon={Layers} label="MCP & AI" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
+              <ActivityRailItem
                   icon={Database}
-                  title="D1 Explorer"
+                  label="D1 Explorer"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
-              <ActivityIcon icon={Camera} title="Meet" active={location.pathname === '/dashboard/meet'} onClick={() => navigate('/dashboard/meet')} />
-              <ActivityIcon
+              <ActivityRailItem icon={Camera} label="Meet" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/meet'} onClick={() => navigate('/dashboard/meet')} />
+              <ActivityRailItem
                 icon={Image}
-                title="Images"
+                label="Images"
+                expanded={sidebarRailExpanded}
                 active={location.pathname === '/dashboard/images'}
                 onClick={() => navigate('/dashboard/images')}
               />
-              <ActivityIcon
+              <ActivityRailItem
                 icon={Mail}
-                title="Mail"
+                label="Mail"
+                expanded={sidebarRailExpanded}
                 active={location.pathname === '/dashboard/mail'}
                 onClick={() => navigate('/dashboard/mail')}
               />
-              <ActivityIcon icon={Settings} title="Settings" active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
+              <ActivityRailItem icon={Settings} label="Settings" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1713,7 +1769,7 @@ const App: React.FC = () => {
                       <MeetProvider value={meetCtxValue}>
                         <MeetShellPanel />
                       </MeetProvider>
-                  ) : activeActivity === 'files' && location.pathname !== '/dashboard/meet' ? (
+                  ) : activeActivity === 'files' && location.pathname === '/dashboard/agent' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
                           onWorkspaceRootChange={({ folderName }) => {
@@ -1788,10 +1844,14 @@ const App: React.FC = () => {
                         }}
                         onOpenRecent={(e) => void openRecentEntry(e)}
                         onOpenLocalFolder={() => {
+                          if (location.pathname !== '/dashboard/agent') navigate('/dashboard/agent');
                           setActiveActivity('files');
                           setNativeFolderOpenSignal((n) => n + 1);
                         }}
-                        onOpenFilesActivity={() => setActiveActivity('files')}
+                        onOpenFilesActivity={() => {
+                          if (location.pathname !== '/dashboard/agent') navigate('/dashboard/agent');
+                          setActiveActivity('files');
+                        }}
                         onOpenGitHubActivity={() => setActiveActivity('actions')}
                         onOpenWorkspace={(name, path) => {
                           setIdeWorkspace({ source: 'pinned', name, pathHint: path });
@@ -1803,6 +1863,17 @@ const App: React.FC = () => {
                           onExplorerJumpConsumed={() => setDbExplorerJump(null)}
                           onClose={() => setActiveActivity(null)}
                       />
+                  ) : activeActivity === 'files' ? (
+                      <div className="flex flex-col items-center justify-center h-full px-6 text-center gap-3">
+                        <p className="text-[12px] text-[var(--text-muted)]">The file explorer is available on the Agent page.</p>
+                        <button
+                          type="button"
+                          className="text-[11px] px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors"
+                          onClick={() => navigate('/dashboard/agent')}
+                        >
+                          Go to Agent
+                        </button>
+                      </div>
                   ) : location.pathname !== '/dashboard/meet' ? (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>
                   ) : null}
@@ -2281,15 +2352,27 @@ const MobileMoreRow: React.FC<{ icon: LucideLike; label: string; onClick: () => 
   </button>
 );
 
-const ActivityIcon: React.FC<{ icon: any, active: boolean, onClick: () => void, title?: string }> = ({ icon: Icon, active, onClick, title }) => (
-    <div 
-        onClick={onClick}
-        title={title}
-        className={`p-3 cursor-pointer transition-colors relative ${active ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'}`}
-    >
-        {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-9 bg-[var(--solar-cyan)] rounded-r-md"></div>}
-        <Icon size={25} strokeWidth={1} />
-    </div>
+const ActivityRailItem: React.FC<{
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  label: string;
+  expanded: boolean;
+  active: boolean;
+  onClick: () => void;
+}> = ({ icon: Icon, label, expanded, active, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    title={label}
+    className={`relative flex w-full min-h-[40px] shrink-0 items-center rounded-lg transition-colors ${
+      expanded ? 'gap-2.5 px-2 justify-start' : 'justify-center px-0'
+    } ${active ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]/60'}`}
+  >
+    {active ? (
+      <div className="absolute left-0 top-1/2 h-8 w-[3px] -translate-y-1/2 rounded-r-md bg-[var(--solar-cyan)]" aria-hidden />
+    ) : null}
+    <Icon size={expanded ? 20 : 18} strokeWidth={1} className="shrink-0" />
+    {expanded ? <span className="min-w-0 truncate text-left text-[12px] font-medium leading-tight">{label}</span> : null}
+  </button>
 );
 
 const Tab: React.FC<{ title: React.ReactNode, icon: React.ReactNode, active: boolean, onClick: () => void, onClose?: (e: React.MouseEvent) => void }> = ({ title, icon, active, onClick, onClose }) => (
@@ -2322,7 +2405,7 @@ const Tab: React.FC<{ title: React.ReactNode, icon: React.ReactNode, active: boo
 const QuickOpen: React.FC<{ label: string, onClick: () => void }> = ({ label, onClick }) => (
     <button
         onClick={onClick}
-        className="text-[10px] px-2 py-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors border border-transparent hover:border-[var(--border-subtle)] font-mono"
+        className="text-[10px] px-2 py-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors border border-transparent hover:border-[var(--border-subtle)] font-sans"
         title={`Open ${label}`}
     >
         + {label}

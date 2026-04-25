@@ -502,7 +502,11 @@ export async function handleRequest(request, env, ctx) {
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────
-  if (path.startsWith('/api/settings') || path.startsWith('/api/user')) {
+  if (
+    path.startsWith('/api/settings') ||
+    path.startsWith('/api/user') ||
+    path.startsWith('/api/ai')
+  ) {
     return handleSettingsApi(request, url, env, ctx);
   }
 

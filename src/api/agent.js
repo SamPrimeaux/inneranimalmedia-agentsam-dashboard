@@ -3,7 +3,8 @@
  * Handles all /api/agent/* routes.
  *
  * Key notes:
- *  - All model resolution uses agent_model_registry (not ai_models)
+ *  - Customer-facing model catalog: D1 ai_models (picker_eligible, picker_group, show_in_picker).
+ *  - agent_model_registry still used for some legacy/registry paths.
  *  - No hardcoded model strings — always resolved from DB
  *  - Tool definitions loaded per-request via classifyIntent + loadToolsForRequest
  *  - Approval gate wired for high-risk tool calls
@@ -859,28 +860,27 @@ export async function handleAgentApi(request, url, env, ctx) {
     });
   }
 
-  // ── /api/agent/models ─────────────────────────────────────────────────────
+  // ── /api/agent/models — canonical ai_models rows (picker + routing metadata)
   if (path === '/api/agent/models') {
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    const provider = url.searchParams.get('provider') || null;
-    const role     = url.searchParams.get('role') || null;
+    if (method !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+    const showInPicker = url.searchParams.get('show_in_picker') === '1';
     try {
-      let sql = `SELECT id, model_key, provider, display_name, role, cost_tier,
-                        input_cost_per_1m, output_cost_per_1m, cached_input_cost_per_1m,
-                        cache_write_cost_per_1m, cache_read_cost_per_1m,
-                        batch_input_cost_per_1m, batch_output_cost_per_1m,
-                        context_window, supports_function_calling,
-                        supports_vision, supports_reasoning, supports_batch,
-                        strengths, best_for, charge_type, charge_unit
-                 FROM agent_model_registry WHERE 1=1`;
-      const params = [];
-      if (provider) { sql += ' AND provider = ?'; params.push(provider); }
-      if (role)     { sql += ' AND role = ?';     params.push(role); }
-      sql += ' ORDER BY provider, role, input_cost_per_1m ASC';
-      const stmt = params.length ? env.DB.prepare(sql).bind(...params) : env.DB.prepare(sql);
-      const { results } = await stmt.all();
+      const { results } = await env.DB.prepare(
+        `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker,
+                picker_eligible, picker_group,
+                input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens,
+                size_class, supports_tools, supports_vision
+         FROM ai_models
+         WHERE COALESCE(is_active, 0) = 1
+           AND COALESCE(picker_eligible, 1) = 1
+           ${showInPicker ? 'AND COALESCE(show_in_picker, 0) = 1' : ''}
+         ORDER BY sort_order ASC, display_name ASC`,
+      ).all();
       return jsonResponse(results || []);
-    } catch (e) { return jsonResponse({ error: e?.message }, 500); }
+    } catch (e) {
+      return jsonResponse({ error: e?.message }, 500);
+    }
   }
 
   // ── /api/agent/modes ──────────────────────────────────────────────────────

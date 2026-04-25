@@ -21,6 +21,17 @@ code, kbd, pre, samp {
   letter-spacing: -0.02em;
 }
 
+/* IAM: Tailwind `font-mono` uses Nunito for UI chrome; real monospace on code/pre/kbd/samp */
+.font-mono {
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif !important;
+}
+pre.font-mono,
+code.font-mono,
+kbd.font-mono,
+samp.font-mono {
+  font-family: var(--font-mono) !important;
+}
+
 .terminal-wrapper {
   display: flex !important;
   flex-direction: column !important;

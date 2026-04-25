@@ -13,9 +13,22 @@ interface MCP {
   enabled: number; requires_approval: number; mcp_service_url: string; input_schema?: string;
 }
 interface AIModel {
-  provider: string; model_key: string; display_name: string;
-  is_active: number; supports_tools: number; supports_vision: number; size_class: string;
+  id?: string;
+  provider: string;
+  model_key: string;
+  display_name: string;
+  is_active: number;
+  supports_tools: number;
+  supports_vision: number;
+  size_class: string;
+  show_in_picker?: number;
+  picker_eligible?: number;
+  picker_group?: string;
+  input_rate_per_mtok?: number | null;
+  output_rate_per_mtok?: number | null;
 }
+
+type LlmVaultRow = { id: string; key_name: string; masked: string };
 interface GitRepo {
   id: number; repo_full_name: string; repo_url: string; default_branch: string;
   cloudflare_worker_name: string; is_active: number;
@@ -68,6 +81,21 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
   const [mcpToggles, setMcpToggles] = useState<Record<string, boolean>>({});
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null);
   const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [defaultModelKey, setDefaultModelKey] = useState<string | null>(null);
+  const [llmKeys, setLlmKeys] = useState<LlmVaultRow[]>([]);
+  const [llmForm, setLlmForm] = useState<Record<string, string>>({
+    OPENAI_API_KEY: '',
+    ANTHROPIC_API_KEY: '',
+    GEMINI_API_KEY: '',
+  });
+  const [llmBusy, setLlmBusy] = useState<string | null>(null);
+
+  const refreshLlmKeys = () => {
+    fetch('/api/vault/llm-keys', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d: { keys?: LlmVaultRow[] }) => setLlmKeys(Array.isArray(d.keys) ? d.keys : []))
+      .catch(() => setLlmKeys([]));
+  };
 
   // Worker routes: /api/mcp/tools, /api/ai/models, /api/integrations/github/repos
   useEffect(() => {
@@ -100,6 +128,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
         const rows = Array.isArray(d.models) ? d.models : [];
         setModels(
           rows.map(m => ({
+            id: typeof (m as AIModel).id === 'string' ? (m as AIModel).id : undefined,
             provider: String((m as AIModel).provider || ''),
             model_key: String((m as AIModel).model_key || ''),
             display_name: String((m as AIModel).display_name || (m as AIModel).model_key || ''),
@@ -107,10 +136,24 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
             supports_tools: Number((m as AIModel).supports_tools) ? 1 : 0,
             supports_vision: Number((m as AIModel).supports_vision) ? 1 : 0,
             size_class: String((m as AIModel).size_class || ''),
+            show_in_picker: Number((m as AIModel).show_in_picker) ? 1 : 0,
+            picker_eligible: Number((m as AIModel).picker_eligible) === 0 ? 0 : 1,
+            picker_group: String((m as AIModel).picker_group || (m as AIModel).provider || ''),
+            input_rate_per_mtok: (m as AIModel).input_rate_per_mtok != null ? Number((m as AIModel).input_rate_per_mtok) : null,
+            output_rate_per_mtok: (m as AIModel).output_rate_per_mtok != null ? Number((m as AIModel).output_rate_per_mtok) : null,
           }))
         );
       })
       .catch(() => setModels([]));
+
+    fetch('/api/settings/default-model', opt)
+      .then((r) => r.json())
+      .then((d: { default_model?: string | null }) => {
+        setDefaultModelKey(typeof d.default_model === 'string' && d.default_model.trim() ? d.default_model.trim() : null);
+      })
+      .catch(() => setDefaultModelKey(null));
+
+    refreshLlmKeys();
 
     fetch('/api/integrations/github/repos', opt)
       .then(r => r.json())
@@ -133,6 +176,80 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
       .catch(() => setRepos([]));
   }, []);
 
+
+  const setModelPickerEnabled = async (modelKey: string, enabled: boolean) => {
+    setLoading((p) => ({ ...p, [modelKey]: true }));
+    try {
+      const r = await fetch('/api/settings/model-preference', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_key: modelKey, enabled }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setModels((prev) =>
+        prev.map((m) => (m.model_key === modelKey ? { ...m, show_in_picker: enabled ? 1 : 0 } : m)),
+      );
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading((p) => ({ ...p, [modelKey]: false }));
+    }
+  };
+
+  const setDefaultModel = async (modelKey: string) => {
+    setLoading((p) => ({ ...p, [`def_${modelKey}`]: true }));
+    try {
+      const r = await fetch('/api/settings/default-model', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_key: modelKey }),
+      });
+      if (r.ok) setDefaultModelKey(modelKey);
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading((p) => ({ ...p, [`def_${modelKey}`]: false }));
+    }
+  };
+
+  const storeLlmKey = async (keyName: keyof typeof llmForm) => {
+    const value = (llmForm[keyName] || '').trim();
+    if (!value) return;
+    setLlmBusy(keyName);
+    try {
+      const r = await fetch('/api/vault/store', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key_name: keyName, value }),
+      });
+      if (r.ok) {
+        setLlmForm((p) => ({ ...p, [keyName]: '' }));
+        refreshLlmKeys();
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLlmBusy(null);
+    }
+  };
+
+  const removeLlmKey = async (id: string) => {
+    setLlmBusy(id);
+    try {
+      await fetch(`/api/vault/llm-keys/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      refreshLlmKeys();
+    } catch {
+      /* ignore */
+    } finally {
+      setLlmBusy(null);
+    }
+  };
 
   const toggleMcp = async (id: string, val: boolean) => {
     setMcpToggles(p => ({ ...p, [id]: val }));
@@ -270,7 +387,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
 
           {/* ── AI MODELS ── */}
           {activeSection === 'AI Models' && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-5 max-w-2xl">
               <h2 className="text-[13px] font-bold text-[var(--text-heading)] uppercase tracking-widest mb-2">AI Models</h2>
               {models.length === 0 && <p className="text-[12px] text-[var(--text-muted)]">Loading models from DB...</p>}
               {['google', 'anthropic', 'cursor', 'openai'].map(provider => {
@@ -281,18 +398,53 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
                     <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)] mb-2 px-1">{provider}</div>
                     <div className="flex flex-col gap-1">
                       {group.map(m => (
-                        <div key={m.model_key} className="flex items-center justify-between p-3 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-xl hover:border-[var(--solar-cyan)]/30 transition-colors">
-                          <div className="flex items-center gap-3">
-                            <StatusDot on={!!m.is_active} />
-                            <div>
+                        <div key={m.model_key} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-xl hover:border-[var(--solar-cyan)]/30 transition-colors">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <button
+                              type="button"
+                              title={m.show_in_picker ? 'Shown in Agent picker — click to hide' : 'Hidden from picker — click to show'}
+                              disabled={!!loading[m.model_key]}
+                              onClick={() => void setModelPickerEnabled(m.model_key, !m.show_in_picker)}
+                              className="mt-0.5 shrink-0 disabled:opacity-40"
+                            >
+                              <span
+                                className={`inline-block h-2.5 w-2.5 rounded-full ${
+                                  m.show_in_picker ? 'bg-[var(--solar-green)]' : 'bg-[var(--border-subtle)]'
+                                }`}
+                              />
+                            </button>
+                            <div className="min-w-0">
                               <div className="text-[12px] font-semibold text-[var(--text-main)]">{m.display_name}</div>
-                              <div className="text-[10px] text-[var(--text-muted)] font-mono">{m.model_key}</div>
+                              <div className="text-[10px] text-[var(--text-muted)] font-sans truncate">{m.model_key}</div>
+                              <div className="text-[10px] text-[var(--text-muted)] mt-0.5 space-x-2">
+                                {m.picker_group ? <span>Picker group: {m.picker_group}</span> : null}
+                                {m.picker_eligible === 0 ? (
+                                  <span className="text-[var(--solar-yellow)]">Not picker-eligible</span>
+                                ) : null}
+                                {m.input_rate_per_mtok != null && m.output_rate_per_mtok != null ? (
+                                  <span>
+                                    ${m.input_rate_per_mtok.toFixed(2)} / ${m.output_rate_per_mtok.toFixed(2)} per MTok (in / out)
+                                  </span>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 text-[10px]">
+                          <div className="flex flex-wrap items-center gap-2 text-[10px] shrink-0">
                             {m.supports_tools ? <span className="px-1.5 py-0.5 bg-[var(--solar-cyan)]/10 text-[var(--solar-cyan)] rounded font-bold">Tools</span> : null}
                             {m.supports_vision ? <span className="px-1.5 py-0.5 bg-[var(--solar-blue)]/10 text-[var(--solar-blue)] rounded font-bold">Vision</span> : null}
                             <span className="px-1.5 py-0.5 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded text-[var(--text-muted)]">{m.size_class}</span>
+                            <StatusDot on={!!m.is_active} />
+                            {defaultModelKey === m.model_key ? (
+                              <span className="px-2 py-0.5 rounded bg-[var(--solar-cyan)]/15 text-[var(--solar-cyan)] font-bold uppercase tracking-wide">Default</span>
+                            ) : null}
+                            <button
+                              type="button"
+                              disabled={!!loading[`def_${m.model_key}`]}
+                              onClick={() => void setDefaultModel(m.model_key)}
+                              className="px-2 py-1 rounded-lg border border-[var(--border-subtle)] text-[10px] font-semibold uppercase tracking-wide text-[var(--text-main)] hover:border-[var(--solar-cyan)]/50 hover:text-[var(--solar-cyan)] disabled:opacity-40"
+                            >
+                              Set as Default
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -300,6 +452,53 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
                   </div>
                 );
               })}
+
+              <div className="border-t border-[var(--border-subtle)] pt-5 mt-2">
+                <h3 className="text-[12px] font-bold text-[var(--text-heading)] uppercase tracking-widest mb-3">Your API Keys</h3>
+                <p className="text-[11px] text-[var(--text-muted)] mb-4">
+                  Stored encrypted in the vault. Used when your workspace routes requests with your tenant keys.
+                </p>
+                {(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY'] as const).map((kn) => {
+                  const existing = llmKeys.find((k) => k.key_name === kn);
+                  return (
+                    <div key={kn} className="mb-4 p-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-app)]">
+                      <div className="text-[11px] font-semibold text-[var(--text-main)] mb-2">{kn}</div>
+                      {existing ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <code className="text-[11px] text-[var(--solar-cyan)] font-sans">{existing.masked}</code>
+                          <button
+                            type="button"
+                            disabled={llmBusy === existing.id}
+                            onClick={() => void removeLlmKey(existing.id)}
+                            className="text-[10px] px-2 py-1 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-red-400 hover:border-red-400/40"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="password"
+                            autoComplete="off"
+                            placeholder="Paste key…"
+                            value={llmForm[kn]}
+                            onChange={(e) => setLlmForm((p) => ({ ...p, [kn]: e.target.value }))}
+                            className="flex-1 min-w-0 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] px-3 py-2 text-[11px] text-[var(--text-main)]"
+                          />
+                          <button
+                            type="button"
+                            disabled={llmBusy === kn || !llmForm[kn].trim()}
+                            onClick={() => void storeLlmKey(kn)}
+                            className="shrink-0 px-3 py-2 rounded-lg bg-[var(--solar-cyan)]/20 text-[11px] font-semibold text-[var(--solar-cyan)] border border-[var(--solar-cyan)]/30 hover:bg-[var(--solar-cyan)]/30 disabled:opacity-40"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

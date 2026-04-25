@@ -15553,7 +15553,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const batch = await env.DB.batch([
           env.DB.prepare("SELECT id, name, role_name, mode FROM agentsam_ai WHERE status='active' ORDER BY CASE id WHEN 'ai_sam_v1' THEN 0 ELSE 1 END, name"),
           env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
-          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY sort_order ASC, input_rate_per_mtok ASC"),
+          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens, picker_group FROM ai_models WHERE COALESCE(is_active,0)=1 AND COALESCE(show_in_picker,0)=1 AND COALESCE(picker_eligible,1)=1 ORDER BY sort_order ASC, display_name ASC"),
           env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
           env.DB.prepare("SELECT id, role, content, variant, ab_weight, agent_id FROM iam_agent_sam_prompts WHERE is_active=1"),
         ]);
@@ -16257,12 +16257,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       try {
         const { results } = await env.DB.prepare(
           `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker,
-                  input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens
+                  picker_eligible, picker_group,
+                  input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens,
+                  size_class, supports_tools, supports_vision
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
-             AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
-             AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor', 'ollama')
-             ${showInPicker ? 'AND show_in_picker = 1' : ''}
+             AND COALESCE(picker_eligible, 1) = 1
+             ${showInPicker ? 'AND COALESCE(show_in_picker, 0) = 1' : ''}
            ORDER BY sort_order ASC, display_name ASC`
         ).all();
         return jsonResponse(results || []);

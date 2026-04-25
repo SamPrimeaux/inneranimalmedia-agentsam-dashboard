@@ -1,6 +1,21 @@
 # Live dashboard API surface (from agent-sam R2)
 
-Source: R2 bucket **agent-sam**, keys `dashboard/agent.html`, `dashboard/finance.html`, `dashboard/finance.js`, `dashboard/cloud.html`, `dashboard/cloud.js`. Fetched 2026-03-02.
+Historical note: the table below was first sourced from R2 keys `dashboard/agent.html`, `finance.js`, `cloud.js` (2026-03-02). **Agent / model / settings routes below are reconciled with the modular Worker (`src/core/router.js`, `src/api/*.js`) and monolithic `worker.js` as of 2026-04-24.**
+
+---
+
+## Source of truth (D1) — models & picker
+
+| Concern | Table / column | Notes |
+|--------|------------------|--------|
+| Model catalog (keys, names, rates, routing) | **`ai_models`** | Single catalog for picker + provider routing (`api_platform`, `secret_key_name`, etc.). |
+| Shown in Agent chat / boot model lists | **`ai_models.show_in_picker`** (0/1) | Filter when `GET /api/agent/models?show_in_picker=1`. Updated via **`POST /api/settings/model-preference`**. |
+| Eligible for customer-facing pickers at all | **`ai_models.picker_eligible`** (0/1) | Product-wide gate; defaults **1**. Set **0** for rows that must never appear (e.g. image/audio/embedding after migration **237**). Replaces old Worker SQL allowlists on `api_platform` / `size_class`. |
+| Picker section / group label | **`ai_models.picker_group`** (text) | UI groups models under this string (verbatim). Seeded from **`provider`** in migration **237**; edit in D1 for display names. |
+| Default model for a user | **`agentsam_bootstrap.ui_preferences_json`** → **`default_model`** | **`GET` / `POST /api/settings/default-model`**. |
+| User-owned LLM API keys (encrypted) | **`user_secrets`** (`project_label = iam_user_llm_keys`, `user_id` = auth user) | **`POST /api/vault/store`**, **`GET /api/vault/llm-keys`**, **`DELETE /api/vault/llm-keys/:id`**. |
+
+**Schema migration:** `migrations/237_ai_models_picker_eligible_picker_group.sql` — adds **`picker_eligible`**, **`picker_group`**. Apply to D1 **before** deploying Worker builds that select these columns.
 
 ---
 
@@ -36,12 +51,12 @@ Source: R2 bucket **agent-sam**, keys `dashboard/agent.html`, `dashboard/finance
 
 ---
 
-## Agent (`agent.html`)
+## Agent (`agent.html` / dashboard shell)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/agent/models` | Model list for dropdown |
-| GET | `/api/agent/models?provider=` | Models by provider |
+| GET | `/api/agent/models` | All **active**, **picker_eligible** rows from **`ai_models`**. JSON **array** of objects (`id`, `name`, `provider`, `model_key`, `api_platform`, `show_in_picker`, `picker_eligible`, `picker_group`, rates, `sort_order`, `context_max_tokens`, `size_class`, tool/vision flags). **No `?provider=` filter** — use D1 data or a dedicated filtered route if added later. |
+| GET | `/api/agent/models?show_in_picker=1` | Same as above plus **`AND show_in_picker = 1`**. Used by Agent Sam model picker. |
 | GET | `/api/agent/context-refs` | Context references |
 | GET | `/api/agent/preview?change_set_id=` | Preview change set |
 | GET | `/api/agent/audit-log` | Audit log |
@@ -55,6 +70,26 @@ Source: R2 bucket **agent-sam**, keys `dashboard/agent.html`, `dashboard/finance
 | GET | `/api/finance/ai-spend?scope=agent` | Budget pie / usage for agent |
 | GET | `/api/settings/theme` | Theme preference |
 | POST | `/api/auth/logout` | Logout |
+
+### Settings & vault (dashboard Settings / Agent)
+
+Authenticated (**session**). Routed via **`src/api/settings.js`** / **`src/api/vault.js`** (and mirrored paths on **`worker.js`** where applicable).
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/ai/models` | Full **`ai_models`** rows for Settings → AI Models (`{ models: [...] }`). |
+| POST | `/api/settings/model-preference` | Body: `{ model_key, enabled }` → **`UPDATE ai_models SET show_in_picker`** for that `model_key`. |
+| GET | `/api/settings/default-model` | `{ default_model }` from **`agentsam_bootstrap.ui_preferences_json`**. |
+| POST | `/api/settings/default-model` | Body: `{ model_key }` → sets **`default_model`** in **`ui_preferences_json`**. |
+| POST | `/api/vault/store` | Body: `{ key_name, value }` — allowed names: **`OPENAI_API_KEY`**, **`ANTHROPIC_API_KEY`**, **`GEMINI_API_KEY`**. Encrypts into **`user_secrets`**. |
+| GET | `/api/vault/llm-keys` | Lists current user’s vault rows for that project (`{ keys: [{ id, key_name, masked, last4 }] }`). |
+| DELETE | `/api/vault/llm-keys/:id` | Revokes one stored key (`is_active = 0`). |
+
+### Client layout (not HTTP)
+
+| Key | Where | Purpose |
+|-----|--------|--------|
+| `iam_sidebar_expanded` | `localStorage` | `1` / `0` — left icon rail expanded (~180px) vs collapsed (~48px). |
 
 ---
 
@@ -75,4 +110,6 @@ Source: R2 bucket **agent-sam**, keys `dashboard/agent.html`, `dashboard/finance
 ## Worker routing (current)
 
 - `/dashboard/:page` → DASHBOARD R2 key `static/dashboard/:page.html` or `dashboard/:page.html`
+- `/api/settings/*`, `/api/user/*`, **`/api/ai/*`** → modular **`handleSettingsApi`** (`src/api/settings.js`)
+- **`/api/agent/*`** (among others) → modular **`handleAgentApi`** (`src/api/agent.js`) when registered before legacy fallback
 - So `/dashboard/finance` serves `dashboard/finance.html` from agent-sam (confirmed).

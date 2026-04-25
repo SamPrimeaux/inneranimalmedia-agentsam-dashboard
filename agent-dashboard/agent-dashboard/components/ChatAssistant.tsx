@@ -106,6 +106,11 @@ type ChatModelRow = {
   provider: string;
   model_key: string;
   api_platform: string;
+  /** D1 `ai_models.picker_group` — section title in model picker; falls back to `provider`. */
+  picker_group?: string;
+  size_class?: string;
+  input_rate_per_mtok?: number | null;
+  output_rate_per_mtok?: number | null;
 };
 
 /** Matches App.tsx `buildAgentSamGreeting` — hide this bubble when no real thread content yet. */
@@ -113,15 +118,6 @@ function isAgentSamEmptyThreadGreeting(content: string): boolean {
   const t = content.trim();
   return t.startsWith("Hi! I'm Agent Sam.") || t.startsWith('Agent Sam: pick a workspace');
 }
-
-const MODEL_PLATFORM_ORDER = ['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor'] as const;
-const MODEL_PLATFORM_LABEL: Record<string, string> = {
-  anthropic_api: 'Anthropic',
-  gemini_api: 'Google',
-  openai: 'OpenAI',
-  workers_ai: 'Workers AI',
-  cursor: 'Cursor',
-};
 
 function formatFileSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -673,10 +669,13 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [attachMenuStyle, setAttachMenuStyle] = useState<React.CSSProperties | null>(null);
   const [modeMenuStyle, setModeMenuStyle] = useState<React.CSSProperties | null>(null);
+  const [modelPickerStyle, setModelPickerStyle] = useState<React.CSSProperties | null>(null);
 
   const [modes, setModes] = useState<{ slug: string; label: string }[]>([]);
   const [mode, setMode] = useState<string>('agent');
   const [isModeOpen, setIsModeOpen] = useState(false);
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [defaultModelKey, setDefaultModelKey] = useState<string | null>(null);
 
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const totalStagedBytes = useMemo(
@@ -854,6 +853,10 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     setModeMenuStyle(measureAboveAnchor(modeButtonRef.current, 120));
   }, []);
 
+  const measureModelPickerMenu = useCallback(() => {
+    setModelPickerStyle(measureAboveAnchor(modeButtonRef.current, 280, 360, 320));
+  }, []);
+
   useLayoutEffect(() => {
     if (!attachMenuOpen) {
       setAttachMenuStyle(null);
@@ -883,6 +886,21 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       window.removeEventListener('scroll', h, true);
     };
   }, [isModeOpen, measureModeMenu]);
+
+  useLayoutEffect(() => {
+    if (!isModelPickerOpen) {
+      setModelPickerStyle(null);
+      return;
+    }
+    measureModelPickerMenu();
+    const h = () => measureModelPickerMenu();
+    window.addEventListener('resize', h);
+    window.addEventListener('scroll', h, true);
+    return () => {
+      window.removeEventListener('resize', h);
+      window.removeEventListener('scroll', h, true);
+    };
+  }, [isModelPickerOpen, measureModelPickerMenu]);
 
   useLayoutEffect(() => {
     if (!mentionOpen && !slashOpen) return;
@@ -917,11 +935,24 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   }, []);
 
   useEffect(() => {
-    fetch('/api/agent/models?show_in_picker=1')
+    fetch('/api/agent/models?show_in_picker=1', { credentials: 'same-origin' })
       .then((r) => r.json())
       .then((data) => {
         if (!Array.isArray(data)) return;
-        const rows = data as ChatModelRow[];
+        const rows: ChatModelRow[] = (data as Record<string, unknown>[]).map((raw) => ({
+          id: String(raw.id ?? raw.model_key ?? ''),
+          name: String(raw.name ?? raw.display_name ?? raw.model_key ?? ''),
+          provider: String(raw.provider ?? ''),
+          model_key: String(raw.model_key ?? ''),
+          api_platform: String(raw.api_platform ?? ''),
+          picker_group:
+            raw.picker_group != null && String(raw.picker_group).trim()
+              ? String(raw.picker_group).trim()
+              : '',
+          size_class: raw.size_class != null ? String(raw.size_class) : '',
+          input_rate_per_mtok: raw.input_rate_per_mtok != null ? Number(raw.input_rate_per_mtok) : null,
+          output_rate_per_mtok: raw.output_rate_per_mtok != null ? Number(raw.output_rate_per_mtok) : null,
+        }));
         setChatModels(rows);
         setSelectedModelKey((prev) => {
           if (prev && rows.some((m) => m.model_key === prev)) return prev;
@@ -929,6 +960,15 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         });
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/settings/default-model', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d: { default_model?: string | null }) => {
+        setDefaultModelKey(typeof d.default_model === 'string' && d.default_model.trim() ? d.default_model.trim() : null);
+      })
+      .catch(() => setDefaultModelKey(null));
   }, []);
 
   const modeLabel = modes.find((m) => m.slug === mode)?.label ?? mode;
@@ -1655,6 +1695,70 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     return ghRepos.filter((r) => (r.full_name || '').toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q));
   }, [ghRepos, repoSearch]);
 
+  const modelPickerGroups = useMemo(() => {
+    const order: string[] = [];
+    const byGroup = new Map<string, ChatModelRow[]>();
+    for (const m of chatModels) {
+      const g = (m.picker_group || m.provider || 'Other').trim() || 'Other';
+      if (!byGroup.has(g)) {
+        byGroup.set(g, []);
+        order.push(g);
+      }
+      byGroup.get(g)!.push(m);
+    }
+    return order.map((g) => ({ group: g, models: byGroup.get(g)! }));
+  }, [chatModels]);
+
+  const renderModelPickerList = useCallback(
+    (onPick: (modelKey: string) => void) =>
+      modelPickerGroups.map(({ group, models }) => (
+        <div key={group} className="pb-1">
+          <div className="px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] opacity-60">
+            {group}
+          </div>
+          {models.map((m) => {
+            const isSession = selectedModelKey === m.model_key;
+            const isDefault = defaultModelKey != null && defaultModelKey === m.model_key;
+            const rateIn = m.input_rate_per_mtok;
+            const rateOut = m.output_rate_per_mtok;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                className={`mx-1 flex w-[min(100%,calc(100vw-3rem))] min-w-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-all hover:bg-[var(--bg-panel)] ${
+                  isSession ? 'bg-[var(--bg-panel)]/80 text-[var(--solar-cyan)]' : 'text-[var(--text-main)]'
+                }`}
+                onClick={() => onPick(m.model_key)}
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="truncate text-[11px] font-bold tracking-tight">{m.name}</span>
+                    {m.size_class ? (
+                      <span className="shrink-0 rounded border border-[var(--border-subtle)] px-1 py-0 text-[8px] font-bold uppercase tracking-wide text-[var(--text-muted)]">
+                        {m.size_class}
+                      </span>
+                    ) : null}
+                    {isDefault ? (
+                      <span className="shrink-0 rounded bg-[var(--solar-cyan)]/15 px-1 py-0 text-[8px] font-bold uppercase tracking-wide text-[var(--solar-cyan)]">
+                        Default
+                      </span>
+                    ) : null}
+                  </div>
+                  {rateIn != null && rateOut != null ? (
+                    <span className="text-[9px] text-[var(--text-muted)]">
+                      ${rateIn.toFixed(2)} in · ${rateOut.toFixed(2)} out / MTok
+                    </span>
+                  ) : null}
+                </div>
+                {isSession ? <Sparkles size={10} className="shrink-0 animate-pulse" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      )),
+    [modelPickerGroups, defaultModelKey, selectedModelKey],
+  );
+
   return (
     <>
       <div className="flex flex-col h-full min-h-0 max-w-[100vw] overflow-x-hidden overflow-y-hidden bg-[var(--bg-panel)] w-full min-w-0">
@@ -2127,6 +2231,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 onClick={() => {
                   setAttachMenuOpen((o) => !o);
                   setIsModeOpen(false);
+                  setIsModelPickerOpen(false);
                 }}
               >
                 <Paperclip size={16} strokeWidth={2} />
@@ -2152,12 +2257,25 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 type="button"
                 ref={modeButtonRef}
                 onClick={() => {
-                  setIsModeOpen((o) => !o);
+                  if (mode === 'auto') {
+                    setIsModelPickerOpen((o) => !o);
+                    setIsModeOpen(false);
+                  } else {
+                    setIsModeOpen((o) => !o);
+                    setIsModelPickerOpen(false);
+                  }
                   setAttachMenuOpen(false);
                 }}
-                className="flex-shrink-0 flex items-center gap-0.5 px-2 py-1.5 text-[0.6875rem] font-mono font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase border border-[var(--border-subtle)] rounded-lg"
+                className="flex-shrink-0 flex flex-col items-end justify-center gap-0 px-2 py-1 min-w-[4.5rem] text-[0.6875rem] font-sans font-bold tracking-tight text-[var(--solar-cyan)] hover:brightness-110 transition-all uppercase border border-[var(--border-subtle)] rounded-lg leading-tight"
               >
-                {modeLabel} <ChevronDown size={8} />
+                <span className="flex items-center gap-0.5">
+                  {modeLabel} <ChevronDown size={8} />
+                </span>
+                {mode === 'auto' ? (
+                  <span className="text-[0.5625rem] font-medium normal-case text-[var(--text-muted)] truncate max-w-[7rem]">
+                    {selectedModelDisplayName}
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"
@@ -2402,40 +2520,45 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
             <div className="px-3 py-1 text-[0.6875rem] uppercase tracking-wider text-[var(--text-muted)]">
               Models
             </div>
-            {MODEL_PLATFORM_ORDER.map((plat) => {
-              const list = chatModels.filter((m) => m.api_platform === plat);
-              if (!list.length) return null;
-              return (
-                <div key={plat} className="pb-1">
-                  <div className="px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] opacity-60">
-                    {MODEL_PLATFORM_LABEL[plat] || plat}
-                  </div>
-                  {list.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`w-full min-w-0 flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[var(--bg-panel)] rounded-lg mx-1 transition-all ${
-                        selectedModelKey === m.model_key
-                          ? 'text-[var(--solar-cyan)] bg-[var(--bg-panel)]/80'
-                          : 'text-[var(--text-main)]'
-                      }`}
-                      onClick={() => {
-                        setSelectedModelKey(m.model_key);
-                        setAttachMenuOpen(false);
-                      }}
-                    >
-                      <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                        <span className="truncate text-[11px] font-bold tracking-tight">{m.name}</span>
-                        {m.provider && <span className="text-[9px] opacity-40 uppercase tracking-widest">{m.provider}</span>}
-                      </div>
-                      {selectedModelKey === m.model_key && <Sparkles size={10} className="animate-pulse" />}
-                    </button>
-                  ))}
-                </div>
-              );
+            {renderModelPickerList((mk) => {
+              setSelectedModelKey(mk);
+              setAttachMenuOpen(false);
             })}
           </div>,
           document.body
+        )}
+
+      {typeof document !== 'undefined' &&
+        isModelPickerOpen &&
+        modelPickerStyle &&
+        createPortal(
+          <div
+            className="flex max-h-[min(360px,calc(100dvh-6rem))] min-w-0 flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--scene-bg)] py-1 text-[0.6875rem] shadow-2xl"
+            style={modelPickerStyle}
+            role="listbox"
+            aria-label="Model picker"
+          >
+            <div className="border-b border-[var(--border-subtle)]/70 px-3 py-2 text-[9px] font-black uppercase tracking-[0.15em] text-[var(--text-muted)]">
+              Models — this chat only
+            </div>
+            {renderModelPickerList((mk) => {
+              setSelectedModelKey(mk);
+              setIsModelPickerOpen(false);
+            })}
+            <div className="mt-1 border-t border-[var(--border-subtle)] px-2 py-1.5">
+              <button
+                type="button"
+                className="w-full rounded-lg px-2 py-1.5 text-left text-[10px] text-[var(--text-muted)] hover:bg-[var(--bg-panel)] hover:text-[var(--text-main)]"
+                onClick={() => {
+                  setIsModelPickerOpen(false);
+                  setIsModeOpen(true);
+                }}
+              >
+                Change conversation mode…
+              </button>
+            </div>
+          </div>,
+          document.body,
         )}
 
       {typeof document !== 'undefined' &&

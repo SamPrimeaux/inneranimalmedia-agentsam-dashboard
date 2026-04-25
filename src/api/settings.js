@@ -443,5 +443,142 @@ export async function handleSettingsRequest(request, env, ctx) {
     }
   }
 
+  // ── GET /api/ai/models — D1 ai_models (Settings + admin) ─────────────────
+  if (pathLower === '/api/ai/models' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    try {
+      const { results } = await env.DB.prepare(
+        'SELECT * FROM ai_models ORDER BY provider ASC, display_name ASC',
+      ).all();
+      return jsonResponse({ models: results || [] });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
+
+  // ── POST /api/settings/model-preference — toggle show_in_picker ─────────
+  if (pathLower === '/api/settings/model-preference' && method === 'POST') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    const isSuper = Number(authUser.is_superadmin) === 1;
+    if (!tenantId && !isSuper) return jsonResponse({ error: 'Tenant required' }, 403);
+    const body = await request.json().catch(() => ({}));
+    const modelKey = String(body.model_key || '').trim();
+    if (!modelKey) return jsonResponse({ error: 'model_key required' }, 400);
+    const enabled =
+      body.enabled === true ||
+      body.enabled === 1 ||
+      body.enabled === '1' ||
+      body.enabled === 'true';
+    try {
+      const r = await env.DB.prepare(
+        `UPDATE ai_models SET show_in_picker = ?, updated_at = unixepoch()
+         WHERE model_key = ?`,
+      )
+        .bind(enabled ? 1 : 0, modelKey)
+        .run();
+      if (!r.meta?.changes) return jsonResponse({ error: 'Model not found' }, 404);
+      const row = await env.DB.prepare(
+        'SELECT * FROM ai_models WHERE model_key = ? LIMIT 1',
+      )
+        .bind(modelKey)
+        .first();
+      return jsonResponse({ ok: true, model: row });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
+
+  // ── GET /api/settings/default-model ──────────────────────────────────────
+  if (pathLower === '/api/settings/default-model' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    try {
+      const row = await env.DB.prepare(
+        `SELECT ui_preferences_json FROM agentsam_bootstrap WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      )
+        .bind(userId)
+        .first();
+      const prefs = parseJsonSafe(row?.ui_preferences_json, {});
+      const default_model =
+        typeof prefs.default_model === 'string' && prefs.default_model.trim()
+          ? prefs.default_model.trim()
+          : null;
+      return jsonResponse({ default_model });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
+
+  // ── POST /api/settings/default-model ─────────────────────────────────────
+  if (pathLower === '/api/settings/default-model' && method === 'POST') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    const isSuper = Number(authUser.is_superadmin) === 1;
+    if (!tenantId && !isSuper) return jsonResponse({ error: 'Tenant required' }, 403);
+    const body = await request.json().catch(() => ({}));
+    const modelKey = String(body.model_key || '').trim();
+    if (!modelKey) return jsonResponse({ error: 'model_key required' }, 400);
+    try {
+      const row = await env.DB.prepare(
+        `SELECT id, ui_preferences_json FROM agentsam_bootstrap WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      )
+        .bind(userId)
+        .first();
+      const prefs = parseJsonSafe(row?.ui_preferences_json, {});
+      prefs.default_model = modelKey;
+      const prefsJson = JSON.stringify(prefs);
+      if (row?.id) {
+        await env.DB.prepare(
+          `UPDATE agentsam_bootstrap SET ui_preferences_json = ?, updated_at = datetime('now') WHERE id = ?`,
+        )
+          .bind(prefsJson, row.id)
+          .run();
+      } else {
+        const bid = `asb_${userId}`.slice(0, 80);
+        let workspaceId = '';
+        try {
+          const urow = await env.DB.prepare(
+            `SELECT default_workspace_id FROM users WHERE id = ? LIMIT 1`,
+          )
+            .bind(userId)
+            .first();
+          workspaceId =
+            String(urow?.default_workspace_id || '').trim() ||
+            `ws_${String(userId).replace(/^au_/, '').slice(0, 28)}`;
+        } catch {
+          workspaceId = `ws_${String(userId).replace(/^au_/, '').slice(0, 28)}`;
+        }
+        await env.DB.prepare(
+          `INSERT INTO agentsam_bootstrap (
+             id, workspace_id, tenant_id, user_id, email, display_name,
+             environment, is_active, capabilities_json, governance_roles_json, approval_required_json,
+             allowed_execution_modes_json, default_execution_mode, runtime_status_json, backend_health_json,
+             feature_flags_json, ui_preferences_json, created_at, updated_at
+           ) VALUES (?,?,?,?,?,?,
+             'production', 1, '{}','[]','[]','[\"pty\"]','pty','{}','{}','{}',?,
+             datetime('now'), datetime('now'))`,
+        )
+          .bind(
+            bid,
+            workspaceId,
+            tenantId,
+            userId,
+            String(authUser.email || '').trim() || null,
+            String(authUser.display_name || authUser.name || '').trim() || null,
+            prefsJson,
+          )
+          .run();
+      }
+      return jsonResponse({ ok: true, default_model: modelKey });
+    } catch (e) {
+      return jsonResponse({ error: e?.message ?? String(e) }, 500);
+    }
+  }
+
   return jsonResponse({ error: 'Settings route not found' }, 404);
+}
+
+/** Router passes `(request, url, env, ctx)` — delegate to `handleSettingsRequest`. */
+export async function handleSettingsApi(request, _url, env, ctx) {
+  return handleSettingsRequest(request, env, ctx);
 }

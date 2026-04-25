@@ -110,27 +110,18 @@ const AVAILABLE_PROVIDERS = [
   ['qdrant', 'Qdrant', 'Vector search collections.', 'analytics'],
 ];
 
+// Fallback palette uses CSS variables only (no hardcoded hex).
 const PROVIDER_COLORS: Record<string, ProviderPalette> = {
-  anthropic_api: { slug: 'anthropic_api', display_name: 'Anthropic API', primary_color: '#D97757', secondary_color: '#b85f3e', text_on_color: '#0f1117', icon_slug: 'anthropic', category: 'ai_api' },
-  cursor_api: { slug: 'cursor_api', display_name: 'Cursor API', primary_color: '#818cf8', secondary_color: '#6366f1', text_on_color: '#ffffff', icon_slug: 'cursor', category: 'ai_api' },
-  google_antigravity: { slug: 'google_antigravity', display_name: 'Google Antigravity', primary_color: '#4285F4', secondary_color: '#fbbc04', text_on_color: '#ffffff', icon_slug: 'google', category: 'ai_api' },
-  openai_api: { slug: 'openai_api', display_name: 'OpenAI API', primary_color: '#10a37f', secondary_color: '#074d3c', text_on_color: '#ffffff', icon_slug: 'openai', category: 'ai_api' },
-  workers_ai: { slug: 'workers_ai', display_name: 'Workers AI', primary_color: '#00E5CC', secondary_color: '#00B8A3', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'ai_api' },
-  chatgpt_pro: { slug: 'chatgpt_pro', display_name: 'ChatGPT Pro', primary_color: '#10a37f', secondary_color: '#0d8a6b', text_on_color: '#ffffff', icon_slug: 'openai', category: 'ai_subscription' },
-  claude_pro: { slug: 'claude_pro', display_name: 'Claude Pro', primary_color: '#D97757', secondary_color: '#EFAF91', text_on_color: '#0f1117', icon_slug: 'anthropic', category: 'ai_subscription' },
-  cursor: { slug: 'cursor', display_name: 'Cursor', primary_color: '#6366f1', secondary_color: '#4f46e5', text_on_color: '#ffffff', icon_slug: 'cursor', category: 'dev_tool' },
-  github: { slug: 'github', display_name: 'GitHub', primary_color: '#24292e', secondary_color: '#0d1117', text_on_color: '#ffffff', icon_slug: 'github', category: 'dev_tool' },
-  aws: { slug: 'aws', display_name: 'AWS', primary_color: '#FF9900', secondary_color: '#232F3E', text_on_color: '#0f1117', icon_slug: 'aws', category: 'infrastructure' },
-  cf_d1: { slug: 'cf_d1', display_name: 'CF D1', primary_color: '#18FFFF', secondary_color: '#00E5FF', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'infrastructure' },
-  cf_images: { slug: 'cf_images', display_name: 'CF Images', primary_color: '#E040FB', secondary_color: '#B71C8C', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
-  cf_r2: { slug: 'cf_r2', display_name: 'CF R2', primary_color: '#00E676', secondary_color: '#00C853', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'infrastructure' },
-  cf_workers: { slug: 'cf_workers', display_name: 'CF Workers', primary_color: '#7C3AED', secondary_color: '#6D28D9', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
-  cloudflare: { slug: 'cloudflare', display_name: 'Cloudflare', primary_color: '#2965F1', secondary_color: '#1a4bb8', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
-  gcp: { slug: 'gcp', display_name: 'Google Cloud (GCP)', primary_color: '#4285F4', secondary_color: '#34A853', text_on_color: '#ffffff', icon_slug: 'google', category: 'infrastructure' },
-  supabase: { slug: 'supabase', display_name: 'Supabase (Hyperdrive)', primary_color: '#3ECF8E', secondary_color: '#1C8B5A', text_on_color: '#0f1117', icon_slug: 'supabase', category: 'infrastructure' },
-  google_workspace: { slug: 'google_workspace', display_name: 'Google Workspace', primary_color: '#4285F4', secondary_color: '#34A853', text_on_color: '#ffffff', icon_slug: 'google', category: 'subscription' },
-  resend: { slug: 'resend', display_name: 'Resend', primary_color: '#000000', secondary_color: '#1a1a1a', text_on_color: '#ffffff', icon_slug: 'resend', category: 'subscription' },
-  bluebubbles: { slug: 'bluebubbles', display_name: 'BlueBubbles', primary_color: '#5AC8FA', secondary_color: '#0A84FF', text_on_color: '#ffffff', icon_slug: 'message', category: 'communication' },
+  github: { slug: 'github', display_name: 'GitHub', primary_color: 'var(--text-heading)', secondary_color: 'var(--bg-app)', text_on_color: 'var(--toggle-knob)', icon_slug: 'github', category: 'dev_tool' },
+  cloudflare: { slug: 'cloudflare', display_name: 'Cloudflare', primary_color: 'var(--solar-cyan)', secondary_color: 'var(--solar-blue)', text_on_color: 'var(--bg-app)', icon_slug: 'cloudflare', category: 'infrastructure' },
+  cf_r2: { slug: 'cf_r2', display_name: 'CF R2', primary_color: 'var(--solar-green)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'cloudflare', category: 'infrastructure' },
+  supabase: { slug: 'supabase', display_name: 'Supabase', primary_color: 'var(--solar-green)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'supabase', category: 'infrastructure' },
+  resend: { slug: 'resend', display_name: 'Resend', primary_color: 'var(--text-heading)', secondary_color: 'var(--bg-hover)', text_on_color: 'var(--toggle-knob)', icon_slug: 'resend', category: 'communication' },
+  openai_api: { slug: 'openai_api', display_name: 'OpenAI API', primary_color: 'var(--solar-green)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'openai', category: 'ai_api' },
+  anthropic_api: { slug: 'anthropic_api', display_name: 'Anthropic API', primary_color: 'var(--solar-yellow)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'anthropic', category: 'ai_api' },
+  google_workspace: { slug: 'google_workspace', display_name: 'Google', primary_color: 'var(--solar-blue)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'google', category: 'subscription' },
+  workers_ai: { slug: 'workers_ai', display_name: 'Workers AI', primary_color: 'var(--solar-cyan)', secondary_color: 'var(--solar-blue)', text_on_color: 'var(--bg-app)', icon_slug: 'cloudflare', category: 'ai_api' },
+  bluebubbles: { slug: 'bluebubbles', display_name: 'BlueBubbles', primary_color: 'var(--solar-blue)', secondary_color: 'var(--solar-cyan)', text_on_color: 'var(--bg-app)', icon_slug: 'message', category: 'communication' },
 };
 
 const PROVIDER_COLOR_SLUGS: Record<string, string> = {
@@ -246,12 +237,16 @@ export const IntegrationsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [data, setData] = useState<SummaryPayload>({});
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [logProvider, setLogProvider] = useState('');
   const [logType, setLogType] = useState('');
+  const [apiKeyDrawer, setApiKeyDrawer] = useState<{ provider: string; display_name: string } | null>(null);
+  const [apiKeyValue, setApiKeyValue] = useState('');
+  const [apiKeyErr, setApiKeyErr] = useState<string | null>(null);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -276,6 +271,27 @@ export const IntegrationsPage: React.FC = () => {
       window.clearInterval(logsTimer);
     };
   }, [refresh, tab]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const success = params.get('success');
+    const err = params.get('error');
+    if (connected && success) {
+      setToast({ type: 'success', message: `Connected to ${connected}` });
+      window.history.replaceState({}, '', '/dashboard/integrations');
+      void refresh(true);
+    } else if (err) {
+      setToast({ type: 'error', message: `Connection failed: ${String(err).replace(/_/g, ' ')}` });
+      window.history.replaceState({}, '', '/dashboard/integrations');
+    }
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   const providers = data.providers || [];
   const summary = data.summary || {};
@@ -321,10 +337,58 @@ export const IntegrationsPage: React.FC = () => {
     }
   }, [openDrawer, refresh, selectedProvider]);
 
+  const providerForOAuthStart = useCallback((providerKey: string) => {
+    const p = normalizeUiProvider(providerKey);
+    if (p === 'google_drive' || p === 'google_gmail' || p === 'google_calendar') return 'google';
+    if (p === 'cloudflare_oauth') return 'cloudflare';
+    if (p === 'supabase_oauth') return 'supabase';
+    return p;
+  }, []);
+
+  const startOAuth = useCallback(async (providerKey: string) => {
+    const prov = providerForOAuthStart(providerKey);
+    const res = await fetchJson<{ redirect_url: string }>(`/api/oauth/${encodeURIComponent(prov)}/start?return_to=${encodeURIComponent('/dashboard/integrations')}`);
+    window.location.href = res.redirect_url;
+  }, [providerForOAuthStart]);
+
+  const connectApiKey = useCallback(async () => {
+    if (!apiKeyDrawer) return;
+    setApiKeyErr(null);
+    setBusy(`apikey:${apiKeyDrawer.provider}`);
+    try {
+      const res = await fetchJson<{ success: boolean; error?: string }>(`/api/oauth/apikey/${encodeURIComponent(apiKeyDrawer.provider)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKeyValue }),
+      });
+      if (!res.success) throw new Error(res.error || 'Validation failed');
+      setToast({ type: 'success', message: `Connected to ${apiKeyDrawer.display_name}` });
+      setApiKeyDrawer(null);
+      setApiKeyValue('');
+      await refresh(true);
+    } catch (e) {
+      setApiKeyErr(e instanceof Error ? e.message : 'Validation failed');
+    } finally {
+      setBusy(null);
+    }
+  }, [apiKeyDrawer, apiKeyValue, refresh]);
+
   return (
     <div className="flex h-full min-h-0 bg-[var(--bg-app)] text-[var(--text-main)] overflow-hidden">
       <main className="flex-1 min-w-0 overflow-auto">
         <div className="p-4 md:p-6 flex flex-col gap-4">
+          {toast && (
+            <div
+              className={cx(
+                'fixed top-4 right-4 z-[60] rounded-xl border px-3 py-2 text-[12px] shadow-lg',
+                toast.type === 'success'
+                  ? 'bg-[var(--solar-green)]/10 border-[var(--solar-green)]/40 text-[var(--solar-green)]'
+                  : 'bg-[var(--solar-red)]/10 border-[var(--solar-red)]/40 text-[var(--solar-red)]',
+              )}
+            >
+              {toast.message}
+            </div>
+          )}
           <header className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3">
             <div>
               <div className="flex items-center gap-2 text-[10px] font-bold tracking-[0.22em] uppercase text-[var(--solar-cyan)]">
@@ -383,9 +447,20 @@ export const IntegrationsPage: React.FC = () => {
                     busy={busy}
                   colorRegistry={colorRegistry}
                   colorAliases={colorAliases}
-                    onTest={() => void runAction(provider.provider_key, 'test')}
-                    onSync={() => void runAction(provider.provider_key, 'sync')}
-                    onConfigure={() => void openDrawer(provider)}
+                    onPrimary={() => {
+                      if (provider.status === 'disconnected') {
+                        if (provider.auth_type === 'oauth2') return void startOAuth(provider.provider_key);
+                        if (provider.auth_type === 'api_key') {
+                          setApiKeyDrawer({ provider: provider.provider_key, display_name: provider.display_name });
+                          setApiKeyValue('');
+                          setApiKeyErr(null);
+                          return;
+                        }
+                        return void runAction(provider.provider_key, 'test');
+                      }
+                      if (provider.status === 'auth_expired' && provider.auth_type === 'oauth2') return void startOAuth(provider.provider_key);
+                      return void openDrawer(provider);
+                    }}
                   />
                 ))}
               </section>
@@ -492,6 +567,52 @@ export const IntegrationsPage: React.FC = () => {
           onDisconnect={() => void runAction(selectedProvider.provider_key, 'disconnect')}
         />
       )}
+
+      {apiKeyDrawer && (
+        <aside className="w-full max-w-md border-l bg-[var(--bg-panel)] shadow-2xl overflow-auto">
+          <div className="sticky top-0 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] p-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">API Key</div>
+              <h2 className="mt-1 text-lg font-bold text-[var(--text-heading)] truncate">Connect {apiKeyDrawer.display_name}</h2>
+              <p className="mt-1 text-[12px] text-[var(--text-muted)]">Paste your API key. We will validate it before storing (encrypted).</p>
+            </div>
+            <button
+              onClick={() => {
+                setApiKeyDrawer(null);
+                setApiKeyValue('');
+                setApiKeyErr(null);
+              }}
+              className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="p-4 flex flex-col gap-3">
+            <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)]">API key</label>
+            <input
+              type="password"
+              value={apiKeyValue}
+              onChange={(e) => setApiKeyValue(e.target.value)}
+              placeholder="Paste your API key"
+              className="w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-app)] px-3 py-2 text-[12px] text-[var(--text-main)] outline-none"
+            />
+            {apiKeyErr && (
+              <div className="rounded-lg border border-[var(--solar-red)]/40 bg-[var(--solar-red)]/10 px-3 py-2 text-[12px] text-[var(--solar-red)]">
+                {apiKeyErr}
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={!apiKeyValue || !!busy}
+              onClick={() => void connectApiKey()}
+              className="inline-flex items-center justify-center gap-2 text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)] disabled:opacity-50"
+            >
+              {busy === `apikey:${apiKeyDrawer.provider}` ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
+              Validate & Connect
+            </button>
+          </div>
+        </aside>
+      )}
     </div>
   );
 };
@@ -524,10 +645,8 @@ const ProviderCard: React.FC<{
   busy: string | null;
   colorRegistry: Map<string, ProviderPalette>;
   colorAliases: Record<string, string>;
-  onTest: () => void;
-  onSync: () => void;
-  onConfigure: () => void;
-}> = ({ provider, busy, colorRegistry, colorAliases, onTest, onSync, onConfigure }) => {
+  onPrimary: () => void;
+}> = ({ provider, busy, colorRegistry, colorAliases, onPrimary }) => {
   const latency = provider.health?.latency_ms ?? provider.last_health_latency_ms;
   const palette = paletteFor(provider.provider_key, provider.category, colorRegistry, provider.provider_color, colorAliases);
   const primary = palette.primary_color!;
@@ -569,11 +688,24 @@ const ProviderCard: React.FC<{
         <Meta label="Tools" value={String(provider.tool_count || 0)} />
       </div>
       <div className="mt-auto flex gap-2">
-        <ActionButton label="Test" busy={busy === `${provider.provider_key}:test`} onClick={onTest} />
-        <ActionButton label="Sync" busy={busy === `${provider.provider_key}:sync`} onClick={onSync} />
-        <button type="button" onClick={onConfigure} className="flex-1 text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)] inline-flex items-center justify-center gap-1.5">
-          <Settings size={13} />
-          Configure
+        <button
+          type="button"
+          onClick={onPrimary}
+          disabled={!!busy}
+          className="flex-1 text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)] disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+        >
+          {provider.status === 'disconnected'
+            ? <Plug size={13} />
+            : provider.status === 'auth_expired'
+              ? <Shield size={13} />
+              : <Settings size={13} />
+          }
+          {provider.status === 'disconnected'
+            ? 'Connect'
+            : provider.status === 'auth_expired'
+              ? 'Re-authorize'
+              : 'Manage'
+          }
         </button>
       </div>
     </article>
@@ -872,12 +1004,12 @@ function oauthStatus(expiresAt: unknown) {
 }
 
 function startOauth(provider: string) {
+  // Legacy (kept for internal table action buttons); main UI uses startOAuth() above.
   const normalized = normalizeUiProvider(provider);
-  if (normalized === 'github') {
-    window.location.href = '/api/oauth/github/start?return_to=' + encodeURIComponent('/dashboard/integrations');
-  } else if (normalized === 'google_drive' || normalized === 'google_gmail') {
-    window.location.href = '/api/oauth/google/start?return_to=' + encodeURIComponent('/dashboard/integrations') + '&connect=drive';
-  }
+  if (normalized === 'github') window.location.href = '/api/oauth/github/start?return_to=' + encodeURIComponent('/dashboard/integrations');
+  if (normalized === 'google_drive' || normalized === 'google_gmail' || normalized === 'google_calendar') window.location.href = '/api/oauth/google/start?return_to=' + encodeURIComponent('/dashboard/integrations');
+  if (normalized === 'cloudflare_oauth') window.location.href = '/api/oauth/cloudflare/start?return_to=' + encodeURIComponent('/dashboard/integrations');
+  if (normalized === 'supabase_oauth') window.location.href = '/api/oauth/supabase/start?return_to=' + encodeURIComponent('/dashboard/integrations');
 }
 
 function normalizeUiProvider(provider: string) {

@@ -220,6 +220,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
   });
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
   const [mcps, setMcps] = useState<MCP[]>([]);
+  const [toolBrowserFilter, setToolBrowserFilter] = useState('');
+  const [toolBrowserExpanded, setToolBrowserExpanded] = useState<Record<string, boolean>>({});
+  const [toolBrowserOutput, setToolBrowserOutput] = useState<Record<string, string>>({});
   const [models, setModels] = useState<AIModel[]>([]);
   const [repos, setRepos] = useState<GitRepo[]>([]);
   const [mcpToggles, setMcpToggles] = useState<Record<string, boolean>>({});
@@ -769,6 +772,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     void loadMcpSettings();
   }, [activeSection, loadMcpSettings]);
 
+  // Keep the MCP tool browser populated even when not on "Tools & MCP".
+  useEffect(() => {
+    void loadMcpSettings();
+  }, [loadMcpSettings]);
+
   useEffect(() => {
     if (activeSection !== 'Rules & Skills') return;
     if (rulesSkillsTab === 'skills') void loadSkills();
@@ -942,6 +950,22 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
     return acc;
   }, {} as Record<string, MCP[]>);
 
+  const visibleToolCategories = useMemo(() => {
+    const q = toolBrowserFilter.trim().toLowerCase();
+    const entries = Object.entries(mcpCategories);
+    if (!q) return entries;
+    return entries
+      .map(([cat, tools]) => {
+        const filtered = tools.filter((t) => {
+          const name = String(t.tool_name || '').toLowerCase();
+          const desc = String(t.description || '').toLowerCase();
+          return name.includes(q) || desc.includes(q) || String(cat).toLowerCase().includes(q);
+        });
+        return [cat, filtered] as const;
+      })
+      .filter(([, tools]) => tools.length > 0);
+  }, [mcpCategories, toolBrowserFilter]);
+
   return (
     <div className="flex flex-col h-full bg-[var(--bg-panel)] text-[var(--text-main)] overflow-hidden">
       {/* ── Header ── */}
@@ -953,6 +977,85 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, onFileSel
       </div>
 
       <div className="flex flex-1 overflow-hidden">
+        {/* ── Panel 1: MCP Tool Browser ── */}
+        {!isMobile && (
+          <div className="w-[240px] shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-app)] overflow-hidden flex flex-col">
+            <div className="px-3 py-3 border-b border-[var(--border-subtle)]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-heading)]">MCP Tool Browser</div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{mcps.length} tools</div>
+              </div>
+              <div className="mt-2 flex items-center gap-2 bg-[var(--bg-panel)] border border-[var(--border-subtle)] rounded-lg px-2 py-1.5">
+                <Search size={10} className="text-[var(--text-muted)] shrink-0" />
+                <input
+                  value={toolBrowserFilter}
+                  onChange={(e) => setToolBrowserFilter(e.target.value)}
+                  placeholder="Filter tools..."
+                  className="bg-transparent text-[11px] focus:outline-none text-[var(--text-main)] placeholder:text-[var(--text-muted)] w-full"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {visibleToolCategories.map(([cat, tools]) => {
+                const isOpen = toolBrowserFilter
+                  ? true
+                  : toolBrowserExpanded[cat] === true;
+                return (
+                  <div key={cat} className="border-b border-[var(--border-subtle)]">
+                    <button
+                      type="button"
+                      onClick={() => setToolBrowserExpanded((p) => ({ ...p, [cat]: !p[cat] }))}
+                      className="w-full px-3 py-2 flex items-center justify-between gap-2 text-left hover:bg-[var(--bg-hover)]"
+                    >
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{cat}</div>
+                      <div className="text-[10px] font-bold text-[var(--text-muted)]">{tools.length}</div>
+                    </button>
+                    {isOpen && (
+                      <div className="px-2 pb-2 flex flex-col gap-2">
+                        {tools.map((tool) => {
+                          const key = String(tool.tool_name || '');
+                          const output = toolBrowserOutput[key];
+                          return (
+                            <div key={key} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] overflow-hidden">
+                              <div className="px-2 py-2 flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-[11px] font-semibold text-[var(--text-heading)] truncate">{key}</div>
+                                  <div className="text-[10px] text-[var(--text-muted)] line-clamp-2">{String(tool.description || '').slice(0, 140) || '—'}</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    openRegisteredToolInMonaco(tool as any);
+                                    setToolBrowserOutput((p) => ({ ...p, [key]: 'Opened tool record in editor.' }));
+                                  }}
+                                  className="shrink-0 px-2 py-1 rounded-lg border border-[var(--border-subtle)] text-[10px] font-bold hover:border-[var(--solar-cyan)]"
+                                >
+                                  Run
+                                </button>
+                              </div>
+                              {output ? (
+                                <div className="px-2 py-2 border-t border-[var(--border-subtle)] text-[10px] text-[var(--text-muted)]">
+                                  {output}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                        {tools.length === 0 ? (
+                          <div className="px-1 py-2 text-[11px] text-[var(--text-muted)]">No tools in this category.</div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {visibleToolCategories.length === 0 ? (
+                <div className="p-3 text-[11px] text-[var(--text-muted)]">No tools match this filter.</div>
+              ) : null}
+            </div>
+          </div>
+        )}
+
         {/* ── Left Nav ── */}
         {!isMobile && (
           <div

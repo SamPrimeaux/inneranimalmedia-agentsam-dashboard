@@ -11,6 +11,7 @@ const DEFAULT_TENANT_ID = 'tenant_sam_primeaux';
 const REGISTRY_SEED = [
     ['int_github', 'github', 'GitHub', 'source_control', 'oauth2', 'connected', 10, null],
     ['int_google_drive', 'google_drive', 'Google Drive', 'storage', 'oauth2', 'connected', 20, null],
+    ['int_cloudflare_oauth', 'cloudflare_oauth', 'Cloudflare (OAuth)', 'deployment', 'oauth2', 'disconnected', 25, 'CLOUDFLARE_OAUTH_CLIENT_ID'],
     ['int_cloudflare_r2', 'cloudflare_r2', 'Cloudflare R2', 'storage', 'worker_binding', 'connected', 30, 'R2'],
     ['int_mcp', 'mcp_servers', 'MCP Servers', 'automation', 'api_key', 'connected', 40, null],
     ['int_resend', 'resend', 'Resend', 'communication', 'api_key', 'connected', 50, 'RESEND_API_KEY'],
@@ -23,6 +24,7 @@ const REGISTRY_SEED = [
     ['int_hyperdrive', 'hyperdrive', 'Hyperdrive (Supabase)', 'database', 'worker_binding', 'connected', 120, 'HYPERDRIVE'],
     ['int_browser_rendering', 'browser_rendering', 'Browser Rendering', 'automation', 'worker_binding', 'connected', 130, 'MYBROWSER'],
     ['int_supabase', 'supabase', 'Supabase', 'database', 'api_key', 'connected', 140, 'SUPABASE_SERVICE_ROLE_KEY'],
+    ['int_supabase_oauth', 'supabase_oauth', 'Supabase (OAuth)', 'database', 'oauth2', 'disconnected', 145, 'SUPABASE_OAUTH_CLIENT_ID'],
     ['int_cursor', 'cursor', 'Cursor', 'automation', 'api_key', 'connected', 150, 'CURSOR_API_KEY'],
     ['int_claude_code', 'claude_code', 'Claude Code', 'automation', 'api_key', 'disconnected', 160, 'CLAUDE_CODE_API_KEY'],
 ];
@@ -31,6 +33,8 @@ const OAUTH_PROVIDER_ALIASES = {
     github: 'github',
     google_drive: 'google_drive',
     google_gmail: 'google_gmail',
+    cloudflare_oauth: 'cloudflare',
+    supabase_oauth: 'supabase',
 };
 
 const PROVIDER_COLOR_SLUGS = {
@@ -38,6 +42,7 @@ const PROVIDER_COLOR_SLUGS = {
     claude_code: 'claude_pro',
     cloudflare_images: 'cf_images',
     cloudflare_r2: 'cf_r2',
+    cloudflare_oauth: 'cloudflare',
     cursor: 'cursor_api',
     github: 'github',
     google_ai: 'google_antigravity',
@@ -47,6 +52,7 @@ const PROVIDER_COLOR_SLUGS = {
     openai: 'openai_api',
     resend: 'resend',
     supabase: 'supabase',
+    supabase_oauth: 'supabase',
     vectorize: 'workers_ai',
     browser_rendering: 'cf_workers',
     bluebubbles: 'bluebubbles',

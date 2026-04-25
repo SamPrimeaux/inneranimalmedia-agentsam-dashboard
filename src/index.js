@@ -32,6 +32,7 @@ import { handleDashboardApi } from './api/dashboard';
 import { handleMailApi } from './api/mail';
 import { handleLearnApi } from './api/learn';
 import { handleOnboardingApi } from './api/onboarding';
+import { handleOAuthApi } from './api/oauth';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -163,7 +164,12 @@ export default {
       }
 
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
-      if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
+      if (pathLower.startsWith('/api/oauth/')) {
+        const res = await handleOAuthApi(request, env, ctx);
+        if (res && res.status !== 404) return res;
+        return await legacyWorker.fetch(request, env, ctx);
+      }
+      if (pathLower.startsWith('/auth/')) {
         return await legacyWorker.fetch(request, env, ctx);
       }
 

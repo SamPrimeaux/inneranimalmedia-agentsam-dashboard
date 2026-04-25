@@ -620,16 +620,22 @@ export async function handleMailApi(request, url, env, ctx) {
 
     // GET /api/mail/sent
     if (method === 'GET' && p === '/api/mail/sent') {
+      const statusParam = url.searchParams.get('status');
+      const status = statusParam && statusParam.trim() ? statusParam.trim().toLowerCase() : null;
+      const allowedStatuses = new Set(['sent', 'draft', 'queued', 'failed']);
+      const includeAll = !status || status === 'all';
+      const statusFilter = (!includeAll && allowedStatuses.has(status)) ? status : null;
+
       const { results } = await env.DB.prepare(
         `SELECT id,
                 COALESCE(from_email, from_address) AS from_address,
                 COALESCE(to_email, to_address) AS to_address,
                 subject, status, created_at
          FROM email_logs
-         WHERE status = 'sent'
+         WHERE ${statusFilter ? `status = ?` : `status IN ('sent','draft')`}
          ORDER BY created_at DESC
          LIMIT 100`
-      ).all();
+      ).bind(...(statusFilter ? [statusFilter] : [])).all();
       return jsonResponse({ emails: results || [] });
     }
 

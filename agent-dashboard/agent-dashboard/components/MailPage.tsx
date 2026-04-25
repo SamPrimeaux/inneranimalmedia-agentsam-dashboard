@@ -203,6 +203,8 @@ export function MailPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [search, setSearch] = useState('');
   const [composeOpen, setComposeOpen] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
+  const [gmailAccount, setGmailAccount] = useState<string | null>(null);
   const [composing, setComposing] = useState<ComposeState>({
     from: '',
     to: '',
@@ -299,6 +301,22 @@ export function MailPage() {
     void loadSenders();
     void loadTemplates();
     void loadStats();
+    (async () => {
+      try {
+        const r = await fetch('/api/mail/gmail/status', { credentials: 'same-origin' });
+        const d = await r.json().catch(() => null);
+        if (r.ok && d) {
+          setGmailConnected(!!d.connected);
+          setGmailAccount(d.account ? String(d.account) : null);
+        } else {
+          setGmailConnected(false);
+          setGmailAccount(null);
+        }
+      } catch {
+        setGmailConnected(false);
+        setGmailAccount(null);
+      }
+    })();
   }, [loadSenders, loadTemplates, loadStats]);
 
   const loadFolder = useCallback(async () => {
@@ -702,8 +720,33 @@ export function MailPage() {
           })}
         </div>
 
-        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: 11 }}>
-          {stats.total} total · {stats.unread} unread
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: 11, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div>{stats.total} total · {stats.unread} unread</div>
+          {gmailConnected === false && (
+            <a
+              href="/api/mail/gmail/start"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: 32,
+                borderRadius: 10,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated)',
+                color: 'var(--text-main)',
+                fontWeight: 800,
+                fontSize: 11,
+                textDecoration: 'none',
+              }}
+            >
+              Connect Gmail
+            </a>
+          )}
+          {gmailConnected === true && gmailAccount && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              Gmail: <span style={{ color: 'var(--text-main)', fontWeight: 800 }}>{gmailAccount}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1387,8 +1430,8 @@ export function MailPage() {
             style={{
               position: 'fixed',
               inset: 0,
-              background: 'rgba(0,0,0,0.6)',
-              backdropFilter: 'blur(4px)',
+              background: 'transparent',
+              backdropFilter: 'none',
               zIndex: 500,
               border: 'none',
               cursor: sending ? 'not-allowed' : 'pointer',

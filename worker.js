@@ -3945,88 +3945,11 @@ const worker = {
         }
       }
 
-      // ----- API: Execute slash command (agent_commands) -----
+      // ----- API: Execute slash command (agentsam_slash_commands) -----
       // NOTE: Must be above the /api/agent/* catch-all or handleAgentApi swallows it
       if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
         if (!env.DB) return jsonResponse({ success: false, error: 'DB not configured' }, 503);
-        try {
-          const body = await request.json().catch(() => ({}));
-          const commandName = (body.command_name || body.name || '').trim();
-          const parameters = body.parameters || {};
-          const tenantId = tenantIdFromEnv(env);
-          if (!tenantId) return jsonResponse({ success: false, error: 'TENANT_ID not configured on worker' }, 503);
-          if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
-          const command = await env.DB.prepare(
-            `SELECT * FROM agent_commands WHERE tenant_id = ? AND status = 'active' AND (name = ? OR slug = ?) LIMIT 1`
-          ).bind(tenantId, commandName, commandName).first();
-          if (!command) {
-            return jsonResponse({ success: false, error: 'Command not found' }, 404);
-          }
-          let result = { output: command.command_text || `Command /${commandName} registered.` };
-          if (command.implementation_type === 'builtin' && command.implementation_ref) {
-            const builtins = {
-              clear_context: async () => ({ output: 'Context cleared' }),
-              runfullaitest: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox',
-              }),
-              runtests: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox --quick',
-              }),
-              list_tools: async () => {
-                const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
-                return { output: JSON.stringify((r.results || []).map(t => ({ name: t.tool_name, description: t.description })), null, 2) };
-              },
-              terminal_execute: async () => {
-                const cmdToRun = (parameters.raw || parameters.command || '').trim();
-                if (!cmdToRun) return { output: 'Usage: /run <command>' };
-                try {
-                  const { output } = await runTerminalCommand(env, request, cmdToRun, body.session_id ?? null, ctx);
-                  return { output: output || '(no output)' };
-                } catch (e) {
-                  return { output: `Error: ${e?.message ?? String(e)}` };
-                }
-              },
-              workflow_execute: async () => {
-                const raw = (parameters.raw || '').trim();
-                const parts = raw.split(/\s+/);
-                const workflow_id = parts[0];
-                const dryRun = !parts.includes('--execute');
-                if (!workflow_id) {
-                  return {
-                    output:
-                      'Usage: /workflow <id> [--execute]\nAvailable: wf_worker_health_check, wf_d1_schema_audit, wf_cost_telemetry_report, wf_dashboard_deploy, wf_knowledge_reindex\nCode review: type /review in chat (wf_code_review; not an mcp_workflows id).',
-                  };
-                }
-                try {
-                  const data = await triggerWorkflowRun(
-                    env,
-                    ctx,
-                    workflow_id,
-                    body.session_id != null ? String(body.session_id) : null,
-                    'slash_command',
-                    dryRun
-                  );
-                  if (data.error) return { output: `Error: ${data.error}` };
-                  if (dryRun) {
-                    return {
-                      output: `DRY RUN — ${data.name}\n${JSON.stringify(data, null, 2)}\n\nTo execute: /workflow ${workflow_id} --execute`,
-                    };
-                  }
-                  return {
-                    output: `Workflow started: ${data.run_id}\nStatus: ${data.status}\nCheck: use d1_query on mcp_workflow_runs`,
-                  };
-                } catch (e) {
-                  return { output: `Error: ${e?.message ?? String(e)}` };
-                }
-              },
-            };
-            const fn = builtins[command.implementation_ref];
-            if (fn) result = await fn();
-          }
-          return jsonResponse({ success: true, result });
-        } catch (e) {
-          return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
-        }
+        return executeAgentsamSlashCommand(request, env, ctx);
       }
 
       // ----- API: Agent Sam settings plane (/api/agentsam/*) — MUST be before /api/agent (agentsam starts with "agent") -----
@@ -17487,6 +17410,193 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
 
   ctx.waitUntil(executeWorkflowSteps(env, wf, run.id, sid));
   return { run_id: run.id, status: 'running' };
+}
+
+const AGENTSAM_DB_QUERY_DEFAULTS = {
+  sc_agents: "SELECT id, slug, display_name, allowed_tool_globs FROM agentsam_subagent_profile WHERE is_active=1 ORDER BY id",
+  sc_model: "SELECT id, provider, model_key, display_name FROM ai_models WHERE is_active=1 ORDER BY provider, display_name",
+  sc_memory: "SELECT key, value_text, created_at FROM context_memory WHERE workspace_id=$workspace_id ORDER BY created_at DESC LIMIT 20",
+  sc_tools: "SELECT tool_name, tool_category, description FROM mcp_registered_tools WHERE enabled=1 ORDER BY tool_category, tool_name",
+  sc_cost: "SELECT SUM(total_cost_usd) as total, COUNT(*) as calls FROM agent_telemetry WHERE tenant_id=$tenant_id AND created_at > datetime('now','-7 days')",
+  sc_status: "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1",
+  sc_ollama: "SELECT id, model_key, display_name, is_active FROM ai_models WHERE provider='ollama'",
+  sc_assign: "SELECT * FROM course_assignments WHERE user_id=$user_id ORDER BY due_date ASC LIMIT 5",
+  sc_courses: "SELECT * FROM course_enrollments WHERE user_id=$user_id ORDER BY created_at DESC",
+  sc_submit: "SELECT * FROM course_submissions WHERE user_id=$user_id ORDER BY submitted_at DESC LIMIT 10",
+};
+
+let agentsamSlashSqlDefaultsEnsured = false;
+
+async function ensureAgentsamSlashCommandSqlDefaults(env) {
+  if (agentsamSlashSqlDefaultsEnsured || !env?.DB) return;
+  agentsamSlashSqlDefaultsEnsured = true;
+  for (const [slug, sql] of Object.entries(AGENTSAM_DB_QUERY_DEFAULTS)) {
+    try {
+      await env.DB.prepare(
+        `UPDATE agentsam_slash_commands
+         SET handler_sql = ?
+         WHERE slug = ?
+           AND handler_type = 'db_query'
+           AND (handler_sql IS NULL OR TRIM(handler_sql) = '')`
+      ).bind(sql, slug).run();
+    } catch (e) {
+      console.warn('[agentsam slash sql default]', slug, e?.message ?? e);
+    }
+  }
+}
+
+function bindAgentsamSessionSql(sql, session) {
+  const values = {
+    tenant_id: session?.tenant_id || tenantIdFromEnv({}) || null,
+    workspace_id: session?.workspace_id || IAM_DEFAULT_WORKSPACE_ID,
+    user_id: session?.id || null,
+  };
+  const binds = [];
+  const preparedSql = String(sql || '').replace(/\$(tenant_id|workspace_id|user_id)\b/g, (_, key) => {
+    binds.push(values[key]);
+    return '?';
+  });
+  return { preparedSql, binds };
+}
+
+function resolveSubagentProfileSlug(commandSlug, args, session) {
+  if (commandSlug === 'spawn' && args[0]) return String(args[0]).trim();
+  const samMap = {
+    check: 'codex-default',
+    boilerplate: 'ollama-boilerplate',
+    free: 'toolbox',
+    analyze: 'analyst',
+    cleanup: 'devops',
+    tablehealth: 'd1-audit',
+  };
+  const connorMap = { check: 'code-check' };
+  const isConnor = String(session?.email || session?.id || '').toLowerCase().includes('connor');
+  return (isConnor && connorMap[commandSlug]) || samMap[commandSlug] || '';
+}
+
+async function executeAgentsamSlashCommand(request, env, ctx) {
+  try {
+    await ensureAgentsamSlashCommandSqlDefaults(env);
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
+    const body = await request.json().catch(() => ({}));
+    const commandName = String(body.command_name || body.name || body.slug || body.id || '').replace(/^\//, '').trim();
+    const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : (body.args && typeof body.args === 'object' ? body.args : {});
+    const rawArgs = String(parameters.raw || body.raw || '').trim();
+    const args = Array.isArray(body.args) ? body.args.map((v) => String(v)) : rawArgs ? rawArgs.split(/\s+/).filter(Boolean) : [];
+    if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
+
+    const command = await env.DB.prepare(
+      `SELECT * FROM agentsam_slash_commands
+       WHERE (slug = ? OR id = ?) AND is_active = 1
+       LIMIT 1`
+    ).bind(commandName, commandName).first();
+    if (!command) return jsonResponse({ success: false, error: 'Command not found' }, 404);
+
+    let result;
+    const handlerType = String(command.handler_type || '').trim();
+    const handlerRef = String(command.handler_ref || '').trim();
+    const session = {
+      tenant_id: authUser.tenant_id || tenantIdFromEnv(env),
+      workspace_id: authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID,
+      id: authUser.id,
+      email: authUser.email,
+    };
+
+    if (handlerType === 'builtin') {
+      if (handlerRef === 'clear_context') {
+        result = { output: 'Context cleared' };
+      } else if (handlerRef === 'switch_mode') {
+        result = { output: 'Mode switch requested', mode: parameters.mode || args[0] || null };
+      } else if (handlerRef === 'workflow_execute') {
+        const workflowId = parameters.workflow_id || args[0] || command.handler_ref;
+        if (!workflowId || workflowId === 'workflow_execute') {
+          result = { error: 'workflow_id required' };
+        } else {
+          result = await triggerWorkflowRun(env, ctx, String(workflowId), body.session_id != null ? String(body.session_id) : null, 'slash_command', parameters.dry_run !== false);
+        }
+      } else {
+        result = { error: 'Command not implemented', slug: command.slug };
+      }
+    } else if (handlerType === 'db_query') {
+      if (!command.handler_sql || !String(command.handler_sql).trim()) {
+        result = { error: 'Command not implemented', slug: command.slug };
+      } else {
+        const { preparedSql, binds } = bindAgentsamSessionSql(command.handler_sql, session);
+        const r = await env.DB.prepare(preparedSql).bind(...binds).all();
+        result = { rows: r.results || [], meta: r.meta || null };
+      }
+    } else if (handlerType === 'subagent_spawn') {
+      const profileSlug = handlerRef || resolveSubagentProfileSlug(command.slug, args, session);
+      if (!profileSlug) {
+        result = { error: 'Subagent profile required', slug: command.slug };
+      } else {
+        const profile = await env.DB.prepare(
+          `SELECT id, slug, display_name, instructions_markdown
+           FROM agentsam_subagent_profile
+           WHERE is_active = 1 AND (slug = ? OR id = ?)
+           LIMIT 1`
+        ).bind(profileSlug, profileSlug).first();
+        if (!profile) {
+          result = { error: 'Subagent profile not found', profile_slug: profileSlug };
+        } else {
+          result = {
+            spawned: true,
+            profile_id: profile.id,
+            profile_slug: profile.slug,
+            instructions_preview: String(profile.instructions_markdown || '').slice(0, 500),
+          };
+        }
+      }
+    } else if (handlerType === 'tool_invoke') {
+      const toolName = handlerRef;
+      const tool = await env.DB.prepare(
+        `SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1 LIMIT 1`
+      ).bind(toolName).first();
+      if (!tool) {
+        result = { error: 'Tool not found', tool: toolName };
+      } else if (Number(tool.requires_approval || 0) === 1) {
+        result = { pending: true, approval_required: true, tool };
+      } else if (Number(tool.is_degraded || 0) === 1) {
+        result = { error: 'Tool degraded', failure_rate: tool.failure_rate };
+      } else {
+        result = await invokeMcpToolFromChat(env, tool.tool_name, parameters, body.session_id != null ? String(body.session_id) : '', { skipApprovalCheck: true });
+      }
+    } else if (handlerType === 'ollama_local') {
+      const ollamaUrl = env.OLLAMA_URL || 'https://ollama.inneranimalmedia.com/api/chat';
+      try {
+        const res = await fetch(ollamaUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'CF-Access-Client-Id': env.OLLAMA_CLIENT_ID || '',
+            'CF-Access-Client-Secret': env.OLLAMA_CLIENT_SECRET || '',
+          },
+          body: JSON.stringify({
+            model: parameters.model || handlerRef || 'llama3.1',
+            messages: [{ role: 'user', content: parameters.prompt || rawArgs || command.slug }],
+            stream: false,
+          }),
+        });
+        if (!res.ok) result = { error: 'Local AI offline', fallback: 'Use cloud model' };
+        else result = await res.json().catch(async () => ({ output: await res.text() }));
+      } catch (_) {
+        result = { error: 'Local AI offline', fallback: 'Use cloud model' };
+      }
+    } else {
+      result = { error: 'Command not implemented', slug: command.slug };
+    }
+
+    await env.DB.prepare(
+      `UPDATE agentsam_slash_commands
+       SET call_count = COALESCE(call_count, 0) + 1,
+           last_called_at = datetime('now')
+       WHERE id = ?`
+    ).bind(command.id).run();
+    return jsonResponse({ success: !result?.error, command: command.slug, result });
+  } catch (e) {
+    return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
+  }
 }
 
 async function handleAgentsamApi(request, url, env) {

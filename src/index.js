@@ -85,6 +85,21 @@ export default {
         return handleHealthCheck(request, env);
       }
 
+      // 1. Provider Colors (D1-driven palette registry)
+      if (pathLower === '/api/provider-colors' && request.method === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT slug, primary_color, secondary_color, text_on_color, display_name, category
+             FROM provider_colors
+             ORDER BY category, slug`
+          ).all();
+          return jsonResponse(results || []);
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       const ASSET_ROUTES = {
         '/work': 'process.html',
         '/about': 'about.html',

@@ -2939,6 +2939,21 @@ const worker = {
         });
       }
 
+      // Provider Colors (D1 palette registry)
+      if (pathLower === '/api/provider-colors' && methodUpper === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT slug, primary_color, secondary_color, text_on_color, display_name, category
+             FROM provider_colors
+             ORDER BY category, slug`
+          ).all();
+          return jsonResponse(results || []);
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       if (pathLower === '/api/system/health' && methodUpper === 'GET') {
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         const refresh = url.searchParams.get('refresh') === 'true';

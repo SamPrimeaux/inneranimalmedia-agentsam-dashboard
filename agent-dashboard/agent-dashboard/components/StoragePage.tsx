@@ -1,873 +1,230 @@
-/**
- * Storage admin — tenant-scoped via session cookies on all API calls (credentials: same-origin).
- */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  HardDrive,
-  BarChart3,
-  Boxes,
-  Settings2,
-  Loader2,
-  Copy,
-  Plus,
-  Database,
-  Cloud,
-  Shield,
-  AlertCircle,
-  RefreshCw,
-  KeyRound,
-  Server,
-  History,
-} from 'lucide-react';
-import {
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
+import { Bar, BarChart, Area, AreaChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { BarChart3, Boxes, Cloud, Database, HardDrive, History, KeyRound, Loader2, RefreshCw, Shield, Trash2 } from 'lucide-react';
 
-type NavKey = 'files' | 'analytics' | 'vectors' | 's3';
-type FilesTab = 'buckets' | 'settings' | 'policies';
+type NavKey = 'files' | 'analytics' | 'vectors' | 's3' | 'policies' | 'cleanup' | 'activity';
+type Row = Record<string, any>;
 
-const CHART_BUCKET_COLORS = [
-  'var(--solar-cyan)',
-  'var(--solar-blue)',
-  'var(--solar-violet)',
-  'var(--solar-magenta)',
-  'var(--solar-green)',
-  'var(--solar-yellow)',
-  'var(--solar-orange)',
-];
+const COLORS = ['var(--solar-cyan)', 'var(--solar-blue)', 'var(--solar-violet)', 'var(--solar-magenta)', 'var(--solar-green)', 'var(--solar-yellow)', 'var(--solar-orange)'];
 
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return '0 B';
-  if (n < 1024) return `${Math.round(n)} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+function n(v: any) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
 }
 
-const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<{ ok: boolean; data: T | null; status: number }> => {
+function mb(v: any) {
+  return `${n(v).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`;
+}
+
+function bytes(v: any) {
+  const x = n(v);
+  if (x < 1024) return `${Math.round(x)} B`;
+  if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KB`;
+  if (x < 1024 * 1024 * 1024) return `${(x / 1048576).toFixed(1)} MB`;
+  return `${(x / 1073741824).toFixed(2)} GB`;
+}
+
+function short(v: any) {
+  if (!v) return 'n/a';
+  const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+  return Number.isNaN(d.getTime()) ? String(v).slice(0, 19) : d.toLocaleString();
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T | null> {
   try {
-    const r = await fetch(url, { credentials: 'same-origin', ...init });
-    const ct = r.headers.get('content-type');
-    const data =
-      ct?.includes('application/json') ? ((await r.json()) as T) : null;
-    return { ok: r.ok, data, status: r.status };
+    const res = await fetch(url, { credentials: 'same-origin', ...init });
+    return await res.json();
   } catch {
-    return { ok: false, data: null, status: 0 };
+    return null;
   }
-};
+}
 
-function StorageAnalyticsCharts({ analytics }: { analytics: Record<string, unknown> }) {
-  const byBucket = useMemo(() => {
-    const raw = analytics.by_bucket;
-    if (!Array.isArray(raw)) return [];
-    return raw.map((row, i) => {
-      const r = row as Record<string, unknown>;
-      const name = String(r.bucket ?? r.name ?? r.binding ?? `bucket_${i}`);
-      const object_count = Number(r.object_count ?? r.count ?? 0) || 0;
-      const total_bytes = Number(r.total_bytes ?? r.bytes ?? 0) || 0;
-      return { name, object_count, total_bytes };
-    });
-  }, [analytics]);
+function Badge({ children, tone = 'info' }: { children: React.ReactNode; tone?: 'ok' | 'warn' | 'bad' | 'info' | 'muted' }) {
+  const color = tone === 'ok' ? 'var(--solar-green)' : tone === 'warn' ? 'var(--solar-yellow)' : tone === 'bad' ? 'var(--solar-red)' : tone === 'muted' ? 'var(--text-muted)' : 'var(--solar-cyan)';
+  return <span className="storage-badge" style={{ color }}>{children}</span>;
+}
 
-  const summary = analytics.summary as { object_count?: number; size_bytes?: number } | undefined;
-  const total_objects =
-    Number(analytics.total_objects ?? summary?.object_count ?? 0) ||
-    byBucket.reduce((s, x) => s + x.object_count, 0);
-  const total_bytes =
-    Number(analytics.total_bytes ?? summary?.size_bytes ?? 0) ||
-    byBucket.reduce((s, x) => s + x.total_bytes, 0);
+function Dot({ ok }: { ok: boolean }) {
+  return <span className="storage-dot" style={{ background: ok ? 'var(--solar-green)' : 'var(--solar-red)' }} />;
+}
 
-  const pieData = byBucket.map((b) => ({ name: b.name, value: b.total_bytes }));
-  const barData = byBucket.map((b) => ({ name: b.name, objects: b.object_count }));
+function DataQuality({ data }: { data?: Row | null }) {
+  if (!data) return null;
+  const warn = data.data_quality === 'fallback_live_scan' || data.data_quality === 'partial';
+  return <div className="storage-quality"><Badge tone={warn ? 'warn' : 'ok'}>{data.source || 'd1_registry'}</Badge><Badge tone={warn ? 'warn' : 'ok'}>{data.data_quality || 'healthy'}</Badge><span>{data.last_synced_at ? short(data.last_synced_at) : 'not synced'}</span></div>;
+}
 
-  const tipStyle = {
-    background: 'var(--bg-panel)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: 8,
-    fontSize: 11,
-    color: 'var(--text-main)',
-  };
+function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div className="storage-stat"><span>{label}</span><strong>{value}</strong></div>;
+}
 
-  return (
-    <div className="space-y-8 max-w-5xl">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Total objects</p>
-          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
-            {total_objects.toLocaleString()}
-          </p>
-        </div>
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Total size</p>
-          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
-            {formatBytes(total_bytes)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Buckets</p>
-          <p className="text-[22px] font-semibold text-[var(--text-heading)] mt-1 tabular-nums">
-            {byBucket.length.toLocaleString()}
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 min-h-[280px]">
-          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3">
-            Storage by bucket (size)
-          </h3>
-          {pieData.length === 0 ? (
-            <p className="text-[12px] text-[var(--text-muted)]">No bucket breakdown.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={56}
-                  outerRadius={88}
-                  paddingAngle={2}
-                >
-                  {pieData.map((_, i) => (
-                    <Cell key={i} fill={CHART_BUCKET_COLORS[i % CHART_BUCKET_COLORS.length]} stroke="var(--border-subtle)" />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={tipStyle}
-                  formatter={(value: number | string) => formatBytes(Number(value))}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 min-h-[280px]">
-          <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3">
-            Objects per bucket
-          </h3>
-          {barData.length === 0 ? (
-            <p className="text-[12px] text-[var(--text-muted)]">No bucket breakdown.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                <XAxis
-                  dataKey="name"
-                  tick={{ fill: 'var(--text-muted)', fontSize: 10 }}
-                  interval={0}
-                  angle={-24}
-                  textAnchor="end"
-                  height={56}
-                />
-                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} width={40} />
-                <Tooltip contentStyle={tipStyle} />
-                <Bar dataKey="objects" fill="var(--solar-cyan)" radius={[4, 4, 0, 0]} stroke="var(--border-subtle)" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function Tip(props: any) {
+  return <Tooltip {...props} contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border-subtle)', borderRadius: 8, color: 'var(--text-main)', fontSize: 11 }} />;
 }
 
 export const StoragePage: React.FC = () => {
   const [nav, setNav] = useState<NavKey>('files');
-  const [filesTab, setFilesTab] = useState<FilesTab>('buckets');
+  const [loading, setLoading] = useState(false);
+  const [buckets, setBuckets] = useState<Row | null>(null);
+  const [analytics, setAnalytics] = useState<Row | null>(null);
+  const [vectors, setVectors] = useState<Row | null>(null);
+  const [s3, setS3] = useState<Row | null>(null);
+  const [policies, setPolicies] = useState<Row | null>(null);
+  const [activity, setActivity] = useState<Row | null>(null);
+  const [selectedBucket, setSelectedBucket] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState('');
+  const [filters, setFilters] = useState({ worker_name: '', outcome: '', start: '', end: '' });
 
-  const [bucketsLoading, setBucketsLoading] = useState(false);
-  const [buckets, setBuckets] = useState<Array<Record<string, unknown>>>([]);
+  const loadBuckets = useCallback(async () => setBuckets(await fetchJson<Row>('/api/storage/buckets')), []);
+  const loadAnalytics = useCallback(async () => setAnalytics(await fetchJson<Row>('/api/storage/analytics')), []);
+  const loadVectors = useCallback(async () => setVectors(await fetchJson<Row>('/api/storage/vectors')), []);
+  const loadS3 = useCallback(async () => setS3(await fetchJson<Row>('/api/storage/s3')), []);
+  const loadPolicies = useCallback(async () => setPolicies(await fetchJson<Row>('/api/storage/policies')), []);
+  const loadActivity = useCallback(async () => {
+    const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v).map(([k, v]) => [k, v]));
+    setActivity(await fetchJson<Row>(`/api/storage/activity${qs.toString() ? `?${qs}` : ''}`));
+  }, [filters]);
 
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  const [analytics, setAnalytics] = useState<Record<string, unknown> | null>(null);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    if (nav === 'files' || nav === 'cleanup') await loadBuckets();
+    if (nav === 'analytics') await loadAnalytics();
+    if (nav === 'vectors') await loadVectors();
+    if (nav === 's3') await Promise.all([loadS3(), loadBuckets()]);
+    if (nav === 'policies') await Promise.all([loadPolicies(), loadBuckets()]);
+    if (nav === 'activity') await loadActivity();
+    setLoading(false);
+  }, [nav, loadBuckets, loadAnalytics, loadVectors, loadS3, loadPolicies, loadActivity]);
 
-  const [vectorsLoading, setVectorsLoading] = useState(false);
-  const [vectors, setVectors] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => { void refresh(); }, [refresh]);
 
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [imageTransform, setImageTransform] = useState(true);
-  const [maxFileMb, setMaxFileMb] = useState(25);
-
-  const [policiesLoading, setPoliciesLoading] = useState(false);
-  const [objectPolicies, setObjectPolicies] = useState<unknown[]>([]);
-  const [bucketPolicies, setBucketPolicies] = useState<unknown[]>([]);
-
-  const [s3Loading, setS3Loading] = useState(false);
-  const [s3Endpoint, setS3Endpoint] = useState('');
-  const [s3Region, setS3Region] = useState('');
-  const [accessKeys, setAccessKeys] = useState<Array<Record<string, unknown>>>([]);
-  const [hyperdriveSnippet, setHyperdriveSnippet] = useState('');
-  const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
-  const [creatingKey, setCreatingKey] = useState(false);
-
-  const [auditLoading, setAuditLoading] = useState(false);
-  const [auditRows, setAuditRows] = useState<Array<Record<string, unknown>>>([]);
-
-  const loadWorkspaceAudit = useCallback(async () => {
-    const wid =
-      typeof window !== 'undefined'
-        ? (window as unknown as { __IAM_WORKSPACE_ID__?: string }).__IAM_WORKSPACE_ID__?.trim()
-        : '';
-    if (!wid || wid === 'global') {
-      setAuditRows([]);
-      return;
-    }
-    setAuditLoading(true);
-    const { ok, data } = await fetchJson<{ events?: unknown[] }>(
-      `/api/workspaces/${encodeURIComponent(wid)}/audit`,
-    );
-    setAuditLoading(false);
-    const ev =
-      ok && data && Array.isArray(data.events) ? data.events : [];
-    setAuditRows(ev as Array<Record<string, unknown>>);
-  }, []);
-
-  const loadBuckets = useCallback(async () => {
-    setBucketsLoading(true);
-    const { ok, data } = await fetchJson<{ buckets?: unknown[] } | unknown[]>('/api/storage/buckets');
-    setBucketsLoading(false);
-    if (!ok || !data) {
-      setBuckets([]);
-      return;
-    }
-    if (Array.isArray(data)) {
-      setBuckets(data as Array<Record<string, unknown>>);
-      return;
-    }
-    const b = (data as { buckets?: unknown[] }).buckets;
-    setBuckets(Array.isArray(b) ? (b as Array<Record<string, unknown>>) : []);
-  }, []);
-
-  const loadAnalytics = useCallback(async () => {
-    setAnalyticsLoading(true);
-    const { ok, data } = await fetchJson<Record<string, unknown>>('/api/storage/analytics');
-    setAnalyticsLoading(false);
-    setAnalytics(ok && data ? data : null);
-  }, []);
-
-  const loadVectors = useCallback(async () => {
-    setVectorsLoading(true);
-    const { ok, data } = await fetchJson<Record<string, unknown>>('/api/storage/vectors');
-    setVectorsLoading(false);
-    setVectors(ok && data ? data : null);
-  }, []);
-
-  const loadPolicies = useCallback(async () => {
-    setPoliciesLoading(true);
-    const { ok, data } = await fetchJson<{
-      policies?: unknown[];
-      storage?: { objects?: unknown[]; buckets?: unknown[] };
-      objectPolicies?: unknown[];
-      bucketPolicies?: unknown[];
-    }>('/api/storage/policies');
-    setPoliciesLoading(false);
-    if (!ok || !data) {
-      setObjectPolicies([]);
-      setBucketPolicies([]);
-      return;
-    }
-    if (Array.isArray(data.policies)) {
-      setObjectPolicies(data.policies);
-      setBucketPolicies([]);
-      return;
-    }
-    const o =
-      data.storage?.objects ??
-      data.objectPolicies ??
-      ([] as unknown[]);
-    const b =
-      data.storage?.buckets ??
-      data.bucketPolicies ??
-      ([] as unknown[]);
-    setObjectPolicies(Array.isArray(o) ? o : []);
-    setBucketPolicies(Array.isArray(b) ? b : []);
-  }, []);
-
-  const loadS3 = useCallback(async () => {
-    setS3Loading(true);
-    const { ok, data } = await fetchJson<{
-      endpoint?: string;
-      region?: string;
-      accessKeys?: Array<Record<string, unknown>>;
-      keys?: Array<Record<string, unknown>>;
-      hyperdrive?: string;
-      hyperdriveInfo?: string;
-    }>('/api/storage/s3');
-    setS3Loading(false);
-    if (!ok || !data) {
-      setS3Endpoint('');
-      setS3Region('');
-      setAccessKeys([]);
-      setHyperdriveSnippet('');
-      return;
-    }
-    setS3Endpoint(typeof data.endpoint === 'string' ? data.endpoint : '');
-    setS3Region(typeof data.region === 'string' ? data.region : '');
-    const keys = data.accessKeys ?? data.keys;
-    setAccessKeys(Array.isArray(keys) ? keys : []);
-    const hd = data.hyperdrive ?? data.hyperdriveInfo;
-    setHyperdriveSnippet(typeof hd === 'string' ? hd : '');
-  }, []);
-
+  const bucketRows = buckets?.buckets || [];
+  const selectedVector = (vectors?.indexes || []).find((x: Row) => x.id === selectedIndex) || (vectors?.indexes || [])[0];
   useEffect(() => {
-    if (nav === 'files' && filesTab === 'buckets') void loadBuckets();
-  }, [nav, filesTab, loadBuckets]);
+    if (!selectedIndex && vectors?.indexes?.[0]?.id) setSelectedIndex(vectors.indexes[0].id);
+  }, [vectors, selectedIndex]);
 
-  useEffect(() => {
-    if (nav === 'analytics') void loadAnalytics();
-  }, [nav, loadAnalytics]);
+  const contentTypes = useMemo(() => Object.entries(analytics?.storage_inventory?.by_content_type || {}).map(([name, value]) => ({ name, value: n(value) })), [analytics]);
+  const cleanup = analytics?.storage_inventory?.cleanup_breakdown || {};
 
-  useEffect(() => {
-    if (nav === 'vectors') void loadVectors();
-  }, [nav, loadVectors]);
-
-  useEffect(() => {
-    if (nav === 'files' && filesTab === 'policies') void loadPolicies();
-  }, [nav, filesTab, loadPolicies]);
-
-  useEffect(() => {
-    if (nav === 's3') void loadS3();
-  }, [nav, loadS3]);
-
-  useEffect(() => {
-    if (nav !== 's3') return;
-    void loadWorkspaceAudit();
-    const fn = () => void loadWorkspaceAudit();
-    window.addEventListener('iam_workspace_id', fn);
-    return () => window.removeEventListener('iam_workspace_id', fn);
-  }, [nav, loadWorkspaceAudit]);
-
-  const saveSettings = async () => {
-    setSettingsSaving(true);
-    await fetch('/api/storage/settings', {
-      method: 'PATCH',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageTransformEnabled: imageTransform,
-        maxUploadMb: maxFileMb,
-      }),
-    });
-    setSettingsSaving(false);
+  const markCleanup = async (bucket: string, status: string) => {
+    await fetchJson(`/api/storage/buckets/${encodeURIComponent(bucket)}/cleanup`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+    await Promise.all([loadBuckets(), loadAnalytics()]);
   };
 
-  const copyText = (t: string) => {
-    void navigator.clipboard?.writeText(t).catch(() => {});
+  const markResolved = async (eventId: string) => {
+    await fetchJson(`/api/storage/errors/${encodeURIComponent(eventId)}`, { method: 'PATCH' });
+    await loadAnalytics();
   };
 
-  const createAccessKey = async () => {
-    setCreatingKey(true);
-    setNewKeySecret(null);
-    const r = await fetch('/api/storage/s3/keys', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    const data = await r.json().catch(() => ({}));
-    setCreatingKey(false);
-    if (!r.ok) return;
-    const secret =
-      typeof data.secret === 'string'
-        ? data.secret
-        : typeof data.secretAccessKey === 'string'
-          ? data.secretAccessKey
-          : typeof data.rawSecret === 'string'
-            ? data.rawSecret
-            : null;
-    if (secret) setNewKeySecret(secret);
-    void loadS3();
-  };
-
-  const NavBtn: React.FC<{ k: NavKey; icon: React.ReactNode; label: string }> = ({ k, icon, label }) => (
-    <button
-      type="button"
-      onClick={() => setNav(k)}
-      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-[12px] font-medium transition-colors ${
-        nav === k
-          ? 'bg-[var(--bg-hover)] text-[var(--solar-cyan)] border border-[var(--border-subtle)]'
-          : 'text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-main)]'
-      }`}
-    >
-      <span className="shrink-0 opacity-90">{icon}</span>
-      {label}
-    </button>
+  const NavBtn = ({ k, icon, label }: { k: NavKey; icon: React.ReactNode; label: string }) => (
+    <button type="button" onClick={() => setNav(k)} className={`storage-nav ${nav === k ? 'active' : ''}`}>{icon}{label}</button>
   );
 
   return (
-    <div className="flex h-full min-h-0 bg-[var(--bg-app)] text-[var(--text-main)]">
-      <aside className="w-52 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--bg-panel)] p-3 flex flex-col gap-1">
-        <div className="flex items-center gap-2 px-2 py-2 mb-2">
-          <div className="w-9 h-9 rounded-lg bg-[var(--solar-cyan)]/15 flex items-center justify-center text-[var(--solar-cyan)]">
-            <HardDrive size={20} strokeWidth={1.75} />
-          </div>
-          <div>
-            <h1 className="text-[13px] font-bold text-[var(--text-heading)] leading-tight">Storage</h1>
-            <p className="text-[10px] text-[var(--text-muted)]">Workspace scope</p>
-          </div>
-        </div>
-        <NavBtn k="files" icon={<HardDrive size={16} />} label="Files" />
-        <NavBtn k="analytics" icon={<BarChart3 size={16} />} label="Analytics" />
-        <NavBtn k="vectors" icon={<Boxes size={16} />} label="Vectors" />
-        <NavBtn k="s3" icon={<Cloud size={16} />} label="S3" />
+    <div className="storage-root">
+      <style>{`
+        .storage-root{height:100%;min-height:0;display:flex;background:var(--bg-app);color:var(--text-main)}.storage-side{width:210px;flex-shrink:0;border-right:1px solid var(--border-subtle);background:var(--bg-panel);padding:12px}.storage-brand{display:flex;gap:9px;align-items:center;margin:4px 4px 14px}.storage-brand h1{font-size:13px;margin:0}.storage-brand p{font-size:10px;color:var(--text-muted);margin:0}.storage-nav{width:100%;display:flex;align-items:center;gap:8px;border:0;background:transparent;color:var(--text-muted);font-size:12px;text-align:left;padding:9px;border-radius:8px}.storage-nav:hover,.storage-nav.active{background:var(--bg-hover);color:var(--solar-cyan)}.storage-main{flex:1;min-width:0;overflow:auto;padding:18px}.storage-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.storage-top h2{font-size:16px;margin:0}.storage-btn{border:1px solid var(--border-subtle);background:var(--bg-panel);color:var(--text-main);border-radius:8px;padding:7px 10px;font-size:12px;display:inline-flex;gap:6px;align-items:center}.storage-card{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;overflow:hidden}.storage-pad{padding:14px}.storage-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.storage-stat{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:10px;padding:13px}.storage-stat span{display:block;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.14em;font-weight:700}.storage-stat strong{display:block;font-size:22px;margin-top:6px}.storage-table{width:100%;border-collapse:collapse;font-size:12px}.storage-table th{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--text-muted);text-align:left}.storage-table th,.storage-table td{padding:8px;border-bottom:1px solid var(--border-subtle);vertical-align:top}.storage-table tr:hover{background:var(--bg-hover)}.storage-badge{border:1px solid currentColor;border-radius:999px;padding:2px 7px;font-size:10px;text-transform:uppercase;white-space:nowrap}.storage-dot{display:inline-block;width:8px;height:8px;border-radius:999px}.storage-quality{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-muted)}.storage-chart{height:260px}.storage-half{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.storage-field{background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:7px;color:var(--text-main);padding:7px;font-size:12px}.storage-banner{border:1px solid var(--solar-yellow);background:color-mix(in srgb,var(--solar-yellow),transparent 88%);border-radius:9px;padding:10px;font-size:12px;color:var(--text-main);margin-bottom:12px}.storage-row-actions{display:flex;gap:6px;flex-wrap:wrap}.storage-muted{color:var(--text-muted)}@media(max-width:768px){.storage-root{flex-direction:column}.storage-side{width:auto;display:flex;overflow:auto}.storage-brand{display:none}.storage-nav{white-space:nowrap}.storage-grid,.storage-half{grid-template-columns:1fr}.storage-main{padding:12px}}
+      `}</style>
+      <aside className="storage-side">
+        <div className="storage-brand"><HardDrive size={22} color="var(--solar-cyan)" /><div><h1>Storage</h1><p>D1 registry backed</p></div></div>
+        <NavBtn k="files" icon={<HardDrive size={15} />} label="Files" />
+        <NavBtn k="analytics" icon={<BarChart3 size={15} />} label="Analytics" />
+        <NavBtn k="vectors" icon={<Boxes size={15} />} label="Vectors" />
+        <NavBtn k="s3" icon={<Cloud size={15} />} label="S3" />
+        <NavBtn k="policies" icon={<Shield size={15} />} label="Policies" />
+        <NavBtn k="cleanup" icon={<Trash2 size={15} />} label="Cleanup" />
+        <NavBtn k="activity" icon={<History size={15} />} label="Activity" />
       </aside>
 
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        {nav === 'files' && (
-          <div className="flex flex-col h-full min-h-0">
-            <div className="flex gap-1 px-4 pt-4 border-b border-[var(--border-subtle)] shrink-0">
-              {(['buckets', 'settings', 'policies'] as FilesTab[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setFilesTab(t)}
-                  className={`px-4 py-2 text-[11px] font-semibold uppercase tracking-wide border-b-2 -mb-px transition-colors ${
-                    filesTab === t
-                      ? 'border-[var(--solar-cyan)] text-[var(--solar-cyan)]'
-                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-main)]'
-                  }`}
-                >
-                  {t === 'buckets' ? 'Buckets' : t === 'settings' ? 'Settings' : 'Policies'}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
-              {filesTab === 'buckets' && (
-                <div className="max-w-4xl">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-[14px] font-semibold text-[var(--text-heading)]">R2 buckets</h2>
-                    <button
-                      type="button"
-                      onClick={() => void loadBuckets()}
-                      className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
-                    >
-                      <RefreshCw size={14} />
-                      Refresh
-                    </button>
-                  </div>
-                  {bucketsLoading ? (
-                    <div className="flex items-center gap-2 text-[var(--text-muted)] text-[13px]">
-                      <Loader2 size={16} className="animate-spin" />
-                      Loading buckets…
-                    </div>
-                  ) : buckets.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-10 text-center text-[13px] text-[var(--text-muted)]">
-                      No buckets returned for this account. Confirm Worker routes <code className="text-[var(--text-main)]">GET /api/storage/buckets</code> are deployed.
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
-                      <table className="w-full text-[12px]">
-                        <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left uppercase tracking-wider">
-                          <tr>
-                            <th className="px-4 py-2 font-semibold">Name</th>
-                            <th className="px-4 py-2 font-semibold">Region / binding</th>
-                            <th className="px-4 py-2 font-semibold">Created</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--border-subtle)]">
-                          {buckets.map((row, i) => (
-                            <tr key={i} className="hover:bg-[var(--bg-hover)]/80">
-                              <td className="px-4 py-2 font-mono text-[var(--text-main)]">
-                                {String(row.name ?? row.bucket ?? row.id ?? '—')}
-                              </td>
-                              <td className="px-4 py-2 text-[var(--text-muted)]">
-                                {String(row.region ?? row.binding ?? row.location ?? '—')}
-                              </td>
-                              <td className="px-4 py-2 text-[var(--text-muted)]">
-                                {String(row.created_at ?? row.createdAt ?? row.created ?? '—')}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {filesTab === 'settings' && (
-                <div className="max-w-lg space-y-6">
-                  <h2 className="text-[14px] font-semibold text-[var(--text-heading)] flex items-center gap-2">
-                    <Settings2 size={16} />
-                    Storage settings
-                  </h2>
-                  <label className="flex items-center justify-between gap-4 p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-                    <span className="text-[13px] text-[var(--text-main)]">Image transforms</span>
-                    <input
-                      type="checkbox"
-                      checked={imageTransform}
-                      onChange={(e) => setImageTransform(e.target.checked)}
-                      className="rounded border-[var(--border-subtle)]"
-                    />
-                  </label>
-                  <div className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] space-y-2">
-                    <label className="text-[12px] text-[var(--text-muted)] uppercase tracking-wide">Max upload size (MB)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={5000}
-                      value={maxFileMb}
-                      onChange={(e) => setMaxFileMb(Number(e.target.value) || 1)}
-                      className="w-full bg-[var(--bg-app)] border border-[var(--border-subtle)] rounded-lg px-3 py-2 text-[13px] font-mono"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void saveSettings()}
-                    disabled={settingsSaving}
-                    className="px-5 py-2 rounded-lg bg-[var(--solar-cyan)] text-black text-[12px] font-bold uppercase tracking-wide disabled:opacity-50"
-                  >
-                    {settingsSaving ? 'Saving…' : 'Save'}
-                  </button>
-                </div>
-              )}
-
-              {filesTab === 'policies' && (
-                <div className="max-w-4xl space-y-8">
-                  <h2 className="text-[14px] font-semibold text-[var(--text-heading)] flex items-center gap-2">
-                    <Shield size={16} />
-                    Policies
-                  </h2>
-                  {policiesLoading ? (
-                    <div className="flex items-center gap-2 text-[var(--text-muted)]">
-                      <Loader2 size={16} className="animate-spin" />
-                      Loading…
-                    </div>
-                  ) : (
-                    <>
-                      <section>
-                        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-2">
-                          Storage policies (D1)
-                        </h3>
-                        {objectPolicies.length === 0 ? (
-                          <div className="rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-6 text-[12px] text-[var(--text-muted)]">
-                            No policies yet. POST to <code className="text-[var(--text-main)]">/api/storage/policies</code> or apply migration 234.
-                          </div>
-                        ) : (
-                          <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
-                            <table className="w-full text-[11px]">
-                              <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left">
-                                <tr>
-                                  <th className="px-3 py-2 font-semibold">Bucket</th>
-                                  <th className="px-3 py-2 font-semibold">Effect</th>
-                                  <th className="px-3 py-2 font-semibold">Actions</th>
-                                  <th className="px-3 py-2 font-semibold">Resource</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-[var(--border-subtle)]">
-                                {objectPolicies.map((row, i) => (
-                                  <tr key={i}>
-                                    <td className="px-3 py-2 font-mono">
-                                      {String((row as { bucket_name?: string }).bucket_name ?? '—')}
-                                    </td>
-                                    <td className="px-3 py-2">{String((row as { effect?: string }).effect ?? '—')}</td>
-                                    <td className="px-3 py-2 max-w-[200px] truncate" title={String((row as { actions?: string }).actions ?? '')}>
-                                      {String((row as { actions?: string }).actions ?? '—')}
-                                    </td>
-                                    <td className="px-3 py-2 font-mono text-[var(--text-muted)]">
-                                      {String((row as { resource?: string }).resource ?? '*')}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </section>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+      <main className="storage-main">
+        <div className="storage-top">
+          <h2>{nav[0].toUpperCase() + nav.slice(1)}</h2>
+          <div className="storage-quality">
+            <DataQuality data={nav === 'analytics' ? analytics : nav === 'vectors' ? vectors : nav === 'activity' ? activity : buckets} />
+            <button className="storage-btn" onClick={refresh}><RefreshCw size={13} className={loading ? 'animate-spin' : ''} />Refresh</button>
           </div>
+        </div>
+
+        {nav === 'files' && (
+          <>
+            <div className="storage-top">
+              <select className="storage-field" value={selectedBucket} onChange={(e) => setSelectedBucket(e.target.value)}>
+                <option value="">All buckets</option>
+                {bucketRows.map((b: Row) => <option key={b.storage_name || b.bucket_name} value={b.storage_name || b.bucket_name}>{b.storage_name || b.bucket_name}</option>)}
+              </select>
+            </div>
+            <div className="storage-grid">
+              <Stat label="Total Objects" value={n(buckets?.total_objects).toLocaleString()} />
+              <Stat label="Total Size" value={mb(buckets?.total_mb)} />
+              <Stat label="Buckets" value={bucketRows.length} />
+              <Stat label="Last Inventoried" value={short(buckets?.last_synced_at)} />
+            </div>
+            {!!buckets?.missing_registry_rows?.length && <div className="storage-banner">{buckets.missing_registry_rows.length} live bindings are missing project_storage registry rows.</div>}
+            <div className="storage-card"><table className="storage-table"><thead><tr><th>Name</th><th>Type</th><th>Objects</th><th>Size</th><th>Status</th><th>Cleanup</th><th>Owner</th><th>Last Inventoried</th><th>Live</th><th>Actions</th></tr></thead><tbody>{bucketRows.filter((b: Row) => !selectedBucket || (b.storage_name || b.bucket_name) === selectedBucket).map((b: Row) => <tr key={b.storage_name || b.bucket_name}><td>{b.storage_name || b.bucket_name}</td><td>{b.storage_type || 'r2_bucket'}</td><td>{n(b.object_count).toLocaleString()}</td><td>{mb(b.total_mb)}</td><td><Badge tone={b.status === 'active' ? 'ok' : 'muted'}>{b.status || 'active'}</Badge></td><td><Badge tone={b.cleanup_status === 'reviewed' ? 'ok' : b.cleanup_status === 'archived' ? 'muted' : 'warn'}>{b.cleanup_status || 'unreviewed'}</Badge></td><td>{b.owner || 'n/a'}</td><td>{short(b.last_inventoried_at)}</td><td><Dot ok={!!b.is_live_connected} /></td><td>{b.registry_status || 'registered'}</td></tr>)}</tbody></table></div>
+          </>
         )}
 
         {nav === 'analytics' && (
-          <div className="flex-1 overflow-auto p-4 md:p-6">
-            <h2 className="text-[14px] font-semibold text-[var(--text-heading)] mb-4 flex items-center gap-2">
-              <BarChart3 size={16} />
-              Analytics
-            </h2>
-            {analyticsLoading ? (
-              <div className="flex items-center gap-2 text-[var(--text-muted)]">
-                <Loader2 size={16} className="animate-spin" />
-                Loading analytics…
-              </div>
-            ) : !analytics || Object.keys(analytics).length === 0 ? (
-              <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-10 text-[13px] text-[var(--text-muted)] max-w-xl">
-                No analytics data yet. Connect <code className="text-[var(--text-main)]">GET /api/storage/analytics</code> or check back after traffic is recorded.
-              </div>
-            ) : (
-              <StorageAnalyticsCharts analytics={analytics} />
-            )}
-          </div>
+          <>
+            <div className="storage-grid">
+              <Stat label="Total Objects" value={n(analytics?.storage_inventory?.total_objects).toLocaleString()} />
+              <Stat label="Total Storage" value={mb(analytics?.storage_inventory?.total_mb)} />
+              <Stat label="Unresolved Errors" value={analytics?.recent_errors?.length || 0} />
+              <Stat label="Requests Today" value={(analytics?.request_trends || []).reduce((s: number, r: Row) => s + n(r.total_requests), 0).toLocaleString()} />
+            </div>
+            <div className="storage-half">
+              <div className="storage-card storage-pad"><div className="storage-chart"><ResponsiveContainer><BarChart data={analytics?.storage_inventory?.storage_by_bucket || []}><XAxis dataKey="bucket_name" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><Tip /><Bar dataKey="total_mb" fill="var(--solar-cyan)" /></BarChart></ResponsiveContainer></div></div>
+              <div className="storage-card storage-pad"><div className="storage-chart"><ResponsiveContainer><PieChart><Pie data={contentTypes} dataKey="value" nameKey="name" innerRadius={58} outerRadius={90}>{contentTypes.map((_r, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tip /></PieChart></ResponsiveContainer></div></div>
+            </div>
+            <div className="storage-card storage-pad" style={{ marginBottom: 14 }}><div className="storage-chart"><ResponsiveContainer><AreaChart data={analytics?.request_trends || []}><CartesianGrid stroke="var(--border-subtle)" vertical={false} /><XAxis dataKey="hour" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><Tip /><Area dataKey="total_requests" stroke="var(--solar-green)" fill="var(--solar-green)" fillOpacity={0.16} /><Area dataKey="failed_requests" stroke="var(--solar-red)" fill="var(--solar-red)" fillOpacity={0.22} /></AreaChart></ResponsiveContainer></div></div>
+            <div className="storage-card" style={{ marginBottom: 14 }}><table className="storage-table"><thead><tr><th>Timestamp</th><th>Worker</th><th>Path</th><th>Method</th><th>Status</th><th>Error</th><th>Resolved</th><th>Action</th></tr></thead><tbody>{(analytics?.recent_errors || []).map((e: Row) => <tr key={e.event_id}><td>{short(e.timestamp)}</td><td>{e.worker_name}</td><td>{e.path}</td><td>{e.method}</td><td>{e.status_code}</td><td>{String(e.error_message || '').slice(0, 120)}</td><td><Badge tone={e.resolved ? 'muted' : 'bad'}>{e.resolved ? 'yes' : 'no'}</Badge></td><td>{!e.resolved && <button className="storage-btn" onClick={() => markResolved(e.event_id)}>Mark Resolved</button>}</td></tr>)}</tbody></table></div>
+            <div className="storage-card storage-pad"><div className="storage-chart"><ResponsiveContainer><LineChart data={analytics?.workspace_usage || []}><XAxis dataKey="metric_date" tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} /><Tip /><Line dataKey="storage_used_mb" stroke="var(--solar-cyan)" dot={false} /><Line dataKey="mcp_calls" stroke="var(--solar-violet)" dot={false} /><Line dataKey="deployments_count" stroke="var(--solar-green)" dot={false} /></LineChart></ResponsiveContainer></div></div>
+          </>
         )}
 
         {nav === 'vectors' && (
-          <div className="flex-1 overflow-auto p-4 md:p-6 space-y-6">
-            <h2 className="text-[14px] font-semibold text-[var(--text-heading)] flex items-center gap-2">
-              <Boxes size={16} />
-              Vectorize & AutoRAG
-            </h2>
-            <div className="grid gap-3 md:grid-cols-2 max-w-3xl">
-              <div className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">VECTORIZE</p>
-                <p className="text-[12px] text-[var(--text-muted)]">
-                  Index bindings are provisioned per workspace. Values load from <code className="text-[var(--solar-cyan)]">/api/storage/vectors</code>.
-                </p>
-              </div>
-              <div className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)]">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">AUTORAG_BUCKET</p>
-                <p className="text-[12px] text-[var(--text-muted)]">
-                  RAG object prefix is never hardcoded in the UI; the API returns your tenant bucket binding.
-                </p>
-              </div>
+          <>
+            <div className="storage-grid">
+              <Stat label="Stored Vectors" value={n(vectors?.total_stored_vectors).toLocaleString()} />
+              <Stat label="Indexed Docs" value={n(vectors?.total_indexed_docs).toLocaleString()} />
+              <Stat label="Queries 30d" value={n(vectors?.total_queries_30d).toLocaleString()} />
+              <Stat label="Indexes" value={(vectors?.indexes || []).length} />
             </div>
-            {vectorsLoading ? (
-              <div className="flex items-center gap-2 text-[var(--text-muted)]">
-                <Loader2 size={16} className="animate-spin" />
-                Loading vectors…
-              </div>
-            ) : vectors && Object.keys(vectors).length > 0 ? (
-              <pre className="text-[12px] font-mono p-4 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] overflow-auto max-w-4xl">
-                {JSON.stringify(vectors, null, 2)}
-              </pre>
-            ) : (
-              <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 text-[13px] text-[var(--text-muted)] max-w-xl">
-                No vector metadata returned. Deploy vector bindings and the vectors API for live status.
-              </div>
-            )}
-          </div>
+            <div className="storage-half">{(vectors?.indexes || []).map((idx: Row) => <div className="storage-card storage-pad" key={idx.id || idx.binding_name} onClick={() => setSelectedIndex(idx.id)}><div className="storage-top"><strong>{idx.display_name || idx.index_name || idx.binding_name}</strong><span><Dot ok={!!idx.is_live_connected} /> {idx.is_preferred ? <Badge tone="ok">preferred</Badge> : null}</span></div><p className="storage-muted">{idx.binding_name} / {idx.source_type} / {idx.source_r2_bucket}</p><div className="storage-grid" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}><Stat label="Vectors" value={n(idx.stored_vectors).toLocaleString()} /><Stat label="Docs" value={n(idx.doc_count).toLocaleString()} /><Stat label="Stale" value={n(idx.stale_doc_count).toLocaleString()} /></div><p className="storage-muted">{idx.description}</p></div>)}</div>
+            {selectedVector?.stale_doc_count > 0 && <div className="storage-banner">{selectedVector.stale_doc_count} stale chunks detected. Re-index recommended. <button className="storage-btn">Re-index</button></div>}
+            <div className="storage-card"><table className="storage-table"><thead><tr><th>R2 Key</th><th>Preview</th><th>Chunk</th><th>Tokens</th><th>Indexed</th><th>Current</th></tr></thead><tbody>{(selectedVector?.recent_docs || []).map((d: Row, i: number) => <tr key={i}><td>{d.source_r2_key}</td><td>{String(d.content_preview || '').slice(0, 80)}</td><td>{d.chunk_index}</td><td>{d.token_count}</td><td>{short(d.indexed_at)}</td><td><Badge tone={d.is_current ? 'ok' : 'warn'}>{d.is_current ? 'current' : 'stale'}</Badge></td></tr>)}</tbody></table></div>
+          </>
+        )}
+
+        {nav === 'cleanup' && (
+          <>
+            <div className="storage-grid"><Stat label="Unreviewed" value={n(cleanup.unreviewed)} /><Stat label="Reviewed" value={n(cleanup.reviewed)} /><Stat label="Archived" value={n(cleanup.archived)} /><Stat label="Buckets" value={bucketRows.length} /></div>
+            <div className="storage-card"><table className="storage-table"><thead><tr><th>Bucket</th><th>Objects</th><th>Size</th><th>Project</th><th>Owner</th><th>Last Inventoried</th><th>Actions</th></tr></thead><tbody>{bucketRows.filter((b: Row) => (b.cleanup_status || 'unreviewed') === 'unreviewed').map((b: Row) => <tr key={b.bucket_name || b.storage_name}><td>{b.bucket_name || b.storage_name}</td><td>{n(b.object_count).toLocaleString()}</td><td>{mb(b.total_mb)}</td><td>{b.project_ref}</td><td>{b.owner}</td><td>{short(b.last_inventoried_at)}</td><td><div className="storage-row-actions"><button className="storage-btn" onClick={() => markCleanup(b.bucket_name || b.storage_name, 'reviewed')}>Mark Reviewed</button><button className="storage-btn" onClick={() => markCleanup(b.bucket_name || b.storage_name, 'archived')}>Archive</button></div></td></tr>)}</tbody></table></div>
+          </>
+        )}
+
+        {nav === 'activity' && (
+          <>
+            <div className="storage-top"><input className="storage-field" placeholder="worker_name" value={filters.worker_name} onChange={(e) => setFilters({ ...filters, worker_name: e.target.value })} /><input className="storage-field" placeholder="outcome" value={filters.outcome} onChange={(e) => setFilters({ ...filters, outcome: e.target.value })} /><input className="storage-field" type="date" value={filters.start} onChange={(e) => setFilters({ ...filters, start: e.target.value })} /><input className="storage-field" type="date" value={filters.end} onChange={(e) => setFilters({ ...filters, end: e.target.value })} /><button className="storage-btn" onClick={loadActivity}>Apply</button></div>
+            <div className="storage-card"><table className="storage-table"><thead><tr><th>Timestamp</th><th>Worker</th><th>Method</th><th>URL</th><th>Status</th><th>Duration</th><th>Outcome</th></tr></thead><tbody>{(activity?.events || []).map((e: Row) => <tr key={e.id || e.event_id}><td>{short(e.timestamp)}</td><td>{e.worker_name}</td><td>{e.method}</td><td>{String(e.url || '').slice(0, 70)}</td><td>{e.status}</td><td>{n(e.duration_ms)}ms</td><td><Badge tone={e.outcome === 'ok' ? 'ok' : e.outcome === 'exception' ? 'warn' : 'bad'}>{e.outcome || 'unknown'}</Badge></td></tr>)}</tbody></table></div>
+          </>
+        )}
+
+        {nav === 'policies' && (
+          <div className="storage-card"><table className="storage-table"><thead><tr><th>Bucket</th><th>Resource</th><th>Effect</th><th>Actions</th><th>Storage Status</th><th>Updated</th></tr></thead><tbody>{(policies?.policies || []).map((p: Row) => <tr key={p.id}><td>{p.bucket_name}</td><td>{p.resource}</td><td><Badge tone={p.effect === 'allow' ? 'ok' : 'bad'}>{p.effect}</Badge></td><td>{p.actions}</td><td>{p.storage_status || 'n/a'}</td><td>{short(p.updated_at || p.created_at)}</td></tr>)}</tbody></table></div>
         )}
 
         {nav === 's3' && (
-          <div className="flex-1 overflow-auto p-4 md:p-6 space-y-8">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h2 className="text-[14px] font-semibold text-[var(--text-heading)] flex items-center gap-2">
-                <Database size={16} />
-                S3-compatible API
-              </h2>
-              <button
-                type="button"
-                onClick={() => void loadS3()}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
-              >
-                <RefreshCw size={14} />
-                Refresh
-              </button>
-            </div>
-
-            {s3Loading ? (
-              <div className="flex items-center gap-2 text-[var(--text-muted)]">
-                <Loader2 size={16} className="animate-spin" />
-                Loading S3 configuration…
-              </div>
-            ) : (
-              <>
-                <div className="grid gap-4 md:grid-cols-2 max-w-4xl">
-                  <div className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] space-y-2">
-                    <p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Endpoint</p>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-[11px] font-mono truncate text-[var(--solar-cyan)]">{s3Endpoint || '—'}</code>
-                      {s3Endpoint && (
-                        <button
-                          type="button"
-                          title="Copy"
-                          onClick={() => copyText(s3Endpoint)}
-                          className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
-                        >
-                          <Copy size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] space-y-2">
-                    <p className="text-[10px] font-bold uppercase text-[var(--text-muted)]">Region</p>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 text-[11px] font-mono text-[var(--text-main)]">{s3Region || 'auto'}</code>
-                      {s3Region && (
-                        <button
-                          type="button"
-                          onClick={() => copyText(s3Region)}
-                          className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
-                        >
-                          <Copy size={14} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="max-w-4xl">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-[12px] font-semibold uppercase tracking-wide text-[var(--text-muted)] flex items-center gap-2">
-                      <KeyRound size={14} />
-                      Access keys
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => void createAccessKey()}
-                      disabled={creatingKey}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg-hover)] border border-[var(--border-subtle)] text-[11px] font-semibold hover:border-[var(--solar-cyan)] disabled:opacity-50"
-                    >
-                      <Plus size={14} />
-                      New access key
-                    </button>
-                  </div>
-
-                  {newKeySecret && (
-                    <div className="mb-4 p-4 rounded-xl border border-[var(--solar-yellow)]/40 bg-[var(--solar-yellow)]/10 flex gap-3">
-                      <AlertCircle className="shrink-0 text-[var(--solar-yellow)]" size={18} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[12px] font-semibold text-[var(--text-heading)] mb-1">Secret (shown once)</p>
-                        <p className="text-[11px] font-mono break-all text-[var(--text-main)] mb-2">{newKeySecret}</p>
-                        <button
-                          type="button"
-                          onClick={() => copyText(newKeySecret)}
-                          className="text-[11px] text-[var(--solar-cyan)] font-semibold"
-                        >
-                          Copy to clipboard
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {accessKeys.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 text-[12px] text-[var(--text-muted)]">
-                      No access keys. Create one to receive an access key id; the secret appears only at creation time.
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
-                      <table className="w-full text-[12px]">
-                        <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left uppercase tracking-wider">
-                          <tr>
-                            <th className="px-4 py-2 font-semibold">Key ID</th>
-                            <th className="px-4 py-2 font-semibold">Created</th>
-                            <th className="px-4 py-2 font-semibold">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--border-subtle)]">
-                          {accessKeys.map((row, i) => (
-                            <tr key={i}>
-                              <td className="px-4 py-2 font-mono">
-                                {String(row.accessKeyId ?? row.id ?? row.key_id ?? '—')}
-                              </td>
-                              <td className="px-4 py-2 text-[var(--text-muted)]">
-                                {String(row.created_at ?? row.createdAt ?? row.created ?? '—')}
-                              </td>
-                              <td className="px-4 py-2">{String(row.status ?? 'active')}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                <div className="max-w-4xl p-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] flex gap-3">
-                  <Server className="shrink-0 text-[var(--solar-violet)]" size={20} />
-                  <div>
-                    <p className="text-[12px] font-semibold text-[var(--text-heading)] mb-1">Hyperdrive</p>
-                    <p className="text-[12px] text-[var(--text-muted)] leading-relaxed">
-                      {hyperdriveSnippet ||
-                        'Hyperdrive connection strings for Postgres or regional buckets appear here when returned by the Worker (e.g. HYPERDRIVE binding).'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="max-w-4xl space-y-3 pt-6 border-t border-[var(--border-subtle)]">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <h3 className="text-[12px] font-semibold uppercase tracking-wide text-[var(--text-muted)] flex items-center gap-2">
-                      <History size={14} />
-                      Audit log
-                    </h3>
-                    <button
-                      type="button"
-                      onClick={() => void loadWorkspaceAudit()}
-                      className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
-                    >
-                      <RefreshCw size={14} />
-                      Refresh
-                    </button>
-                  </div>
-                  {auditLoading ? (
-                    <div className="flex items-center gap-2 text-[var(--text-muted)] text-[13px]">
-                      <Loader2 size={16} className="animate-spin" />
-                      Loading audit…
-                    </div>
-                  ) : auditRows.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-panel)] p-8 text-[12px] text-[var(--text-muted)]">
-                      No audit events yet.
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-[var(--border-subtle)] overflow-hidden bg-[var(--bg-panel)]">
-                      <table className="w-full text-[11px]">
-                        <thead className="bg-[var(--bg-hover)] text-[var(--text-muted)] text-left uppercase tracking-wider">
-                          <tr>
-                            <th className="px-3 py-2 font-semibold">Time</th>
-                            <th className="px-3 py-2 font-semibold">Actor</th>
-                            <th className="px-3 py-2 font-semibold">Action</th>
-                            <th className="px-3 py-2 font-semibold">Entity</th>
-                            <th className="px-3 py-2 font-semibold">Severity</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--border-subtle)]">
-                          {auditRows.map((row, i) => {
-                            const sev = String(row.severity ?? 'info').toLowerCase();
-                            const sevClass =
-                              sev === 'error'
-                                ? 'text-red-400'
-                                : sev === 'warn' || sev === 'warning'
-                                  ? 'text-amber-400'
-                                  : 'text-[var(--text-muted)]';
-                            const ts = row.created_at;
-                            const timeLabel =
-                              ts == null
-                                ? '—'
-                                : typeof ts === 'number'
-                                  ? new Date(ts < 1e12 ? ts * 1000 : ts).toLocaleString()
-                                  : String(ts);
-                            const actor =
-                              (row.actor_email as string) ||
-                              (row.actor_id as string) ||
-                              '—';
-                            const entity = `${String(row.entity_type ?? '')} ${String(row.entity_id ?? '')}`.trim() || '—';
-                            return (
-                              <tr key={String(row.id ?? i)} className="hover:bg-[var(--bg-hover)]/80">
-                                <td className="px-3 py-2 font-mono text-[var(--text-muted)] whitespace-nowrap">
-                                  {timeLabel}
-                                </td>
-                                <td className="px-3 py-2 max-w-[140px] truncate" title={actor}>
-                                  {actor}
-                                </td>
-                                <td className="px-3 py-2">{String(row.action ?? '—')}</td>
-                                <td className="px-3 py-2 max-w-[180px] truncate" title={entity}>
-                                  {entity}
-                                </td>
-                                <td className={`px-3 py-2 font-medium ${sevClass}`}>{sev}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+          <>
+            <div className="storage-grid"><Stat label="Endpoint" value={<span style={{ fontSize: 12 }}>{s3?.endpoint || 'n/a'}</span>} /><Stat label="Region" value={s3?.region || 'auto'} /><Stat label="Access Keys" value={(s3?.accessKeys || s3?.keys || []).length} /><Stat label="Buckets" value={(s3?.source_buckets || []).length} /></div>
+            <div className="storage-card storage-pad" style={{ marginBottom: 14 }}><label className="storage-muted">Source bucket</label><br /><select className="storage-field">{(s3?.source_buckets || bucketRows).map((b: Row) => <option key={b.storage_name || b.bucket_name}>{b.storage_name || b.bucket_name}</option>)}</select><p className="storage-muted">Allowed buckets: {s3?.allowed_buckets_json || '[]'}</p></div>
+            <div className="storage-card"><table className="storage-table"><thead><tr><th>Access Key</th><th>Created</th><th>Status</th></tr></thead><tbody>{(s3?.accessKeys || s3?.keys || []).map((k: Row) => <tr key={k.id || k.accessKeyId}><td>{k.accessKeyId || k.id}</td><td>{short(k.created_at || k.createdAt)}</td><td>{k.status}</td></tr>)}</tbody></table></div>
+          </>
         )}
-      </div>
+
+        {loading && <div className="storage-muted" style={{ marginTop: 12 }}><Loader2 size={14} className="animate-spin" /> Loading</div>}
+      </main>
     </div>
   );
 };

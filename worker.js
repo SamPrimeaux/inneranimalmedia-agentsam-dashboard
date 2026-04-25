@@ -4591,16 +4591,269 @@ const worker = {
       }
       // ── END /api/env/* ──────────────────────────────────────────
 
+      // /api/workspace/settings — active workspace theme payload for dashboard pages.
+      if (pathLower === '/api/workspace/settings' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const workspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
+        let settings = null;
+        let theme = null;
+        try {
+          settings = await env.DB.prepare('SELECT * FROM workspace_settings WHERE workspace_id = ? LIMIT 1').bind(workspaceId).first();
+        } catch (_) { }
+        const themeId = settings?.theme_id || settings?.theme || null;
+        try {
+          if (themeId) {
+            theme = await env.DB.prepare(
+              `SELECT id, name, slug, monaco_theme, monaco_bg, config
+               FROM cms_themes
+               WHERE id = ? OR slug = ?
+               ORDER BY CASE WHEN workspace_id = ? THEN 0 ELSE 1 END
+               LIMIT 1`
+            ).bind(themeId, themeId, workspaceId).first();
+          }
+          if (!theme) {
+            theme = await env.DB.prepare(
+              `SELECT id, name, slug, monaco_theme, monaco_bg, config
+               FROM cms_themes
+               WHERE COALESCE(is_system, 0) = 1
+               ORDER BY sort_order ASC, name ASC
+               LIMIT 1`
+            ).first();
+          }
+        } catch (e) {
+          console.warn('[api/workspace/settings theme]', e?.message ?? e);
+        }
+        const cfg = parseCmsThemeConfig(theme?.config);
+        return jsonResponse({
+          workspace_id: workspaceId,
+          settings,
+          theme: theme ? { ...theme, config: cfg } : null,
+          variables: mergeAgentDashboardIdeTokens(themeConfigToVariables(cfg), cfg),
+        });
+      }
+
+      // GET /api/d1/tables — table names, row counts, and CREATE sql cached briefly in KV.
+      if (pathLower === '/api/d1/tables' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ tables: [] }, 200);
+        const cacheKey = 'database:d1:tables:v1';
+        try {
+          const cached = await env.KV?.get(cacheKey, 'json');
+          if (cached?.tables) return jsonResponse(cached);
+        } catch (_) { }
+        try {
+          const tq = await env.DB.prepare(
+            `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+          ).all();
+          const tables = [];
+          for (const row of tq.results || []) {
+            const name = String(row.name || '').trim();
+            if (!name) continue;
+            let row_count = null;
+            try {
+              const countRow = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${iamD1QuoteIdent(name)}`).first();
+              row_count = Number(countRow?.count ?? 0);
+            } catch (_) { }
+            tables.push({ name, row_count, sql: row.sql || null });
+          }
+          const payload = { tables };
+          try { await env.KV?.put(cacheKey, JSON.stringify(payload), { expirationTtl: 30 }); } catch (_) { }
+          return jsonResponse(payload);
+        } catch (e) {
+          return jsonResponse({ tables: [], error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1TableRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/(schema|data|indexes)$/);
+      if (d1TableRoute && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1TableRoute[1]);
+        const action = d1TableRoute[2];
+        const qtable = iamD1QuoteIdent(table);
+        try {
+          if (action === 'schema') {
+            const [columns, indexList, foreignKeys] = await Promise.all([
+              env.DB.prepare(`PRAGMA table_info(${qtable})`).all(),
+              env.DB.prepare(`PRAGMA index_list(${qtable})`).all(),
+              env.DB.prepare(`PRAGMA foreign_key_list(${qtable})`).all(),
+            ]);
+            const indexNames = (indexList.results || []).map((r) => String(r.name || '')).filter(Boolean);
+            const indexes = [];
+            for (const name of indexNames) {
+              const row = await env.DB.prepare(
+                `SELECT name, sql FROM sqlite_master WHERE type='index' AND name = ? LIMIT 1`
+              ).bind(name).first();
+              indexes.push({ name, sql: row?.sql || null });
+            }
+            return jsonResponse({ columns: columns.results || [], indexes, foreign_keys: foreignKeys.results || [] });
+          }
+          if (action === 'indexes') {
+            const indexes = await env.DB.prepare(
+              `SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? ORDER BY name`
+            ).bind(table).all();
+            return jsonResponse({ indexes: indexes.results || [] });
+          }
+          const pageNum = Math.max(1, Number(url.searchParams.get('page') || '1'));
+          const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || '50')));
+          const sort = String(url.searchParams.get('sort') || '').trim();
+          const dir = String(url.searchParams.get('dir') || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+          const filters = iamParseDatabaseFilters(url.searchParams.get('filter'));
+          const built = iamBuildD1FilterWhere(filters);
+          const order = sort ? ` ORDER BY ${iamD1QuoteIdent(sort)} ${dir}` : '';
+          const offset = (pageNum - 1) * limit;
+          const countRow = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${qtable}${built.where}`).bind(...built.values).first();
+          const rows = await env.DB.prepare(`SELECT * FROM ${qtable}${built.where}${order} LIMIT ? OFFSET ?`).bind(...built.values, limit, offset).all();
+          const total = Number(countRow?.count ?? 0);
+          return jsonResponse({
+            rows: rows.results || [],
+            total_count: total,
+            columns: rows.results?.[0] ? Object.keys(rows.results[0]) : [],
+            page: pageNum,
+            total_pages: Math.max(1, Math.ceil(total / limit)),
+          });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1RowRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/row$/);
+      if (d1RowRoute && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1RowRoute[1]);
+        const body = await request.json().catch(() => ({}));
+        const columns = body?.columns && typeof body.columns === 'object' ? body.columns : {};
+        const names = Object.keys(columns);
+        try {
+          const sql = names.length
+            ? `INSERT INTO ${iamD1QuoteIdent(table)} (${names.map(iamD1QuoteIdent).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`
+            : `INSERT INTO ${iamD1QuoteIdent(table)} DEFAULT VALUES`;
+          const run = await env.DB.prepare(sql).bind(...names.map((n) => columns[n])).run();
+          return jsonResponse({ success: true, id: run.meta?.last_row_id ?? null, row: columns });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+      if (d1RowRoute && (request.method || 'GET').toUpperCase() === 'PATCH') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1RowRoute[1]);
+        const body = await request.json().catch(() => ({}));
+        const updates = body?.updates && typeof body.updates === 'object' ? body.updates : {};
+        const names = Object.keys(updates);
+        if (!body.pk_col || !names.length) return jsonResponse({ error: 'pk_col and updates required' }, 400);
+        try {
+          await env.DB.prepare(
+            `UPDATE ${iamD1QuoteIdent(table)} SET ${names.map((n) => `${iamD1QuoteIdent(n)} = ?`).join(', ')} WHERE ${iamD1QuoteIdent(body.pk_col)} = ?`
+          ).bind(...names.map((n) => updates[n]), body.pk_val).run();
+          const row = await env.DB.prepare(`SELECT * FROM ${iamD1QuoteIdent(table)} WHERE ${iamD1QuoteIdent(body.pk_col)} = ? LIMIT 1`).bind(body.pk_val).first();
+          return jsonResponse({ success: true, row });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1RowsRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/rows$/);
+      if (d1RowsRoute && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const body = await request.json().catch(() => ({}));
+        if (body.confirm !== true) return jsonResponse({ error: 'confirm=true required' }, 400);
+        const table = decodeURIComponent(d1RowsRoute[1]);
+        const vals = Array.isArray(body.pk_vals) ? body.pk_vals : [];
+        if (!body.pk_col || !vals.length) return jsonResponse({ error: 'pk_col and pk_vals required' }, 400);
+        try {
+          const sql = `DELETE FROM ${iamD1QuoteIdent(table)} WHERE ${iamD1QuoteIdent(body.pk_col)} IN (${vals.map(() => '?').join(', ')})`;
+          const run = await env.DB.prepare(sql).bind(...vals).run();
+          return jsonResponse({ deleted: run.meta?.changes ?? vals.length });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      // Platform health panels for the database page.
+      if (pathLower === '/api/platform/kv-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const bindings = ['KV', 'SESSION_CACHE'].filter((b) => !!env[b]);
+        const namespaces = [];
+        for (const binding of bindings) {
+          let estimated_keys = null;
+          try {
+            const listed = await env[binding].list({ limit: 1 });
+            estimated_keys = listed?.keys?.length ?? null;
+          } catch (_) { }
+          namespaces.push({ binding, name: binding, estimated_keys, status: 'ok' });
+        }
+        return jsonResponse({ namespaces });
+      }
+      if (pathLower === '/api/platform/kv/flush' && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser?.is_superadmin) return jsonResponse({ error: 'superadmin required' }, 403);
+        const body = await request.json().catch(() => ({}));
+        if (body.namespace !== 'SESSION_CACHE') return jsonResponse({ error: 'only SESSION_CACHE flush is supported' }, 400);
+        let deleted = 0;
+        try {
+          let cursor;
+          do {
+            const list = await env.SESSION_CACHE.list({ limit: 1000, cursor });
+            cursor = list.cursor;
+            for (const key of list.keys || []) {
+              await env.SESSION_CACHE.delete(key.name);
+              deleted++;
+            }
+          } while (cursor);
+          return jsonResponse({ ok: true, deleted });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e), deleted }, 500);
+        }
+      }
+      if (pathLower === '/api/platform/d1-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const tq = await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all();
+          let totalRows = 0;
+          for (const r of tq.results || []) {
+            try {
+              const c = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${iamD1QuoteIdent(r.name)}`).first();
+              totalRows += Number(c?.count || 0);
+            } catch (_) { }
+          }
+          return jsonResponse({
+            tables_count: tq.results?.length || 0,
+            total_rows: totalRows,
+            last_migration: null,
+            storage_used: null,
+            studio_url: 'https://dash.cloudflare.com/ede6590ac0d2fb7daf155b35653457b2/workers/d1/databases/cf87b717-d4e2-4cf8-bab0-a81268e32d49',
+          });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
       // /api/d1/query — D1 SQL runner (auth required). Dashboard CRUD: allow DML/DDL; block only cluster-level DROP DATABASE patterns.
       if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
-          const { sql } = await request.json();
+          const { sql, params } = await request.json();
           if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
           if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
             return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
+          }
+          if (iamSqlStatementKind(sql) === 'ddl' && !authUser.is_superadmin) {
+            return jsonResponse({ error: 'superadmin required for DDL statements' }, 403);
           }
           const trimmed = sql.trim();
           const upper = trimmed.toUpperCase();
@@ -4609,36 +4862,38 @@ const worker = {
             upper.startsWith('PRAGMA') ||
             upper.startsWith('WITH') ||
             upper.startsWith('EXPLAIN');
+          const bindings = Array.isArray(params) ? params : [];
           if (isRead) {
             const _t0 = Date.now();
-            const { results, success, meta } = await env.DB.prepare(sql).all();
+            const { results, success, meta } = await env.DB.prepare(sql).bind(...bindings).all();
             const executionMs = Date.now() - _t0;
-            return jsonResponse({ results: results || [], success, meta, executionMs });
+            return jsonResponse({ rows: results || [], results: results || [], success, meta: { ...(meta || {}), duration_ms: executionMs }, executionMs });
           }
           const _t1 = Date.now();
-          const run = await env.DB.prepare(sql).run();
+          const run = await env.DB.prepare(sql).bind(...bindings).run();
           const executionMs = Date.now() - _t1;
-          return jsonResponse({ results: [], success: true, meta: run.meta, executionMs });
+          return jsonResponse({ rows: [], results: [], success: true, meta: { ...(run.meta || {}), duration_ms: executionMs }, executionMs });
         } catch (e) {
           return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
         }
       }
 
-      // /api/hyperdrive/status — Hyperdrive binding + Postgres connectivity (no auth; same-origin only useful with session)
-      if (pathLower === '/api/hyperdrive/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+      // /api/hyperdrive/status|health — Hyperdrive binding + Postgres connectivity.
+      if ((pathLower === '/api/hyperdrive/status' || pathLower === '/api/hyperdrive/health') && (request.method || 'GET').toUpperCase() === 'GET') {
         if (!env.HYPERDRIVE?.connectionString) {
           return jsonResponse({ ok: false, error: 'hyperdrive not configured' }, 503);
         }
         try {
           const { Client } = await import('pg');
           const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+          const _t0 = Date.now();
           await client.connect();
           try {
             await client.query('SELECT 1 AS ok');
           } finally {
             await client.end().catch(() => { });
           }
-          return jsonResponse({ ok: true });
+          return jsonResponse({ ok: true, latency_ms: Date.now() - _t0, active_connections: null });
         } catch (e) {
           return jsonResponse({ ok: false, error: e?.message || String(e) }, 503);
         }
@@ -4655,11 +4910,23 @@ const worker = {
           await client.connect();
           try {
             const res = await client.query(
-              `SELECT table_name AS tablename FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_type IN ('BASE TABLE', 'VIEW')
-             ORDER BY table_name`
+              `SELECT t.table_name, t.table_schema,
+                      COALESCE(s.n_live_tup, 0)::bigint AS row_count
+                 FROM information_schema.tables t
+                 LEFT JOIN pg_stat_user_tables s
+                   ON s.schemaname = t.table_schema AND s.relname = t.table_name
+                WHERE t.table_schema = 'public'
+                  AND t.table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY t.table_name`
             );
-            const tables = (res.rows || []).map((r) => String(r.tablename || '').trim()).filter(Boolean);
+            const tables = (res.rows || [])
+              .map((r) => ({
+                name: String(r.table_name || '').trim(),
+                table_name: String(r.table_name || '').trim(),
+                table_schema: r.table_schema || 'public',
+                row_count: Number(r.row_count || 0),
+              }))
+              .filter((r) => r.name);
             return jsonResponse({ tables });
           } finally {
             await client.end().catch(() => { });
@@ -4670,28 +4937,124 @@ const worker = {
         }
       }
 
+      const hyperdriveTableRoute = url.pathname.match(/^\/api\/hyperdrive\/table\/([^/]+)\/(schema|data)$/);
+      if (hyperdriveTableRoute && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ error: 'hyperdrive not configured' }, 503);
+        const table = decodeURIComponent(hyperdriveTableRoute[1]);
+        const action = hyperdriveTableRoute[2];
+        try {
+          const { Client } = await import('pg');
+          const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+          await client.connect();
+          try {
+            if (action === 'schema') {
+              const cols = await client.query(
+                `SELECT c.ordinal_position - 1 AS cid,
+                        c.column_name AS name,
+                        c.data_type AS type,
+                        CASE WHEN c.is_nullable = 'NO' THEN 1 ELSE 0 END AS notnull,
+                        c.column_default AS dflt_value,
+                        CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END AS pk
+                   FROM information_schema.columns c
+                   LEFT JOIN (
+                     SELECT kcu.column_name
+                       FROM information_schema.table_constraints tc
+                       JOIN information_schema.key_column_usage kcu
+                         ON kcu.constraint_name = tc.constraint_name
+                        AND kcu.table_schema = tc.table_schema
+                      WHERE tc.table_schema = 'public'
+                        AND tc.table_name = $1
+                        AND tc.constraint_type = 'PRIMARY KEY'
+                   ) pk ON pk.column_name = c.column_name
+                  WHERE c.table_schema = 'public'
+                    AND c.table_name = $1
+                  ORDER BY c.ordinal_position`,
+                [table],
+              );
+              const idx = await client.query(
+                `SELECT indexname AS name, indexdef AS sql
+                   FROM pg_indexes
+                  WHERE schemaname = 'public' AND tablename = $1
+                  ORDER BY indexname`,
+                [table],
+              );
+              const fk = await client.query(
+                `SELECT kcu.column_name AS source_column,
+                        ccu.table_name AS target_table,
+                        ccu.column_name AS target_column,
+                        'outbound' AS direction
+                   FROM information_schema.table_constraints tc
+                   JOIN information_schema.key_column_usage kcu
+                     ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                   JOIN information_schema.constraint_column_usage ccu
+                     ON ccu.constraint_name = tc.constraint_name
+                    AND ccu.table_schema = tc.table_schema
+                  WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = 'public'
+                    AND tc.table_name = $1`,
+                [table],
+              );
+              return jsonResponse({ columns: cols.rows || [], indexes: idx.rows || [], foreign_keys: fk.rows || [] });
+            }
+            const pageNum = Math.max(1, Number(url.searchParams.get('page') || '1'));
+            const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || '50')));
+            const sort = String(url.searchParams.get('sort') || '').trim();
+            const dir = String(url.searchParams.get('dir') || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+            const filters = iamParseDatabaseFilters(url.searchParams.get('filter'));
+            const built = iamBuildPgFilterWhere(filters, 1);
+            const offsetParam = built.nextIndex;
+            const limitParam = built.nextIndex + 1;
+            const order = sort ? ` ORDER BY ${iamPgQuoteIdent(sort)} ${dir}` : '';
+            const count = await client.query(`SELECT COUNT(*)::int AS count FROM public.${iamPgQuoteIdent(table)}${built.where}`, built.values);
+            const rows = await client.query(
+              `SELECT * FROM public.${iamPgQuoteIdent(table)}${built.where}${order} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+              [...built.values, (pageNum - 1) * limit, limit],
+            );
+            const total = Number(count.rows?.[0]?.count || 0);
+            return jsonResponse({
+              rows: rows.rows || [],
+              total_count: total,
+              columns: rows.fields?.map((f) => f.name) || [],
+              page: pageNum,
+              total_pages: Math.max(1, Math.ceil(total / limit)),
+            });
+          } finally {
+            await client.end().catch(() => { });
+          }
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
       // POST /api/hyperdrive/query — Postgres via Hyperdrive (same response shape as POST /api/d1/query)
       if (pathLower === '/api/hyperdrive/query' && (request.method || 'GET').toUpperCase() === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
         if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ error: 'hyperdrive not configured' }, 503);
         try {
-          const { sql } = await request.json();
+          const { sql, params } = await request.json();
           if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
           if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
             return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
+          }
+          if (iamSqlStatementKind(sql) === 'ddl' && !authUser.is_superadmin) {
+            return jsonResponse({ error: 'superadmin required for DDL statements' }, 403);
           }
           const { Client } = await import('pg');
           const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
           await client.connect();
           try {
             const _t0 = Date.now();
-            const res = await client.query(sql);
+            const res = await client.query(sql, Array.isArray(params) ? params : []);
             const executionMs = Date.now() - _t0;
             return jsonResponse({
+              rows: res.rows || [],
               results: res.rows || [],
               success: true,
-              meta: { rows_read: res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
+              meta: { duration_ms: executionMs, rows_read: res.rowCount, rows_written: res.command === 'SELECT' ? 0 : res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
               executionMs,
             });
           } finally {
@@ -4699,6 +5062,127 @@ const worker = {
           }
         } catch (e) {
           return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
+        }
+      }
+
+      async function ensureUserConnectionsTable() {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS user_connections (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            connection_type TEXT NOT NULL CHECK(connection_type IN (
+              'supabase','postgres','mysql','sqlite','d1','planetscale','neon','turso'
+            )),
+            display_name TEXT NOT NULL,
+            host TEXT,
+            port INTEGER,
+            database_name TEXT,
+            username TEXT,
+            password_secret_ref TEXT,
+            ssl_mode TEXT DEFAULT 'require',
+            is_active INTEGER DEFAULT 1,
+            last_tested_at TEXT,
+            last_test_status TEXT CHECK(last_test_status IN ('ok','error','timeout',NULL)),
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(tenant_id, user_id, display_name)
+          )`
+        ).run();
+      }
+
+      if (pathLower === '/api/db/connections' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ connections: [] }, 200);
+        try {
+          await ensureUserConnectionsTable();
+          const tenant = authUser.tenant_id || env.TENANT_ID || 'tenant_inneranimalmedia';
+          const uid = String(authUser.id || authUser.email || '');
+          const rows = await env.DB.prepare(
+            `SELECT id, connection_type, display_name, host, port, database_name, username,
+                    ssl_mode, last_tested_at, last_test_status, metadata_json, created_at
+               FROM user_connections
+              WHERE tenant_id = ? AND user_id = ? AND is_active = 1
+              ORDER BY display_name`
+          ).bind(tenant, uid).all();
+          const permissions = authUser.permissions || {};
+          return jsonResponse({
+            connections: rows.results || [],
+            can_manage_mcp: Boolean(authUser.is_superadmin || permissions.can_manage_mcp || permissions.manage_mcp),
+          });
+        } catch (e) {
+          return jsonResponse({ connections: [], error: e?.message || String(e) }, 500);
+        }
+      }
+
+      if (pathLower === '/api/db/connections' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const permissions = authUser.permissions || {};
+        if (!(authUser.is_superadmin || permissions.can_manage_mcp || permissions.manage_mcp)) {
+          return jsonResponse({ error: 'can_manage_mcp required' }, 403);
+        }
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const id = `uc_${[...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+        const secretRef = `conn_${id}_secret`;
+        try {
+          await ensureUserConnectionsTable();
+          if (body.password && env.KV) {
+            await env.KV.put(secretRef, String(body.password));
+          }
+          const tenant = authUser.tenant_id || env.TENANT_ID || 'tenant_inneranimalmedia';
+          const uid = String(authUser.id || authUser.email || '');
+          await env.DB.prepare(
+            `INSERT INTO user_connections
+              (id, tenant_id, user_id, connection_type, display_name, host, port, database_name,
+               username, password_secret_ref, ssl_mode, last_test_status, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            id,
+            tenant,
+            uid,
+            String(body.connection_type || 'postgres'),
+            String(body.display_name || body.host || 'Connected database'),
+            body.host || null,
+            body.port != null && body.port !== '' ? Number(body.port) : null,
+            body.database_name || null,
+            body.username || null,
+            body.password ? secretRef : null,
+            body.ssl_mode || 'require',
+            'ok',
+            JSON.stringify(body.metadata_json || {}),
+          ).run();
+          return jsonResponse({ ok: true, id, password_secret_ref: body.password ? secretRef : null });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      if (pathLower === '/api/db/connections/test' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const started = Date.now();
+        try {
+          const { Client } = await import('pg');
+          const connectionString = body.connectionString || (
+            body.host
+              ? `postgres://${encodeURIComponent(body.username || '')}:${encodeURIComponent(body.password || '')}@${body.host}:${body.port || 5432}/${body.database_name || 'postgres'}?sslmode=${body.ssl_mode || 'require'}`
+              : env.HYPERDRIVE?.connectionString
+          );
+          if (!connectionString) return jsonResponse({ ok: false, latency_ms: Date.now() - started, error: 'connection details required' }, 400);
+          const client = new Client({ connectionString });
+          await client.connect();
+          try {
+            await client.query('SELECT 1');
+          } finally {
+            await client.end().catch(() => { });
+          }
+          return jsonResponse({ ok: true, latency_ms: Date.now() - started });
+        } catch (e) {
+          return jsonResponse({ ok: false, latency_ms: Date.now() - started, error: e?.message || String(e) }, 200);
         }
       }
 
@@ -26289,6 +26773,67 @@ function iamUnifiedSearchTextScore(text, query, base) {
 
 function iamD1QuoteIdent(ident) {
   return `"${String(ident).replace(/"/g, '""')}"`;
+}
+
+function iamPgQuoteIdent(ident) {
+  return `"${String(ident).replace(/"/g, '""')}"`;
+}
+
+function iamSqlStatementKind(sql) {
+  const trimmed = String(sql || '').trim().replace(/^--.*$/gm, '').trim();
+  const first = (trimmed.match(/^[a-z]+/i)?.[0] || '').toUpperCase();
+  if (['CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'REINDEX', 'VACUUM'].includes(first)) return 'ddl';
+  if (['INSERT', 'UPDATE', 'DELETE', 'REPLACE'].includes(first)) return 'dml';
+  return 'read';
+}
+
+function iamParseDatabaseFilters(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function iamBuildD1FilterWhere(filters) {
+  const clauses = [];
+  const values = [];
+  for (const f of filters || []) {
+    const col = String(f?.col || '').trim();
+    const op = String(f?.op || '').trim();
+    if (!col) continue;
+    const qcol = iamD1QuoteIdent(col);
+    if (op === 'is_null') clauses.push(`${qcol} IS NULL`);
+    else if (op === 'not_null') clauses.push(`${qcol} IS NOT NULL`);
+    else if (op === 'eq') { clauses.push(`${qcol} = ?`); values.push(f.val); }
+    else if (op === 'neq') { clauses.push(`${qcol} != ?`); values.push(f.val); }
+    else if (op === 'gt') { clauses.push(`${qcol} > ?`); values.push(f.val); }
+    else if (op === 'lt') { clauses.push(`${qcol} < ?`); values.push(f.val); }
+    else if (op === 'like') { clauses.push(`${qcol} LIKE ?`); values.push(`%${String(f.val ?? '')}%`); }
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values };
+}
+
+function iamBuildPgFilterWhere(filters, startIndex = 1) {
+  const clauses = [];
+  const values = [];
+  let idx = startIndex;
+  for (const f of filters || []) {
+    const col = String(f?.col || '').trim();
+    const op = String(f?.op || '').trim();
+    if (!col) continue;
+    const qcol = iamPgQuoteIdent(col);
+    if (op === 'is_null') clauses.push(`${qcol} IS NULL`);
+    else if (op === 'not_null') clauses.push(`${qcol} IS NOT NULL`);
+    else if (op === 'eq') { clauses.push(`${qcol} = $${idx++}`); values.push(f.val); }
+    else if (op === 'neq') { clauses.push(`${qcol} <> $${idx++}`); values.push(f.val); }
+    else if (op === 'gt') { clauses.push(`${qcol} > $${idx++}`); values.push(f.val); }
+    else if (op === 'lt') { clauses.push(`${qcol} < $${idx++}`); values.push(f.val); }
+    else if (op === 'like') { clauses.push(`${qcol}::text ILIKE $${idx++}`); values.push(`%${String(f.val ?? '')}%`); }
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values, nextIndex: idx };
 }
 
 function iamUnifiedSearchDedupeKey(r) {

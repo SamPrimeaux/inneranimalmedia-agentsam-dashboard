@@ -219,6 +219,34 @@ async function finishLogin(request, url, env, userId, redirectPath) {
       Date.now(),
       expiresAtMs
     ).run().catch(() => {});
+
+    // Enrich session with superadmin identity if email matches
+    try {
+      const loginEmail = String(userEmail || '').toLowerCase().trim();
+      const superRow = await env.DB.prepare(`
+        SELECT superadmin_uuid, tenant_id, role, permissions_json
+        FROM superadmin_identity
+        WHERE LOWER(email) = ? AND is_enabled = 1
+        LIMIT 1
+      `).bind(loginEmail).first();
+
+      if (superRow) {
+        // Update auth_users to ensure is_superadmin flag is set
+        await env.DB.prepare(`
+          UPDATE auth_users
+          SET is_superadmin = 1, role = 'superadmin', tenant_id = ?
+          WHERE id = ?
+        `).bind(superRow.tenant_id, userId).run();
+
+        // Update sessions row with superadmin context
+        env.DB.prepare(`
+          UPDATE sessions
+          SET tenant_id = ?, provider_subject = ?
+          WHERE id = ? AND revoked_at IS NULL
+        `).bind(superRow.tenant_id, superRow.superadmin_uuid, sessionId)
+          .run().catch(() => {});
+      }
+    } catch (_) {}
   } catch (_) {}
 
   // 2. KV Cache

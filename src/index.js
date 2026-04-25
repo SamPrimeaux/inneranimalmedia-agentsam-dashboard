@@ -103,9 +103,23 @@ export default {
       if (assetHtmlKey && env.ASSETS) {
         const obj = await env.ASSETS.get(assetHtmlKey);
         if (!obj) return new Response('Not found', { status: 404 });
+        const fromMeta = obj.httpMetadata?.contentType;
+        const k = assetHtmlKey.toLowerCase();
+        // R2 often has no customMetadata, or text/plain on HTML — browsers then show source as plain text.
+        const inferred =
+          k.endsWith('.html') ? 'text/html; charset=utf-8' :
+          k.endsWith('.css') ? 'text/css; charset=utf-8' :
+          k.endsWith('.js') ? 'text/javascript; charset=utf-8' :
+          'text/plain; charset=utf-8';
+        const base = fromMeta || inferred;
+        const mainType = (base.split(';')[0] || '').trim().toLowerCase();
+        const contentType =
+          k.endsWith('.html') && (!fromMeta || mainType === 'text/plain')
+            ? 'text/html; charset=utf-8'
+            : base;
         return new Response(obj.body, {
           headers: {
-            'Content-Type': obj.httpMetadata?.contentType || 'text/plain; charset=utf-8',
+            'Content-Type': contentType,
             'Cache-Control': 'public, max-age=300',
           },
         });

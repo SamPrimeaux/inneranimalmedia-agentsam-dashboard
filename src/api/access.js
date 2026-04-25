@@ -10,15 +10,32 @@
  */
 import { jsonResponse } from '../core/auth.js';
 
-// JWKS endpoint for your Zero Trust team domain
-const CF_CERTS_URL = 'https://inneranimalmedia.cloudflareaccess.com/cdn-cgi/access/certs';
-
-// Access Application AUD (Application ID from Zero Trust)
-const EXPECTED_AUD = 'c0b2db17-f9c9-4a85-a106-ece501795795';
-
 let cachedKeys = null;
 let keyCacheTime = 0;
 const KEY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function resolveTeamDomain(env) {
+  const raw = String(env?.CF_ACCESS_TEAM_DOMAIN || '').trim();
+  if (!raw) throw new Error('CF_ACCESS_TEAM_DOMAIN not set');
+  // Accept either a full domain (inneranimalmedia.cloudflareaccess.com) or a team name (inneranimalmedia)
+  if (raw.includes('.')) return raw;
+  return `${raw}.cloudflareaccess.com`;
+}
+
+function resolveCFCertsUrl(env) {
+  const domain = resolveTeamDomain(env);
+  return `https://${domain}/cdn-cgi/access/certs`;
+}
+
+function resolveExpectedAud(env) {
+  const raw = String(env?.CF_ACCESS_AUD || '').trim();
+  if (!raw) throw new Error('CF_ACCESS_AUD not set');
+  // Support either a single AUD or comma-separated list
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function base64UrlToUint8Array(b64url) {
   const b64 = String(b64url || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -35,11 +52,11 @@ function base64UrlJsonDecode(b64url) {
   return JSON.parse(json);
 }
 
-async function getCFPublicKeys() {
+async function getCFPublicKeys(env) {
   const now = Date.now();
   if (cachedKeys && now - keyCacheTime < KEY_CACHE_TTL_MS) return cachedKeys;
 
-  const res = await fetch(CF_CERTS_URL, { headers: { Accept: 'application/json' } });
+  const res = await fetch(resolveCFCertsUrl(env), { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`Failed to fetch CF certs: ${res.status}`);
   const data = await res.json();
   const keys = Array.isArray(data?.keys) ? data.keys : [];
@@ -48,7 +65,7 @@ async function getCFPublicKeys() {
   return keys;
 }
 
-async function verifyCFAccessJWT(token) {
+async function verifyCFAccessJWT(env, token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) throw new Error('Invalid JWT structure');
 
@@ -60,14 +77,16 @@ async function verifyCFAccessJWT(token) {
   if (payload?.nbf != null && Number(payload.nbf) > now) throw new Error('JWT not yet valid');
 
   const audArr = Array.isArray(payload?.aud) ? payload.aud : payload?.aud != null ? [payload.aud] : [];
-  if (!audArr.map(String).includes(EXPECTED_AUD)) {
+  const expectedAud = resolveExpectedAud(env);
+  const audStrs = audArr.map(String);
+  if (!expectedAud.some((a) => audStrs.includes(a))) {
     throw new Error(`JWT aud mismatch`);
   }
 
   const kid = header?.kid ? String(header.kid) : '';
   if (!kid) throw new Error('Missing kid');
 
-  const keys = await getCFPublicKeys();
+  const keys = await getCFPublicKeys(env);
   const matchingKey = keys.find((k) => String(k?.kid || '') === kid);
   if (!matchingKey) throw new Error(`No matching key for kid: ${kid}`);
 
@@ -174,7 +193,7 @@ export async function handleAccessEvaluate(request, env, service) {
   }
 
   try {
-    const payload = await verifyCFAccessJWT(jwtToken);
+    const payload = await verifyCFAccessJWT(env, jwtToken);
     const email = payload?.email != null ? String(payload.email) : null;
     const tenantId = email ? await resolveTenantFromEmail(env.DB, email) : null;
     const allowed = await checkEntitlement(env.DB, email, tenantId, svc);

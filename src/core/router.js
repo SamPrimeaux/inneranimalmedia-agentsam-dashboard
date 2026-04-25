@@ -40,7 +40,6 @@ import { handleDrawApi }             from '../api/draw.js';
 import { handleMailApi }             from '../api/mail.js';
 import { handleGitStatusApi }        from '../api/git-status.js';
 import { handleAdminApi }            from '../api/admin.js';
-import { handleGithubApi }           from '../api/github.js';
 import { handleLearnApi }            from '../api/learn.js';
 import { handleOnboardingApi }       from '../api/onboarding.js';
 
@@ -289,9 +288,14 @@ export async function handleRequest(request, env, ctx) {
     return handleNotifyDeployComplete(request, env, ctx);
   }
 
-  // ── GitHub (before /api/integrations catch-all) ────────────────────────────
-  if (path.startsWith('/api/integrations/github') || path.startsWith('/api/github/')) {
-    return handleGithubApi(request, url, env, ctx);
+  // ── GitHub browser aliases (before /api/integrations catch-all) ────────────
+  if (path.startsWith('/api/integrations/github')) {
+    return handleIntegrationsRequest(request, env, ctx);
+  }
+  if (path.startsWith('/api/github/')) {
+    const mappedUrl = new URL(request.url);
+    mappedUrl.pathname = path.replace('/api/github', '/api/integrations/github');
+    return handleIntegrationsRequest(new Request(mappedUrl.toString(), request), env, ctx);
   }
 
   // ── Google Drive (stubbed — suppress console error, return clean 501) ───────
@@ -304,7 +308,7 @@ export async function handleRequest(request, env, ctx) {
 
   // ── Integrations / Webhooks ────────────────────────────────────────────────
   if (path.startsWith('/api/integrations') || path.startsWith('/api/webhooks')) {
-    return handleIntegrationsRequest(request, url, env, ctx);
+    return handleIntegrationsRequest(request, env, ctx);
   }
 
   if (path.startsWith('/api/onboarding')) {

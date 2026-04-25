@@ -3343,8 +3343,29 @@ const worker = {
       if (pathLower === '/api/overview/activity-strip') {
         return handleOverviewActivityStrip(request, url, env);
       }
+      if (pathLower === '/api/overview/kpi-strip') {
+        return handleOverviewKpiStrip(request, env);
+      }
+      if (pathLower === '/api/overview/finance-charts') {
+        return handleOverviewFinanceCharts(request, env);
+      }
+      if (pathLower === '/api/overview/agent-activity') {
+        return handleOverviewAgentActivity(request, env);
+      }
       if (pathLower === '/api/overview/deployments') {
         return handleOverviewDeployments(request, url, env);
+      }
+      if (pathLower === '/api/overview/goals-launch') {
+        return handleOverviewGoalsLaunch(request, env);
+      }
+      if (pathLower === '/api/overview/time-founder') {
+        return handleOverviewTimeFounder(request, env);
+      }
+      if (pathLower === '/api/overview/mcp-health') {
+        return handleOverviewMcpHealth(request, env);
+      }
+      if (pathLower === '/api/overview/commands-workflows') {
+        return handleOverviewCommandsWorkflows(request, env);
       }
 
       // ----- API: Time tracking (start/heartbeat/end session) -----
@@ -3356,6 +3377,12 @@ const worker = {
       }
       if (pathLower.startsWith('/api/dashboard/time-track')) {
         return handleTimeTrack(request, url, env);
+      }
+      if (pathLower === '/api/timers/start' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleOverviewStartTimer(request, env);
+      }
+      if (pathLower === '/api/founder/log' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleOverviewFounderLog(request, env);
       }
 
       // ----- API: Colors (finance UI) -----
@@ -3693,8 +3720,11 @@ const worker = {
             pipelines = r.results || [];
           }
           const executed = [];
+          const usedInternalSecret = !!(expectedInternal && internalSecret === expectedInternal);
           for (const p of pipelines) {
-            const tenantId = p.tenant_id || 'system';
+            // system-only, no user session
+            const tenantId = p.tenant_id || (usedInternalSecret ? 'tenant_platform' : null);
+            if (!tenantId) return jsonResponse({ error: 'pipeline tenant_id required' }, 400);
             const nextNum = await env.DB.prepare('SELECT COALESCE(MAX(execution_number),0)+1 as n FROM ai_workflow_executions WHERE pipeline_id = ?').bind(p.id).first().then((r) => r?.n ?? 1);
             const execId = crypto.randomUUID();
             await env.DB.prepare(
@@ -3711,6 +3741,8 @@ const worker = {
 
       if (pathLower === '/api/workflow/run' && methodUpper === 'POST') {
         if (!env.DB) return jsonResponse({ error: 'DB not available' }, 503);
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         try {
           const body = await request.json().catch(() => ({}));
           const pipeline_id = body.pipeline_id;
@@ -3719,7 +3751,8 @@ const worker = {
           const pipeline = await env.DB.prepare('SELECT * FROM ai_workflow_pipelines WHERE id = ? LIMIT 1').bind(pipeline_id).first();
           if (!pipeline) return jsonResponse({ error: 'pipeline not found' }, 404);
           const execId = 'wfexec_' + Date.now();
-          const tenantId = pipeline.tenant_id || 'tenant_default';
+          const tenantId = pipeline.tenant_id != null && String(pipeline.tenant_id).trim() ? String(pipeline.tenant_id).trim() : null;
+          if (!tenantId) return jsonResponse({ error: 'pipeline tenant_id required' }, 400);
           let stages = [];
           try {
             stages = JSON.parse(pipeline.stages_json || '[]');
@@ -5668,7 +5701,13 @@ const worker = {
       {
         const canvasMatch = pathLower.match(/^\/api\/collab\/canvas(\/.*)?$/);
         if (canvasMatch && env.IAM_COLLAB) {
-          const workspaceId = url.searchParams.get('workspace_id') || 'global';
+          const authUser = await getAuthUser(request, env);
+          if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          const workspaceId =
+            authUser.workspace_id != null && String(authUser.workspace_id).trim()
+              ? String(authUser.workspace_id).trim()
+              : null;
+          if (!workspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
           const id = env.IAM_COLLAB.idFromName(`canvas:${workspaceId}`);
           const stub = env.IAM_COLLAB.get(id);
           return stub.fetch(new Request(`https://internal${canvasMatch[0]}`, { method: request.method, body: request.body, headers: request.headers }));
@@ -6219,9 +6258,17 @@ function appendMcpAuditLogAndStats(env, {
   error,
   durationMs = 0,
   costUsd = 0,
+  tenantId = null,
 }) {
   if (!env?.DB || !toolName) return;
-  const tid = tenantIdFromEnv(env) || 'global';
+  const tid =
+    (tenantId != null && String(tenantId).trim()) ||
+    tenantIdFromEnv(env) ||
+    null;
+  if (!tid) {
+    console.warn('[mcp_audit_log] missing tenant_id; skip');
+    return;
+  }
   const errStr = error ? String(error).slice(0, 200) : null;
   const ok = !error;
   const status = ok ? 'success' : 'error';
@@ -7640,15 +7687,19 @@ async function logAssistantCodeArtifactIfPresent(env, {
 }
 
 /** INSERT OR IGNORE so FK on agent_messages.conversation_id -> agent_conversations(id) succeeds. Same id used for agent_sessions row (workspace/chat session key). */
-async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId, workspaceId = null, modelKey = null) {
+async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId, workspaceId = null, modelKey = null, tenantId = null) {
   if (!env?.DB || conversationId == null || String(conversationId).trim() === '') return;
   const cid = String(conversationId).trim();
+  const tenant = tenantId != null && String(tenantId).trim() ? String(tenantId).trim() : null;
+  if (!tenant) {
+    console.warn('[ensureAgentChatPersistenceParents] missing tenant_id; skip');
+    return;
+  }
   const uid =
     chatUserId != null && String(chatUserId).trim() !== ''
       ? String(chatUserId).trim()
       : 'sam_primeaux';
   const now = Math.floor(Date.now() / 1000);
-  const tenant =  'system';
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at)
@@ -7687,8 +7738,8 @@ async function writeTestRun(env, data) {
     latencyMs = 0,
     responseText = '',
     errorMessage = '',
-    workspaceId = 'ws_inneranimalmedia',
-    tenantId = 'tenant_sam_primeaux',
+    workspaceId = null,
+    tenantId = null,
     testSuite = 'production',
     testName = '',
     runGroupId = '',
@@ -7696,6 +7747,10 @@ async function writeTestRun(env, data) {
     promptId = '',
     experimentId = '',
   } = data || {};
+  if (!tenantId || !workspaceId) {
+    console.warn('[ai_api_test_runs] missing tenant_id/workspace_id; skip');
+    return null;
+  }
   const id = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
   const now = new Date().toISOString();
   await env.DB.prepare(`
@@ -7805,6 +7860,9 @@ async function handleAiSmokeTest(request, url, env) {
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const smokeTenantId = authUser.tenant_id != null && String(authUser.tenant_id).trim() ? String(authUser.tenant_id).trim() : null;
+  const smokeWorkspaceId = authUser.workspace_id != null && String(authUser.workspace_id).trim() ? String(authUser.workspace_id).trim() : null;
+  if (!smokeTenantId || !smokeWorkspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
   const body = await request.json().catch(() => ({}));
   const prompt = String(body.prompt || 'Reply with the word ok.').slice(0, 500);
   const providers = aiSmokeProvidersFromUrl(url);
@@ -7830,8 +7888,8 @@ async function handleAiSmokeTest(request, url, env) {
           outputTokens: result.outputTokens,
           latencyMs: result.latencyMs,
           responseText: result.responseText,
-          workspaceId: authUser.workspace_id || env.WORKSPACE_ID || 'ws_inneranimalmedia',
-          tenantId: authUser.tenant_id || 'tenant_sam_primeaux',
+          workspaceId: smokeWorkspaceId,
+          tenantId: smokeTenantId,
           testSuite: 'production',
           testName: 'ai_smoke_test',
           runGroupId,
@@ -7846,8 +7904,8 @@ async function handleAiSmokeTest(request, url, env) {
           success: 0,
           latencyMs: Date.now() - start,
           errorMessage: err?.message || String(err),
-          workspaceId: authUser.workspace_id || env.WORKSPACE_ID || 'ws_inneranimalmedia',
-          tenantId: authUser.tenant_id || 'tenant_sam_primeaux',
+          workspaceId: smokeWorkspaceId,
+          tenantId: smokeTenantId,
           testSuite: 'production',
           testName: 'ai_smoke_test',
           runGroupId,
@@ -7908,7 +7966,7 @@ async function handleCmsPageRequest(request, url, env) {
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
 async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false, chatPersistenceUserId = null) {
   if (env.DB && conversationId != null && String(conversationId).trim() !== '') {
-    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId, routingOpts?.workspaceId || "ws_inneranimalmedia", modelRow?.model_key || null);
+    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId, routingOpts?.workspaceId || null, modelRow?.model_key || null, routingOpts?.tenantId || null);
   }
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
@@ -7941,8 +7999,8 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
       totalCostUsd: amountUsd,
       latencyMs: routingOpts && typeof routingOpts.chatStartMs === 'number' ? Date.now() - routingOpts.chatStartMs : 0,
       responseText: safeText.slice(0, 500),
-      workspaceId: routingOpts?.workspaceId || 'ws_inneranimalmedia',
-      tenantId: routingOpts?.tenantId || 'tenant_sam_primeaux',
+      workspaceId: routingOpts?.workspaceId || null,
+      tenantId: routingOpts?.tenantId || null,
       testSuite: 'production',
       testName: routingOpts?.testName || 'agent_chat_provider_call',
       runGroupId: routingOpts?.runGroupId || '',
@@ -10072,12 +10130,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         const steps = Array.isArray(params.steps) ? params.steps : [];
         try {
           const planId = crypto.randomUUID();
-          const tenantId = tenantIdFromEnv(env) ?? 'system';
+          const tenantId = params.tenant_id != null && String(params.tenant_id).trim() ? String(params.tenant_id).trim() : null;
+          if (!tenantId) {
+            resultText = JSON.stringify({ error: 'tenant_id required' });
+          } else {
           const planJson = JSON.stringify({ summary, steps });
           await env.DB.prepare(
             `INSERT INTO agent_execution_plans (id, tenant_id, session_id, plan_json, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', unixepoch(), unixepoch())`
           ).bind(planId, tenantId, conversationId ?? '', planJson, summary.slice(0, 2000)).run();
           resultText = JSON.stringify({ plan_id: planId, status: 'pending', message: 'Plan created; user can approve or reject in the UI.' });
+          }
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
@@ -15178,7 +15240,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!session?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       const userId = session.user_id;
-      const workspaceId = session.workspace_id || tenantIdFromEnv(env) || 'ws_inneranimalmedia';
+      const workspaceId = session.workspace_id != null && String(session.workspace_id).trim() ? String(session.workspace_id).trim() : null;
+      if (!workspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
       const { results } = await env.DB.prepare(
         `SELECT
            slug,
@@ -16605,6 +16668,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/sessions') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const sessionTenantId =
+        authUser.tenant_id != null && String(authUser.tenant_id).trim()
+          ? String(authUser.tenant_id).trim()
+          : null;
+      if (!sessionTenantId) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (method === 'POST') {
         const body = await request.json().catch(() => ({}));
         const id = crypto.randomUUID();
@@ -16631,11 +16701,10 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         }
         await env.DB.prepare(
           "INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(id, 'system', sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
+        ).bind(id, sessionTenantId, sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
         if (env.SESSION_CACHE) await env.SESSION_CACHE.put(`session:${id}`, JSON.stringify({ id, status: 'active' }), { expirationTtl: 86400 });
         return jsonResponse({ id, status: 'active' });
       }
-      const tenantId = 'system';
       const { results } = await env.DB.prepare(
         `SELECT s.id, s.session_type, s.status, s.state_json, s.started_at, s.r2_key,
          COALESCE(s.name, ac.name, ac.title, 'New Conversation') as name,
@@ -16646,7 +16715,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
          WHERE s.tenant_id = ?
          ORDER BY s.updated_at DESC
          LIMIT 50`
-      ).bind(tenantId).all();
+      ).bind(sessionTenantId).all();
       return new Response(JSON.stringify(results || []), {
         status: 200,
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
@@ -17597,7 +17666,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/agent/bootstrap' && method === 'GET') {
       try {
         const session = await getSession(env, request);
-        const userId = session?.user_id || 'system';
+        if (!session?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const userId = session.user_id;
         const cacheKey = 'bootstrap_' + userId;
         if (env.DB) {
           const cached = await env.DB.prepare(
@@ -17709,8 +17779,9 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
  * Start an MCP minion workflow run or return a dry-run preview. Shared by POST /api/mcp/workflows/:id/run
  * and the Agent Sam /workflow slash builtin (avoids Worker self-fetch, which can fail with 522).
  */
-async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run) {
-  const MCP_WF_TENANT = tenantIdFromEnv(env) || 'global';
+async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run, tenantId) {
+  const MCP_WF_TENANT = tenantId != null && String(tenantId).trim() ? String(tenantId).trim() : null;
+  if (!MCP_WF_TENANT) return { error: 'Unauthorized', status: 401 };
   await ensureMcpWorkflowStepDefaults(env);
   const sid = session_id != null ? String(session_id) : null;
   const trig = triggered_by != null ? String(triggered_by) : 'manual';
@@ -17903,7 +17974,15 @@ async function executeAgentsamSlashCommand(request, env, ctx) {
         if (!workflowId || workflowId === 'workflow_execute') {
           result = { error: 'workflow_id required' };
         } else {
-          result = await triggerWorkflowRun(env, ctx, String(workflowId), body.session_id != null ? String(body.session_id) : null, 'slash_command', parameters.dry_run !== false);
+          result = await triggerWorkflowRun(
+            env,
+            ctx,
+            String(workflowId),
+            body.session_id != null ? String(body.session_id) : null,
+            'slash_command',
+            parameters.dry_run !== false,
+            session.tenant_id
+          );
         }
       } else {
         result = { error: 'Command not implemented', slug: command.slug };
@@ -19068,8 +19147,14 @@ async function handleAgentsamApi(request, url, env) {
 async function handleMcpApi(req, u, e, ctx) {
   const pathLower = u.pathname.replace(/\/$/, '').toLowerCase();
   const method = (req.method || 'GET').toUpperCase();
-  const MCP_WF_TENANT = tenantIdFromEnv(e) || 'global';
   if (!e.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const mcpAuthUser = await getAuthUser(req, e);
+  if (!mcpAuthUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const MCP_WF_TENANT =
+    mcpAuthUser.tenant_id != null && String(mcpAuthUser.tenant_id).trim()
+      ? String(mcpAuthUser.tenant_id).trim()
+      : null;
+  if (!MCP_WF_TENANT) return jsonResponse({ error: 'Unauthorized' }, 401);
   try {
     if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
       const au = await getAuthUser(req, e);
@@ -19607,7 +19692,7 @@ async function handleMcpApi(req, u, e, ctx) {
       const session_id = body.session_id != null ? String(body.session_id) : null;
       const triggered_by = body.triggered_by != null ? String(body.triggered_by) : 'manual';
       const dry_run = body.dry_run === true;
-      const data = await triggerWorkflowRun(e, ctx, workflow_id, session_id, triggered_by, dry_run);
+      const data = await triggerWorkflowRun(e, ctx, workflow_id, session_id, triggered_by, dry_run, MCP_WF_TENANT);
       if (data.error) {
         const msg = data.error;
         const status =
@@ -19679,7 +19764,7 @@ async function handleCidiApi(request, url, env, ctx) {
         return { r, json };
       }
       const u = new URL('https://inneranimalmedia.com/api/mcp/status');
-      const req = new Request(u.toString(), { method: 'GET' });
+      const req = new Request(u.toString(), { method: 'GET', headers: { cookie } });
       const r = await handleMcpApi(req, u, env, ctx);
       const json = await r.json().catch(() => ({}));
       return { r, json };
@@ -19997,7 +20082,11 @@ async function recordMcpToolCall(env, opts) {
   const tenant =
     (optTenantId != null && String(optTenantId).trim()) ||
     tenantIdFromEnv(env) ||
-    'global';
+    null;
+  if (!tenant) {
+    console.warn('[mcp_tool_calls] missing tenant_id; skip');
+    return;
+  }
   const sessionId = conversationId ?? '';
   const status = error ? 'failed' : 'completed';
   const output = error ? JSON.stringify({ error }) : (typeof result === 'string' ? result : JSON.stringify(result ?? {}));
@@ -20060,6 +20149,7 @@ async function recordMcpToolCall(env, opts) {
       error,
       durationMs,
       costUsd: toolCostUsd,
+      tenantId: tenant,
     });
   } catch (e) { console.warn('[recordMcpToolCall] mcp_tool_calls', e?.message ?? e); }
   /* mcp_usage_log: rolled up by trg_mcp_tool_calls_usage (migration 161) after INSERT into mcp_tool_calls */
@@ -20336,7 +20426,11 @@ async function recordR2WriteTraceability(env, {
     let byteLen = 0;
     if (typeof body === 'string') byteLen = body.length;
     else if (body != null && typeof body.byteLength === 'number') byteLen = body.byteLength;
-    const tid = (tenantId != null && String(tenantId).trim()) || tenantIdFromEnv(env) || 'system';
+    const tid = (tenantId != null && String(tenantId).trim()) || tenantIdFromEnv(env) || null;
+    if (!tid) {
+      console.warn('[r2_objects] missing tenant_id; skip object index row');
+      return;
+    }
     const uid = (userId != null && String(userId).trim()) || 'agent_sam';
     const objId = crypto.randomUUID();
     const ct = (contentType != null && String(contentType).trim()) || 'application/octet-stream';
@@ -21985,7 +22079,8 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       query,
       search_engine: 'perplexity'
     });
-    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) ||  'tenant_default';
+    const tid = opts.tenantId != null && String(opts.tenantId).trim() ? String(opts.tenantId).trim() : null;
+    if (!tid) return { error: 'tenant_id required' };
     
     await env.DB.prepare(`
         INSERT INTO playwright_jobs
@@ -22308,10 +22403,13 @@ async function runWorkflowHttpHealthStep(env, url) {
 async function runWorkflowGithubDiffReviewStep(env, triggerUserId, step) {
   const repo = String(step.github_repo || 'SamPrimeaux/march1st-inneranimalmedia').trim();
   const baseBranch = String(step.compare_base || 'main').trim() || 'main';
-  const uid = String(triggerUserId || '').trim() || 'system';
+  const uid = String(triggerUserId || '').trim();
   const role = step.role === 'tester' ? 'Tester' : 'Architect';
   if (!env.DB) {
     return { ok: false, summary: `${role}: D1 unavailable for GitHub token lookup.` };
+  }
+  if (!uid) {
+    return { ok: true, summary: `${role}: no authenticated workflow user — skipped diff fetch.` };
   }
   const tokenRow = await getIntegrationToken(env.DB, uid, 'github', '');
   if (!tokenRow?.access_token) {
@@ -22432,7 +22530,8 @@ async function agentWorkflowRecordStepSuccess(env, workflowRunId, stepNum, stepN
  * Runs inside ctx.waitUntil only — HTTP response has already returned.
  */
 async function executeAgentWorkflowSteps(env, ctx, workflowRunId, workflowId, workflowName) {
-  const tenantId = tenantIdFromEnv(env) || 'global';
+  // system-only, no user session
+  const tenantId = 'tenant_platform';
   const steps = AGENT_BUILTIN_WORKFLOW_STEPS[workflowName] || [];
   const startedWall = Date.now();
   try {
@@ -22447,7 +22546,7 @@ async function executeAgentWorkflowSteps(env, ctx, workflowRunId, workflowId, wo
   let lastSummary = '';
   let failed = false;
   let failReason = '';
-  let triggerUserId = 'system';
+  let triggerUserId = '';
   try {
     const tr = await env.DB.prepare('SELECT triggered_by FROM workflow_runs WHERE id = ?').bind(workflowRunId).first();
     if (tr?.triggered_by && String(tr.triggered_by).trim()) triggerUserId = String(tr.triggered_by).trim();
@@ -22916,7 +23015,19 @@ async function dispatchMcpTool(env, tool_name, input_template, session_id) {
 }
 
 async function executeWorkflowSteps(env, workflow, run_id, session_id) {
-  const MCP_WF_TENANT = tenantIdFromEnv(env) || 'global';
+  const MCP_WF_TENANT =
+    workflow?.tenant_id != null && String(workflow.tenant_id).trim()
+      ? String(workflow.tenant_id).trim()
+      : null;
+  if (!MCP_WF_TENANT) {
+    try {
+      await env.DB.prepare(
+        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?,
+         completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
+      ).bind('Unauthorized', run_id).run();
+    } catch (_) { }
+    return;
+  }
   let lastError = null;
   try {
     let steps = [];
@@ -24063,6 +24174,11 @@ async function runMeshyBuiltinTool(env, toolName, params) {
           });
           if (env.DB) {
             try {
+              const cmsTenantId = params.tenant_id != null && String(params.tenant_id).trim() ? String(params.tenant_id).trim() : null;
+              if (!cmsTenantId) {
+                console.warn('[meshy cms_3d_assets] missing tenant_id; skip');
+                return out;
+              }
               const assetId = String(params.asset_id || params.cms_asset_id || `asset_${task_id}`).slice(0, 128);
               await env.DB.prepare(
                 `INSERT INTO cms_3d_assets
@@ -24073,7 +24189,7 @@ async function runMeshyBuiltinTool(env, toolName, params) {
               ).bind(
                 `c3d_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`,
                 assetId,
-                params.tenant_id || 'tenant_sam_primeaux',
+                cmsTenantId,
                 task_id,
                 params.model_type || (params.image_url ? 'image_to_3d' : 'text_to_3d'),
                 params.prompt || null,
@@ -24205,8 +24321,12 @@ function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
   agentRunId,
 }) {
   if (!env?.DB) return undefined;
-  const tenantId = tenantIdFromEnv(env) || 'unknown';
-  const workspaceId = tenantIdFromEnv(env) || null;
+  const tenantId = routingOpts?.tenantId != null && String(routingOpts.tenantId).trim() ? String(routingOpts.tenantId).trim() : null;
+  const workspaceId = routingOpts?.workspaceId != null && String(routingOpts.workspaceId).trim() ? String(routingOpts.workspaceId).trim() : null;
+  if (!tenantId || !workspaceId) {
+    console.warn('[agent_telemetry final llm] missing tenant_id/workspace_id; skip');
+    return undefined;
+  }
 
   const run = async () => {
     try {
@@ -29615,6 +29735,244 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
   }
 }
 
+const OVERVIEW_AI_PROVIDERS = ['anthropic', 'openai', 'google', 'cursor', 'cloudflare_workers_ai'];
+const OVERVIEW_INFRA_PROVIDERS = ['cloudflare', 'stripe', 'resend', 'supabase', 'vercel'];
+
+function overviewRows(result) {
+  return Array.isArray(result?.results) ? result.results : (Array.isArray(result) ? result : []);
+}
+
+function overviewNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function overviewDayLabels(days) {
+  const now = new Date();
+  const labels = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - i);
+    labels.push(d.toISOString().slice(0, 10));
+  }
+  return labels;
+}
+
+function overviewTrend(rows, labels, dayKey = 'day', valueKey = 'value') {
+  const byDay = new Map(overviewRows(rows).map((r) => [String(r?.[dayKey] || '').slice(0, 10), overviewNumber(r?.[valueKey])]));
+  return labels.map((day) => byDay.get(day) || 0);
+}
+
+async function overviewQuery(env, failed, tableName, sql, binds = [], mode = 'all') {
+  try {
+    const stmt = env.DB.prepare(sql).bind(...binds);
+    return mode === 'first' ? await stmt.first() : overviewRows(await stmt.all());
+  } catch (e) {
+    if (failed && tableName) failed.add(tableName);
+    console.warn(`[overview:${tableName}]`, e?.message ?? e);
+    return mode === 'first' ? null : [];
+  }
+}
+
+async function overviewCachedResponse(request, env, endpointName, producer) {
+  if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+  const cacheKey = `overview:${endpointName}:${tenantId}`;
+  if (env.SESSION_CACHE) {
+    try {
+      const cached = await env.SESSION_CACHE.get(cacheKey, 'json');
+      if (cached) return jsonResponse(cached, 200);
+    } catch (_) { }
+  }
+  const generatedAt = Math.floor(Date.now() / 1000);
+  if (!env.DB) {
+    return jsonResponse({ data: {}, generated_at: generatedAt, error: 'partial', failed: ['DB'] }, 200);
+  }
+  try {
+    const failed = new Set();
+    const data = await producer({ tenantId, session, failed });
+    const payload = {
+      data,
+      generated_at: generatedAt,
+      ...(failed.size ? { error: 'partial', failed: [...failed] } : {}),
+    };
+    if (env.SESSION_CACHE) {
+      env.SESSION_CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 60 }).catch(() => { });
+    }
+    return jsonResponse(payload, 200);
+  } catch (e) {
+    console.warn(`[overview:${endpointName}]`, e?.message ?? e);
+    return jsonResponse({ data: {}, generated_at: generatedAt, error: 'partial', failed: [endpointName] }, 200);
+  }
+}
+
+async function handleOverviewKpiStrip(request, env) {
+  return overviewCachedResponse(request, env, 'kpi-strip', async ({ tenantId, failed }) => {
+    const labels = overviewDayLabels(7);
+    const aiList = OVERVIEW_AI_PROVIDERS.map(() => '?').join(',');
+    const infraList = OVERVIEW_INFRA_PROVIDERS.map(() => '?').join(',');
+    const [
+      burn, burnTrend, ai, aiTrend, infra, infraTrend, agentCalls, agentTrend,
+      hoursWeek, hoursTrend, activeTimer, mcpToday, mcpTrend, taskCounts, providerColors,
+    ] = await Promise.all([
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${aiList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId, ...OVERVIEW_AI_PROVIDERS], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${aiList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId, ...OVERVIEW_AI_PROVIDERS]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${infraList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId, ...OVERVIEW_INFRA_PROVIDERS], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${infraList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId, ...OVERVIEW_INFRA_PROVIDERS]),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT COUNT(*) AS total FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','weekday 0','-6 days')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT date(created_at,'unixepoch') AS day, COUNT(*) AS value FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','-6 days') GROUP BY day ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT COALESCE(SUM(duration_seconds),0)/3600.0 AS total FROM project_time_entries WHERE start_time >= date('now','weekday 0','-6 days') AND COALESCE(is_active,0) = 0`, [], 'first'),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT date(start_time) AS day, COALESCE(SUM(duration_seconds),0)/3600.0 AS value FROM project_time_entries WHERE start_time >= date('now','-6 days') AND COALESCE(is_active,0) = 0 GROUP BY day ORDER BY day`, []),
+      overviewQuery(env, failed, 'active_timers', `SELECT id, project_id, started_at AS start_time, status FROM active_timers WHERE tenant_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(SUM(call_count),0) AS total, COALESCE(SUM(success_count),0) AS successes FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT date AS day, COALESCE(SUM(call_count),0) AS value FROM mcp_tool_call_stats WHERE tenant_id = ? AND date >= date('now','-6 days') GROUP BY date ORDER BY date`, [tenantId]),
+      overviewQuery(env, failed, 'tasks', `SELECT status, COUNT(*) AS count FROM tasks WHERE tenant_id = ? AND status IN ('todo','in_progress','blocked') GROUP BY status`, [tenantId]),
+      overviewQuery(env, failed, 'provider_colors', `SELECT slug, css_var, color FROM provider_colors`),
+    ]);
+    const tasks = { todo: 0, in_progress: 0, blocked: 0 };
+    overviewRows(taskCounts).forEach((r) => { tasks[r.status] = overviewNumber(r.count); });
+    const taskTotal = tasks.todo + tasks.in_progress + tasks.blocked;
+    const mcpCalls = overviewNumber(mcpToday?.total);
+    const mcpSuccess = mcpCalls > 0 ? Math.round((overviewNumber(mcpToday?.successes) / mcpCalls) * 100) : 0;
+    return {
+      labels,
+      provider_colors: providerColors,
+      cards: [
+        { key: 'monthly_burn', label: 'Monthly Burn', value: overviewNumber(burn?.total), format: 'currency', threshold: overviewNumber(burn?.total) > 1000 ? 'danger' : overviewNumber(burn?.total) >= 500 ? 'warning' : 'success', subtitle: 'current month', trend: overviewTrend(burnTrend, labels) },
+        { key: 'ai_tooling', label: 'AI Tooling', value: overviewNumber(ai?.total), format: 'currency', subtitle: 'AI providers', trend: overviewTrend(aiTrend, labels) },
+        { key: 'infra_bills', label: 'Infra / Bills', value: overviewNumber(infra?.total), format: 'currency', subtitle: 'infra providers', trend: overviewTrend(infraTrend, labels) },
+        { key: 'agent_calls', label: 'Agent Calls', value: overviewNumber(agentCalls?.total), format: 'number', subtitle: 'this week', trend: overviewTrend(agentTrend, labels) },
+        { key: 'hours_week', label: 'Hours This Week', value: overviewNumber(hoursWeek?.total), format: 'hours', subtitle: activeTimer ? 'timer running' : 'tracked hours', is_running: !!activeTimer, active_timer: activeTimer, trend: overviewTrend(hoursTrend, labels) },
+        { key: 'mcp_today', label: 'MCP Calls Today', value: mcpCalls, format: 'number', subtitle: `${mcpSuccess}% success rate`, trend: overviewTrend(mcpTrend, labels) },
+        { key: 'open_tasks', label: 'Open Tasks', value: taskTotal, format: 'number', subtitle: `${tasks.todo} todo / ${tasks.in_progress} active / ${tasks.blocked} blocked`, href: '/tasks', breakdown: tasks, trend: labels.map(() => 0) },
+      ],
+    };
+  });
+}
+
+async function handleOverviewFinanceCharts(request, env) {
+  return overviewCachedResponse(request, env, 'finance-charts', async ({ tenantId, failed }) => {
+    const [daily, categories, topProviders, colors] = await Promise.all([
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, CASE WHEN lower(COALESCE(provider_slug, provider, 'other')) IN ('anthropic','openai','cloudflare','cursor') THEN lower(COALESCE(provider_slug, provider, 'other')) ELSE 'other' END AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-29 days') GROUP BY day, provider ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT CASE WHEN lower(COALESCE(category,'')) IN ('ai_tools','usage','ai') THEN 'AI Tools' WHEN lower(COALESCE(category,'')) IN ('infra','infrastructure','hosting') THEN 'Infra' WHEN lower(COALESCE(category,'')) IN ('subscription','subscriptions') THEN 'Subscriptions' ELSE 'Other' END AS category, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month') GROUP BY category ORDER BY total DESC`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(provider_slug, provider, 'unknown') AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month') GROUP BY COALESCE(provider_slug, provider, 'unknown') ORDER BY total DESC LIMIT 3`, [tenantId]),
+      overviewQuery(env, failed, 'provider_colors', `SELECT slug, css_var, color FROM provider_colors`),
+    ]);
+    return { daily_by_provider: daily, category_totals: categories, top_providers: topProviders, provider_colors: colors };
+  });
+}
+
+async function handleOverviewAgentActivity(request, env) {
+  return overviewCachedResponse(request, env, 'agent-activity', async ({ tenantId, failed }) => {
+    const [executions, recent, usage, leaderboard] = await Promise.all([
+      overviewQuery(env, failed, 'agentsam_executions', `SELECT date(created_at,'unixepoch') AS day, execution_type, COUNT(*) AS count FROM agentsam_executions WHERE created_at >= unixepoch('now','-13 days') GROUP BY day, execution_type ORDER BY day`, []),
+      overviewQuery(env, failed, 'agentsam_executions', `SELECT execution_type, command, duration_ms, created_at FROM agentsam_executions ORDER BY created_at DESC LIMIT 5`, []),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT date(created_at,'unixepoch') AS day, COALESCE(model_used, 'unknown') AS model, COUNT(*) AS calls FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','-6 days') GROUP BY day, model ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'model_performance_scores', `SELECT model, calls, avg_cost_usd AS avg_cost, total_cost_usd AS total_cost, avg_latency_ms AS avg_latency, is_recommended_for_task FROM model_performance_scores WHERE tenant_id = ? AND period_end >= unixepoch('now','-7 days') ORDER BY total_cost_usd DESC LIMIT 8`, [tenantId]),
+    ]);
+    return { executions_by_day: executions, recent_executions: recent, model_usage: usage, model_leaderboard: leaderboard };
+  });
+}
+
+async function handleOverviewGoalsLaunch(request, env) {
+  return overviewCachedResponse(request, env, 'goals-launch', async ({ tenantId, failed }) => {
+    const [goals, kpis, launches, milestones, launchStats] = await Promise.all([
+      overviewQuery(env, failed, 'goals', `SELECT id, name, status, current_value, target_value, due_date FROM goals WHERE tenant_id = ? AND status IN ('active','blocked') ORDER BY due_date ASC LIMIT 8`, [tenantId]),
+      overviewQuery(env, failed, 'kpi_definitions', `SELECT d.name, d.unit, d.target_value, e.value, e.period_start FROM kpi_definitions d LEFT JOIN kpi_entries e ON e.kpi_id = d.id WHERE d.tenant_id = ? AND COALESCE(d.is_active,1) = 1 GROUP BY d.id ORDER BY e.period_start DESC LIMIT 8`, [tenantId]),
+      overviewQuery(env, failed, 'launch_tracker', `SELECT id, goal_name, confidence_pct, target_date, status FROM launch_tracker WHERE tenant_id = ? AND status = 'in_progress' ORDER BY target_date ASC LIMIT 5`, [tenantId]),
+      overviewQuery(env, failed, 'launch_milestones', `SELECT m.tracker_id, m.name, m.status, m.order_index FROM launch_milestones m INNER JOIN launch_tracker l ON l.id = m.tracker_id WHERE l.tenant_id = ? AND l.status = 'in_progress' ORDER BY l.target_date ASC, m.order_index ASC LIMIT 12`, [tenantId]),
+      overviewQuery(env, failed, 'launch_tracker', `SELECT COUNT(*) AS completed_count, AVG(julianday(completed_at) - julianday(created_at)) AS avg_days_to_launch FROM launch_tracker WHERE tenant_id = ? AND status = 'completed'`, [tenantId], 'first'),
+    ]);
+    return { active_goals: goals, kpi_snapshots: kpis, active_launches: launches, top_launch_milestones: milestones, launch_stats: launchStats || { completed_count: 0, avg_days_to_launch: 0 } };
+  });
+}
+
+async function handleOverviewTimeFounder(request, env) {
+  return overviewCachedResponse(request, env, 'time-founder', async ({ tenantId, failed }) => {
+    const [hours, activeTimer, founder] = await Promise.all([
+      overviewQuery(env, failed, 'project_time_entries', `SELECT COALESCE(p.name, e.project_id, 'Unknown') AS project_name, ROUND(COALESCE(SUM(e.duration_seconds),0)/3600.0,2) AS hours FROM project_time_entries e LEFT JOIN projects p ON p.id = e.project_id WHERE date(e.start_time) >= date('now','start of month') AND COALESCE(e.is_active,0) = 0 GROUP BY COALESCE(p.name, e.project_id, 'Unknown') ORDER BY hours DESC LIMIT 10`, []),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT e.id, e.project_id, e.start_time, p.name AS project_name FROM project_time_entries e LEFT JOIN projects p ON p.id = e.project_id WHERE COALESCE(e.is_active,0) = 1 ORDER BY e.start_time DESC LIMIT 1`, [], 'first'),
+      overviewQuery(env, failed, 'founder_metrics', `SELECT * FROM founder_metrics WHERE tenant_id = ? ORDER BY date DESC LIMIT 7`, [tenantId]),
+    ]);
+    return { hours_by_project: hours, active_timer: activeTimer, founder_recent: founder };
+  });
+}
+
+async function handleOverviewMcpHealth(request, env) {
+  return overviewCachedResponse(request, env, 'mcp-health', async ({ tenantId, failed }) => {
+    const [topTools, categories, totals, degraded] = await Promise.all([
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT s.tool_name, COALESCE(s.tool_category, t.tool_category, 'uncategorized') AS category, s.call_count AS calls_today, CASE WHEN s.call_count > 0 THEN ROUND((s.success_count * 100.0) / s.call_count, 1) ELSE 0 END AS success_rate, COALESCE(t.avg_latency_ms, s.avg_duration_ms, 0) AS avg_latency, s.total_cost_usd AS cost_today, COALESCE(t.is_degraded,0) AS is_degraded, COALESCE(t.failure_rate,0) AS failure_rate FROM mcp_tool_call_stats s LEFT JOIN mcp_registered_tools t ON t.tool_name = s.tool_name WHERE s.tenant_id = ? AND s.date = date('now') ORDER BY s.call_count DESC LIMIT 15`, [tenantId]),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(tool_category, 'uncategorized') AS category, COALESCE(SUM(call_count),0) AS calls FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now') GROUP BY COALESCE(tool_category, 'uncategorized') ORDER BY calls DESC`, [tenantId]),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(SUM(call_count),0) AS calls, COALESCE(SUM(total_cost_usd),0) AS cost FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_registered_tools', `SELECT COUNT(*) AS count FROM mcp_registered_tools WHERE COALESCE(is_degraded,0) = 1 OR COALESCE(failure_rate,0) > 0.2`, [], 'first'),
+    ]);
+    return { top_tools: topTools, category_breakdown: categories, degraded_count: overviewNumber(degraded?.count), totals: { calls: overviewNumber(totals?.calls), cost: overviewNumber(totals?.cost) } };
+  });
+}
+
+async function handleOverviewCommandsWorkflows(request, env) {
+  return overviewCachedResponse(request, env, 'commands-workflows', async ({ tenantId, failed }) => {
+    const [slash, never, runs, workflows, runDistinct, dependencies] = await Promise.all([
+      overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name, call_count FROM agentsam_slash_commands ORDER BY call_count DESC LIMIT 10`, []),
+      overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name FROM agentsam_slash_commands WHERE COALESCE(call_count,0) = 0 AND COALESCE(is_active,1) = 1 ORDER BY sort_order ASC LIMIT 12`, []),
+      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT w.name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM mcp_workflow_runs r LEFT JOIN mcp_workflows w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
+      overviewQuery(env, failed, 'mcp_workflows', `SELECT COUNT(*) AS total FROM mcp_workflows WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT COUNT(DISTINCT workflow_id) AS run_once FROM mcp_workflow_runs WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
+    ]);
+    const total = overviewNumber(workflows?.total);
+    const runOnce = overviewNumber(runDistinct?.run_once);
+    return {
+      slash_by_usage: slash,
+      never_called: never,
+      recent_workflow_runs: runs,
+      workflow_health_summary: { total_workflows: total, run_at_least_once: runOnce, never_run: Math.max(0, total - runOnce) },
+      execution_dependency_graph: dependencies,
+    };
+  });
+}
+
+async function handleOverviewStartTimer(request, env) {
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  const id = crypto.randomUUID();
+  const userId = session.user_id || 'sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
+       VALUES (?, ?, ?, ?, datetime('now'), NULL, 0, 1, ?, datetime('now'))`
+    ).bind(id, userId, PROJECT_ID, session.id || session.session_id || null, 'overview_start').run();
+    return jsonResponse({ success: true, id });
+  } catch (e) {
+    console.warn('[overview start timer]', e?.message ?? e);
+    return jsonResponse({ success: false, error: 'partial', failed: ['project_time_entries'] }, 200);
+  }
+}
+
+async function handleOverviewFounderLog(request, env) {
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  let body = {};
+  try { body = await request.json(); } catch (_) { }
+  const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO founder_metrics (id, tenant_id, date, energy_level, stress_level, sleep_hours, notes, created_at, updated_at)
+       VALUES (?, ?, date('now'), ?, ?, ?, ?, unixepoch(), unixepoch())`
+    ).bind(crypto.randomUUID(), tenantId, overviewNumber(body.energy, 5), overviewNumber(body.stress, 5), overviewNumber(body.sleep, 0), String(body.notes || '').slice(0, 500)).run();
+    return jsonResponse({ success: true });
+  } catch (e) {
+    console.warn('[overview founder log]', e?.message ?? e);
+    return jsonResponse({ success: false, error: 'partial', failed: ['founder_metrics'] }, 200);
+  }
+}
+
 function overviewStatsPayload(overrides = {}) {
   return {
     success: true,
@@ -29630,6 +29988,8 @@ function overviewStatsPayload(overrides = {}) {
     pipeline_runs: overrides.pipeline_runs ?? 0,
     agent_conversations: overrides.agent_conversations ?? 0,
     agent_last_activity: overrides.agent_last_activity ?? null,
+    mcp_tool_calls_today: overrides.mcp_tool_calls_today ?? 0,
+    mcp_tool_success_rate_today: overrides.mcp_tool_success_rate_today ?? 0,
     latest_migration: overrides.latest_migration ?? null,
   };
 }
@@ -29651,6 +30011,7 @@ async function handleOverviewStats(request, url, env) {
       providersResult,
       totalInRow,
       totalOutRow,
+      mcpTodayRow,
     ] = await Promise.all([
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM financial_transactions`).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as entries, COALESCE(SUM(amount_usd), 0) as total FROM spend_ledger`).first()),
@@ -29661,6 +30022,7 @@ async function handleOverviewStats(request, url, env) {
       safe(env.DB.prepare(`SELECT provider, SUM(amount_usd) as total FROM spend_ledger GROUP BY provider ORDER BY total DESC LIMIT 5`).all()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM financial_transactions WHERE amount > 0`).first()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as total FROM financial_transactions WHERE amount < 0`).first()),
+      safe(env.DB.prepare(`SELECT COALESCE(SUM(call_count),0) AS calls, COALESCE(SUM(success_count),0) AS successes FROM mcp_tool_call_stats WHERE date = date('now')`).first()),
     ]);
 
     const spendTotal = sum(spendRow, 'total');
@@ -29668,6 +30030,7 @@ async function handleOverviewStats(request, url, env) {
     const totalOutAllTime = outTxns + spendTotal;
     const providers = (providersResult?.results || providersResult || []).map((r) => ({ provider: r.provider || 'unknown', total: Number(r.total || 0) }));
     const dbHealth = (num(txCountRow) + num(spendRow, 'entries') + (deployRow ? 1 : 0)) > 0 ? 'ok' : 'no_data';
+    const mcpCalls = sum(mcpTodayRow, 'calls');
 
     return jsonResponse({
       success: true,
@@ -29688,6 +30051,8 @@ async function handleOverviewStats(request, url, env) {
       pipeline_runs: 0,
       agent_conversations: num(agentTelemetryRow),
       agent_last_activity: agentTelemetryRow?.last_at ? String(agentTelemetryRow.last_at).slice(0, 19) : null,
+      mcp_tool_calls_today: mcpCalls,
+      mcp_tool_success_rate_today: mcpCalls > 0 ? Math.round((sum(mcpTodayRow, 'successes') / mcpCalls) * 100) : 0,
       latest_migration: deployRow ? { name: deployRow.deployment_id?.slice(0, 8) || 'deploy', applied_at: deployRow.deployed_at } : null,
     });
   } catch (e) {
@@ -29990,10 +30355,51 @@ async function handleOverviewDeployments(request, url, env) {
       } catch (_) { }
     }
 
-    return jsonResponse({ deployments: deploymentRows, cicd_runs });
+    const failed = new Set();
+    const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+    const [deployTimelineRows, phaseRows, cicdTableRows, githubRows, dependencyRows] = await Promise.all([
+      overviewQuery(env, failed, 'deployments', `SELECT date(timestamp) AS day, status, COUNT(*) AS count FROM deployments WHERE date(timestamp) >= date('now','-13 days') GROUP BY day, status ORDER BY day`, []),
+      overviewQuery(env, failed, 'cicd_runs', `SELECT phase_sandbox_status, phase_benchmark_status, phase_promote_status, COUNT(*) AS count FROM cicd_runs GROUP BY phase_sandbox_status, phase_benchmark_status, phase_promote_status`, []),
+      overviewQuery(env, failed, 'cicd_runs', `SELECT worker_name AS worker, environment AS env, status, benchmark_score, duration_ms AS duration, triggered_by, created_at FROM cicd_runs ORDER BY created_at DESC LIMIT 5`, []),
+      overviewQuery(env, failed, 'cicd_github_runs', `SELECT workflow_name, status, conclusion, branch, started_at, completed_at, duration_ms FROM cicd_github_runs ORDER BY created_at DESC LIMIT 3`, []),
+      overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
+    ]);
+    const phaseHealth = ['sandbox', 'benchmark', 'promote'].map((phase) => {
+      const col = `phase_${phase}_status`;
+      const counts = { pass: 0, fail: 0, other: 0 };
+      overviewRows(phaseRows).forEach((r) => {
+        const key = String(r[col] || '').toLowerCase();
+        const n = overviewNumber(r.count);
+        if (key === 'pass' || key === 'passed' || key === 'success') counts.pass += n;
+        else if (key === 'fail' || key === 'failed' || key === 'failure') counts.fail += n;
+        else counts.other += n;
+      });
+      const total = counts.pass + counts.fail + counts.other;
+      return { phase, pass_rate: total ? Math.round((counts.pass / total) * 100) : 0, counts };
+    });
+
+    return jsonResponse({
+      deployments: deploymentRows,
+      cicd_runs,
+      deploy_timeline: deployTimelineRows,
+      phase_health: phaseHealth,
+      cicd_runs_table: cicdTableRows,
+      github_runs: githubRows,
+      execution_dependency_graph: dependencyRows,
+      data: {
+        deployments: deploymentRows,
+        cicd_runs,
+        deploy_timeline: deployTimelineRows,
+        phase_health: phaseHealth,
+        cicd_runs_table: cicdTableRows,
+        github_runs: githubRows,
+        execution_dependency_graph: dependencyRows,
+      },
+      ...(failed.size ? { error: 'partial', failed: [...failed] } : {}),
+    });
   } catch (e) {
     console.warn('Overview deployments error:', e?.message);
-    return jsonResponse({ error: String(e?.message), deployments: [], cicd_runs: [] }, 500);
+    return jsonResponse({ error: 'partial', failed: ['deployments'], deployments: [], cicd_runs: [], data: { deployments: [], cicd_runs: [] } }, 200);
   }
 }
 
@@ -30348,6 +30754,7 @@ async function handleFinanceSummary(url, env) {
     aiSpendList,
     totalInAllTime,
     totalOutTxns,
+    spendDaily30,
   ] = await Promise.all([
     safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_transactions WHERE transaction_date >= ? AND amount > 0`).bind(monthStart).first()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as v FROM financial_transactions WHERE transaction_date >= ? AND amount < 0`).bind(monthStart).first()),
@@ -30379,6 +30786,7 @@ async function handleFinanceSummary(url, env) {
     safe(env.DB.prepare(`SELECT occurred_at, provider_slug, provider, amount_usd, description, notes FROM spend_ledger WHERE category IN ('ai_tools','usage') OR provider IS NOT NULL ORDER BY occurred_at DESC LIMIT 50`).all()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_transactions WHERE amount > 0`).first()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as v FROM financial_transactions WHERE amount < 0`).first()),
+    safe(env.DB.prepare(`SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(provider_slug, provider, 'unknown') AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-29 days') GROUP BY day, provider ORDER BY day`).all()),
   ]);
 
   const spendTotal = Number(spendLedgerRow?.total ?? 0);
@@ -30418,6 +30826,7 @@ async function handleFinanceSummary(url, env) {
       total: spendTotal,
       entries: spendEntries,
       by_provider: byProvider,
+      daily_30d: (spendDaily30?.results ?? spendDaily30 ?? []),
     },
     ai_spend: {
       total_usd: Number(aiSpendRow?.total ?? 0),

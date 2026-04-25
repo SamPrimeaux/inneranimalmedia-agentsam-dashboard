@@ -561,7 +561,7 @@ export async function handleOAuthApi(request, env, ctx) {
         setup: `Set Worker secrets, then retry.`,
       }, 503);
     }
-    return jsonResponse({ redirect_url: redirectUrl });
+    return Response.redirect(redirectUrl, 302);
   }
 
   if (cbMatch) {

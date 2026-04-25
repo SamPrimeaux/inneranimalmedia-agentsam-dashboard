@@ -33,6 +33,26 @@ const OAUTH_PROVIDER_ALIASES = {
     google_gmail: 'google_gmail',
 };
 
+const PROVIDER_COLOR_SLUGS = {
+    anthropic: 'anthropic_api',
+    claude_code: 'claude_pro',
+    cloudflare_images: 'cf_images',
+    cloudflare_r2: 'cf_r2',
+    cursor: 'cursor_api',
+    github: 'github',
+    google_ai: 'google_antigravity',
+    google_drive: 'google_workspace',
+    hyperdrive: 'supabase',
+    mcp_servers: 'cf_workers',
+    openai: 'openai_api',
+    resend: 'resend',
+    supabase: 'supabase',
+    vectorize: 'workers_ai',
+    browser_rendering: 'cf_workers',
+    bluebubbles: 'bluebubbles',
+    aws_s3: 'aws',
+};
+
 /**
  * Main switch-board for Integration webhooks.
  */
@@ -139,6 +159,11 @@ function normalizeProviderKey(provider) {
     return p;
 }
 
+function colorSlugForProvider(providerKey) {
+    const key = normalizeProviderKey(providerKey);
+    return PROVIDER_COLOR_SLUGS[key] || key;
+}
+
 function parseJson(value, fallback) {
     if (value == null || value === '') return fallback;
     if (typeof value !== 'string') return value;
@@ -224,7 +249,7 @@ async function handleSummary(env, authUser) {
     if (!env?.DB) return jsonResponse({ providers: [], summary: emptySummary(), error: 'DB not configured' }, 503);
     const tenantId = resolveTenantId(authUser, env);
     const userId = integrationUserId(authUser);
-    const [registry, oauth, toolCounts, webhookCounts, allowlistCount, events] = await Promise.all([
+    const [registry, oauth, toolCounts, webhookCounts, allowlistCount, events, providerColors] = await Promise.all([
         env.DB.prepare(
             `SELECT r.*,
                     h.status AS health_status,
@@ -245,7 +270,9 @@ async function handleSummary(env, authUser) {
         getWebhookCounts(env),
         safeFirst(env.DB, `SELECT COUNT(*) AS count FROM agentsam_mcp_allowlist WHERE user_id = ?`, [userId]),
         safeAll(env.DB, `SELECT provider_key, event_type, message, actor, created_at FROM integration_events WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 25`, [tenantId]),
+        loadProviderColors(env),
     ]);
+    const colorBySlug = new Map((providerColors.results || []).map((row) => [String(row.slug || '').toLowerCase(), row]));
 
     const oauthByProvider = new Map();
     for (const token of oauth.results || []) {
@@ -266,9 +293,12 @@ async function handleSummary(env, authUser) {
     const providers = (registry.results || []).map((r) => {
         const oauthAccounts = oauthByProvider.get(normalizeProviderKey(r.provider_key)) || [];
         const status = oauthAccounts.some((a) => a.status === 'expired') ? 'auth_expired' : r.status;
+        const providerColorSlug = colorSlugForProvider(r.provider_key);
         return {
             ...r,
             status,
+            provider_color_slug: providerColorSlug,
+            provider_color: colorBySlug.get(providerColorSlug) || null,
             scopes: parseJson(r.scopes_json, []),
             config: parseJson(r.config_json, {}),
             oauth_account: oauthAccounts[0] || null,
@@ -292,9 +322,17 @@ async function handleSummary(env, authUser) {
         webhooks: webhookCounts,
         allowlist_count: Number(allowlistCount?.count || 0),
         recent_events: events.results || [],
+        provider_colors: providerColors.results || [],
+        provider_color_aliases: PROVIDER_COLOR_SLUGS,
         capabilities: resolveCapabilities(authUser),
         summary,
     });
+}
+
+async function loadProviderColors(env) {
+    const withDisplayName = await safeAll(env.DB, `SELECT slug, display_name, primary_color, secondary_color, text_on_color, icon_slug, category FROM provider_colors ORDER BY category, display_name`, []);
+    if (withDisplayName.results?.length) return withDisplayName;
+    return safeAll(env.DB, `SELECT slug, css_var, color AS primary_color, color AS secondary_color, '#ffffff' AS text_on_color, slug AS icon_slug, 'other' AS category FROM provider_colors ORDER BY slug`, []);
 }
 
 function resolveCapabilities(authUser) {
@@ -365,14 +403,25 @@ async function getWebhookCounts(env) {
 async function handleProviderDetail(env, authUser, provider) {
     const tenantId = resolveTenantId(authUser, env);
     const userId = integrationUserId(authUser);
-    const [registry, health, events, oauth, tools] = await Promise.all([
+    const [registry, health, events, oauth, tools, providerColors] = await Promise.all([
         safeFirst(env.DB, `SELECT * FROM integration_registry WHERE tenant_id = ? AND provider_key = ? LIMIT 1`, [tenantId, provider]),
         safeAll(env.DB, `SELECT * FROM integration_health_checks WHERE tenant_id = ? AND provider_key = ? ORDER BY checked_at DESC LIMIT 5`, [tenantId, provider]),
         safeAll(env.DB, `SELECT * FROM integration_events WHERE tenant_id = ? AND provider_key = ? ORDER BY created_at DESC LIMIT 10`, [tenantId, provider]),
         safeAll(env.DB, `SELECT provider, account_identifier, scope, expires_at, created_at, updated_at FROM user_oauth_tokens WHERE user_id = ? AND provider = ?`, [userId, OAUTH_PROVIDER_ALIASES[provider] || provider]),
         safeAll(env.DB, `SELECT id, tool_name, tool_category, description, enabled FROM mcp_registered_tools WHERE (? = 'mcp_servers' OR tool_category = 'integrations') ORDER BY tool_category, tool_name LIMIT 100`, [provider]),
+        loadProviderColors(env),
     ]);
-    return jsonResponse({ provider: registry, health_checks: health.results || [], events: events.results || [], oauth_tokens: oauth.results || [], tools: tools.results || [] });
+    const colorSlug = colorSlugForProvider(provider);
+    const colorBySlug = new Map((providerColors.results || []).map((row) => [String(row.slug || '').toLowerCase(), row]));
+    return jsonResponse({
+        provider: registry ? { ...registry, provider_color_slug: colorSlug, provider_color: colorBySlug.get(colorSlug) || null } : registry,
+        health_checks: health.results || [],
+        events: events.results || [],
+        oauth_tokens: oauth.results || [],
+        tools: tools.results || [],
+        provider_colors: providerColors.results || [],
+        provider_color_aliases: PROVIDER_COLOR_SLUGS,
+    });
 }
 
 async function handleEvents(env, authUser, url) {

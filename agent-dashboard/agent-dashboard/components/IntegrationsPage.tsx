@@ -10,7 +10,6 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   Cloud,
   Database,
   Github,
@@ -48,6 +47,8 @@ type Provider = {
   oauth_accounts?: any[];
   health?: { status?: string | null; latency_ms?: number | null; checked_at?: string | null; error_message?: string | null };
   tool_count?: number;
+  provider_color_slug?: string | null;
+  provider_color?: ProviderPalette | null;
 };
 
 type SummaryPayload = {
@@ -58,7 +59,24 @@ type SummaryPayload = {
   webhooks?: { total?: number; active?: number };
   allowlist_count?: number;
   recent_events?: any[];
+  provider_colors?: ProviderPalette[];
+  provider_color_aliases?: Record<string, string>;
   capabilities?: { can_manage_mcp?: boolean; can_manage_secrets?: boolean; is_superadmin?: boolean };
+};
+
+type ProviderPalette = {
+  slug: string;
+  display_name?: string;
+  displayName?: string;
+  primary_color?: string;
+  secondary_color?: string;
+  text_on_color?: string;
+  icon_slug?: string;
+  primary?: string;
+  secondary?: string;
+  text?: string;
+  iconSlug?: string;
+  category: string;
 };
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -92,8 +110,83 @@ const AVAILABLE_PROVIDERS = [
   ['qdrant', 'Qdrant', 'Vector search collections.', 'analytics'],
 ];
 
+const PROVIDER_COLORS: Record<string, ProviderPalette> = {
+  anthropic_api: { slug: 'anthropic_api', display_name: 'Anthropic API', primary_color: '#D97757', secondary_color: '#b85f3e', text_on_color: '#0f1117', icon_slug: 'anthropic', category: 'ai_api' },
+  cursor_api: { slug: 'cursor_api', display_name: 'Cursor API', primary_color: '#818cf8', secondary_color: '#6366f1', text_on_color: '#ffffff', icon_slug: 'cursor', category: 'ai_api' },
+  google_antigravity: { slug: 'google_antigravity', display_name: 'Google Antigravity', primary_color: '#4285F4', secondary_color: '#fbbc04', text_on_color: '#ffffff', icon_slug: 'google', category: 'ai_api' },
+  openai_api: { slug: 'openai_api', display_name: 'OpenAI API', primary_color: '#10a37f', secondary_color: '#074d3c', text_on_color: '#ffffff', icon_slug: 'openai', category: 'ai_api' },
+  workers_ai: { slug: 'workers_ai', display_name: 'Workers AI', primary_color: '#00E5CC', secondary_color: '#00B8A3', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'ai_api' },
+  chatgpt_pro: { slug: 'chatgpt_pro', display_name: 'ChatGPT Pro', primary_color: '#10a37f', secondary_color: '#0d8a6b', text_on_color: '#ffffff', icon_slug: 'openai', category: 'ai_subscription' },
+  claude_pro: { slug: 'claude_pro', display_name: 'Claude Pro', primary_color: '#D97757', secondary_color: '#EFAF91', text_on_color: '#0f1117', icon_slug: 'anthropic', category: 'ai_subscription' },
+  cursor: { slug: 'cursor', display_name: 'Cursor', primary_color: '#6366f1', secondary_color: '#4f46e5', text_on_color: '#ffffff', icon_slug: 'cursor', category: 'dev_tool' },
+  github: { slug: 'github', display_name: 'GitHub', primary_color: '#24292e', secondary_color: '#0d1117', text_on_color: '#ffffff', icon_slug: 'github', category: 'dev_tool' },
+  aws: { slug: 'aws', display_name: 'AWS', primary_color: '#FF9900', secondary_color: '#232F3E', text_on_color: '#0f1117', icon_slug: 'aws', category: 'infrastructure' },
+  cf_d1: { slug: 'cf_d1', display_name: 'CF D1', primary_color: '#18FFFF', secondary_color: '#00E5FF', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'infrastructure' },
+  cf_images: { slug: 'cf_images', display_name: 'CF Images', primary_color: '#E040FB', secondary_color: '#B71C8C', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
+  cf_r2: { slug: 'cf_r2', display_name: 'CF R2', primary_color: '#00E676', secondary_color: '#00C853', text_on_color: '#0f1117', icon_slug: 'cloudflare', category: 'infrastructure' },
+  cf_workers: { slug: 'cf_workers', display_name: 'CF Workers', primary_color: '#7C3AED', secondary_color: '#6D28D9', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
+  cloudflare: { slug: 'cloudflare', display_name: 'Cloudflare', primary_color: '#2965F1', secondary_color: '#1a4bb8', text_on_color: '#ffffff', icon_slug: 'cloudflare', category: 'infrastructure' },
+  gcp: { slug: 'gcp', display_name: 'Google Cloud (GCP)', primary_color: '#4285F4', secondary_color: '#34A853', text_on_color: '#ffffff', icon_slug: 'google', category: 'infrastructure' },
+  supabase: { slug: 'supabase', display_name: 'Supabase (Hyperdrive)', primary_color: '#3ECF8E', secondary_color: '#1C8B5A', text_on_color: '#0f1117', icon_slug: 'supabase', category: 'infrastructure' },
+  google_workspace: { slug: 'google_workspace', display_name: 'Google Workspace', primary_color: '#4285F4', secondary_color: '#34A853', text_on_color: '#ffffff', icon_slug: 'google', category: 'subscription' },
+  resend: { slug: 'resend', display_name: 'Resend', primary_color: '#000000', secondary_color: '#1a1a1a', text_on_color: '#ffffff', icon_slug: 'resend', category: 'subscription' },
+  bluebubbles: { slug: 'bluebubbles', display_name: 'BlueBubbles', primary_color: '#5AC8FA', secondary_color: '#0A84FF', text_on_color: '#ffffff', icon_slug: 'message', category: 'communication' },
+};
+
+const PROVIDER_COLOR_SLUGS: Record<string, string> = {
+  anthropic: 'anthropic_api',
+  claude_code: 'claude_pro',
+  cloudflare_images: 'cf_images',
+  cloudflare_r2: 'cf_r2',
+  cursor: 'cursor_api',
+  github: 'github',
+  google_ai: 'google_antigravity',
+  google_drive: 'google_workspace',
+  hyperdrive: 'supabase',
+  mcp_servers: 'cf_workers',
+  openai: 'openai_api',
+  resend: 'resend',
+  supabase: 'supabase',
+  vectorize: 'workers_ai',
+  browser_rendering: 'cf_workers',
+  bluebubbles: 'bluebubbles',
+  aws_s3: 'aws',
+};
+
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
+}
+
+function normalizePalette(raw: ProviderPalette | null | undefined): ProviderPalette | null {
+  if (!raw) return null;
+  const primary = raw.primary_color || raw.primary || 'var(--solar-cyan)';
+  const secondary = raw.secondary_color || raw.secondary || primary;
+  const text = raw.text_on_color || raw.text || 'var(--bg-app)';
+  return {
+    ...raw,
+    primary_color: primary,
+    secondary_color: secondary,
+    text_on_color: text,
+    icon_slug: raw.icon_slug || raw.iconSlug || raw.slug,
+  };
+}
+
+function paletteFor(
+  providerKey: string,
+  category?: string,
+  registry?: Map<string, ProviderPalette>,
+  providerColor?: ProviderPalette | null,
+  aliases: Record<string, string> = PROVIDER_COLOR_SLUGS,
+): ProviderPalette {
+  const slug = aliases[providerKey] || providerKey;
+  const direct = normalizePalette(providerColor) || normalizePalette(registry?.get(slug)) || normalizePalette(PROVIDER_COLORS[slug]);
+  if (direct) return direct;
+  if (category === 'database') return normalizePalette(PROVIDER_COLORS.cf_d1)!;
+  if (category === 'storage') return normalizePalette(PROVIDER_COLORS.cf_r2)!;
+  if (category === 'deployment') return normalizePalette(PROVIDER_COLORS.cf_workers)!;
+  if (category === 'ai_provider') return normalizePalette(PROVIDER_COLORS.workers_ai)!;
+  if (category === 'communication') return normalizePalette(PROVIDER_COLORS.bluebubbles)!;
+  return normalizePalette(PROVIDER_COLORS.cloudflare)!;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -189,6 +282,10 @@ export const IntegrationsPage: React.FC = () => {
   const canManageMcp = data.capabilities?.can_manage_mcp !== false;
   const canManageSecrets = data.capabilities?.can_manage_secrets !== false;
   const isSuperadmin = data.capabilities?.is_superadmin !== false;
+  const colorAliases = data.provider_color_aliases || PROVIDER_COLOR_SLUGS;
+  const colorRegistry = useMemo(() => {
+    return new Map((data.provider_colors || []).map((row) => [String(row.slug || '').toLowerCase(), normalizePalette(row)!]));
+  }, [data.provider_colors]);
 
   const visibleTabs = useMemo(() => {
     if (canManageMcp) return TABS;
@@ -284,6 +381,8 @@ export const IntegrationsPage: React.FC = () => {
                     key={provider.provider_key}
                     provider={provider}
                     busy={busy}
+                  colorRegistry={colorRegistry}
+                  colorAliases={colorAliases}
                     onTest={() => void runAction(provider.provider_key, 'test')}
                     onSync={() => void runAction(provider.provider_key, 'sync')}
                     onConfigure={() => void openDrawer(provider)}
@@ -295,30 +394,49 @@ export const IntegrationsPage: React.FC = () => {
 
           {tab === 'available' && (
             <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {availableProviders.map(([key, name, description, category]) => (
-                <div key={key} className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 min-h-[150px] flex flex-col gap-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-[var(--bg-app)] text-[var(--solar-cyan)] flex items-center justify-center">
-                        {iconFor(key, category)}
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-[var(--text-heading)] truncate">{name}</h3>
-                        <p className="text-[11px] text-[var(--text-muted)] leading-snug">{description}</p>
-                      </div>
-                    </div>
-                    <Badge value={category} />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProvider({ provider_key: key, display_name: name, category, auth_type: 'api_key', status: 'disconnected' })}
-                    className="mt-auto inline-flex items-center justify-center gap-2 text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)]"
+              {availableProviders.map(([key, name, description, category]) => {
+                const palette = paletteFor(key, category, colorRegistry, null, colorAliases);
+                const primary = palette.primary_color!;
+                const secondary = palette.secondary_color!;
+                const text = palette.text_on_color!;
+                return (
+                  <div
+                    key={key}
+                    className="rounded-xl border bg-[var(--bg-panel)] p-4 min-h-[150px] flex flex-col gap-3 overflow-hidden"
+                    style={{ borderColor: `${secondary}66`, boxShadow: `inset 3px 0 0 ${primary}` }}
                   >
-                    <Plug size={13} />
-                    Connect
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className="w-9 h-9 rounded-lg flex items-center justify-center"
+                          style={{ background: `linear-gradient(135deg, ${primary}, ${secondary})`, color: text }}
+                          title={palette.slug}
+                        >
+                          {iconFor(key, category)}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-semibold text-[var(--text-heading)] truncate">{name}</h3>
+                          <p className="text-[11px] text-[var(--text-muted)] leading-snug">{description}</p>
+                        </div>
+                      </div>
+                      <span
+                        className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border whitespace-nowrap"
+                        style={{ borderColor: `${primary}66`, color: primary, backgroundColor: `${primary}14` }}
+                      >
+                        {category}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProvider({ provider_key: key, display_name: name, category, auth_type: 'api_key', status: 'disconnected' })}
+                      className="mt-auto inline-flex items-center justify-center gap-2 text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--border-subtle)] hover:border-[var(--solar-cyan)]"
+                    >
+                      <Plug size={13} />
+                      Connect
+                    </button>
+                  </div>
+                );
+              })}
             </section>
           )}
 
@@ -363,6 +481,8 @@ export const IntegrationsPage: React.FC = () => {
           detail={detail}
           loading={detailLoading}
           isSuperadmin={isSuperadmin}
+          colorRegistry={colorRegistry}
+          colorAliases={colorAliases}
           onClose={() => {
             setSelectedProvider(null);
             setDetail(null);
@@ -402,21 +522,36 @@ const KpiStrip: React.FC<{ summary: Record<string, number> }> = ({ summary }) =>
 const ProviderCard: React.FC<{
   provider: Provider;
   busy: string | null;
+  colorRegistry: Map<string, ProviderPalette>;
+  colorAliases: Record<string, string>;
   onTest: () => void;
   onSync: () => void;
   onConfigure: () => void;
-}> = ({ provider, busy, onTest, onSync, onConfigure }) => {
+}> = ({ provider, busy, colorRegistry, colorAliases, onTest, onSync, onConfigure }) => {
   const latency = provider.health?.latency_ms ?? provider.last_health_latency_ms;
+  const palette = paletteFor(provider.provider_key, provider.category, colorRegistry, provider.provider_color, colorAliases);
+  const primary = palette.primary_color!;
+  const secondary = palette.secondary_color!;
+  const text = palette.text_on_color!;
   return (
-    <article className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-panel)] p-4 flex flex-col gap-3 min-h-[190px]">
+    <article
+      className="rounded-xl border bg-[var(--bg-panel)] p-4 flex flex-col gap-3 min-h-[190px] overflow-hidden"
+      style={{ borderColor: `${secondary}66`, boxShadow: `inset 3px 0 0 ${primary}` }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-lg bg-[var(--bg-app)] text-[var(--solar-cyan)] flex items-center justify-center shrink-0">
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: `linear-gradient(135deg, ${primary}, ${secondary})`, color: text }}
+            title={palette.slug}
+          >
             {iconFor(provider.provider_key, provider.category)}
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-[var(--text-heading)] truncate">{provider.display_name}</h3>
-            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mt-0.5">{provider.category}</p>
+            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mt-0.5">
+              {provider.category} · {palette.slug}
+            </p>
           </div>
         </div>
         <Badge value={provider.status} />
@@ -600,60 +735,84 @@ const ProviderDrawer: React.FC<{
   detail: any;
   loading: boolean;
   isSuperadmin: boolean;
+  colorRegistry: Map<string, ProviderPalette>;
+  colorAliases: Record<string, string>;
   onClose: () => void;
   onTest: () => void;
   onSync: () => void;
   onDisconnect: () => void;
-}> = ({ provider, detail, loading, isSuperadmin, onClose, onTest, onSync, onDisconnect }) => (
-  <aside className="w-full max-w-md border-l border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-2xl overflow-auto">
-    <div className="sticky top-0 bg-[var(--bg-panel)] border-b border-[var(--border-subtle)] p-4 flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 text-[var(--solar-cyan)]">{iconFor(provider.provider_key, provider.category)}<span className="text-[10px] uppercase tracking-wider font-bold">{provider.category}</span></div>
-        <h2 className="mt-1 text-lg font-bold text-[var(--text-heading)] truncate">{provider.display_name}</h2>
-        <div className="mt-2"><Badge value={provider.status} /></div>
+}> = ({ provider, detail, loading, isSuperadmin, colorRegistry, colorAliases, onClose, onTest, onSync, onDisconnect }) => {
+  const detailColor = detail?.provider?.provider_color || provider.provider_color;
+  const palette = paletteFor(provider.provider_key, provider.category, colorRegistry, detailColor, colorAliases);
+  const primary = palette.primary_color!;
+  const secondary = palette.secondary_color!;
+  const text = palette.text_on_color!;
+  return (
+    <aside
+      className="w-full max-w-md border-l bg-[var(--bg-panel)] shadow-2xl overflow-auto"
+      style={{ borderColor: `${secondary}99` }}
+    >
+      <div
+        className="sticky top-0 bg-[var(--bg-panel)] border-b p-4 flex items-start justify-between gap-3"
+        style={{ borderColor: `${secondary}66`, boxShadow: `inset 4px 0 0 ${primary}` }}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2" style={{ color: primary }}>
+            <span
+              className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ background: `linear-gradient(135deg, ${primary}, ${secondary})`, color: text }}
+            >
+              {iconFor(provider.provider_key, provider.category)}
+            </span>
+            <span className="text-[10px] uppercase tracking-wider font-bold">{provider.category} · {palette.slug}</span>
+          </div>
+          <h2 className="mt-1 text-lg font-bold text-[var(--text-heading)] truncate">{provider.display_name}</h2>
+          <div className="mt-2"><Badge value={provider.status} /></div>
+        </div>
+        <button onClick={onClose} className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"><X size={16} /></button>
       </div>
-      <button onClick={onClose} className="p-2 rounded-lg hover:bg-[var(--bg-hover)]"><X size={16} /></button>
-    </div>
-    <div className="p-4 flex flex-col gap-4">
-      <div className="flex gap-2">
-        <ActionButton label="Test" onClick={onTest} />
-        <ActionButton label="Sync" onClick={onSync} />
-      </div>
-      {loading ? <LoadingBlock /> : (
-        <>
-          <DrawerSection title="Connection Details">
-            <DetailLine label="Account" value={provider.account_display || detail?.provider?.account_display || 'not recorded'} />
-            <DetailLine label="Auth Type" value={provider.auth_type} />
-            <DetailLine label="Secret / Binding" value={provider.secret_binding_name || 'none'} />
-            <DetailLine label="OAuth Expires" value={relativeTime(detail?.oauth_tokens?.[0]?.expires_at)} />
-            <DetailLine label="Tools Count" value={String(detail?.tools?.length || provider.tool_count || 0)} />
-          </DrawerSection>
-          <DrawerSection title="Scopes">
-            <div className="flex flex-wrap gap-1.5">
-              {(provider.scopes?.length ? provider.scopes : String(detail?.oauth_tokens?.[0]?.scope || '').split(/[,\s]+/).filter(Boolean)).map((scope: string) => (
-                <span key={scope} className="text-[10px] font-mono px-2 py-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-app)]">{scope}</span>
-              ))}
-              {!provider.scopes?.length && !detail?.oauth_tokens?.[0]?.scope && <span className="text-[12px] text-[var(--text-muted)]">No scopes recorded.</span>}
-            </div>
-          </DrawerSection>
-          <DrawerSection title="Recent Health Checks">
-            <CompactList rows={detail?.health_checks || []} primary="status" secondary="error_message" time="checked_at" empty="No health checks yet." />
-          </DrawerSection>
-          <DrawerSection title="Recent Events">
-            <CompactList rows={detail?.events || []} primary="event_type" secondary="message" time="created_at" empty="No recent events." />
-          </DrawerSection>
-          {isSuperadmin && (
-            <DrawerSection title="Danger Zone">
-              <button onClick={onDisconnect} className="w-full px-3 py-2 rounded-lg border border-[var(--solar-red)]/40 text-[var(--solar-red)] text-[11px] font-bold hover:bg-[var(--solar-red)]/10">
-                Disconnect
-              </button>
+      <div className="p-4 flex flex-col gap-4">
+        <div className="flex gap-2">
+          <ActionButton label="Test" onClick={onTest} />
+          <ActionButton label="Sync" onClick={onSync} />
+        </div>
+        {loading ? <LoadingBlock /> : (
+          <>
+            <DrawerSection title="Connection Details">
+              <DetailLine label="Provider Color" value={`${palette.slug} (${primary} / ${secondary})`} />
+              <DetailLine label="Account" value={provider.account_display || detail?.provider?.account_display || 'not recorded'} />
+              <DetailLine label="Auth Type" value={provider.auth_type} />
+              <DetailLine label="Secret / Binding" value={provider.secret_binding_name || 'none'} />
+              <DetailLine label="OAuth Expires" value={relativeTime(detail?.oauth_tokens?.[0]?.expires_at)} />
+              <DetailLine label="Tools Count" value={String(detail?.tools?.length || provider.tool_count || 0)} />
             </DrawerSection>
-          )}
-        </>
-      )}
-    </div>
-  </aside>
-);
+            <DrawerSection title="Scopes">
+              <div className="flex flex-wrap gap-1.5">
+                {(provider.scopes?.length ? provider.scopes : String(detail?.oauth_tokens?.[0]?.scope || '').split(/[,\s]+/).filter(Boolean)).map((scope: string) => (
+                  <span key={scope} className="text-[10px] font-mono px-2 py-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-app)]">{scope}</span>
+                ))}
+                {!provider.scopes?.length && !detail?.oauth_tokens?.[0]?.scope && <span className="text-[12px] text-[var(--text-muted)]">No scopes recorded.</span>}
+              </div>
+            </DrawerSection>
+            <DrawerSection title="Recent Health Checks">
+              <CompactList rows={detail?.health_checks || []} primary="status" secondary="error_message" time="checked_at" empty="No health checks yet." />
+            </DrawerSection>
+            <DrawerSection title="Recent Events">
+              <CompactList rows={detail?.events || []} primary="event_type" secondary="message" time="created_at" empty="No recent events." />
+            </DrawerSection>
+            {isSuperadmin && (
+              <DrawerSection title="Danger Zone">
+                <button onClick={onDisconnect} className="w-full px-3 py-2 rounded-lg border border-[var(--solar-red)]/40 text-[var(--solar-red)] text-[11px] font-bold hover:bg-[var(--solar-red)]/10">
+                  Disconnect
+                </button>
+              </DrawerSection>
+            )}
+          </>
+        )}
+      </div>
+    </aside>
+  );
+};
 
 const DrawerSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-app)] p-3">

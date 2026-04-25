@@ -218,25 +218,28 @@ async function finishLogin(request, url, env, userId, redirectPath) {
       userAgent ?? null,
       Date.now(),
       expiresAtMs
-    ).run().catch(() => {});
+    ).run().catch((e) => console.warn('[sessions dual-write]', e?.message ?? e));
 
     // Enrich session with superadmin identity if email matches
     try {
       const loginEmail = String(userEmail || '').toLowerCase().trim();
       const superRow = await env.DB.prepare(`
-        SELECT superadmin_uuid, tenant_id, role, permissions_json
+        SELECT id, superadmin_uuid, tenant_id, role, permissions_json
         FROM superadmin_identity
         WHERE LOWER(email) = ? AND is_enabled = 1
         LIMIT 1
       `).bind(loginEmail).first();
 
       if (superRow) {
-        // Update auth_users to ensure is_superadmin flag is set
         await env.DB.prepare(`
           UPDATE auth_users
-          SET is_superadmin = 1, role = 'superadmin', tenant_id = ?
+          SET is_superadmin = 1,
+              tenant_id = ?,
+              superadmin_uuid = COALESCE(superadmin_uuid, ?),
+              superadmin_identity_id = COALESCE(superadmin_identity_id, ?),
+              updated_at = datetime('now')
           WHERE id = ?
-        `).bind(superRow.tenant_id, userId).run();
+        `).bind(superRow.tenant_id, superRow.superadmin_uuid, superRow.id, userId).run();
 
         // Update sessions row with superadmin context
         env.DB.prepare(`

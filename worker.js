@@ -31078,18 +31078,19 @@ async function handleGoogleOAuthCallback(request, url, env) {
     return Response.redirect(`${origin(url)}/auth/login?error=userinfo_failed`, 302);
   }
   const userInfo = await userRes.json();
-  const email = (userInfo.email || '').toLowerCase();
-  const name = userInfo.name || email || 'User';
-  if (!email) {
+  const oauthEmail = String(userInfo.email || '').toLowerCase().trim();
+  const name = userInfo.name || oauthEmail || 'User';
+  if (!oauthEmail) {
     return Response.redirect(`${origin(url)}/auth/login?error=no_email`, 302);
   }
-  let userId = email;
-  try {
-    const urow = await env.DB.prepare(
-      `SELECT id, user_key, default_workspace_id FROM users WHERE email=? LIMIT 1`
-    ).bind(email).first();
-    if (urow?.id) userId = urow.id;
-  } catch (_) { }
+
+  // 1. Find existing auth_users row by email
+  const existing = await env.DB.prepare(
+    `SELECT id, email, name FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+  ).bind(oauthEmail).first();
+
+  // 2. Resolve or generate — NEVER hardcode any ID
+  const authUserId = existing?.id ?? `au_${crypto.randomUUID().replace(/-/g,'').slice(0,16)}`;
 
   if (connectDrive) {
     const sessionUser = await getAuthUser(request, env);
@@ -31105,50 +31106,39 @@ async function handleGoogleOAuthCallback(request, url, env) {
       { headers: { 'Content-Type': 'text/html' } }
     );
   }
-  // login flow: upsert auth_users, provision user if new, create session
-  const oauthPlaceholder = 'oauth';
-  // Use email as auth_users.id for OAuth users (existing behavior preserved)
-  let authUserId = email;
+  // 3. Insert if new, patch only null fields if existing
   try {
-    const existingAuth = await env.DB.prepare(
-      `SELECT id FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
-    ).bind(email).first();
-    if (existingAuth?.id) {
-      authUserId = existingAuth.id;
-      await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, authUserId).run();
-    } else {
+    if (!existing?.id) {
       await env.DB.prepare(
-        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-      ).bind(authUserId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at)
+         VALUES (?, ?, ?, 'oauth', 'oauth', datetime('now'), datetime('now'))`
+      ).bind(authUserId, oauthEmail, name).run();
+    } else {
+      if (!existing.name || !String(existing.name).trim()) {
+        await env.DB.prepare(
+          `UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(name, authUserId).run();
+      }
     }
   } catch (e) {
-    console.warn('[OAuth] auth_users upsert:', e?.message);
+    console.warn('[OAuth] auth_users upsert:', e?.message ?? e);
   }
 
   // Provision user row, workspace, settings on first login
-  await provisionNewUser(env, { email, name, authUserId });
-
-  // Resolve canonical user_id for session (prefer users.id if exists)
-  let sessionUserId = authUserId;
-  try {
-    const usersRow = await env.DB.prepare(
-      `SELECT id FROM users WHERE email = ? OR auth_id = ? LIMIT 1`
-    ).bind(email, authUserId).first();
-    if (usersRow?.id) sessionUserId = usersRow.id;
-  } catch (_) {}
+  await provisionNewUser(env, { email: oauthEmail, name, authUserId });
 
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
-  const tidOauth = await resolveTenantAtLogin(env, sessionUserId).catch(() => null);
+  const tidOauth = await resolveTenantAtLogin(env, authUserId).catch(() => null);
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
-  ).bind(sessionId, sessionUserId, expiresAt, ip, ua, tidOauth).run();
+  ).bind(sessionId, authUserId, expiresAt, ip, ua, tidOauth).run();
 
   // FIX: writeIamSessionToKv was missing — getSession() reads ONLY from KV,
   // so without this the session cookie was set but never resolvable → redirect loop.
-  await writeIamSessionToKv(env, sessionId, sessionUserId, tidOauth, expiresAt);
+  await writeIamSessionToKv(env, sessionId, authUserId, tidOauth, expiresAt);
 
   // FIX: Skip globe_exit redirect — oauthPostLoginGlobeRedirectUrl sends to
   // /auth/login?globe_exit=1&next=... which was dropping users on the homepage
@@ -31251,9 +31241,14 @@ async function handleGitHubOAuthCallback(request, url, env) {
       email = primary?.email;
     }
   }
-  email = (email || userInfo.login || 'unknown').toLowerCase();
-  const name = userInfo.name || userInfo.login || email;
-  const userId = email;
+  const oauthEmail = String(email || userInfo.login || 'unknown').toLowerCase().trim();
+  const name = userInfo.name || userInfo.login || oauthEmail;
+
+  const existing = await env.DB.prepare(
+    `SELECT id, email, name FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+  ).bind(oauthEmail).first();
+
+  const userId = existing?.id ?? `au_${crypto.randomUUID().replace(/-/g,'').slice(0,16)}`;
 
   if (connectGitHub) {
     const sessionUser = await getAuthUser(request, env);
@@ -31279,31 +31274,31 @@ async function handleGitHubOAuthCallback(request, url, env) {
     );
   }
 
-  const oauthPlaceholder = 'oauth';
   try {
-    await env.DB.prepare(
-      `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-    ).bind(userId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+    if (!existing?.id) {
+      await env.DB.prepare(
+        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at)
+         VALUES (?, ?, ?, 'oauth', 'oauth', datetime('now'), datetime('now'))`
+      ).bind(userId, oauthEmail, name).run();
+    } else {
+      if (!existing.name || !String(existing.name).trim()) {
+        await env.DB.prepare(
+          `UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(name, userId).run();
+      }
+    }
   } catch (e) {
-    await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, userId).run();
+    console.warn('[oauth/github/callback] auth_users upsert failed:', e?.message ?? e);
   }
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
-  let sessionUserIdGh = userId;
-  try {
-    const ur = await env.DB
-      .prepare(`SELECT id FROM users WHERE email = ? OR auth_id = ? LIMIT 1`)
-      .bind(email, userId)
-      .first();
-    if (ur?.id) sessionUserIdGh = ur.id;
-  } catch (_) {}
-  const tidGh = await resolveTenantAtLogin(env, sessionUserIdGh).catch(() => null);
+  const tidGh = await resolveTenantAtLogin(env, userId).catch(() => null);
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
-  ).bind(sessionId, sessionUserIdGh, expiresAt, ip, ua, tidGh).run();
-  await writeIamSessionToKv(env, sessionId, sessionUserIdGh, tidGh, expiresAt);
+  ).bind(sessionId, userId, expiresAt, ip, ua, tidGh).run();
+  await writeIamSessionToKv(env, sessionId, userId, tidGh, expiresAt);
   const ghLogin = (userInfo.login || '').toString() || 'github';
   if (tokens.access_token && env.DB) {
     try {

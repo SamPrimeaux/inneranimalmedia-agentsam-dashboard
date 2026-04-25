@@ -11,6 +11,7 @@
  *  - Persists tokens in D1 `user_oauth_tokens` with forward-compatible encrypted columns.
  */
 import { getAuthUser, jsonResponse } from '../core/auth.js';
+import { getAESKey, aesGcmEncryptToB64, aesGcmDecryptFromB64 } from '../core/crypto-vault.js';
 
 const OAUTH_STATE_TTL_SECONDS = 600;
 
@@ -51,30 +52,14 @@ async function kvDeleteState(env, state) {
   await env.SESSION_CACHE.delete(oauthStateKey(state));
 }
 
-async function vaultKey(masterKeyB64) {
-  const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+async function encryptWithVault(env, plaintext) {
+  const key = await getAESKey(env, ['encrypt']);
+  return aesGcmEncryptToB64(plaintext, key);
 }
 
-async function encryptWithVault(plaintext, masterKeyB64) {
-  const key = await vaultKey(masterKeyB64);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(String(plaintext));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-  const combined = new Uint8Array(iv.byteLength + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.byteLength);
-  return btoa(String.fromCharCode(...combined));
-}
-
-async function decryptWithVault(encryptedB64, masterKeyB64) {
-  const key = await vaultKey(masterKeyB64);
-  const combined = Uint8Array.from(atob(String(encryptedB64 || '')), (c) => c.charCodeAt(0));
-  if (combined.length < 13) throw new Error('invalid encrypted payload');
-  const iv = combined.slice(0, 12);
-  const ciphertext = combined.slice(12);
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-  return new TextDecoder().decode(decrypted);
+async function decryptWithVault(env, encryptedB64) {
+  const key = await getAESKey(env, ['decrypt']);
+  return aesGcmDecryptFromB64(encryptedB64, key);
 }
 
 async function pragmaColumns(DB, tableName) {
@@ -130,8 +115,8 @@ async function upsertOauthToken(env, { user_id, tenant_id, provider, access_toke
   const updatedAt = createdAt;
 
   const providerForDb = mapTokenProviderForStorage(provider);
-  const encryptedAccess = access_token ? await encryptWithVault(access_token, env.VAULT_MASTER_KEY) : null;
-  const encryptedRefresh = refresh_token ? await encryptWithVault(refresh_token, env.VAULT_MASTER_KEY) : null;
+  const encryptedAccess = access_token ? await encryptWithVault(env, access_token) : null;
+  const encryptedRefresh = refresh_token ? await encryptWithVault(env, refresh_token) : null;
 
   const hasEncrypted = cols.has('access_token_encrypted');
   const hasPlain = cols.has('access_token');
@@ -230,11 +215,11 @@ async function getOauthTokenRow(env, userId, providerForDb) {
 
   const access =
     row.access_token_encrypted && env.VAULT_MASTER_KEY
-      ? await decryptWithVault(row.access_token_encrypted, env.VAULT_MASTER_KEY).catch(() => row.access_token || null)
+      ? await decryptWithVault(env, row.access_token_encrypted).catch(() => row.access_token || null)
       : row.access_token || null;
   const refresh =
     row.refresh_token_encrypted && env.VAULT_MASTER_KEY
-      ? await decryptWithVault(row.refresh_token_encrypted, env.VAULT_MASTER_KEY).catch(() => row.refresh_token || null)
+      ? await decryptWithVault(env, row.refresh_token_encrypted).catch(() => row.refresh_token || null)
       : row.refresh_token || null;
   return { ...row, access_token: access, refresh_token: refresh, _columns: cols };
 }
@@ -463,7 +448,7 @@ async function storeApiKeyAsOauth(env, authUser, provider, apiKey) {
   const userId = integrationUserId(authUser);
   const tenantId = authUser?.tenant_id || '';
   await ensureOauthTokenColumns(env.DB); // PRAGMA before write
-  const encrypted = await encryptWithVault(apiKey, env.VAULT_MASTER_KEY);
+  const encrypted = await encryptWithVault(env, apiKey);
   const createdAt = nowSeconds();
 
   // Store under provider key; keep account_identifier empty.

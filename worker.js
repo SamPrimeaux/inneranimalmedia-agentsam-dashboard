@@ -11,6 +11,7 @@ import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
 import { handleMeetApi } from "./src/api/meet.js";
 import { authUserIsSuperadmin } from "./src/core/auth.js";
+import { getAESKey } from "./src/core/crypto-vault.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -1271,12 +1272,8 @@ async function fetchUnifiedSpendGrouped(env, periodDays, groupKey) {
 async function getVaultSecrets(env) {
   try {
     if (!env.VAULT_KEY || !env.DB) return {};
-    async function importKey(b64) {
-      const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
-    }
     async function decryptRow(encB64, ivB64, vaultKeyB64) {
-      const key = await importKey(vaultKeyB64);
+      const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['decrypt']);
       const plain = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
         key,
@@ -4422,12 +4419,8 @@ const worker = {
         }
 
         // ── Crypto helpers (Web Crypto API — works in Workers runtime) ──
-        async function _vaultImportKey(b64) {
-          const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-          return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
-        }
         async function _vaultEncrypt(plaintext, vaultKeyB64) {
-          const key = await _vaultImportKey(vaultKeyB64);
+          const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['encrypt']);
           const iv = crypto.getRandomValues(new Uint8Array(12));
           const cipher = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv },
@@ -4440,7 +4433,7 @@ const worker = {
           };
         }
         async function _vaultDecrypt(encB64, ivB64, vaultKeyB64) {
-          const key = await _vaultImportKey(vaultKeyB64);
+          const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['decrypt']);
           const plain = await crypto.subtle.decrypt(
             { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
             key,
@@ -27891,13 +27884,8 @@ async function resolveTenantIdForThemeApi(request, env) {
 // ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----
 const VAULT_USER_ID = null; // was sam_primeaux — now resolved per-request
 
-async function vaultGetKey(masterKeyB64) {
-  const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
-
-async function vaultEncrypt(plaintext, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
+async function vaultEncrypt(plaintext, masterKeyMaterial) {
+  const key = await getAESKey({ VAULT_MASTER_KEY: masterKeyMaterial }, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
@@ -27907,8 +27895,8 @@ async function vaultEncrypt(plaintext, masterKeyB64) {
   return btoa(String.fromCharCode(...combined));
 }
 
-async function vaultDecrypt(encryptedB64, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
+async function vaultDecrypt(encryptedB64, masterKeyMaterial) {
+  const key = await getAESKey({ VAULT_MASTER_KEY: masterKeyMaterial }, ['decrypt']);
   const combined = Uint8Array.from(atob(encryptedB64), (c) => c.charCodeAt(0));
   const iv = combined.slice(0, 12);
   const ciphertext = combined.slice(12);

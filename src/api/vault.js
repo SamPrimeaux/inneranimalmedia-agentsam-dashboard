@@ -1,5 +1,6 @@
 import { jsonResponse } from '../core/responses.js';
 import { getAuthUser, fetchAuthUserTenantId } from '../core/auth.js';
+import { getAESKey, aesGcmEncryptToB64, aesGcmDecryptFromB64 } from '../core/crypto-vault.js';
 
 const LLM_VAULT_PROJECT = 'iam_user_llm_keys';
 const LLM_ALLOWED_NAMES = new Set(['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY']);
@@ -25,29 +26,14 @@ function vaultErr(message, status = 400) {
   return jsonResponse({ error: message }, status);
 }
 
-async function vaultGetKey(masterKeyB64) {
-  const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+async function vaultEncrypt(env, plaintext) {
+  const key = await getAESKey(env, ['encrypt']);
+  return aesGcmEncryptToB64(plaintext, key);
 }
 
-async function vaultEncrypt(plaintext, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(plaintext);
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-  const combined = new Uint8Array(iv.byteLength + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.byteLength);
-  return btoa(String.fromCharCode(...combined));
-}
-
-async function vaultDecrypt(encryptedB64, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
-  const combined = Uint8Array.from(atob(encryptedB64), (c) => c.charCodeAt(0));
-  const iv = combined.slice(0, 12);
-  const ciphertext = combined.slice(12);
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-  return new TextDecoder().decode(decrypted);
+async function vaultDecrypt(env, encryptedB64) {
+  const key = await getAESKey(env, ['decrypt']);
+  return aesGcmDecryptFromB64(encryptedB64, key);
 }
 
 function vaultLast4(str) {
@@ -75,7 +61,7 @@ async function vaultCreateSecret(request, env, authUser) {
   const body = await request.json();
   const { secret_name, secret_value, service_name, description, project_label, project_id, tags, scopes_json, expires_at } = body;
   if (!secret_name || !secret_value) return vaultErr('secret_name and secret_value are required');
-  const encrypted = await vaultEncrypt(secret_value, env.VAULT_MASTER_KEY);
+  const encrypted = await vaultEncrypt(env, secret_value);
   const id = vaultNewId('sec');
   const last4val = vaultLast4(secret_value);
   const metadata = JSON.stringify({ last4: last4val });
@@ -120,7 +106,7 @@ async function vaultRevealSecret(id, eventType, request, env, authUser) {
   if (!row) return vaultErr('Secret not found or inactive', 404);
   let plaintext;
   try {
-    plaintext = await vaultDecrypt(row.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    plaintext = await vaultDecrypt(env, row.secret_value_encrypted);
   } catch {
     return vaultErr('Decryption failed — master key may have changed', 500);
   }
@@ -153,10 +139,10 @@ async function vaultRotateSecret(id, request, env, authUser) {
   if (!existing) return vaultErr('Secret not found', 404);
   let oldLast4 = '????';
   try {
-    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    const oldPlain = await vaultDecrypt(env, existing.secret_value_encrypted);
     oldLast4 = vaultLast4(oldPlain);
   } catch { }
-  const newEncrypted = await vaultEncrypt(new_value, env.VAULT_MASTER_KEY);
+  const newEncrypted = await vaultEncrypt(env, new_value);
   const newLast4 = vaultLast4(new_value);
   const newMeta = JSON.stringify({ ...JSON.parse(existing.metadata_json || '{}'), last4: newLast4 });
   await env.DB.prepare(`UPDATE user_secrets SET secret_value_encrypted = ?, metadata_json = ?, updated_at = unixepoch() WHERE id = ?`).bind(newEncrypted, newMeta, id).run();

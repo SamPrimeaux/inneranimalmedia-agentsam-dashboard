@@ -3991,6 +3991,10 @@ const worker = {
         return jsonResponse({ runs: rows.results || [] });
       }
 
+      if (pathLower.startsWith('/api/cms/pages/')) {
+        return handleCmsPageRequest(request, url, env);
+      }
+
       // ----- API: Core Generation / Drive Sync -----
       if (pathLower === '/api/generate' && methodUpper === 'POST') {
         if (!env.AI) return jsonResponse({ error: 'AI not configured' }, 503);
@@ -7854,6 +7858,51 @@ async function handleAiSmokeTest(request, url, env) {
     }
   }
   return jsonResponse({ run_group_id: runGroupId, results: rows });
+}
+
+async function handleCmsPageRequest(request, url, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const match = url.pathname.match(/^\/api\/cms\/pages\/([^/]+)\/?(.*)$/);
+  if (!match) return jsonResponse({ error: 'projectSlug and path required' }, 400);
+  const projectSlug = decodeURIComponent(match[1] || '').trim();
+  const pagePathRaw = decodeURIComponent(match[2] || '').trim();
+  const pagePath = '/' + pagePathRaw.replace(/^\/+/, '');
+  const page = await env.DB.prepare(
+    `SELECT * FROM cms_site_pages
+     WHERE project_slug = ? AND path = ? AND is_active = 1
+     LIMIT 1`
+  ).bind(projectSlug, pagePath === '/' ? '/' : pagePath).first();
+  if (!page) return jsonResponse({ error: 'Page not found' }, 404);
+  let sections = [];
+  try {
+    const sectionRows = await env.DB.prepare(
+      `SELECT * FROM cms_page_sections
+       WHERE page_id = ?
+       ORDER BY sort_order ASC, id ASC`
+    ).bind(page.id).all();
+    sections = sectionRows.results || [];
+  } catch (e) {
+    console.warn('[cms pages] cms_page_sections', e?.message ?? e);
+    sections = [];
+  }
+  const outSections = [];
+  for (const section of sections) {
+    let components = [];
+    try {
+      const componentRows = await env.DB.prepare(
+        `SELECT * FROM cms_section_components
+         WHERE section_id = ?
+         ORDER BY sort_order ASC, id ASC`
+      ).bind(section.id).all();
+      components = componentRows.results || [];
+    } catch (e) {
+      console.warn('[cms pages] cms_section_components', e?.message ?? e);
+    }
+    outSections.push({ ...section, components });
+  }
+  return jsonResponse({ page, sections: outSections });
 }
 
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
@@ -15978,6 +16027,24 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
+    if (pathLower === '/api/terminal/sessions' && method === 'GET') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+      const userId = String(authUser.id || '').trim();
+      if (!tenantId || !userId) return jsonResponse({ sessions: [] });
+      const rows = await env.DB.prepare(
+        `SELECT id, tenant_id, workspace_id, user_id, label, status, shell, cwd,
+          tunnel_url, cols, rows, last_input_at, last_output_at, last_command,
+          last_exit_code, created_at, updated_at
+         FROM terminal_sessions
+         WHERE tenant_id = ? AND user_id = ? AND status = 'active'
+         ORDER BY created_at DESC
+         LIMIT 20`
+      ).bind(tenantId, userId).all();
+      return jsonResponse({ sessions: rows.results || [] });
+    }
+
     // One-hop terminal: return wss URL for logged-in dashboard only (avoids Worker fetch() WebSocket proxy).
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
       const session = await getSession(env, request);
@@ -23994,6 +24061,31 @@ async function runMeshyBuiltinTool(env, toolName, params) {
             },
             relatedIdsJson: [task_id, meshyKey],
           });
+          if (env.DB) {
+            try {
+              const assetId = String(params.asset_id || params.cms_asset_id || `asset_${task_id}`).slice(0, 128);
+              await env.DB.prepare(
+                `INSERT INTO cms_3d_assets
+                  (id, asset_id, tenant_id, meshy_task_id, model_type, prompt,
+                   source_image_url, status, glb_url, thumbnail_url, poly_count,
+                   created_at, completed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'succeeded', ?, ?, ?, unixepoch(), unixepoch())`
+              ).bind(
+                `c3d_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`,
+                assetId,
+                params.tenant_id || 'tenant_sam_primeaux',
+                task_id,
+                params.model_type || (params.image_url ? 'image_to_3d' : 'text_to_3d'),
+                params.prompt || null,
+                params.image_url || d.source_image_url || null,
+                glbUrl,
+                d.thumbnail_url || d.thumbnailUrl || null,
+                Number(d.poly_count ?? d.polyCount ?? 0) || null
+              ).run();
+            } catch (e) {
+              console.warn('[meshy cms_3d_assets]', e?.message ?? e);
+            }
+          }
         }
       }
     }

@@ -152,12 +152,20 @@ async function checkEntitlement(db, email, tenantId, service = 'mcp') {
   return false;
 }
 
-export async function handleAccessEvaluate(request, env) {
+const ALLOWED_SERVICES = new Set(['mcp', 'ssh', 'terminal', 'dashboard', 'api']);
+
+export async function handleAccessEvaluate(request, env, service) {
   if ((request.method || '').toUpperCase() !== 'POST') {
     return jsonResponse({ success: false, error: 'Method not allowed' }, 405);
   }
   if (!env?.DB) {
     return jsonResponse({ success: false, error: 'DB not configured' }, 200);
+  }
+
+  const svc = String(service || '').trim().toLowerCase();
+  if (!ALLOWED_SERVICES.has(svc)) {
+    // Unknown service => fail closed (deny)
+    return jsonResponse({ success: false, error: 'Unknown service' }, 200);
   }
 
   const jwtToken = request.headers.get('Cf-Access-Jwt-Assertion');
@@ -169,11 +177,11 @@ export async function handleAccessEvaluate(request, env) {
     const payload = await verifyCFAccessJWT(jwtToken);
     const email = payload?.email != null ? String(payload.email) : null;
     const tenantId = email ? await resolveTenantFromEmail(env.DB, email) : null;
-    const allowed = await checkEntitlement(env.DB, email, tenantId, 'mcp');
-    console.log(`[access/evaluate/mcp] email=${email || 'null'} tenant=${tenantId || 'null'} allowed=${allowed}`);
+    const allowed = await checkEntitlement(env.DB, email, tenantId, svc);
+    console.log(`[access/evaluate/${svc}] email=${email || 'null'} tenant=${tenantId || 'null'} allowed=${allowed}`);
     return jsonResponse({ success: allowed }, 200);
   } catch (e) {
-    console.error('[access/evaluate/mcp] deny', e?.message ?? e);
+    console.error(`[access/evaluate/${svc}] deny`, e?.message ?? e);
     // Cloudflare Access expects a 200 with success:false to deny.
     return jsonResponse({ success: false }, 200);
   }

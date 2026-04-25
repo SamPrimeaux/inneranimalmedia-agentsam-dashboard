@@ -264,8 +264,10 @@ export async function handleRequest(request, env, ctx) {
   if (method === 'OPTIONS') return corsPreFlight();
 
   // ── Cloudflare Access External Evaluation (no app session) ────────────────
-  if (path === '/api/access/evaluate/mcp') {
-    return handleAccessEvaluate(request, env);
+  // POST /api/access/evaluate/:service  (service: mcp|ssh|terminal|dashboard|api)
+  if (path.startsWith('/api/access/evaluate/')) {
+    const service = path.replace('/api/access/evaluate/', '').split('/')[0] || '';
+    return handleAccessEvaluate(request, env, service);
   }
 
   // ── Collab WebSocket (must be before auth — WebSocket upgrade can't send JSON) ─

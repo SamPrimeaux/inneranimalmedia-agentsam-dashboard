@@ -94,14 +94,18 @@ export default {
         '/privacy': 'privacy-policy.html',
         '/pricing': 'pricing.html',
         '/start': 'start-project.html',
-        '/apiguide/providers': 'apiguide/providers.html',
+        // Old-school: serve the raw TSX guide from ASSETS R2
+        '/apiguide/providers': 'ApiProviderGuide.tsx',
       };
       const assetHtmlKey = ASSET_ROUTES[pathLower] || ASSET_ROUTES[path];
       if (assetHtmlKey && env.ASSETS) {
         const obj = await env.ASSETS.get(assetHtmlKey);
         if (!obj) return new Response('Not found', { status: 404 });
         return new Response(obj.body, {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          headers: {
+            'Content-Type': obj.httpMetadata?.contentType || 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
         });
       }
 

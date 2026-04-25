@@ -81,7 +81,55 @@ function DesignStudioLeftPanel(props: {
   const [newAssetUrl, setNewAssetUrl] = useState('');
   const [directUrl, setDirectUrl] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [chessPieces, setChessPieces] = useState<
+    { type: string; name: string; white_url: string; black_url: string }[]
+  >([]);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch('/api/games/pieces')
+      .then((r) => r.json())
+      .then(({ results }) => {
+        const map: Record<
+          string,
+          { type: string; name: string; white_url?: string; black_url?: string }
+        > = {};
+        for (const row of results || []) {
+          let meta: Record<string, unknown> = {};
+          try {
+            meta =
+              typeof (row as { metadata?: unknown }).metadata === 'string'
+                ? JSON.parse((row as { metadata: string }).metadata || '{}')
+                : ((row as { metadata?: Record<string, unknown> }).metadata ?? {});
+          } catch {
+            meta = {};
+          }
+          const piece = meta.piece;
+          const color = meta.color;
+          if (typeof piece !== 'string' || typeof color !== 'string') continue;
+          if (!map[piece]) {
+            const label = meta.piece_armory_label;
+            map[piece] = {
+              type: piece,
+              name: typeof label === 'string' ? label : piece,
+            };
+          }
+          if (color === 'white' || color === 'black') {
+            map[piece][`${color}_url` as 'white_url' | 'black_url'] = (row as { public_url: string })
+              .public_url;
+          }
+        }
+        setChessPieces(
+          Object.values(map).map((p) => ({
+            type: p.type,
+            name: p.name,
+            white_url: p.white_url || '',
+            black_url: p.black_url || '',
+          })),
+        );
+      })
+      .catch((e) => console.warn('[Piece Armory] fetch failed', e));
+  }, []);
 
   const projects = [
     { id: ProjectType.CHESS, name: 'Games', icon: <Gamepad2 size={20} />, desc: '3D Physics Chess' },
@@ -106,18 +154,6 @@ function DesignStudioLeftPanel(props: {
     { id: '#6366f1', name: 'Indigo', icon: <Palette size={12} /> },
     { id: '#0a0a0f', name: 'Void', icon: <Palette size={12} /> },
   ];
-
-  const chessPieces = [
-    { name: 'King', type: 'king' },
-    { name: 'Queen', type: 'queen' },
-    { name: 'Rook', type: 'rook' },
-    { name: 'Bishop', type: 'bishop' },
-    { name: 'Knight', type: 'knight' },
-    { name: 'Pawn', type: 'pawn' },
-  ];
-
-  const getChessUrl = (color: 'white' | 'black', piece: string) =>
-    `/assets/chess/v1/pieces/${color}/${piece}.glb`;
 
   const assetGallery = [
     {
@@ -256,8 +292,9 @@ function DesignStudioLeftPanel(props: {
                     <button
                       type="button"
                       key={`white-${piece.type}`}
-                      onClick={() => onSpawnModel(`White ${piece.name}`, getChessUrl('white', piece.type), 0.8)}
-                      className="flex flex-col items-center gap-1 p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]"
+                      onClick={() => onSpawnModel(`White ${piece.name}`, piece.white_url, 0.8)}
+                      disabled={!piece.white_url}
+                      className="flex flex-col items-center gap-1 p-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <UserCircle size={16} className="text-[var(--text-muted)]" />
                       <span className="text-[8px] font-black uppercase text-[var(--text-muted)]">{piece.name}</span>
@@ -272,8 +309,9 @@ function DesignStudioLeftPanel(props: {
                     <button
                       type="button"
                       key={`black-${piece.type}`}
-                      onClick={() => onSpawnModel(`Black ${piece.name}`, getChessUrl('black', piece.type), 0.8)}
-                      className="flex flex-col items-center gap-1 p-2 rounded-xl bg-[var(--bg-app)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]"
+                      onClick={() => onSpawnModel(`Black ${piece.name}`, piece.black_url, 0.8)}
+                      disabled={!piece.black_url}
+                      className="flex flex-col items-center gap-1 p-2 rounded-xl bg-[var(--bg-app)] border border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <UserCircle size={16} className="text-[var(--solar-violet)]" />
                       <span className="text-[8px] font-black uppercase text-[var(--text-muted)]">{piece.name}</span>

@@ -5729,24 +5729,6 @@ const worker = {
         return notFound(path);
       }
 
-      // Public page routing - map clean URLs to actual R2 files
-      const PUBLIC_ROUTES = {
-        '/work': 'process.html',
-        '/about': 'about.html',
-        '/services': 'pricing.html',
-        '/contact': 'contact.html',
-        '/terms': 'terms-of-service.html',
-        '/privacy': 'privacy-policy.html',
-        '/learn': 'learn.html',
-        '/games': 'games.html'
-      };
-
-      if (PUBLIC_ROUTES[path]) {
-        const obj = await env.ASSETS.get(PUBLIC_ROUTES[path]);
-        if (obj) return respondWithR2Object(obj, 'text/html');
-        return notFound(path);
-      }
-
       // Auth sign-in / login / signup (DASHBOARD) -- same page for all
       if (pathLower === '/auth/login' || pathLower === '/auth/signin' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
         const isSignup = pathLower === '/auth/signup' || pathLower === '/auth/register';

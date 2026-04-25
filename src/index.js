@@ -86,13 +86,15 @@ export default {
       }
 
       const ASSET_ROUTES = {
-        '/work': 'work.html',
+        '/work': 'process.html',
         '/about': 'about.html',
         '/services': 'services.html',
         '/contact': 'contact.html',
+        '/pricing': 'pricing.html',
         '/terms': 'terms-of-service.html',
         '/privacy': 'privacy-policy.html',
-        '/pricing': 'pricing.html',
+        '/learn': 'learn.html',
+        '/games': 'games.html',
         '/start': 'start-project.html',
         // Old-school: serve the raw TSX guide from ASSETS R2
         '/apiguide/providers': 'ApiProviderGuide.tsx',
@@ -274,6 +276,11 @@ export default {
 
       if (pathLower.startsWith('/api/onboarding')) {
         return handleOnboardingApi(request, url, env);
+      }
+
+      if (pathLower.startsWith('/api/games')) {
+        const { handleGamesApi } = await import('./api/games.js');
+        return handleGamesApi(request, url, env, ctx, authUser);
       }
 
       if (pathLower.startsWith('/api/auth') || pathLower === '/api/settings/profile') {

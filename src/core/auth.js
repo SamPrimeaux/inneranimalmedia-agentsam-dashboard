@@ -148,7 +148,11 @@ export async function buildSuperadminContext(env, sessionId, sessionUserKey) {
  */
 export async function resolveAgentsamUserKey(env, authUser) {
   if (!authUser?.id) return null;
-  if (authUser.id === 'sam_primeaux') return 'sam_primeaux';
+  const isSuperAdmin =
+    authUser.is_superadmin === 1 ||
+    authUser.role === 'superadmin' ||
+    authUser.is_super === 1;
+  if (isSuperAdmin) return authUser.tenant_id ?? authUser.id;
   if (!env?.DB) return authUser.id;
   try {
     const row = await env.DB.prepare(
@@ -173,7 +177,11 @@ export async function resolveAgentsamUserKey(env, authUser) {
  */
 export async function isSamOnlyUser(env, authUser) {
   if (!authUser) return false;
-  if (authUser.id === 'sam_primeaux') return true;
+  const isSuperAdmin =
+    authUser.is_superadmin === 1 ||
+    authUser.role === 'superadmin' ||
+    authUser.is_super === 1;
+  if (isSuperAdmin) return true;
   if (!env?.DB) return false;
   const email = String(authUser.email || '').toLowerCase();
   if (email && (await isSuperadminEmail(env, email))) return true;

@@ -336,7 +336,7 @@ async function handleInvite(request, env, roomId) {
       'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      from:    'InnerAnimalMedia Meet <meet@inneranimalmedia.com>',
+      from:    `Inner Animal Media <${env.RESEND_FROM || 'support@inneranimalmedia.com'}>`,
       to:      [email],
       subject: `You've been invited to ${meetingName}`,
       html: `
@@ -389,7 +389,7 @@ async function handleSchedule(request, env) {
   `).bind(id, userId, title, sAt, JSON.stringify(emails)).run();
 
   const meetUrl = 'https://inneranimalmedia.com/dashboard/meet';
-  const fromAddr = env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>';
+  const fromAddr = env.EMAIL_FROM || 'Inner Animal Media <support@inneranimalmedia.com>';
   const inviteSubject = "You're invited to a call — Inner Animal Media";
   if (emails.length && env.RESEND_API_KEY) {
     for (const raw of emails) {

@@ -1,6 +1,6 @@
 /**
  * POST /api/notify/deploy-complete
- * Internal: sends Resend emails to Sam + Connor with Meet link after production deploy.
+ * Internal: sends Resend emails with Meet link after production deploy.
  * Auth: INTERNAL_API_SECRET (X-Internal-Secret or Bearer).
  */
 import { verifyInternalApiSecret, jsonResponse } from '../core/auth.js';
@@ -24,7 +24,7 @@ function deployEmailHtml(meetUrl) {
 async function sendResendEmail(env, { to, subject, html }) {
   const key = env.RESEND_API_KEY;
   if (!key) throw new Error('RESEND_API_KEY not configured');
-  const from = env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>';
+  const from = env.EMAIL_FROM || 'Inner Animal Media <support@inneranimalmedia.com>';
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -39,6 +39,15 @@ async function sendResendEmail(env, { to, subject, html }) {
   }
 }
 
+function parseNotifyRecipients(env) {
+  const raw = String(env.DEPLOY_NOTIFY_EMAILS || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,\n]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export async function handleNotifyDeployComplete(request, env, ctx) {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'Method not allowed' }, 405);
@@ -49,20 +58,17 @@ export async function handleNotifyDeployComplete(request, env, ctx) {
 
   const meetUrl = MEET_URL;
   const html = deployEmailHtml(meetUrl);
+  const recipients = parseNotifyRecipients(env);
 
   const work = (async () => {
-    await Promise.all([
+    if (recipients.length === 0) return;
+    await Promise.all(recipients.map((to) =>
       sendResendEmail(env, {
-        to: 'sam@inneranimalmedia.com',
-        subject: '🚀 Production deployed — join Connor now',
+        to,
+        subject: '🚀 Production deployed — join live session',
         html,
-      }),
-      sendResendEmail(env, {
-        to: 'connordmcneely@leadershiplegacydigital.com',
-        subject: 'IAM platform updated — join Sam now',
-        html,
-      }),
-    ]);
+      })
+    ));
   })();
 
   if (ctx?.waitUntil) ctx.waitUntil(work.catch((e) => console.warn('[notify-deploy-complete]', e?.message ?? e)));

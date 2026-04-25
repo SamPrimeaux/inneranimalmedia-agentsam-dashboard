@@ -28,8 +28,8 @@ if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
     "${REPO_ROOT}/.env.cloudflare" | grep -v '^#' | xargs || true)
   [ -n "${_kv}" ] && export ${_kv}
 fi
-RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
-RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
+RESEND_FROM="${RESEND_FROM:-support@inneranimalmedia.com}"
+RESEND_TO="${RESEND_TO:-support@inneranimalmedia.com}"
 
 # INTERNAL_API_SECRET must be in .env.cloudflare for cicd-event + knowledge sync to work.
 # It is NOT auto-loaded from wrangler secrets (those are write-only via wrangler secret put).

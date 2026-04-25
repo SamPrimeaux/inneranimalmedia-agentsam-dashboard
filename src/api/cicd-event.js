@@ -248,8 +248,8 @@ async function fireHooks(trigger, payload, env, isExplicitId = false) {
       if (cmd === 'notify:imessage' || cmd === 'notify:email') {
         // Deliver via Resend → your email (which forwards to iMessage via email-to-SMS bridge)
         const resendKey = env.RESEND_API_KEY;
-        const to = env.RESEND_TO || 'meauxbility@gmail.com';
-        const from = env.RESEND_FROM || 'sam@inneranimalmedia.com';
+        const to = env.RESEND_TO || 'support@inneranimalmedia.com';
+        const from = env.RESEND_FROM || 'support@inneranimalmedia.com';
         if (resendKey) {
           const subject = `[IAM] ${env_label} ${ver} — ${health}`;
           const html = `<pre style="font-family:monospace;background:#0f1117;color:#e2e8f0;padding:16px;border-radius:6px;white-space:pre-wrap">${summaryText}</pre>`;

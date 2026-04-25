@@ -522,7 +522,7 @@ async function sendOnboardingInviteEmail(env, { to, name, intakeToken, personalM
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>',
+      from: env.EMAIL_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
       to: [to],
       subject: 'Your Inner Animal Media workspace is ready',
       html: renderedHtml,
@@ -950,8 +950,8 @@ export async function handleOnboardingApi(request, url, env, _ctx = null) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: env.EMAIL_FROM || 'Inner Animal Media <noreply@inneranimalmedia.com>',
-          to: ['sam@inneranimalmedia.com'],
+          from: env.EMAIL_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
+          to: [env.RESEND_TO || 'support@inneranimalmedia.com'],
           subject: `[IAM] ${namePlain}'s intake is in — ${new Date().toLocaleDateString()}`,
           html: intakeSummary,
         }),

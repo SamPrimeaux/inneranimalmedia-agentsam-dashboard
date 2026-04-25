@@ -27,7 +27,7 @@ INSERT OR REPLACE INTO deployments (
   'user-settings-profile-fix',
   '8ce51465',
   '["dashboard/user-settings.html", "worker.js"]',
-  'User Settings: header z-index fix, profile image and identity sync, verified emails. Profile pre-filled in D1 for info@inneranimals.com (Sam Primeaux, avatar, phone)',
+  'User Settings: header z-index fix, profile image and identity sync, verified emails. Profile pre-filled in D1 for provisioned admin account (avatar, phone).',
   'success',
   'cursor-manual',
   'production',

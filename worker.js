@@ -683,14 +683,18 @@ async function notifySam(env, opts, executionCtx) {
     .trim();
   const bodyRaw = String(opts.body || '').trim();
   const category = String(opts.category || 'notice').trim();
-  const toAddr = opts.to || 'sam@inneranimalmedia.com';
-  const fromAddr = 'agent@inneranimalmedia.com';
+  const toAddr = opts.to || env.RESEND_TO || '';
+  const fromAddr = env.RESEND_FROM || 'support@inneranimalmedia.com';
   const prefix = subjectRaw.startsWith('[Agent Sam]') ? '' : '[Agent Sam] ';
   const subject = `${prefix}${subjectRaw}`.slice(0, 400);
 
   const run = async () => {
     if (!env.RESEND_API_KEY) {
       console.warn('[notifySam] RESEND_API_KEY not set', category);
+      return;
+    }
+    if (!toAddr) {
+      console.warn('[notifySam] RESEND_TO not set', category);
       return;
     }
     try {
@@ -2043,7 +2047,7 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
   if (actionType === 'send_notification') {
     const deploymentId = cfg.deployment_id != null ? String(cfg.deployment_id) : ctx.webhookEventId;
     const notifType = cfg.notification_type != null ? String(cfg.notification_type) : 'webhook';
-    const recipient = cfg.recipient != null ? String(cfg.recipient) : 'sam@inneranimalmedia.com';
+    const recipient = cfg.recipient != null ? String(cfg.recipient) : (env.RESEND_TO || 'support@inneranimalmedia.com');
     const subject = cfg.subject != null ? String(cfg.subject) : `Webhook: ${ctx.eventType}`;
     const message =
       cfg.message != null
@@ -5802,7 +5806,7 @@ const worker = {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'Inner Animal Media <sam@inneranimalmedia.com>',
+              from: env.RESEND_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
               to: [toEmail],
               subject: 'Your backup codes - Inner Animal Media',
               html,
@@ -17908,8 +17912,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -17945,8 +17949,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -17989,8 +17993,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -22196,8 +22200,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
 
   if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
     // Model cascade: Gemini Flash → Workers AI → gpt-5.4-nano (never hard-fail on missing key)
-    const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
-    const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
+    const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : (env.RESEND_TO || 'support@inneranimalmedia.com');
+    const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : (env.RESEND_FROM || 'support@inneranimalmedia.com');
     const today = new Date().toISOString().slice(0, 10);
     const emptyRows = { results: [] };
     const safeAll = async (p) => {
@@ -29985,7 +29989,7 @@ ${hookHtml}
     `Archived convos: ${archiveStatus?.archived_convos}; D1 messages: ${msgTableSize?.total_msgs}`,
   ].join('\n');
 
-  const toEmail = 'meauxbility@gmail.com';
+  const toEmail = env.RESEND_TO || 'support@inneranimalmedia.com';
   if (env.RESEND_API_KEY) {
     try {
       const subject = `IAM Daily Digest -- ${new Date().toISOString().slice(0, 10)}`;
@@ -29997,7 +30001,7 @@ ${hookHtml}
           'Accept': 'application/json, text/event-stream',
         },
         body: JSON.stringify({
-          from: 'sam@inneranimalmedia.com',
+          from: env.RESEND_FROM || 'support@inneranimalmedia.com',
           to: [toEmail],
           subject,
           text: textBody,
@@ -30013,9 +30017,11 @@ ${hookHtml}
         await env.DB.prepare(
           `INSERT INTO email_logs
            (id, to_email, from_email, subject, status, resend_id, created_at, updated_at)
-           VALUES (?, 'meauxbility@gmail.com', 'sam@inneranimalmedia.com', ?, 'sent', ?, datetime('now'), datetime('now'))`
+           VALUES (?, ?, ?, ?, 'sent', ?, datetime('now'), datetime('now'))`
         ).bind(
           crypto.randomUUID(),
+          toEmail,
+          env.RESEND_FROM || 'support@inneranimalmedia.com',
           subject,
           resendResult.id ?? null
         ).run().catch(() => { });
@@ -30277,8 +30283,8 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: 'Agent Sam <agent@inneranimalmedia.com>',
-        to: ['sam@inneranimalmedia.com'],
+        from: env.RESEND_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
+        to: [env.RESEND_TO || 'support@inneranimalmedia.com'],
         subject,
         text: emailBody,
         html: htmlBody,
@@ -31930,7 +31936,7 @@ async function handleEmailSignup(request, url, env) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: 'Inner Animal Media <noreply@inneranimalmedia.com>',
+          from: 'Inner Animal Media <support@inneranimalmedia.com>',
           to: [email],
           subject: 'Welcome — verify your email',
           html: `
@@ -32278,7 +32284,13 @@ async function handleOvernightValidate(env, baseUrl) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: '[ok] Overnight setup validated (remote) -- before screenshots captured', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: '[ok] Overnight setup validated (remote) -- before screenshots captured',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch((e) => ({ ok: false, status: 0, error: String(e?.message || e) }));
     if (env.DB && res && !res.ok) {
       const errText = typeof res.text === 'function' ? await res.text().catch(() => '') : (res.error || '');
@@ -32390,7 +32402,13 @@ async function handleOvernightStart(env, baseUrl) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'dark Overnight Pipeline Started (remote) -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: 'dark Overnight Pipeline Started (remote) -- Inner Animal Media',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch((e) => ({ ok: false, status: 0, error: String(e?.message || e) }));
     if (env.DB && res && !res.ok) {
       const errText = typeof res.text === 'function' ? await res.text().catch(() => '') : (res.error || '');
@@ -32466,8 +32484,8 @@ async function runOvernightCronStep(env) {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'sam@inneranimalmedia.com',
-            to: 'meauxbility@gmail.com',
+            from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+            to: env.RESEND_TO || 'support@inneranimalmedia.com',
             subject: '🛑 Overnight Pipeline Cancelled',
             html: `<div style="font-family:monospace;background:#0f172a;color:#e2e8f0;padding:32px"><h1 style="color:#f59e0b">Pipeline cancelled by user</h1><p>${nowIso}</p></div>`,
           }),
@@ -32494,7 +32512,13 @@ async function runOvernightCronStep(env) {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'time Overnight 30min update -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: 'time Overnight 30min update -- Inner Animal Media',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch(() => { });
     if (_cronPmTid) {
       await env.DB.prepare(
@@ -32517,7 +32541,13 @@ async function runOvernightCronStep(env) {
       await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'dawn Overnight morning report -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+        body: JSON.stringify({
+          from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+          to: env.RESEND_TO || 'support@inneranimalmedia.com',
+          subject: 'dawn Overnight morning report -- Inner Animal Media',
+          html,
+          attachments: attachments.length ? attachments : undefined
+        }),
       }).catch(() => { });
       if (_cronPmTid) {
         await env.DB.prepare(
@@ -32535,7 +32565,13 @@ async function runOvernightCronStep(env) {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: `alert Overnight Hour ${nextHour} -- Inner Animal Media`, html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: `alert Overnight Hour ${nextHour} -- Inner Animal Media`,
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch(() => { });
     if (_cronPmTid) {
       await env.DB.prepare(

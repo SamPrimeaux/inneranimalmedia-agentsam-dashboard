@@ -19,8 +19,8 @@ if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
     export ${_iam_cf_kv}
   fi
 fi
-RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
-RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
+RESEND_FROM="${RESEND_FROM:-support@inneranimalmedia.com}"
+RESEND_TO="${RESEND_TO:-support@inneranimalmedia.com}"
 
 WORKER_ONLY=0
 for arg in "$@"; do

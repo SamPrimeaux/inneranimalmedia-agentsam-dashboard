@@ -190,7 +190,7 @@ To stop agent `bc-d535452c` (or similar), use Cursor dashboard or Cloud Agents A
 Send `notifySam`-equivalent incident email (Mar 24 outage, Resolution version filled); prevention item: madge in build pipeline.
 
 ### What was done
-- **Email:** Sent via Resend API (same as worker `notifySam`: `agent@inneranimalmedia.com` to `sam@inneranimalmedia.com`, subject `[Agent Sam] INCIDENT REPORT: Production Outage — Mar 24 2026`). Body included resolution worker version **`9707c1c2-6c90-431f-9f2b-6134ae5edd9c`**. Resend response id: `2df44096-02d0-4dac-9ad3-2298ac2c9f79`. (Did not go through worker, so no `email_logs` row unless you backfill manually.)
+- **Email:** Sent via Resend API (same as worker `notifySam`). Body included resolution worker version **`9707c1c2-6c90-431f-9f2b-6134ae5edd9c`**. Resend response id: `2df44096-02d0-4dac-9ad3-2298ac2c9f79`. (Did not go through worker, so no `email_logs` row unless you backfill manually.)
 - **`agent-dashboard/package.json`:** `build` now runs `npx --yes madge --extensions js,jsx --circular src/main.jsx` then `vite build`; added **`build:vite-only`** to skip the cycle check if needed.
 
 ### Files changed
@@ -2362,7 +2362,7 @@ Chat endpoint accepts `Cookie: iam_session=<uuid>`; full benchmark requires a va
 
 ### Prod deploy completed
 - v16 promoted to inneranimalmedia.com/dashboard/agent
-- Resend notification delivered -> meauxbility@gmail.com (id=d229bee5)
+- Resend notification delivered -> configured recipient (id=d229bee5)
 - WARN: cicd_notifications FK mismatch fixed (removed from cicd-d1-log.sh)
 - promote-to-prod.sh CURRENT_V parse fixed
 
@@ -2456,7 +2456,7 @@ Optimal first milestone: **document the target host(s), auth method (key per mac
 ### Result
 - Sandbox: dashboard **v=21**, worker `inneranimal-dashboard` (version id in deploy log).
 - Production: dashboard **v=21**, worker `inneranimalmedia` @ `318a8385-9414-4fe7-ba3a-fa2f928ccf5c`.
-- Resend: **HTTP 200** to `meauxbility@gmail.com` (id `94ebeca7-ac51-4e99-8659-344bcb0fab76`).
+- Resend: **HTTP 200** (id `94ebeca7-ac51-4e99-8659-344bcb0fab76`).
 
 ### Notes
 - Includes worker fix for **`/api/themes/active`** (`cms_themes` / `variablesFromCmsThemeConfig` + IDE token aliases) and dashboard CMS theme client (`applyCmsTheme.ts`).

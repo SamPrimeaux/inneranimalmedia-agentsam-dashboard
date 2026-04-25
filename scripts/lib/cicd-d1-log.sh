@@ -134,7 +134,7 @@ INSERT OR IGNORE INTO cicd_notifications (
   run_id, event_type, channel, recipient, subject, body_preview,
   status, http_status_code, resend_message_id, attempt_count, sent_at, created_at
 ) VALUES (
-  '${cicd_run_id}', '${event_type}', 'resend_email', 'meauxbility@gmail.com',
+  '${cicd_run_id}', '${event_type}', 'resend_email', 'support@inneranimalmedia.com',
   '${subj_esc}', '${body_esc}',
   '${notif_status}', ${notif_http}, ${msg_id_sql},
   1, unixepoch(), unixepoch()

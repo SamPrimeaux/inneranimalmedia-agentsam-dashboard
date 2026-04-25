@@ -7,7 +7,7 @@ UI enhancements, Settings polish, terminal session fix, testing
 - **Default delivery:** Resend **`scheduled_at`**: `today at 8:30am America/Chicago` (override with env **`MORNING_BRIEF_SCHEDULED_AT`** or Resend natural language / ISO 8601).
 - **Immediate send (no schedule):** `node scripts/send-morning-brief-email.mjs --now`
 - **Run:** `set -a; . ./.env.cloudflare; set +a; node scripts/send-morning-brief-email.mjs` (requires **`RESEND_API_KEY`**).
-- **From / to:** `MORNING_BRIEF_FROM`, `MORNING_BRIEF_TO` (optional; defaults: `sam@inneranimalmedia.com` → `meauxbility@gmail.com`).
+- **From / to:** `MORNING_BRIEF_FROM`, `MORNING_BRIEF_TO` (optional; defaults: `support@inneranimalmedia.com` → `support@inneranimalmedia.com`).
 
 ---
 

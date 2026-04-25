@@ -4,8 +4,8 @@
 
 INSERT OR IGNORE INTO mcp_entitlements (tenant_id, user_email, service, effect)
 VALUES
-  ('tenant_sam_primeaux', 'info@inneranimals.com', 'ssh', 'allow'),
-  ('tenant_sam_primeaux', 'info@inneranimals.com', 'terminal', 'allow'),
-  ('tenant_sam_primeaux', 'info@inneranimals.com', 'dashboard', 'allow'),
-  ('tenant_sam_primeaux', 'info@inneranimals.com', 'api', 'allow');
+  ('tenant_sam_primeaux', NULL, 'ssh', 'allow'),
+  ('tenant_sam_primeaux', NULL, 'terminal', 'allow'),
+  ('tenant_sam_primeaux', NULL, 'dashboard', 'allow'),
+  ('tenant_sam_primeaux', NULL, 'api', 'allow');
 

@@ -10,8 +10,8 @@ const CF_TOKEN   = process.env.CLOUDFLARE_API_TOKEN;
 const ACCOUNT    = 'ede6590ac0d2fb7daf155b35653457b2';
 const DB_ID      = 'cf87b717-d4e2-4cf8-bab0-a81268e32d49';
 const BUCKET     = 'agent-sam';
-const FROM       = 'sam@inneranimalmedia.com';
-const TO         = 'meauxbility@gmail.com';
+const FROM       = process.env.RESEND_FROM || 'support@inneranimalmedia.com';
+const TO         = process.env.RESEND_TO || 'support@inneranimalmedia.com';
 const BASE       = 'https://inneranimalmedia.com';
 
 const EVERY_PAGE = ['overview','finance','chats','mcp','cloud','time-tracking','agent','billing','clients','tools','calendar','images','draw','meet','kanban','cms','mail','pipelines','onboarding','user-settings','settings'];

@@ -17,7 +17,3 @@ CREATE INDEX IF NOT EXISTS idx_mcp_ent_tenant  ON mcp_entitlements(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_mcp_ent_email   ON mcp_entitlements(user_email);
 CREATE INDEX IF NOT EXISTS idx_mcp_ent_service ON mcp_entitlements(service);
 
--- Seed: grant access to Sam immediately (adjust tenant id/email if needed)
-INSERT OR IGNORE INTO mcp_entitlements (tenant_id, user_email, service, effect)
-VALUES ('tenant_sam_primeaux', 'info@inneranimals.com', 'mcp', 'allow');
-

@@ -109,6 +109,28 @@ export default {
         });
       }
 
+      // 1a. Same-origin R2 assets passthrough (GLB, images, etc.)
+      // Example: /assets/chess/v1/pieces/white/king.glb -> ASSETS.get('chess/v1/pieces/white/king.glb')
+      if (pathLower.startsWith('/assets/') && env.ASSETS) {
+        const key = path.slice('/assets/'.length).replace(/^\/+/, '');
+        if (!key || key.includes('..')) return new Response('Bad request', { status: 400 });
+
+        const obj = await env.ASSETS.get(key);
+        if (!obj) return new Response('Not found', { status: 404 });
+
+        const inferred =
+          key.toLowerCase().endsWith('.glb') ? 'model/gltf-binary' :
+          key.toLowerCase().endsWith('.gltf') ? 'model/gltf+json' :
+          null;
+
+        return new Response(obj.body, {
+          headers: {
+            'Content-Type': obj.httpMetadata?.contentType || inferred || 'application/octet-stream',
+            'Cache-Control': 'public, max-age=3600',
+          },
+        });
+      }
+
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
       if (pathLower.startsWith('/auth/') || pathLower.startsWith('/api/oauth/')) {
         return await legacyWorker.fetch(request, env, ctx);

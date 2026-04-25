@@ -154,7 +154,7 @@ CLOUDFLARE_ACCOUNT_ID = "ede6590ac0d2fb7daf155b35653457b2"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "g7wf09fCONpnidkRnR_5vw"
 GITHUB_CLIENT_ID = "Ov23li6BZYxjVtGUWibX"
 GOOGLE_CLIENT_ID = "427617292678-gf3u47lpf876q7miq31hel2ms6tcr2f8.apps.googleusercontent.com"
-TENANT_ID = "tenant_sam_primeaux"
+TENANT_ID = "tenant_inneranimalmedia"
 WORKSPACE_ID = "ws_inneranimalmedia"
 DEPLOY_ENV = "production"
 

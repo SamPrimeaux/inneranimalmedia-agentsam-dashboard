@@ -117,7 +117,7 @@ function DesignStudioLeftPanel(props: {
   ];
 
   const getChessUrl = (color: 'white' | 'black', piece: string) =>
-    `https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/${color}/${piece}.glb`;
+    `/assets/chess/v1/pieces/${color}/${piece}.glb`;
 
   const assetGallery = [
     {

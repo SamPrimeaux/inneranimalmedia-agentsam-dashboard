@@ -5726,12 +5726,23 @@ const worker = {
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
       if (pathLower.startsWith('/dashboard/')) {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
-        const SPA_ROUTES = new Set(["calendar", "mcp", "overview", "database", "settings", "integrations", "designstudio", "storage"]);
-        const key = SPA_ROUTES.has(segment) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
+        const SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "calendar", "chat", "clients", "cms", "database", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "overview", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace", "integrations", "designstudio", "storage"]);
+        const wildcardSpa = segment === 'settings' || segment === 'chat' || segment === 'workspace' || segment === 'cms';
+        const key = (SPA_ROUTES.has(segment) || wildcardSpa) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
         if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
         return notFound(path);
+      }
+
+      if (env.DASHBOARD && !pathLower.startsWith('/api/')) {
+        const topLevelSegment = pathLower.replace(/^\/+/, '').split('/')[0];
+        const TOP_LEVEL_SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "chat", "clients", "cms", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace"]);
+        const wildcardTopLevel = pathLower.startsWith('/settings/') || pathLower.startsWith('/chat/') || pathLower.startsWith('/workspace/') || pathLower.startsWith('/cms/');
+        if (TOP_LEVEL_SPA_ROUTES.has(topLevelSegment) || wildcardTopLevel) {
+          const obj = await env.DASHBOARD.get("static/dashboard/agent.html");
+          if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
+        }
       }
 
       // Static assets: try ASSETS then DASHBOARD by path (key = path without leading slash)
@@ -15641,19 +15652,64 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!session_id || !tunnel_url) {
         return new Response(JSON.stringify({ error: 'session_id and tunnel_url required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
-      const regTid = tenantIdFromEnv(env);
-      const regUid = body?.user_id != null && String(body.user_id).trim() !== ''
-        ? String(body.user_id).trim()
-        : 'system_terminal';
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      const regTid = authUser.tenant_id || tenantIdFromEnv(env);
+      const regUid = String(authUser.id || '').trim();
+      const regWorkspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
       if (!regTid) {
-        return new Response(JSON.stringify({ error: 'TENANT_ID not configured on worker' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ error: 'Tenant not resolved for terminal session' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!regUid) {
+        return new Response(JSON.stringify({ error: 'User not resolved for terminal session' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       }
       try {
+        const bootstrap = await env.DB.prepare(
+          `SELECT user_id, capabilities_json, allowed_execution_modes_json
+           FROM agentsam_bootstrap
+           WHERE user_id = ? AND COALESCE(is_active, 1) = 1
+           LIMIT 1`
+        ).bind(regUid).first();
+        if (!bootstrap) {
+          return new Response(JSON.stringify({ error: 'Terminal not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        let capabilities = {};
+        let executionModes = [];
+        try { capabilities = JSON.parse(bootstrap.capabilities_json || '{}'); } catch (_) { capabilities = {}; }
+        try { executionModes = JSON.parse(bootstrap.allowed_execution_modes_json || '[]'); } catch (_) { executionModes = []; }
+        if (capabilities.can_run_pty !== true) {
+          return new Response(JSON.stringify({ error: 'Terminal not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (!Array.isArray(executionModes) || !executionModes.includes('pty')) {
+          return new Response(JSON.stringify({ error: 'Terminal execution mode not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
         await env.DB.prepare(
-          `INSERT INTO terminal_sessions (id, tenant_id, workspace_id, user_id, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, '', unixepoch(), unixepoch())
-           ON CONFLICT(id) DO UPDATE SET tunnel_url=excluded.tunnel_url, status='active', workspace_id=excluded.workspace_id, updated_at=unixepoch()`
-        ).bind(session_id, regTid, IAM_DEFAULT_WORKSPACE_ID, regUid, tunnel_url, shell, cwd, cols, rows).run();
+          `UPDATE terminal_sessions
+           SET status = 'closed', closed_at = unixepoch(), updated_at = unixepoch()
+           WHERE user_id = 'system_terminal'
+             AND workspace_id = ?
+             AND created_at < (unixepoch() - 3600)`
+        ).bind(regWorkspaceId).run();
+        await env.DB.prepare(
+          `UPDATE agentsam_mcp_allowlist
+           SET workspace_id = ?
+           WHERE workspace_id = '' AND user_id = 'au_871d920d1233cbd1'`
+        ).bind(regWorkspaceId).run();
+        const tokenHash = await sha256hex(crypto.randomUUID());
+        await env.DB.prepare(
+          `INSERT INTO terminal_sessions
+             (id, tenant_id, workspace_id, user_id, label, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'interactive', ?, 'active', ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+           ON CONFLICT(id) DO UPDATE SET
+             tenant_id=excluded.tenant_id,
+             workspace_id=excluded.workspace_id,
+             user_id=excluded.user_id,
+             label='interactive',
+             tunnel_url=excluded.tunnel_url,
+             status='active',
+             auth_token_hash=excluded.auth_token_hash,
+             updated_at=unixepoch()`
+        ).bind(session_id, regTid, regWorkspaceId, regUid, tunnel_url, shell, cwd, cols, rows, tokenHash).run();
       } catch (e) {
         console.error('[terminal/session/register]', e.message);
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
@@ -15666,19 +15722,18 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-      if (!authUserIsSuperadmin(authUser)) {
-        return new Response(JSON.stringify({ terminal_enabled: false, resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      const userId = authUser.id;
+      const userId = String(authUser.id || '').trim();
+      const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+      if (!tenantId || !userId) return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       let session;
       try {
         session = await env.DB.prepare(
           `SELECT id, tunnel_url, shell, cwd, cols, rows
            FROM terminal_sessions
-           WHERE user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
-           ORDER BY updated_at DESC
+           WHERE tenant_id = ? AND user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
+           ORDER BY created_at DESC
            LIMIT 1`
-        ).bind(userId).first();
+        ).bind(tenantId, userId).first();
       } catch (e) {
         console.error('[terminal/session/resume]', e.message);
         return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });

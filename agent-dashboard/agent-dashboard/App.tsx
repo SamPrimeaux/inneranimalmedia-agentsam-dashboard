@@ -129,6 +129,45 @@ const App: React.FC = () => {
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
 
+  // Monaco deep-link handler (Settings → MCP tool config).
+  // Opens a new editor tab with payload content, then clears query params.
+  useEffect(() => {
+    if (location.pathname !== '/dashboard/agent') return;
+    const search = location.search || '';
+    if (!search) return;
+    const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+    const monaco = params.get('monaco');
+    if (monaco !== 'mcp_tool') return;
+
+    const id = params.get('id') || 'tool';
+    const payload = params.get('payload') || '';
+    if (!payload) return;
+
+    let decoded = payload;
+    try {
+      decoded = decodeURIComponent(payload);
+    } catch {
+      decoded = payload;
+    }
+
+    // Guard: avoid blowing up the editor with absurd payloads.
+    const content = decoded.length > 250_000 ? decoded.slice(0, 250_000) : decoded;
+    const name = `mcp_tool_${id}.json`;
+
+    openFile({
+      name,
+      workspacePath: `mcp_tool:${id}`,
+      content,
+    });
+
+    // Clear query params but stay on the Agent route.
+    try {
+      navigate('/dashboard/agent', { replace: true });
+    } catch {
+      // ignore
+    }
+  }, [location.pathname, location.search, navigate, openFile]);
+
   if (!location.pathname.startsWith('/dashboard')) {
     return (
       <Routes>
@@ -1314,6 +1353,35 @@ const App: React.FC = () => {
 
   const handleSaveFile = useCallback(async (content: string) => {
     if (!activeFile) return;
+    if (typeof activeFile.workspacePath === 'string' && activeFile.workspacePath.startsWith('mcp_tool:')) {
+      const toolId = activeFile.workspacePath.slice('mcp_tool:'.length).trim();
+      if (!toolId) return;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        setToastMsg('Invalid JSON');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/settings/mcp/tools/${encodeURIComponent(toolId)}`, {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parsed),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setToastMsg(typeof data.error === 'string' ? data.error : `Tool config save failed (${res.status})`);
+          return;
+        }
+        setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
+        setToastMsg('Tool config saved');
+      } catch (e) {
+        setToastMsg(e instanceof Error ? e.message : 'Tool config save failed');
+      }
+      return;
+    }
     if (activeFile.driveFileId) {
       try {
         const res = await fetch('/api/drive/file', {

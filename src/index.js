@@ -94,6 +94,7 @@ export default {
         '/privacy': 'privacy-policy.html',
         '/pricing': 'pricing.html',
         '/start': 'start-project.html',
+        '/apiguide/providers': 'apiguide/providers.html',
       };
       const assetHtmlKey = ASSET_ROUTES[pathLower] || ASSET_ROUTES[path];
       if (assetHtmlKey && env.ASSETS) {

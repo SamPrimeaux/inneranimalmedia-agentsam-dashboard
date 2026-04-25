@@ -140,6 +140,13 @@ async function handleLogout(request, url, env) {
 
   if (sessionId && env.DB) {
     await env.DB.prepare('DELETE FROM auth_sessions WHERE id = ?').bind(sessionId).run();
+    // Revoke sessions row (fire-and-forget)
+    try {
+      env.DB.prepare(
+        `UPDATE sessions SET revoked_at = ?, revoke_reason = 'logout'
+         WHERE id = ? AND revoked_at IS NULL`
+      ).bind(Date.now(), sessionId).run().catch(() => {});
+    } catch (_) {}
     if (env.SESSION_CACHE) {
       await env.SESSION_CACHE.delete(`iam_sess_v1:${sessionId}`);
     }
@@ -177,6 +184,42 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
   ).bind(sessionId, userId, expiresAtIso, ip, ua, tenantId).run();
+
+  // Dual-write: sessions table (fire-and-forget)
+  try {
+    let userEmail = '';
+    let displayName = null;
+    try {
+      const u = await env.DB.prepare(
+        `SELECT email, name FROM auth_users WHERE id = ? LIMIT 1`
+      ).bind(userId).first();
+      if (u?.email) userEmail = String(u.email);
+      if (u?.name) displayName = String(u.name);
+    } catch (_) { }
+    const ipAddress = ip;
+    const userAgent = ua;
+    const expiresAt = expiresAtIso;
+    const expiresAtMs = typeof expiresAt === 'number'
+      ? expiresAt
+      : new Date(expiresAt).getTime();
+    env.DB.prepare(`
+      INSERT INTO sessions (
+        id, user_id, tenant_id, email, provider,
+        display_name, ip_address, user_agent,
+        last_active_at, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, 'email', ?, ?, ?, ?, ?, unixepoch() * 1000)
+    `).bind(
+      sessionId,
+      userId,
+      tenantId ?? null,
+      userEmail,
+      displayName ?? null,
+      ipAddress ?? null,
+      userAgent ?? null,
+      Date.now(),
+      expiresAtMs
+    ).run().catch(() => {});
+  } catch (_) {}
 
   // 2. KV Cache
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);

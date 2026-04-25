@@ -606,6 +606,18 @@ export function isIngestSecretAuthorized(request, env) {
 }
 
 /**
+ * INTERNAL_API_SECRET via X-Internal-Secret or Authorization: Bearer (deploy hooks, notify).
+ */
+export function verifyInternalApiSecret(request, env) {
+  const secret = env?.INTERNAL_API_SECRET;
+  if (!secret || typeof secret !== 'string') return false;
+  const auth = request.headers.get('Authorization') || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const header = (request.headers.get('X-Internal-Secret') || '').trim();
+  return bearer === secret || header === secret;
+}
+
+/**
  * Standardized JSON response helper.
  */
 export function jsonResponse(body, status = 200) {

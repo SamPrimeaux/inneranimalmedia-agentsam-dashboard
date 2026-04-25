@@ -14,6 +14,16 @@ R2_PREFIX="static/dashboard/agent"
 echo "=== CF Builds PROD: worker deploy ==="
 npx wrangler deploy -c wrangler.production.toml
 
+if [ -n "${INTERNAL_API_SECRET:-}" ]; then
+  echo "=== CF Builds PROD: deploy-complete email notify ==="
+  curl -sS -X POST "https://inneranimalmedia.com/api/notify/deploy-complete" \
+    -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{}' || true
+else
+  echo "=== CF Builds PROD: skip notify (INTERNAL_API_SECRET unset) ==="
+fi
+
 echo "=== CF Builds PROD: record health snapshot ==="
 COMMIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 COMMIT_MSG=$(git log -1 --pretty=%s 2>/dev/null || echo "unknown")

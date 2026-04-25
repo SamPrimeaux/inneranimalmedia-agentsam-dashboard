@@ -232,7 +232,13 @@ function PollPanel() {
 // ── Main Component ────────────────────────────────────────────────────────
 
 export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: MeetCtxValue) => void }) {
-  const [phase, setPhase]         = useState<CallPhase>('lobby');
+  /** When present on first paint, lobby form is skipped and join runs automatically. */
+  const [roomFromUrl] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('room')?.trim() || '';
+  });
+
+  const [phase, setPhase]         = useState<CallPhase>(() => (roomFromUrl ? 'connecting' : 'lobby'));
   const [roomId, setRoomId]       = useState('');
   const [roomName, setRoomName]   = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -347,8 +353,12 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
   // ── Join ──────────────────────────────────────────────────────────────
 
-  const joinCall = useCallback(async () => {
-    if (!displayName.trim()) return;
+  const joinCallRef = useRef<((o?: { roomId?: string; displayName?: string }) => Promise<void>) | null>(null);
+
+  const joinCall = useCallback(async (overrides?: { roomId?: string; displayName?: string }) => {
+    const effName = (overrides?.displayName ?? displayName).trim();
+    const effRoom = (overrides?.roomId ?? roomId).trim();
+    if (!effName) return;
     setPhase('connecting'); setError(null);
     try {
       const turnRes  = await api('/turn', { method: 'POST' });
@@ -363,7 +373,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
       const roomRes  = await api('/room', {
         method: 'POST',
-        body: JSON.stringify({ roomId: roomId.trim() || undefined, name: `${displayName}'s Meeting` }),
+        body: JSON.stringify({ roomId: effRoom || undefined, name: `${effName}'s Meeting` }),
       });
       const roomData = await roomRes.json();
       const rid = roomData.roomId;
@@ -371,7 +381,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
       setRoomId(rid); setRoomName(roomData.name);
 
       const sessRes  = await api(`/room/${rid}/session`, {
-        method: 'POST', body: JSON.stringify({ displayName: displayName.trim() }),
+        method: 'POST', body: JSON.stringify({ displayName: effName }),
       });
       const sessData = await sessRes.json();
       sessionRef.current = sessData.sessionId;
@@ -418,6 +428,37 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
     }
   }, [displayName, roomId, audioOn, videoOn, preview]);
 
+  useEffect(() => {
+    joinCallRef.current = joinCall;
+  }, [joinCall]);
+
+  const autoJoinStarted = useRef(false);
+
+  // Auto-join when ?room= is present — no manual lobby step.
+  useEffect(() => {
+    if (!roomFromUrl || autoJoinStarted.current) return;
+    autoJoinStarted.current = true;
+    let cancelled = false;
+    (async () => {
+      let dn = 'Guest';
+      try {
+        const r = await fetch('/api/settings/profile', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json().catch(() => ({}));
+          const flat = (d as { flat?: { display_name?: string; name?: string; primary_email?: string } }).flat || {};
+          dn = String(flat.display_name || flat.name || '').trim()
+            || String(flat.primary_email || '').split('@')[0]?.trim()
+            || 'Guest';
+        }
+      } catch { /* use Guest */ }
+      if (cancelled) return;
+      setDisplayName(dn);
+      setRoomId(roomFromUrl);
+      await joinCallRef.current?.({ roomId: roomFromUrl, displayName: dn });
+    })();
+    return () => { cancelled = true; };
+  }, [roomFromUrl]);
+
   // ── Polling / HB ──────────────────────────────────────────────────────
 
   const startPolling = (rid: string) => {
@@ -451,10 +492,10 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
     pollTimer.current = window.setInterval(poll, 2000);
   };
 
-  const startHb = (_rid: string) => {
+  const startHb = (rid: string) => {
     hbTimer.current = window.setInterval(() => {
-      if (!roomId || roomId === 'undefined') return;
-      api(`/room/${roomId}/heartbeat`, { method: 'POST' }).catch(() => {});
+      if (!rid || rid === 'undefined') return;
+      api(`/room/${rid}/heartbeat`, { method: 'POST' }).catch(() => {});
     }, 5000);
   };
 
@@ -728,24 +769,41 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
               <span>InnerAnimalMedia</span>
               <span className="lobby-live-badge">MEET</span>
             </div>
-            <h2 className="lobby-heading">Join a meeting</h2>
-            {error && <div className="lobby-error">{error}</div>}
-            <label className="lobby-label">Your name</label>
-            <input className="lobby-input" value={displayName} onChange={e => setDisplayName(e.target.value)}
-              placeholder="Display name" onKeyDown={e => e.key === 'Enter' && joinCall()} />
-            <label className="lobby-label">Room ID <span className="lobby-hint">(blank = new room)</span></label>
-            <input className="lobby-input" value={roomId} onChange={e => setRoomId(e.target.value)}
-              placeholder="Paste room ID" onKeyDown={e => e.key === 'Enter' && joinCall()} />
-            <button className="lobby-btn" onClick={joinCall}
-              disabled={!displayName.trim() || phase === 'connecting'}>
-              {phase === 'connecting'
-                ? <><Loader2 size={15} className="spin" /> Connecting…</>
-                : <><Video size={15} /> Join Call</>}
-            </button>
-            <div className="lobby-divider">or</div>
-            <button className="lobby-btn-secondary" onClick={() => setShowSchedule(true)}>
-              <CalendarIcon size={15} /> Schedule for later
-            </button>
+            {roomFromUrl ? (
+              <>
+                <h2 className="lobby-heading">Joining room…</h2>
+                {error && <div className="lobby-error">{error}</div>}
+                <p className="lobby-sub" style={{ fontSize: 12, color: 'var(--text-muted, #4a7a75)', margin: 0 }}>
+                  <span className="font-mono">{roomFromUrl}</span>
+                </p>
+                <button className="lobby-btn" type="button" disabled>
+                  {phase === 'connecting'
+                    ? <><Loader2 size={15} className="spin" /> Connecting…</>
+                    : <><Loader2 size={15} className="spin" /> Starting…</>}
+                </button>
+              </>
+            ) : (
+              <>
+                <h2 className="lobby-heading">Join a meeting</h2>
+                {error && <div className="lobby-error">{error}</div>}
+                <label className="lobby-label">Your name</label>
+                <input className="lobby-input" value={displayName} onChange={e => setDisplayName(e.target.value)}
+                  placeholder="Display name" onKeyDown={e => e.key === 'Enter' && joinCall()} />
+                <label className="lobby-label">Room ID <span className="lobby-hint">(blank = new room)</span></label>
+                <input className="lobby-input" value={roomId} onChange={e => setRoomId(e.target.value)}
+                  placeholder="Paste room ID" onKeyDown={e => e.key === 'Enter' && joinCall()} />
+                <button className="lobby-btn" onClick={() => joinCall()}
+                  disabled={!displayName.trim() || phase === 'connecting'}>
+                  {phase === 'connecting'
+                    ? <><Loader2 size={15} className="spin" /> Connecting…</>
+                    : <><Video size={15} /> Join Call</>}
+                </button>
+                <div className="lobby-divider">or</div>
+                <button className="lobby-btn-secondary" onClick={() => setShowSchedule(true)}>
+                  <CalendarIcon size={15} /> Schedule for later
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

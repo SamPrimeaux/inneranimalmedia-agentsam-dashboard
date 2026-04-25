@@ -19,6 +19,7 @@ import { handleCidiApi } from './api/cicd';
 import { handleDeploymentsApi } from './api/deployments';
 import { handleFinanceApi } from './api/finance';
 import { handleMcpApi } from './api/mcp';
+import { handleNotifyDeployComplete } from './api/notify-deploy';
 import { handleDrawApi } from './api/draw';
 import { handleThemesApi } from './api/themes';
 import { handleHubApi } from './api/hub';
@@ -176,6 +177,10 @@ export default {
       if (pathLower.startsWith('/api/finance') || pathLower.startsWith('/api/clients') ||
           pathLower.startsWith('/api/projects') || pathLower.startsWith('/api/billing')) {
         return handleFinanceApi(request, url, env, ctx);
+      }
+
+      if (pathLower === '/api/notify/deploy-complete' && request.method === 'POST') {
+        return handleNotifyDeployComplete(request, env, ctx);
       }
 
       if (pathLower.startsWith('/api/mcp')) {

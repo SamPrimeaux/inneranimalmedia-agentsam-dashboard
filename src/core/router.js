@@ -20,6 +20,7 @@ import { handleCicdApi }             from '../api/cicd.js';
 import { handleIntegrationsRequest } from '../api/integrations.js';
 import { handleIntegrityApi }        from '../api/integrity.js';
 import { handleMcpApi }              from '../api/mcp.js';
+import { handleNotifyDeployComplete } from '../api/notify-deploy.js';
 import { handleAgentApi }            from '../api/agent.js';
 import { handleAgentSamApi }         from '../api/agentsam.js';
 import { handleOverviewApi }         from '../api/overview.js';
@@ -279,6 +280,10 @@ export async function handleRequest(request, env, ctx) {
 
   if (path === '/api/deploy/post' || path.startsWith('/api/post-deploy')) {
     return handlePostDeployApi(request, url, env, ctx);
+  }
+
+  if (path === '/api/notify/deploy-complete' && method === 'POST') {
+    return handleNotifyDeployComplete(request, env, ctx);
   }
 
   // ── GitHub (before /api/integrations catch-all) ────────────────────────────

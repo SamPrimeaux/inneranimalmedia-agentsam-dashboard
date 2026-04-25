@@ -3973,6 +3973,24 @@ const worker = {
 
       if (url.pathname.startsWith('/api/meet')) return handleMeetApi(request, env, ctx);
 
+      if (pathLower === '/api/ai/smoke-test' && request.method === 'POST') {
+        return handleAiSmokeTest(request, url, env);
+      }
+
+      if (pathLower === '/api/ai/test-runs' && request.method === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const providerFilter = url.searchParams.get('provider');
+        const modelFilter = url.searchParams.get('model');
+        const rows = await env.DB.prepare(
+          `SELECT * FROM ai_api_test_runs
+           WHERE (? IS NULL OR provider = ?)
+             AND (? IS NULL OR model = ?)
+           ORDER BY created_at DESC
+           LIMIT 100`
+        ).bind(providerFilter, providerFilter, modelFilter, modelFilter).all();
+        return jsonResponse({ runs: rows.results || [] });
+      }
+
       // ----- API: Core Generation / Drive Sync -----
       if (pathLower === '/api/generate' && methodUpper === 'POST') {
         if (!env.AI) return jsonResponse({ error: 'AI not configured' }, 503);
@@ -7649,6 +7667,195 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
   }
 }
 
+async function writeTestRun(env, data) {
+  if (!env?.DB) return null;
+  const {
+    provider,
+    model,
+    status = 'succeeded',
+    success = 1,
+    inputTokens = 0,
+    outputTokens = 0,
+    cachedTokens = 0,
+    inputCostUsd = 0,
+    outputCostUsd = 0,
+    totalCostUsd = 0,
+    latencyMs = 0,
+    responseText = '',
+    errorMessage = '',
+    workspaceId = 'ws_inneranimalmedia',
+    tenantId = 'tenant_sam_primeaux',
+    testSuite = 'production',
+    testName = '',
+    runGroupId = '',
+    assertionPassed = -1,
+    promptId = '',
+    experimentId = '',
+  } = data || {};
+  const id = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO ai_api_test_runs (
+      id, run_group_id, provider, model, status, success,
+      input_tokens, output_tokens, cached_tokens, total_tokens,
+      input_cost_usd, output_cost_usd, total_cost_usd,
+      latency_ms, response_text, error_message,
+      started_at, completed_at, workspace_id, tenant_id,
+      test_suite, test_name, assertion_passed,
+      prompt_id, experiment_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    id, runGroupId, provider, model, status, success,
+    Number(inputTokens) || 0,
+    Number(outputTokens) || 0,
+    Number(cachedTokens) || 0,
+    (Number(inputTokens) || 0) + (Number(outputTokens) || 0),
+    Number(inputCostUsd) || 0,
+    Number(outputCostUsd) || 0,
+    Number(totalCostUsd) || 0,
+    Number(latencyMs) || 0,
+    String(responseText || '').slice(0, 500),
+    String(errorMessage || '').slice(0, 1000),
+    now,
+    now,
+    workspaceId,
+    tenantId,
+    testSuite,
+    testName,
+    Number(assertionPassed),
+    promptId,
+    experimentId,
+  ).run();
+  return id;
+}
+
+function aiSmokeProvidersFromUrl(url) {
+  const requested = String(url.searchParams.get('providers') || 'openai')
+    .split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+  return requested.length ? requested : ['openai'];
+}
+
+async function callAiSmokeProvider(env, provider, model, prompt) {
+  const start = Date.now();
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
+    const res = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, input: prompt, max_output_tokens: 24 }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usage || {};
+    const responseText = json.output_text || (json.output || []).map((o) => (o.content || []).map((c) => c.text || '').join('')).join('');
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      responseText,
+    };
+  }
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 24, messages: [{ role: 'user', content: prompt }] }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usage || {};
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      responseText: (json.content || []).map((c) => c.text || '').join(''),
+    };
+  }
+  if (provider === 'gemini') {
+    if (!env.GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY not configured');
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${env.GOOGLE_AI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Gemini ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usageMetadata || {};
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.promptTokenCount || 0,
+      outputTokens: usage.candidatesTokenCount || 0,
+      responseText: json.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '',
+    };
+  }
+  throw new Error(`Unsupported smoke provider: ${provider}`);
+}
+
+async function handleAiSmokeTest(request, url, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const body = await request.json().catch(() => ({}));
+  const prompt = String(body.prompt || 'Reply with the word ok.').slice(0, 500);
+  const providers = aiSmokeProvidersFromUrl(url);
+  const runGroupId = `smoke-gpt54-${Math.floor(Date.now() / 1000)}`;
+  const providerModels = {
+    openai: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
+    anthropic: body.anthropic_models || ['claude-4-5-haiku-latest'],
+    gemini: body.gemini_models || ['gemini-2.5-flash'],
+  };
+  const rows = [];
+  for (const provider of providers) {
+    const models = providerModels[provider] || [];
+    for (const model of models) {
+      const start = Date.now();
+      try {
+        const result = await callAiSmokeProvider(env, provider, model, prompt);
+        await writeTestRun(env, {
+          provider,
+          model,
+          status: 'succeeded',
+          success: 1,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          latencyMs: result.latencyMs,
+          responseText: result.responseText,
+          workspaceId: authUser.workspace_id || env.WORKSPACE_ID || 'ws_inneranimalmedia',
+          tenantId: authUser.tenant_id || 'tenant_sam_primeaux',
+          testSuite: 'production',
+          testName: 'ai_smoke_test',
+          runGroupId,
+          assertionPassed: 1,
+        });
+        rows.push({ model, provider, latencyMs: result.latencyMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, totalCostUsd: 0 });
+      } catch (err) {
+        await writeTestRun(env, {
+          provider,
+          model,
+          status: 'failed',
+          success: 0,
+          latencyMs: Date.now() - start,
+          errorMessage: err?.message || String(err),
+          workspaceId: authUser.workspace_id || env.WORKSPACE_ID || 'ws_inneranimalmedia',
+          tenantId: authUser.tenant_id || 'tenant_sam_primeaux',
+          testSuite: 'production',
+          testName: 'ai_smoke_test',
+          runGroupId,
+          assertionPassed: 0,
+        });
+        rows.push({ model, provider, error: err?.message || String(err), latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0, totalCostUsd: 0 });
+      }
+    }
+  }
+  return jsonResponse({ run_group_id: runGroupId, results: rows });
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
 async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false, chatPersistenceUserId = null) {
   if (env.DB && conversationId != null && String(conversationId).trim() !== '') {
@@ -7672,6 +7879,27 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     // Fallback if DB row missing rates
     const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
     amountUsd = (safeInput * rateIn / 1_000_000) + (safeOutput * rateOut / 1_000_000);
+  }
+  try {
+    await writeTestRun(env, {
+      provider: safeProvider,
+      model: safeModelKey,
+      status: 'succeeded',
+      success: 1,
+      inputTokens: safeInput,
+      outputTokens: safeOutput,
+      cachedTokens: safeCacheRead,
+      totalCostUsd: amountUsd,
+      latencyMs: routingOpts && typeof routingOpts.chatStartMs === 'number' ? Date.now() - routingOpts.chatStartMs : 0,
+      responseText: safeText.slice(0, 500),
+      workspaceId: routingOpts?.workspaceId || 'ws_inneranimalmedia',
+      tenantId: routingOpts?.tenantId || 'tenant_sam_primeaux',
+      testSuite: 'production',
+      testName: routingOpts?.testName || 'agent_chat_provider_call',
+      runGroupId: routingOpts?.runGroupId || '',
+    });
+  } catch (e) {
+    console.warn('[ai_api_test_runs] chat write failed', e?.message ?? e);
   }
   const msgId = crypto.randomUUID();
   const role = 'assistant';

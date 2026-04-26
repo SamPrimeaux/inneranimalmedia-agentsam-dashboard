@@ -1,12 +1,11 @@
-// Workers Builds config aligned to production worker bindings.
-// Production deploy strategy remains unchanged and uses wrangler.production.toml.
-
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "inneranimalmedia",
   "main": "src/index.js",
   "compatibility_date": "2026-01-20",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "preview_urls": true,
   "no_bundle": false,
@@ -97,32 +96,6 @@
     {
       "binding": "SESSION_CACHE",
       "id": "dc87920b0a9247979a213c09df9a0234"
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "IAM_COLLAB",
-        "class_name": "IAMCollaborationSession"
-      },
-      {
-        "name": "CHESS_SESSION",
-        "class_name": "ChessRoom"
-      },
-      {
-        "name": "AGENT_SESSION",
-        "class_name": "AgentChatSqlV1"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v5",
-      "new_sqlite_classes": ["AgentChatSqlV1"]
-    },
-    {
-      "tag": "v6",
-      "deleted_classes": ["MeauxSession", "IAMAgentSession", "IAMSession"]
     }
   ],
   "queues": {

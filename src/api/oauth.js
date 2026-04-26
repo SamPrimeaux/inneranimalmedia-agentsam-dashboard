@@ -558,7 +558,7 @@ export async function handleOAuthApi(request, env, ctx) {
 
     const state = url.searchParams.get('state') || '';
     const code = url.searchParams.get('code') || '';
-    if (!state || !code) return Response.redirect(`/dashboard/integrations?error=missing_params`, 302);
+    if (!state || !code) return Response.redirect(`${new URL(request.url).origin}/dashboard/integrations?error=missing_params`, 302);
 
     const stored = await kvGetState(env, state);
     if (!stored) return new Response(null, { status: 404 });
@@ -635,11 +635,11 @@ export async function handleOAuthApi(request, env, ctx) {
     } catch (e) {
       await kvDeleteState(env, state);
       const msg = encodeURIComponent(e?.message || 'oauth_failed');
-      return Response.redirect(`${returnTo}?error=${msg}`, 302);
+      const _origin = new URL(request.url).origin; const _abs638 = returnTo.startsWith("http") ? returnTo : _origin + returnTo; return Response.redirect(`${_abs638}?error=${msg}`, 302);
     }
 
     await kvDeleteState(env, state);
-    return Response.redirect(`${returnTo}?connected=${encodeURIComponent(provider)}&success=true`, 302);
+    const _abs642 = returnTo.startsWith("http") ? returnTo : new URL(request.url).origin + returnTo; return Response.redirect(`${_abs642}?connected=${encodeURIComponent(provider)}&success=true`, 302);
   }
 
   return jsonResponse({ error: 'not_found' }, 404);

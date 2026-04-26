@@ -469,7 +469,7 @@ export async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
 
-  let userId = session.user_id;
+  const authId = session.user_id; // Usually au_...
   let email = session._session_user_id || session.user_id;
   const sessionTenant =
     session.tenant_id != null && String(session.tenant_id).trim() !== ''
@@ -478,93 +478,74 @@ export async function getAuthUser(request, env) {
 
   let role = 'user';
   let is_superadmin = 0;
-  let usersTenantId = null;
   let resolvedEmail = null;
 
-  if (env.DB && userId) {
+  if (env.DB && authId) {
     try {
-      if (String(userId).startsWith('usr_')) {
-        const userRow = await env.DB.prepare(`SELECT email, tenant_id FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
-        if (userRow) {
-          resolvedEmail = userRow.email || null;
-          if (userRow.tenant_id != null && String(userRow.tenant_id).trim() !== '') {
-            usersTenantId = String(userRow.tenant_id).trim();
-          }
-          if (resolvedEmail && (!email || email === userId)) email = resolvedEmail;
-        }
-      } else {
-        resolvedEmail = email && email !== userId ? email : userId;
+      // 1. Resolve auth_user info
+      let authRow = null;
+      if (String(authId).startsWith('au_')) {
+        authRow = await env.DB.prepare(
+          `SELECT email, tenant_id, COALESCE(is_superadmin, 0) AS is_superadmin, name FROM auth_users WHERE id = ? LIMIT 1`
+        ).bind(authId).first();
+      } else if (email && email.includes('@')) {
+        authRow = await env.DB.prepare(
+          `SELECT id, email, tenant_id, COALESCE(is_superadmin, 0) AS is_superadmin, name FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`
+        ).bind(email).first();
       }
 
-      const lookupEmail = resolvedEmail || String(email || userId);
-      if (lookupEmail) {
-        const authRow = await env.DB
-          .prepare(
-            `SELECT email, tenant_id, COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users
-             WHERE LOWER(email) = LOWER(?) LIMIT 1`,
-          )
-          .bind(lookupEmail)
-          .first();
-
-        const authTenant =
-          authRow?.tenant_id != null && String(authRow.tenant_id).trim() !== ''
-            ? String(authRow.tenant_id).trim()
-            : null;
-
-        if (authRow && authRow.is_superadmin) {
-          is_superadmin = 1;
-          role = 'superadmin';
-          if (authRow.email && (!email || email === userId)) email = authRow.email;
-          const effectiveTenant = sessionTenant || usersTenantId || authTenant || null;
-          const sid = session.session_id;
-          if (sid && effectiveTenant && !sessionTenant) {
-            patchAuthSessionTenantIfMissing(env, sid, effectiveTenant, userId, session.expires_at);
-          }
-          return { id: userId, email, tenant_id: effectiveTenant, role, is_superadmin };
-        }
+      if (authRow) {
+        resolvedEmail = authRow.email || null;
+        is_superadmin = authRow.is_superadmin ? 1 : 0;
+        if (is_superadmin) role = 'superadmin';
       }
+
+      const lookupEmail = resolvedEmail || (email && email.includes('@') ? email : null);
+      
+      // 2. Enrich with canonical identity (users table + superadmin_identity)
+      const enrichment = await resolveUserEnrichment(env, null, authRow?.id || authId, lookupEmail);
+
+      const canonicalId = enrichment?.canonical_id || (String(authId).startsWith('usr_') ? authId : null);
+      const effectiveTenant = sessionTenant || enrichment?.tenant_id || authRow?.tenant_id || null;
+      
+      const identity = {
+        id:            canonicalId, // usr_ prefix
+        person_uuid:   enrichment?.person_uuid || null,
+        auth_id:       authRow?.id || authId,
+        email:         lookupEmail || resolvedEmail || email,
+        name:          enrichment?.display_name || authRow?.name || 'User',
+        user_key:      enrichment?.user_key || null,
+        role:          role,
+        is_superadmin: is_superadmin,
+        tenant_id:     effectiveTenant,
+        workspace_id:  enrichment?.workspace_id || 'ws_default',
+        session_id:    session.session_id,
+        expires_at:    session.expires_at ? (typeof session.expires_at === 'number' ? session.expires_at : new Date(session.expires_at).getTime()) : null,
+      };
+
+      // Patch session tenant if missing
+      if (session.session_id && effectiveTenant && !sessionTenant) {
+        patchAuthSessionTenantIfMissing(env, session.session_id, effectiveTenant, authId, session.expires_at);
+      }
+
+      return identity;
     } catch (e) {
-      console.warn('[getAuthUser Superadmin Resolve Error]', e.message);
+      console.warn('[getAuthUser Enrichment Error]', e.message);
     }
   }
 
-  if (env.DB && userId && String(userId).startsWith('usr_') && (!email || email === userId)) {
-    try {
-      const u = await env.DB.prepare(`SELECT email FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
-      if (u && u.email) email = u.email;
-    } catch (e) {
-      console.warn('[getAuthUser User Lookup Error]', e.message);
-    }
-  }
-
-  const lookupEmail2 = resolvedEmail || String(email || userId);
-  let authTenant2 = null;
-  if (env.DB && lookupEmail2) {
-    try {
-      const ar = await env.DB
-        .prepare(`SELECT tenant_id FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`)
-        .bind(lookupEmail2)
-        .first();
-      if (ar?.tenant_id != null && String(ar.tenant_id).trim() !== '') {
-        authTenant2 = String(ar.tenant_id).trim();
-      }
-    } catch (e) {
-      console.warn('[getAuthUser auth tenant]', e?.message ?? e);
-    }
-  }
-  let fromKey = null;
-  if (env.DB && (!sessionTenant || !usersTenantId) && (!authTenant2)) {
-    fromKey = await fetchAuthUserTenantId(env, userId);
-  }
-
-  const effectiveTenant = sessionTenant || usersTenantId || authTenant2 || fromKey || null;
-  const sid = session.session_id;
-  if (sid && effectiveTenant && !sessionTenant) {
-    patchAuthSessionTenantIfMissing(env, sid, effectiveTenant, userId, session.expires_at);
-  }
-
-  return { id: userId, email, tenant_id: effectiveTenant, role, is_superadmin };
+  // Fallback if DB enrichment fails or session is minimal
+  return {
+    id: authId,
+    email: email,
+    tenant_id: sessionTenant,
+    role: 'user',
+    is_superadmin: 0,
+    session_id: session.session_id,
+    expires_at: session.expires_at ? (typeof session.expires_at === 'number' ? session.expires_at : new Date(session.expires_at).getTime()) : null,
+  };
 }
+
 
 /**
  * Create D1 + KV session for a platform user id and return JSON + session cookies.
@@ -638,4 +619,47 @@ export function jsonResponse(body, status = 200) {
     status: Number(status) || 200,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+/**
+ * Resolves person_uuid, workspace_id, user_key, display_name by checking
+ * users table via auth_id → users.id → email fallback,
+ * then checking superadmin_identity for person_uuid if still null.
+ */
+export async function resolveUserEnrichment(env, _userId, authId, email) {
+  if (!env?.DB) return null;
+  
+  // 1. Try users table by auth_id or email
+  let userRow = null;
+  if (authId) {
+    userRow = await env.DB.prepare(
+      `SELECT id, person_uuid, default_workspace_id, user_key, display_name, tenant_id FROM users WHERE auth_id = ? LIMIT 1`
+    ).bind(authId).first();
+  }
+  
+  if (!userRow && email) {
+    userRow = await env.DB.prepare(
+      `SELECT id, person_uuid, default_workspace_id, user_key, display_name, tenant_id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1`
+    ).bind(email).first();
+  }
+
+  // 2. Try superadmin_identity if still missing person_uuid
+  let person_uuid = userRow?.person_uuid || null;
+  if (!person_uuid && email) {
+    try {
+      const superRow = await env.DB.prepare(
+        `SELECT superadmin_uuid FROM superadmin_identity WHERE LOWER(email) = LOWER(?) AND is_enabled = 1 LIMIT 1`
+      ).bind(email).first();
+      person_uuid = superRow?.superadmin_uuid || null;
+    } catch (_) { }
+  }
+
+  return {
+    canonical_id: userRow?.id || null,
+    person_uuid,
+    workspace_id: userRow?.default_workspace_id || null,
+    user_key: userRow?.user_key || null,
+    display_name: userRow?.display_name || null,
+    tenant_id: userRow?.tenant_id || null
+  };
 }

@@ -4,6 +4,8 @@
  * Replaces the monolithic worker.js.
  */
 import { handleAgentRequest } from './api/agent';
+import { handleCmsApi } from './api/cms';
+
 import { handleAgentSamRegistryRequest } from './api/agentsam';
 import { handleTimeDispatch } from './tools/time';
 import { handleR2Api } from './api/r2-api';
@@ -213,6 +215,10 @@ export default {
       if (pathLower.startsWith('/api/agentsam')) {
         const res = await handleAgentSamRegistryRequest(request, env, ctx, authUser);
         if (res && res.status !== 404) return res;
+      }
+
+      if (pathLower.startsWith('/api/cms')) {
+        return handleCmsApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/storage')) {

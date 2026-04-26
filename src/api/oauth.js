@@ -103,10 +103,10 @@ function mapTokenProviderForStorage(provider) {
 }
 
 function integrationUserId(authUser) {
-  return authUser?._session_user_id || authUser?.email || authUser?.id;
+  return authUser?.id;
 }
 
-async function upsertOauthToken(env, { user_id, tenant_id, provider, access_token, refresh_token, scope, expires_at, account_identifier, account_email, account_display }) {
+async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider, access_token, refresh_token, scope, expires_at, account_identifier, account_email, account_display }) {
   if (!env?.DB) throw new Error('DB not configured');
   if (!env.VAULT_MASTER_KEY) throw new Error('VAULT_MASTER_KEY not configured');
 
@@ -130,7 +130,7 @@ async function upsertOauthToken(env, { user_id, tenant_id, provider, access_toke
 
   const sql = `
     INSERT OR REPLACE INTO user_oauth_tokens
-      (user_id, tenant_id, provider, account_identifier,
+      (user_id, tenant_id, person_uuid, provider, account_identifier,
        ${hasPlain ? 'access_token,' : ''} ${cols.has('refresh_token') ? 'refresh_token,' : ''}
        ${hasEncrypted ? 'access_token_encrypted, refresh_token_encrypted,' : ''}
        ${cols.has('scope') ? 'scope,' : ''} ${cols.has('scopes') ? 'scopes,' : ''}
@@ -140,7 +140,7 @@ async function upsertOauthToken(env, { user_id, tenant_id, provider, access_toke
        created_at
       )
     VALUES (
-      ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
       ${hasPlain ? '?,' : ''} ${cols.has('refresh_token') ? '?,' : ''}
       ${hasEncrypted ? '?, ?,': ''}
       ${cols.has('scope') ? '?,' : ''} ${cols.has('scopes') ? '?,' : ''}
@@ -154,8 +154,9 @@ async function upsertOauthToken(env, { user_id, tenant_id, provider, access_toke
   const binds = [
     String(user_id),
     String(tenant_id || ''),
+    String(person_uuid || ''),
     providerForDb,
-    String(accountIdVal),
+    String(accountIdVal || providerForDb),
   ];
   if (hasPlain) binds.push(accessPlain);
   if (cols.has('refresh_token')) binds.push(refreshPlain);
@@ -529,10 +530,11 @@ export async function handleOAuthApi(request, env, ctx) {
 
     const userId = integrationUserId(authUser);
     const tenantId = authUser?.tenant_id || '';
+    const personUuid = authUser?.person_uuid || '';
 
     const state = crypto.randomUUID();
     const returnTo = safeReturnTo(url.searchParams.get('return_to'));
-    await kvPutState(env, state, { user_id: userId, tenant_id: tenantId, provider, initiated_at: Date.now(), return_to: returnTo });
+    await kvPutState(env, state, { user_id: userId, tenant_id: tenantId, person_uuid: personUuid, provider, initiated_at: Date.now(), return_to: returnTo });
 
     let redirectUrl = null;
     if (provider === 'github') redirectUrl = githubAuthUrl(env, state);
@@ -559,10 +561,11 @@ export async function handleOAuthApi(request, env, ctx) {
     if (!state || !code) return Response.redirect(`/dashboard/integrations?error=missing_params`, 302);
 
     const stored = await kvGetState(env, state);
-    if (!stored) return Response.redirect(`/dashboard/integrations?error=state_mismatch`, 302);
+    if (!stored) return new Response(null, { status: 404 });
 
     const userId = stored.user_id;
     const tenantId = stored.tenant_id || '';
+    const personUuid = stored.person_uuid || '';
     const returnTo = safeReturnTo(stored.return_to);
 
     try {
@@ -572,12 +575,13 @@ export async function handleOAuthApi(request, env, ctx) {
         await upsertOauthToken(env, {
           user_id: userId,
           tenant_id: tenantId,
+          person_uuid: personUuid,
           provider: 'github',
           access_token: tok.access_token,
           refresh_token: null,
           scope: tok.scope || null,
           expires_at: null,
-          account_identifier: acct.login || '',
+          account_identifier: acct.login || acct.email || userId,
           account_email: acct.email,
           account_display: acct.login ? `github.com/${acct.login}` : null,
         });
@@ -587,12 +591,13 @@ export async function handleOAuthApi(request, env, ctx) {
         await upsertOauthToken(env, {
           user_id: userId,
           tenant_id: tenantId,
+          person_uuid: personUuid,
           provider: 'google',
           access_token: tok.access_token,
           refresh_token: tok.refresh_token || null,
           scope: tok.scope || null,
           expires_at: tok.expires_in ? nowSeconds() + Number(tok.expires_in) : null,
-          account_identifier: info.email || '',
+          account_identifier: info.email || userId,
           account_email: info.email,
           account_display: info.email || null,
         });
@@ -601,12 +606,13 @@ export async function handleOAuthApi(request, env, ctx) {
         await upsertOauthToken(env, {
           user_id: userId,
           tenant_id: tenantId,
+          person_uuid: personUuid,
           provider: 'cloudflare',
           access_token: tok.access_token,
           refresh_token: tok.refresh_token || null,
           scope: tok.scope || null,
           expires_at: tok.expires_in ? nowSeconds() + Number(tok.expires_in) : null,
-          account_identifier: '',
+          account_identifier: 'Cloudflare',
           account_email: null,
           account_display: 'Cloudflare',
         });
@@ -615,12 +621,13 @@ export async function handleOAuthApi(request, env, ctx) {
         await upsertOauthToken(env, {
           user_id: userId,
           tenant_id: tenantId,
+          person_uuid: personUuid,
           provider: 'supabase',
           access_token: tok.access_token,
           refresh_token: tok.refresh_token || null,
           scope: tok.scope || null,
           expires_at: tok.expires_in ? nowSeconds() + Number(tok.expires_in) : null,
-          account_identifier: '',
+          account_identifier: 'Supabase',
           account_email: null,
           account_display: 'Supabase',
         });

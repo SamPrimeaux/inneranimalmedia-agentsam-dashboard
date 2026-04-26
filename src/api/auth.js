@@ -10,6 +10,7 @@ import {
   AUTH_COOKIE_NAME,
   getAuthUser,
   getSession,
+  resolveUserEnrichment,
 } from '../core/auth';
 
 /**
@@ -220,24 +221,30 @@ async function finishLogin(request, url, env, userId, redirectPath) {
       if (u?.email) userEmail = String(u.email);
       if (u?.name) displayName = String(u.name);
     } catch (_) { }
+
+    const enrichment = await resolveUserEnrichment(env, null, userId, userEmail);
+    const personUuid = enrichment?.person_uuid || null;
+    const workspaceId = enrichment?.workspace_id || null;
     const ipAddress = ip;
     const userAgent = ua;
-    const expiresAt = expiresAtIso;
-    const expiresAtMs = typeof expiresAt === 'number'
-      ? expiresAt
-      : new Date(expiresAt).getTime();
+    const expiresAtMs = typeof expiresAtIso === 'number'
+      ? expiresAtIso
+      : new Date(expiresAtIso).getTime();
+
     env.DB.prepare(`
       INSERT INTO sessions (
-        id, user_id, tenant_id, email, provider,
+        id, user_id, tenant_id, person_uuid, workspace_id, email, provider,
         display_name, ip_address, user_agent,
         last_active_at, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, 'email', ?, ?, ?, ?, ?, unixepoch() * 1000)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'email', ?, ?, ?, ?, ?, unixepoch() * 1000)
     `).bind(
       sessionId,
-      userId,
-      tenantId ?? null,
+      userId, // au_ prefix (exception for login table)
+      tenantId ?? enrichment?.tenant_id ?? null,
+      personUuid,
+      workspaceId,
       userEmail,
-      displayName ?? null,
+      displayName ?? enrichment?.display_name ?? null,
       ipAddress ?? null,
       userAgent ?? null,
       Date.now(),

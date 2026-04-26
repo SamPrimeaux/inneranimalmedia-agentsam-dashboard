@@ -231,7 +231,7 @@ export default {
       }
 
       if (pathLower.startsWith('/api/vault')) {
-        return handleVaultApi(request, env);
+        return handleVaultApi(request, new URL(request.url), env, ctx);
       }
 
       if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/chat') || pathLower.startsWith('/api/playwright')) {

@@ -13,11 +13,173 @@ export async function handleOverviewApi(request, url, env, ctx) {
 
   try {
     if (pathLower === '/api/overview/activity-strip') return handleOverviewActivityStrip(authUser, env);
+    if (pathLower === '/api/overview/agent-activity') return handleOverviewAgentActivity(env);
+    if (pathLower === '/api/overview/commands-workflows') return handleOverviewCommandsWorkflows(env);
+    if (pathLower === '/api/overview/kpi-strip') return handleOverviewKpiStrip(authUser, env);
+    if (pathLower === '/api/overview/goals-launch') return handleOverviewGoalsLaunch(authUser, env);
     if (pathLower === '/api/overview/deployments') return handleOverviewDeployments(env);
     if (pathLower === '/api/overview/stats') return handleOverviewStats(env);
     return jsonResponse({ error: 'Overview route not found' }, 404);
   } catch (e) {
     return jsonResponse({ error: String(e.message || e) }, 500);
+  }
+}
+
+async function handleOverviewAgentActivity(env) {
+  // last 24h grouped by event_type
+  const since = Math.floor(Date.now() / 1000) - 24 * 3600;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT COALESCE(event_type,'unknown') as type,
+              COUNT(*) as count,
+              COALESCE(SUM(COALESCE(cost_usd,0)),0) as cost_usd
+       FROM agent_telemetry
+       WHERE COALESCE(created_at,0) >= ?
+       GROUP BY COALESCE(event_type,'unknown')
+       ORDER BY count DESC`
+    ).bind(since).all();
+
+    const events = (results || []).map((r) => ({
+      type: String(r.type || 'unknown'),
+      count: Number(r.count || 0),
+      cost: Number(r.cost_usd || 0),
+    }));
+
+    const sessions = events.reduce((acc, e) => acc + (e.type.toLowerCase().includes('session') ? e.count : 0), 0);
+    const llm_calls = events.reduce((acc, e) => acc + (e.type.toLowerCase().includes('llm') || e.type.toLowerCase().includes('chat') ? e.count : 0), 0);
+    const total_cost_usd = events.reduce((acc, e) => acc + (Number(e.cost) || 0), 0);
+
+    let top_model = null;
+    try {
+      const row = await env.DB.prepare(
+        `SELECT COALESCE(model_key, model, provider_model, '') AS m, COUNT(*) AS c
+         FROM agent_telemetry
+         WHERE COALESCE(created_at,0) >= ?
+         GROUP BY COALESCE(model_key, model, provider_model, '')
+         ORDER BY c DESC
+         LIMIT 1`
+      ).bind(since).first();
+      if (row?.m && String(row.m).trim()) top_model = String(row.m).trim();
+    } catch (_) {}
+
+    return jsonResponse({
+      sessions,
+      llm_calls,
+      top_model,
+      total_cost_usd: Math.round(total_cost_usd * 10000) / 10000,
+      events,
+    });
+  } catch (e) {
+    // If table doesn't exist yet, return safe empty payload (do not 500).
+    return jsonResponse({ sessions: 0, llm_calls: 0, top_model: null, total_cost_usd: 0, events: [] });
+  }
+}
+
+async function handleOverviewCommandsWorkflows(env) {
+  // last 7d
+  const since = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
+  try {
+    const totalRow = await env.DB.prepare(
+      `SELECT COUNT(*) as c
+       FROM agentsam_command_run
+       WHERE COALESCE(created_at,0) >= ?`
+    ).bind(since).first().catch(() => ({ c: 0 }));
+
+    const byIntentRes = await env.DB.prepare(
+      `SELECT COALESCE(intent,'unknown') as intent,
+              COUNT(*) as count,
+              AVG(CASE WHEN LOWER(COALESCE(status,'')) IN ('success','ok','done','completed') THEN 1.0 ELSE 0.0 END) as success_rate
+       FROM agentsam_command_run
+       WHERE COALESCE(created_at,0) >= ?
+       GROUP BY COALESCE(intent,'unknown')
+       ORDER BY count DESC
+       LIMIT 50`
+    ).bind(since).all().catch(() => ({ results: [] }));
+
+    const recentRes = await env.DB.prepare(
+      `SELECT id, model, intent, status, error_message, created_at
+       FROM agentsam_command_run
+       WHERE COALESCE(created_at,0) >= ?
+       ORDER BY created_at DESC
+       LIMIT 5`
+    ).bind(since).all().catch(() => ({ results: [] }));
+
+    return jsonResponse({
+      total: Number(totalRow?.c || 0),
+      by_intent: (byIntentRes.results || []).map((r) => ({
+        intent: String(r.intent || 'unknown'),
+        count: Number(r.count || 0),
+        success_rate: Math.round((Number(r.success_rate || 0) || 0) * 10000) / 10000,
+      })),
+      recent: (recentRes.results || []).map((r) => ({
+        id: r.id ?? null,
+        model: r.model ?? null,
+        intent: r.intent ?? null,
+        status: r.status ?? null,
+        error_message: r.error_message ?? null,
+        created_at: r.created_at ?? null,
+      })),
+    });
+  } catch (_) {
+    return jsonResponse({ total: 0, by_intent: [], recent: [] });
+  }
+}
+
+async function handleOverviewKpiStrip(authUser, env) {
+  // Alias of "activity-strip" but with explicit KPI keys for today's strip.
+  // This endpoint should never hard-fail; return zeros if tables are missing.
+  try {
+    const userId = authUser?.id || '';
+    const today = new Date().toISOString().slice(0, 10);
+
+    const safeFirst = async (q, ...binds) => {
+      try { return await env.DB.prepare(q).bind(...binds).first(); } catch { return null; }
+    };
+
+    const [
+      apiCallsRow,
+      tokensRow,
+      costRow,
+      toolCallsRow,
+      mcpCallsRow,
+      deploymentsRow,
+    ] = await Promise.all([
+      safeFirst(`SELECT COUNT(*) as c FROM worker_analytics WHERE date(created_at) = date(?)`, today),
+      safeFirst(`SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) as t FROM spend_ledger WHERE date(occurred_at) = date(?)`, today),
+      safeFirst(`SELECT COALESCE(SUM(COALESCE(amount_usd,0)),0) as c FROM spend_ledger WHERE date(occurred_at) = date(?)`, today),
+      safeFirst(`SELECT COUNT(*) as c FROM mcp_tool_calls WHERE date(created_at) = date(?)`, today),
+      safeFirst(`SELECT COUNT(*) as c FROM mcp_usage_log WHERE date(created_at) = date(?)`, today),
+      safeFirst(`SELECT COUNT(*) as c FROM deployments WHERE date(timestamp) = date(?) AND status = 'success'`, today),
+    ]);
+
+    return jsonResponse({
+      api_calls: Number(apiCallsRow?.c || 0),
+      tokens_used: Number(tokensRow?.t || 0),
+      cost_usd: Number(costRow?.c || 0),
+      tool_calls: Number(toolCallsRow?.c || 0),
+      mcp_calls: Number(mcpCallsRow?.c || 0),
+      deployments: Number(deploymentsRow?.c || 0),
+      user_id: userId || null,
+    });
+  } catch (_) {
+    return jsonResponse({ api_calls: 0, tokens_used: 0, cost_usd: 0, tool_calls: 0, mcp_calls: 0, deployments: 0 });
+  }
+}
+
+async function handleOverviewGoalsLaunch(authUser, env) {
+  // Return empty arrays if no data or table not present.
+  const tenantId = String(authUser?.tenant_id || '').trim();
+  if (!tenantId) return jsonResponse({ goals: [], launch_milestones: [] });
+  try {
+    const goals = await env.DB.prepare(
+      `SELECT * FROM goals WHERE tenant_id = ? ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200`
+    ).bind(tenantId).all().catch(() => ({ results: [] }));
+    const milestones = await env.DB.prepare(
+      `SELECT * FROM launch_milestones WHERE tenant_id = ? ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200`
+    ).bind(tenantId).all().catch(() => ({ results: [] }));
+    return jsonResponse({ goals: goals.results || [], launch_milestones: milestones.results || [] });
+  } catch (_) {
+    return jsonResponse({ goals: [], launch_milestones: [] });
   }
 }
 

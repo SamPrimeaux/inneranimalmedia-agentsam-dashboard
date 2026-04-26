@@ -98,6 +98,26 @@ export async function handleIntegrationsRequest(request, envArg, ctxArg, authUse
 
     await ensureIntegrationTables(env, resolveTenantId(authUser, env));
 
+    // ── GET /api/integrations (lightweight list) ─────────────────────────────
+    if (method === 'GET' && pathLower === '/api/integrations') {
+        const tenantId = resolveTenantId(authUser, env);
+        try {
+            const { results } = await env.DB.prepare(
+                `SELECT id, tenant_id, provider_key, display_name, category, auth_type, status,
+                        scopes_json, config_json, account_display, secret_binding_name,
+                        last_sync_at, last_health_check_at, last_health_latency_ms, last_health_status,
+                        is_enabled, sort_order, created_at, updated_at
+                 FROM integration_registry
+                 WHERE tenant_id = ? AND COALESCE(is_enabled, 1) = 1
+                 ORDER BY sort_order ASC, display_name ASC`,
+            ).bind(tenantId).all();
+            const integrations = (results || []).filter(Boolean);
+            return jsonResponse({ integrations, total: integrations.length });
+        } catch (e) {
+            return jsonResponse({ integrations: [], total: 0, error: String(e?.message || e) }, 200);
+        }
+    }
+
     if (method === 'GET' && pathLower === '/api/integrations/status') {
         return handleLegacyStatus(env, authUser);
     }
@@ -278,7 +298,9 @@ async function handleSummary(env, authUser) {
         safeAll(env.DB, `SELECT provider_key, event_type, message, actor, created_at FROM integration_events WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 25`, [tenantId]),
         loadProviderColors(env),
     ]);
-    const colorBySlug = new Map((providerColors.results || []).map((row) => [String(row.slug || '').toLowerCase(), row]));
+    // Defensive: filter null rows to avoid frontend palette crashes.
+    const providerColorsSafe = (providerColors.results || []).filter(Boolean);
+    const colorBySlug = new Map(providerColorsSafe.map((row) => [String(row.slug || '').toLowerCase(), row]));
 
     const oauthByProvider = new Map();
     for (const token of oauth.results || []) {
@@ -328,7 +350,7 @@ async function handleSummary(env, authUser) {
         webhooks: webhookCounts,
         allowlist_count: Number(allowlistCount?.count || 0),
         recent_events: events.results || [],
-        provider_colors: providerColors.results || [],
+        provider_colors: providerColorsSafe,
         provider_color_aliases: PROVIDER_COLOR_SLUGS,
         capabilities: resolveCapabilities(authUser),
         summary,

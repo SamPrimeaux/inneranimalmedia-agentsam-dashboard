@@ -836,6 +836,70 @@ export async function handleAgentApi(request, url, env, ctx) {
   const path   = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
   const method = request.method.toUpperCase();
 
+  // GET /api/agent/tools — combined tool exposure (builtin + registered MCP)
+  if (path === '/api/agent/tools' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+
+    const tools = [];
+    try {
+      const a = await env.DB.prepare(
+        `SELECT name, description, category, handler_type, is_active, risk_level
+         FROM agentsam_tools
+         WHERE COALESCE(is_active, 0) = 1
+         ORDER BY category ASC, name ASC
+         LIMIT 500`,
+      ).all().catch(() => ({ results: [] }));
+      for (const r of a.results || []) {
+        if (!r) continue;
+        tools.push({
+          name: String(r.name || ''),
+          description: String(r.description || ''),
+          category: String(r.category || 'builtin'),
+          handler_type: String(r.handler_type || 'builtin'),
+          is_active: 1,
+          risk_level: String(r.risk_level || 'low'),
+        });
+      }
+    } catch (_) {}
+
+    try {
+      const m = await env.DB.prepare(
+        `SELECT tool_name, description, tool_category, enabled, requires_approval
+         FROM mcp_registered_tools
+         WHERE COALESCE(enabled,0) = 1
+         ORDER BY tool_name ASC
+         LIMIT 500`,
+      ).all().catch(() => ({ results: [] }));
+      for (const r of m.results || []) {
+        if (!r) continue;
+        const name = String(r.tool_name || '').trim();
+        if (!name) continue;
+        tools.push({
+          name,
+          description: String(r.description || ''),
+          category: String(r.tool_category || 'mcp'),
+          handler_type: 'mcp',
+          is_active: 1,
+          risk_level: Number(r.requires_approval || 0) === 1 ? 'high' : 'medium',
+        });
+      }
+    } catch (_) {}
+
+    // De-dupe by name (prefer builtin if collision)
+    const seen = new Set();
+    const deduped = [];
+    for (const t of tools) {
+      const key = String(t.name || '').toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(t);
+    }
+
+    return jsonResponse({ tools: deduped, total: deduped.length });
+  }
+
   // GET /api/agent/todo — multi-tenant agentsam_todo
   if (path === '/api/agent/todo' && method === 'GET') {
     const authUser = await getAuthUser(request, env);

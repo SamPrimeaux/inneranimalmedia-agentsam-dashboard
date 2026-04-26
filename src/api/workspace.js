@@ -18,6 +18,63 @@ export async function handleWorkspaceApi(request, url, env, ctx, authUser) {
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
     if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
 
+    // ── GET /api/workspace/settings ─────────────────────────────────────────
+    if (pathLower === '/api/workspace/settings' && method === 'GET') {
+        const workspaceId = String(authUser.workspace_id || authUser.workspaceId || url.searchParams.get('workspace_id') || '').trim();
+        const userId = String(authUser.id || '').trim();
+        const tenantId = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== '' ? String(authUser.tenant_id).trim() : null;
+        const defaults = { workspace_id: workspaceId || null, theme: null, timezone: 'UTC', locale: 'en', settings_json: {} };
+        if (!workspaceId) return jsonResponse(defaults);
+        try {
+            const row = await env.DB.prepare(
+                `SELECT workspace_id, theme, timezone, locale, settings_json
+                 FROM workspace_settings WHERE workspace_id = ? LIMIT 1`,
+            ).bind(workspaceId).first();
+            if (row) {
+                let settingsObj = {};
+                try { settingsObj = row.settings_json ? JSON.parse(row.settings_json) : {}; } catch { settingsObj = {}; }
+                return jsonResponse({
+                    workspace_id: row.workspace_id,
+                    theme: row.theme ?? null,
+                    timezone: row.timezone ?? 'UTC',
+                    locale: row.locale ?? 'en',
+                    settings_json: settingsObj,
+                });
+            }
+        } catch (_) {
+            // table may not exist; fall through to defaults
+        }
+        // Upsert defaults if possible
+        try {
+            await env.DB.prepare(
+                `INSERT INTO workspace_settings (workspace_id, theme, timezone, locale, settings_json, updated_at)
+                 VALUES (?, NULL, 'UTC', 'en', '{}', unixepoch())
+                 ON CONFLICT(workspace_id) DO UPDATE SET updated_at = excluded.updated_at`,
+            ).bind(workspaceId).run();
+        } catch (_) {}
+        return jsonResponse(defaults);
+    }
+
+    // ── GET /api/workspace/list ─────────────────────────────────────────────
+    if (pathLower === '/api/workspace/list' && method === 'GET') {
+        const tenantId = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== '' ? String(authUser.tenant_id).trim() : null;
+        if (!tenantId) return jsonResponse({ workspaces: [] });
+        try {
+            const { results } = await env.DB.prepare(
+                `SELECT w.id, w.name, w.type, w.status, w.created_at, w.updated_at
+                 FROM tenant_workspaces tw
+                 LEFT JOIN workspaces w ON w.id = tw.workspace_id
+                 WHERE tw.tenant_id = ?
+                 ORDER BY COALESCE(w.updated_at, w.created_at) DESC
+                 LIMIT 200`,
+            ).bind(tenantId).all();
+            const rows = (results || []).filter(Boolean);
+            return jsonResponse({ workspaces: rows });
+        } catch (_) {
+            return jsonResponse({ workspaces: [] });
+        }
+    }
+
     const agentsamRes = await handleAgentsamWorkspacesApi(request, url, env, ctx, authUser);
     if (agentsamRes) return agentsamRes;
 

@@ -120,10 +120,66 @@ export async function handleMcpApi(request, url, env, ctx) {
       return jsonResponse({ ok: true, service: 'mcp', status: 'connected' }, 200);
     }
 
+    // ── Public-ish list of MCP servers (auth required, per sprint spec) ──────
+    if (pathLower === '/api/mcp/servers' && method === 'GET') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      try {
+        const { results } = await env.DB.prepare(
+          `SELECT id, service_name AS name, service_url AS url,
+                  COALESCE(health_status, status, 'unknown') AS status,
+                  COALESCE(tool_count, 0) AS tool_count
+           FROM mcp_services
+           ORDER BY COALESCE(updated_at, created_at) DESC
+           LIMIT 200`,
+        ).all().catch(() => ({ results: [] }));
+        return jsonResponse({ servers: results || [] });
+      } catch (_) {
+        return jsonResponse({ servers: [] });
+      }
+    }
+
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     const tenantId = resolveMcpTenantId(authUser, env);
+
+    // ── POST /api/mcp/invoke — dashboard proxy (session auth in, MCP token out)
+    if (pathLower === '/api/mcp/invoke' && method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const toolName = String(body.tool_name || body.tool || '').trim();
+      const args = body.arguments && typeof body.arguments === 'object' ? body.arguments : (body.params && typeof body.params === 'object' ? body.params : {});
+      if (!toolName) return jsonResponse({ error: 'tool_name required' }, 400);
+
+      const endpoint = String(env.MCP_SERVICE_URL || 'https://mcp.inneranimalmedia.com/mcp').trim();
+      const token = env.MCP_AUTH_TOKEN ? String(env.MCP_AUTH_TOKEN).trim() : '';
+      if (!token) return jsonResponse({ error: 'MCP_AUTH_TOKEN not configured' }, 503);
+
+      // MCP JSON-RPC (tools/call)
+      const rpcBody = {
+        jsonrpc: '2.0',
+        id: crypto.randomUUID(),
+        method: 'tools/call',
+        params: { name: toolName, arguments: args },
+      };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(rpcBody),
+      });
+
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return jsonResponse({ error: out?.error || out?.message || res.statusText, status: res.status, raw: out }, 502);
+      }
+      if (out && out.error) return jsonResponse({ error: out.error }, 502);
+      return jsonResponse(out?.result ?? out);
+    }
 
     if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
       const { results } = await env.DB.prepare(

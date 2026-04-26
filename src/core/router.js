@@ -43,6 +43,7 @@ import { handleAdminApi }            from '../api/admin.js';
 import { handleLearnApi }            from '../api/learn.js';
 import { handleOnboardingApi }       from '../api/onboarding.js';
 import { handleAccessEvaluate }      from '../api/access.js';
+import { handleCmsApi }              from '../api/cms.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -490,6 +491,11 @@ export async function handleRequest(request, env, ctx) {
   // ── Overview ───────────────────────────────────────────────────────────────
   if (path.startsWith('/api/overview')) {
     return handleOverviewApi(request, url, env, ctx);
+  }
+
+  // ── CMS ────────────────────────────────────────────────────────────────────
+  if (path.startsWith('/api/cms')) {
+    return handleCmsApi(request, url, env, ctx);
   }
 
   // ── Deployments ────────────────────────────────────────────────────────────

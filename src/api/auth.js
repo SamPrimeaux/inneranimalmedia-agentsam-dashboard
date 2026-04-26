@@ -9,6 +9,7 @@ import {
   resolveTenantAtLogin,
   AUTH_COOKIE_NAME,
   getAuthUser,
+  getSession,
 } from '../core/auth';
 
 /**
@@ -20,6 +21,29 @@ export async function handleAuthApi(request, url, env) {
 
   if (path === '/api/auth/login' && method === 'POST') {
     return handleEmailPasswordLogin(request, url, env);
+  }
+  if (path === '/api/auth/me' && method === 'GET') {
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+    return jsonResponse({
+      id: authUser.id ?? null,
+      email: authUser.email ?? null,
+      name: authUser.name ?? authUser.display_name ?? null,
+      tenant_id: authUser.tenant_id ?? null,
+      role: authUser.role ?? 'user',
+      workspace_id: authUser.workspace_id ?? null,
+    });
+  }
+  if (path === '/api/auth/session' && method === 'GET') {
+    const session = await getSession(env, request);
+    if (!session) return jsonResponse({ valid: false }, 200);
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ valid: false }, 200);
+    return jsonResponse({
+      valid: true,
+      expires_at: session.expires_at ?? null,
+      user: { id: authUser.id ?? null, email: authUser.email ?? null },
+    });
   }
   if (path === '/api/auth/backup-code' && method === 'POST') {
     return handleBackupCodeLogin(request, url, env);

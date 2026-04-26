@@ -151,6 +151,91 @@ export async function handleSettingsRequest(request, env, ctx) {
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
   const sessionUserId = authUser.id;
 
+  // ── /api/settings/profile ─────────────────────────────────────────────────
+  if (pathLower === '/api/settings/profile' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const uid = String(authUser.id || '').trim();
+    const email = String(authUser.email || '').trim() || null;
+    let row = null;
+    try {
+      row = await env.DB.prepare(
+        `SELECT id, email, name, tenant_id, role, created_at, avatar_url, default_workspace_id
+         FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`,
+      )
+        .bind(uid, uid)
+        .first();
+    } catch (_) {}
+    const tenantId = (row?.tenant_id != null && String(row.tenant_id).trim() !== '')
+      ? String(row.tenant_id).trim()
+      : await resolveAuthTenantId(env, authUser);
+    const role = row?.role != null && String(row.role).trim() ? String(row.role).trim() : (authUser.role || 'user');
+    const workspace_id = row?.default_workspace_id != null && String(row.default_workspace_id).trim()
+      ? String(row.default_workspace_id).trim()
+      : (await resolveRequestWorkspaceId(env, authUser, url)) || null;
+    return jsonResponse({
+      id: uid,
+      email: row?.email ?? email,
+      name: row?.name ?? authUser.name ?? null,
+      tenant_id: tenantId,
+      role,
+      workspace_id,
+      created_at: row?.created_at ?? null,
+      avatar_url: row?.avatar_url ?? null,
+    });
+  }
+
+  // ── /api/settings/theme ───────────────────────────────────────────────────
+  if (pathLower === '/api/settings/theme' && method === 'GET') {
+    if (!env.DB) {
+      return jsonResponse({ theme: 'dark', accent_color: '#c8ff3e', dark_mode: true });
+    }
+    const uid = String(authUser.id || '').trim();
+    const defaults = { theme: 'dark', accent_color: '#c8ff3e', dark_mode: true };
+    try {
+      const row = await env.DB.prepare(
+        `SELECT theme, accent_color, dark_mode
+         FROM user_settings WHERE user_id = ? LIMIT 1`,
+      )
+        .bind(uid)
+        .first();
+      if (!row) return jsonResponse(defaults);
+      const theme = row.theme != null && String(row.theme).trim() ? String(row.theme).trim() : defaults.theme;
+      const accent_color =
+        row.accent_color != null && String(row.accent_color).trim()
+          ? String(row.accent_color).trim()
+          : defaults.accent_color;
+      const dark_mode =
+        row.dark_mode === 0 || row.dark_mode === '0' || row.dark_mode === false
+          ? false
+          : true;
+      return jsonResponse({ theme, accent_color, dark_mode });
+    } catch (_) {
+      return jsonResponse(defaults);
+    }
+  }
+
+  // ── /api/settings/preferences ─────────────────────────────────────────────
+  if (pathLower === '/api/settings/preferences' && method === 'GET') {
+    if (!env.DB) return jsonResponse({ prefs_json: {}, tenant_id: null, user_id: sessionUserId });
+    const tenantId = await resolveAuthTenantId(env, authUser);
+    const uid = String(authUser.id || '').trim();
+    if (!tenantId) return jsonResponse({ prefs_json: {}, tenant_id: null, user_id: uid });
+    try {
+      const row = await env.DB.prepare(
+        `SELECT * FROM user_storage_preferences WHERE tenant_id = ? AND user_id = ? LIMIT 1`,
+      )
+        .bind(tenantId, uid)
+        .first();
+      if (!row) {
+        return jsonResponse({ tenant_id: tenantId, user_id: uid, prefs_json: {}, updated_at: null });
+      }
+      const prefs = parseJsonSafe(row.prefs_json, {});
+      return jsonResponse({ ...row, prefs_json: prefs });
+    } catch (_) {
+      return jsonResponse({ tenant_id: tenantId, user_id: uid, prefs_json: {}, updated_at: null });
+    }
+  }
+
   const { authId: canonicalAuthId, userId: canonicalUserId } =
     await resolveCanonicalUserId(env, sessionUserId, authUser.email);
   const agentsamUserCandidates = Array.from(

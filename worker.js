@@ -12,6 +12,7 @@ import { handleWorkspaceApi } from "./src/api/workspace.js";
 import { handleMeetApi } from "./src/api/meet.js";
 import { authUserIsSuperadmin } from "./src/core/auth.js";
 import { getAESKey } from "./src/core/crypto-vault.js";
+import { handleVaultApi } from "./src/api/vault.js";
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -4400,7 +4401,7 @@ const worker = {
       if (pathLower.startsWith('/api/vault')) {
         const vaultUser = await getAuthUser(request, env);
         if (!vaultUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        return handleVaultRequest(request, env);
+        return handleVaultApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/env/')) {

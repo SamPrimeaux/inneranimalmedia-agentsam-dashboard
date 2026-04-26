@@ -194,6 +194,7 @@ async function handleLogout(request, url, env) {
 }
 
 /**
+ * /**
  * Shared Session Finalizer
  */
 async function finishLogin(request, url, env, userId, redirectPath) {
@@ -204,99 +205,70 @@ async function finishLogin(request, url, env, userId, redirectPath) {
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
 
-  // 1. D1 + KV: persist tenant_id on the session row (never rely on env.TENANT_ID for authenticated users)
-  const tenantId = await resolveTenantAtLogin(env, userId);
+  // 1. Get user details from auth_users (Canonical Source)
+  let userRow = null;
+  try {
+    userRow = await env.DB.prepare(
+      `SELECT * FROM auth_users WHERE id = ? LIMIT 1`
+    ).bind(userId).first();
+  } catch (e) {
+    console.warn('[finishLogin] auth_users lookup failed', e.message);
+  }
+
+  if (!userRow) {
+    throw new Error('User not found in auth_users during login finalization');
+  }
+
+  const tenantId = userRow.tenant_id;
+  const personUuid = userRow.person_uuid;
+
+  // 2. Persist to auth_sessions (Core Auth)
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
   ).bind(sessionId, userId, expiresAtIso, ip, ua, tenantId).run();
 
-  // Dual-write: sessions table (fire-and-forget)
+  // 3. Dual-write: sessions table (Analytics/Audit)
   try {
-    let userEmail = '';
-    let displayName = null;
-    try {
-      const u = await env.DB.prepare(
-        `SELECT email, name FROM auth_users WHERE id = ? LIMIT 1`
-      ).bind(userId).first();
-      if (u?.email) userEmail = String(u.email);
-      if (u?.name) displayName = String(u.name);
-    } catch (_) { }
+    const expiresAtMs = new Date(expiresAtIso).getTime();
 
-    const enrichment = await resolveUserEnrichment(env, null, userId, userEmail);
-    const personUuid = enrichment?.person_uuid || null;
-    const workspaceId = enrichment?.workspace_id || null;
-    const ipAddress = ip;
-    const userAgent = ua;
-    const expiresAtMs = typeof expiresAtIso === 'number'
-      ? expiresAtIso
-      : new Date(expiresAtIso).getTime();
-
-    env.DB.prepare(`
+    await env.DB.prepare(`
       INSERT INTO sessions (
-        id, user_id, tenant_id, person_uuid, workspace_id, email, provider,
+        id, user_id, tenant_id, person_uuid, email, provider,
         display_name, ip_address, user_agent,
         last_active_at, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'email', ?, ?, ?, ?, ?, unixepoch() * 1000)
+      ) VALUES (?, ?, ?, ?, ?, 'email', ?, ?, ?, ?, ?, unixepoch() * 1000)
     `).bind(
       sessionId,
-      userId, // au_ prefix (exception for login table)
-      tenantId ?? enrichment?.tenant_id ?? null,
+      userId, 
+      tenantId,
       personUuid,
-      workspaceId,
-      userEmail,
-      displayName ?? enrichment?.display_name ?? null,
-      ipAddress ?? null,
-      userAgent ?? null,
+      userRow.email,
+      userRow.name || 'User',
+      ip,
+      ua,
       Date.now(),
       expiresAtMs
-    ).run().catch((e) => console.warn('[sessions dual-write]', e?.message ?? e));
+    ).run();
 
-    // Enrich session with superadmin identity if email matches
-    try {
-      const loginEmail = String(userEmail || '').toLowerCase().trim();
-      const superRow = await env.DB.prepare(`
-        SELECT id, superadmin_uuid, tenant_id, role, permissions_json
-        FROM superadmin_identity
-        WHERE LOWER(email) = ? AND is_enabled = 1
-        LIMIT 1
-      `).bind(loginEmail).first();
+    // 4. Handle Superadmin Auto-Enrichment
+    if (userRow.is_superadmin) {
+      // Any superadmin-specific session updates go here if needed
+    }
+  } catch (e) {
+    console.warn('[sessions dual-write]', e?.message ?? e);
+  }
 
-      if (superRow) {
-        await env.DB.prepare(`
-          UPDATE auth_users
-          SET is_superadmin = 1,
-              tenant_id = ?,
-              superadmin_uuid = COALESCE(superadmin_uuid, ?),
-              superadmin_identity_id = COALESCE(superadmin_identity_id, ?),
-              updated_at = datetime('now')
-          WHERE id = ?
-        `).bind(superRow.tenant_id, superRow.superadmin_uuid, superRow.id, userId).run();
-
-        // Update sessions row with superadmin context
-        env.DB.prepare(`
-          UPDATE sessions
-          SET tenant_id = ?, provider_subject = ?
-          WHERE id = ? AND revoked_at IS NULL
-        `).bind(superRow.tenant_id, superRow.superadmin_uuid, sessionId)
-          .run().catch(() => {});
-      }
-    } catch (_) {}
-  } catch (_) {}
-
-  // 2. KV Cache
+  // 5. KV Cache
   await writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso);
 
-  // 3. Response: Construct host-only session cookie (removed Domain attribute)
+  // 6. Response
   const next = redirectPath && redirectPath.startsWith('/') ? redirectPath : '/dashboard/overview';
   const response = new Response(JSON.stringify({ ok: true, redirect: next }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' }
   });
 
-  // Set the fresh host-only session
   response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`);
-
-  // Explicitly kill the stale legacy wildcard cookies to prevent browser selection conflicts
   response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
   response.headers.append('Set-Cookie', `${AUTH_COOKIE_NAME}=; Domain=.sandbox.inneranimalmedia.com; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Lax`);
 
@@ -305,178 +277,29 @@ async function finishLogin(request, url, env, userId, redirectPath) {
 
 /**
  * GET /api/settings/profile
- * Essential for SPA session verification on load.
  */
-function parseJsonObject(str) {
-  if (str == null || str === '') return {};
-  try {
-    const o = typeof str === 'string' ? JSON.parse(str) : str;
-    return typeof o === 'object' && o !== null && !Array.isArray(o) ? o : {};
-  } catch {
-    return {};
-  }
-}
-
-async function resolveWorkerBaseUrl(env, authUser) {
-  const fromEnv =
-    typeof env.WORKER_BASE_URL === 'string' && env.WORKER_BASE_URL.trim() !== ''
-      ? env.WORKER_BASE_URL.trim().replace(/\/$/, '')
-      : '';
-  if (fromEnv) return fromEnv;
-  if (!env.DB) return 'https://inneranimalmedia.com';
-  try {
-    let row = null;
-    if (authUser?.id) {
-      row = await env.DB.prepare(
-        `SELECT ui_preferences_json FROM agentsam_bootstrap WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1`,
-      )
-        .bind(authUser.id)
-        .first();
-    }
-    if (!row?.ui_preferences_json && authUser?.email) {
-      row = await env.DB.prepare(
-        `SELECT ui_preferences_json FROM agentsam_bootstrap WHERE LOWER(email) = LOWER(?) ORDER BY updated_at DESC LIMIT 1`,
-      )
-        .bind(authUser.email)
-        .first();
-    }
-    const prefs = parseJsonObject(row?.ui_preferences_json);
-    const u = prefs.worker_base_url;
-    if (typeof u === 'string' && u.trim() !== '') return u.trim().replace(/\/$/, '');
-  } catch (_) {
-    /* non-fatal */
-  }
-  return 'https://inneranimalmedia.com';
-}
-
 async function handleSettingsProfileRequest(request, env) {
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-  const worker_base_url = await resolveWorkerBaseUrl(env, authUser);
-  if (!env.DB) {
-    const email = String(authUser.email || authUser.id || '').trim();
-    return jsonResponse({
-      display_name: email ? email.split('@')[0] : '',
-      email: email || '',
-      plan: null,
-      worker_base_url,
-      profile: null,
-      flat: {
-        display_name: email ? email.split('@')[0] : '',
-        primary_email: email,
-        role: 'admin',
-        timezone: 'America/Chicago',
-        language: 'en',
-      },
-    });
-  }
+  
+  const worker_base_url = (typeof env.WORKER_BASE_URL === 'string') ? env.WORKER_BASE_URL.trim() : 'https://inneranimalmedia.com';
 
-  const sessionKey = String(authUser.email || authUser.id || '').trim();
-  try {
-    const authRow = await env.DB.prepare(
-      `SELECT * FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`,
-    )
-      .bind(authUser.id, authUser.email)
-      .first();
+  const flat = {
+    full_name: authUser.name || 'User',
+    display_name: authUser.name || 'User',
+    primary_email: authUser.email,
+    tenant_id: authUser.tenant_id,
+    person_uuid: authUser.person_uuid,
+    role: authUser.is_superadmin ? 'superadmin' : 'user',
+    timezone: 'America/Chicago',
+    language: 'en',
+  };
 
-    let usersRow = null;
-    try {
-      if (String(authUser.id || '').startsWith('usr_')) {
-        usersRow = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(authUser.id).first();
-      } else {
-        usersRow = await env.DB
-          .prepare(
-            `SELECT u.* FROM users u
-             INNER JOIN auth_users au ON u.auth_id = au.id
-             WHERE au.id = ? OR LOWER(COALESCE(u.email, '')) = LOWER(?) OR LOWER(au.email) = LOWER(?)
-             LIMIT 1`,
-          )
-          .bind(authUser.id, sessionKey, authUser.email || sessionKey)
-          .first();
-      }
-    } catch (_) {
-      usersRow = null;
-    }
-
-    let usRow = null;
-    for (const key of [authUser.id, usersRow?.id, authRow?.id, sessionKey].filter(Boolean)) {
-      try {
-        usRow = await env.DB.prepare(`SELECT * FROM user_settings WHERE user_id = ? LIMIT 1`).bind(key).first();
-      } catch {
-        usRow = null;
-      }
-      if (usRow) break;
-    }
-
-    const email = String(
-      usersRow?.email || authRow?.email || authUser.email || authUser.id || '',
-    ).trim();
-    const nameFromAuth = String(authRow?.name || '').trim();
-    const nameFromUsers = String(
-      usersRow?.display_name || usersRow?.full_name || usersRow?.name || '',
-    ).trim();
-    const dnFromSettings = String(usRow?.display_name || usRow?.full_name || '').trim();
-    const display_name = (
-      nameFromUsers ||
-      dnFromSettings ||
-      nameFromAuth ||
-      (email.includes('@') ? email.split('@')[0] : email) ||
-      ''
-    ).trim();
-
-    const rawPlan =
-      usersRow &&
-      (usersRow.plan ??
-        usersRow.billing_plan ??
-        usersRow.subscription_tier ??
-        usersRow.tier);
-    const rawPlanAuth =
-      authRow &&
-      (authRow.plan ?? authRow.billing_plan ?? authRow.subscription_tier ?? authRow.tier);
-    const planSource = rawPlan != null && String(rawPlan).trim() !== '' ? rawPlan : rawPlanAuth;
-    const plan =
-      planSource != null && String(planSource).trim() !== ''
-        ? String(planSource).trim().toLowerCase()
-        : null;
-
-    const flat = {
-      full_name: String(usRow?.full_name ?? nameFromUsers ?? nameFromAuth ?? '').trim() || display_name,
-      display_name,
-      avatar_url: String(usRow?.avatar_url || usersRow?.avatar_url || '').trim(),
-      bio: String(usRow?.bio || '').trim(),
-      primary_email: email,
-      primary_email_verified: Number(usRow?.primary_email_verified || 0),
-      backup_email: String(usRow?.backup_email || '').trim(),
-      phone: String(usRow?.phone || '').trim(),
-      timezone: String(usRow?.timezone || 'America/Chicago'),
-      language: String(usRow?.language || 'en'),
-    };
-
-    return jsonResponse({
-      display_name,
-      email,
-      plan,
-      worker_base_url,
-      profile: usRow || null,
-      canonical_user: usersRow || null,
-      flat,
-    });
-  } catch (e) {
-    console.warn('[settings/profile]', e?.message ?? e);
-    const email = String(authUser.email || authUser.id || '').trim();
-    return jsonResponse({
-      display_name: email ? email.split('@')[0] : '',
-      email: email || '',
-      plan: null,
-      worker_base_url,
-      profile: null,
-      flat: {
-        display_name: email ? email.split('@')[0] : '',
-        primary_email: email,
-        role: 'admin',
-        timezone: 'America/Chicago',
-        language: 'en',
-      },
-    });
-  }
+  return jsonResponse({
+    display_name: authUser.name || 'User',
+    email: authUser.email,
+    tenant_id: authUser.tenant_id,
+    worker_base_url,
+    flat,
+  });
 }

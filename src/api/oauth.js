@@ -127,6 +127,10 @@ async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider
 
   const scopesVal = scope || null;
   const accountIdVal = account_identifier || account_email || '';
+  
+  if (!accountIdVal) {
+    throw new Error(`account_identifier missing for provider ${provider}`);
+  }
 
   const sql = `
     INSERT OR REPLACE INTO user_oauth_tokens
@@ -248,15 +252,16 @@ async function maybeRefreshGoogle(env, userId) {
 
   await upsertOauthToken(env, {
     user_id: userId,
-    tenant_id: '',
+    tenant_id: row.tenant_id || '',
+    person_uuid: row.person_uuid || '',
     provider: 'google',
     access_token: data.access_token,
     refresh_token: row.refresh_token,
     scope: data.scope || null,
     expires_at: data.expires_in ? nowSeconds() + Number(data.expires_in) : row.expires_at,
     account_identifier: row.account_identifier || '',
-    account_email: null,
-    account_display: null,
+    account_email: row.account_email || null,
+    account_display: row.account_display || null,
   }).catch(() => {});
 
   return await getOauthTokenRow(env, userId, 'google_drive');

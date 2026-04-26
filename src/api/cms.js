@@ -94,7 +94,7 @@ export async function handleCmsApi(request, url, env, ctx) {
   // Scoping context
   const tenantId = authUser.tenant_id;
   const personUuid = authUser.person_uuid;
-  const workspaceId = authUser.workspace_id || 'ws_default';
+  const workspaceId = authUser.workspace_id || tenantId || 'ws_default';
 
   if (!env.DB) return jsonResponse({ error: 'Database unavailable' }, 503);
 

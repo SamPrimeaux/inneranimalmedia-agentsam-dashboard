@@ -35,6 +35,7 @@ import { handleMailApi } from './api/mail';
 import { handleLearnApi } from './api/learn';
 import { handleOnboardingApi } from './api/onboarding';
 import { handleOAuthApi } from './api/oauth';
+import { handleSearchApi } from './api/search';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -219,6 +220,10 @@ export default {
 
       if (pathLower.startsWith('/api/cms')) {
         return handleCmsApi(request, url, env, ctx);
+      }
+      
+      if (pathLower.startsWith('/api/search')) {
+        return handleSearchApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/storage')) {

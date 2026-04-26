@@ -176,7 +176,7 @@ export async function handleCmsApi(request, url, env, ctx) {
 
       // 2. Insert to D1
       const pageId = crypto.randomUUID();
-      const now = new Date().toISOString();
+      const now = Math.floor(Date.now() / 1000);
       
       await env.DB.prepare(`
         INSERT INTO cms_pages (
@@ -227,7 +227,7 @@ export async function handleCmsApi(request, url, env, ctx) {
       });
 
       // 2. Update D1 metadata
-      const now = new Date().toISOString();
+      const now = Math.floor(Date.now() / 1000);
       await env.DB.prepare(`
         UPDATE cms_pages 
         SET title = COALESCE(?, title),
@@ -278,7 +278,7 @@ export async function handleCmsApi(request, url, env, ctx) {
       });
 
       // 2. Update D1
-      const now = new Date().toISOString();
+      const now = Math.floor(Date.now() / 1000);
       await env.DB.prepare(`
         UPDATE cms_pages 
         SET status = 'published',
@@ -304,7 +304,7 @@ export async function handleCmsApi(request, url, env, ctx) {
   if (pageIdMatch && method === 'DELETE') {
     const pageId = pageIdMatch[1];
     try {
-      const now = new Date().toISOString();
+      const now = Math.floor(Date.now() / 1000);
       await env.DB.prepare(`
         UPDATE cms_pages 
         SET status = 'archived',

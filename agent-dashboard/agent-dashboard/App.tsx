@@ -24,6 +24,7 @@ import { UnifiedSearchBar, type UnifiedSearchNavigate } from './components/Unifi
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
 import { GitHubExplorer } from './components/GitHubExplorer';
 import { KnowledgeSearchPanel } from './components/KnowledgeSearchPanel';
+import { AISearchPanel } from './components/AISearchPanel';
 // import { ProblemsDebugPanel } from './components/ProblemsDebugPanel';
 import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
@@ -65,7 +66,7 @@ import { AuthSignUpPage } from './components/auth/AuthSignUpPage';
 import { AuthForgotPage } from './components/auth/AuthForgotPage';
 import { AuthResetPage } from './components/auth/AuthResetPage';
 import { OnboardingPage } from './components/onboarding/OnboardingPage';
-import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap } from 'lucide-react';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap, Sparkles } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -185,7 +186,7 @@ const App: React.FC = () => {
 
   // IDE State
   type TabId = 'Workspace' | 'welcome' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database' | null>(() =>
+  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database' | 'autorag' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
   const LS_SIDEBAR_RAIL = 'iam_sidebar_expanded';
@@ -1748,6 +1749,13 @@ const App: React.FC = () => {
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
+              <ActivityRailItem
+                  icon={Sparkles}
+                  label="AutoRAG Search"
+                  expanded={sidebarRailExpanded}
+                  active={activeActivity === 'autorag'}
+                  onClick={() => setActiveActivity(activeActivity === 'autorag' ? null : 'autorag')}
+              />
               <ActivityRailItem icon={Camera} label="Meet" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/meet'} onClick={() => navigate('/dashboard/meet')} />
               <ActivityRailItem
                 icon={Image}
@@ -1833,6 +1841,8 @@ const App: React.FC = () => {
                         onClose={() => setActiveActivity(null)}
                         activeConversationId={agentChatConversationId}
                       />
+                  ) : activeActivity === 'autorag' ? (
+                      <AISearchPanel />
                   ) : location.pathname === '/dashboard/meet' && meetCtxValue ? (
                       <MeetProvider value={meetCtxValue}>
                         <MeetShellPanel />

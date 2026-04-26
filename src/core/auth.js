@@ -323,3 +323,89 @@ export function jsonResponse(body, status = 200) {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+/** 
+ * Legacy/Helper: Resolves tenant ID for telemetry events.
+ */
+export function resolveTelemetryTenantId(_env, explicitTenantId) {
+  if (explicitTenantId != null && String(explicitTenantId).trim() !== '') {
+    return String(explicitTenantId).trim();
+  }
+  return null;
+}
+
+/**
+ * Legacy/Helper: Fetches the tenant ID for a user.
+ */
+export async function fetchAuthUserTenantId(env, userKey) {
+  if (!env?.DB || userKey == null || String(userKey).trim() === '') return null;
+  const k = String(userKey).trim();
+  try {
+    const u = await env.DB.prepare(
+      `SELECT tenant_id FROM auth_users WHERE id = ? OR LOWER(email) = LOWER(?) LIMIT 1`
+    ).bind(k, k).first();
+    if (u && u.tenant_id != null && String(u.tenant_id).trim() !== '') return String(u.tenant_id).trim();
+  } catch (e) {
+    console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
+  }
+  return null;
+}
+
+/**
+ * Legacy/Helper: Alias for fetchAuthUserTenantId.
+ */
+export async function resolveTenantAtLogin(env, userId) {
+  return await fetchAuthUserTenantId(env, userId);
+}
+
+/**
+ * Legacy/Helper: Empty stub for user enrichment.
+ */
+export async function resolveUserEnrichment(env, authUser) {
+  return authUser;
+}
+
+/**
+ * Internal: Hex string to Uint8Array.
+ */
+function hexToBytes(hex) {
+  const arr = [];
+  for (let i = 0; i < hex.length; i += 2) arr.push(parseInt(hex.slice(i, i + 2), 16));
+  return new Uint8Array(arr);
+}
+
+/**
+ * Security: Verify password against PBKDF2-SHA256 stored hash and salt.
+ */
+export async function verifyPassword(password, saltHex, hashHex) {
+  try {
+    const salt = hexToBytes(saltHex);
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+    const derived = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+      key,
+      256
+    );
+    const derivedHex = Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    return derivedHex === hashHex.toLowerCase();
+  } catch (e) {
+    console.warn('[verifyPassword] failed', e.message);
+    return false;
+  }
+}
+
+/**
+ * Security: Generate new salt and PBKDF2-SHA256 hash.
+ */
+export async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const derived = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    key,
+    256
+  );
+  const hashHex = Array.from(new Uint8Array(derived)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return { saltHex, hashHex };
+}

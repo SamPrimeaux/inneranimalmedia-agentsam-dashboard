@@ -35,7 +35,7 @@ binding = "MYBROWSER"
 
 [[r2_buckets]]
 binding = "ASSETS"
-bucket_name = "inneranimalmedia-assets"
+bucket_name = "inneranimalmedia"
 
 # Dashboard JS/HTML/CSS served on inneranimalmedia.com — production R2 (`agent-sam`) only.
 [[r2_buckets]]
@@ -97,7 +97,7 @@ name = "AGENT_SESSION"
 class_name = "AgentChatSqlV1"
 
 [[vpc_services]]
-binding = "PTY_SERVICE"
+binding = "VPC_SERVICE"
 service_id = "019db639-7c70-7071-8ef3-32ec0392a9ff"
 remote = true
 
@@ -134,12 +134,8 @@ dataset = "inneranimalmedia"
 
 [triggers]
 crons = [
-  "0 6 * * *",    # RAG/knowledge sync — real handler exists
-  "30 13 * * *",  # Daily plan email — real handler exists
-  "0 9 * * *",    # FinancialCommand stub — real handler added today
-  "*/30 * * * *", # Queue processor + overnight progress — handler exists, was missing
-  "0 12 * * *",   # Daily summary email — Phase 3C active
-  "0 0 * * *"     # Daily digest email — handler exists, was missing
+  "0 6 * * *",    # RAG/knowledge sync
+  "0 0 * * *"     # Daily digest email
 ]
 
 [vars]

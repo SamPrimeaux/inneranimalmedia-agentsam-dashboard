@@ -1047,6 +1047,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
     const wsUrl = `${proto}//${window.location.host}/api/collab/room/browser`;
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let reconnectAttempts = 0;
 
     const connect = () => {
       ws = new WebSocket(wsUrl);
@@ -1079,7 +1080,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
 
       ws.onerror  = () => {};
       ws.onclose  = () => {
-        reconnectTimer = setTimeout(connect, 5000);
+        reconnectTimer = setTimeout(connect, Math.min(30000, 5000 * Math.pow(2, reconnectAttempts++)));
       };
     };
 

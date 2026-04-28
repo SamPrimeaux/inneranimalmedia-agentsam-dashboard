@@ -271,12 +271,16 @@ export async function handleRequest(request, env, ctx) {
     return handleAccessEvaluate(request, env, service);
   }
 
-  // ── Collab WebSocket (must be before auth — WebSocket upgrade can't send JSON) ─
+  // ── Collab WebSocket — stubbed (IAM_COLLAB DO suspended) ─
   if (path.startsWith('/api/collab/room/')) {
-    if (!env.IAM_COLLAB) return jsonResponse({ error: 'IAM_COLLAB not configured' }, 503);
-    const roomId = path.replace('/api/collab/room/', '').split('/')[0] || 'default';
-    const doId   = env.IAM_COLLAB.idFromName(roomId);
-    return env.IAM_COLLAB.get(doId).fetch(request);
+    const upgrade = request.headers.get('Upgrade') || '';
+    if (upgrade.toLowerCase() === 'websocket') {
+      const [client, server] = Object.values(new WebSocketPair());
+      server.accept();
+      server.close(1001, 'collab_stub');
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    return new Response(null, { status: 204 });
   }
 
   // ── Internal / Webhook Routes (no auth required) ───────────────────────────

@@ -42,7 +42,7 @@
   "r2_buckets": [
     {
       "binding": "ASSETS",
-      "bucket_name": "inneranimalmedia-assets"
+      "bucket_name": "inneranimalmedia"
     },
     {
       "binding": "DASHBOARD",
@@ -77,7 +77,7 @@
   ],
   "vpc_services": [
     {
-      "binding": "PTY_SERVICE",
+      "binding": "VPC_SERVICE",
       "service_id": "019db639-7c70-7071-8ef3-32ec0392a9ff",
       "remote": true
     }
@@ -85,7 +85,7 @@
   "vectorize": [
     {
       "binding": "VECTORIZE",
-      "index_name": "ai-search-inneranimalmedia-autorag"
+      "index_name": "REAL_INDEX_NAME_HERE"
     }
   ],
   "kv_namespaces": [
@@ -117,16 +117,6 @@
       "dataset": "inneranimalmedia"
     }
   ],
-  "triggers": {
-    "crons": [
-      "0 6 * * *",
-      "30 13 * * *",
-      "0 9 * * *",
-      "*/30 * * * *",
-      "0 12 * * *",
-      "0 0 * * *"
-    ]
-  },
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "ede6590ac0d2fb7daf155b35653457b2",
     "CLOUDFLARE_IMAGES_ACCOUNT_HASH": "g7wf09fCONpnidkRnR_5vw",

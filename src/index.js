@@ -105,9 +105,12 @@ export default {
       }
 
       const ASSET_ROUTES = {
-        '/login': 'pages/auth/login.html',
-        '/signup': 'pages/auth/signup.html',
-        '/reset': 'pages/auth/reset.html',
+        '/': 'pages/home/index.html',
+        '/auth/login': 'pages/auth/login.html',
+        '/auth/signup': 'pages/auth/signup.html',
+        '/auth/reset': 'pages/auth/reset.html',
+
+
         '/work': 'pages/work/index.html',
         '/about': 'pages/about/index.html',
         '/services': 'pages/services/index.html',

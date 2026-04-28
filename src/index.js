@@ -104,6 +104,20 @@ export default {
         }
       }
 
+
+
+
+      if (pathLower.startsWith('/api/collab/room/')) {
+        const upgrade = request.headers.get('Upgrade') || '';
+        if (upgrade.toLowerCase() === 'websocket') {
+          const [client, server] = Object.values(new WebSocketPair());
+          server.accept();
+          server.close(1001, 'collab_stub');
+          return new Response(null, { status: 101, webSocket: client });
+        }
+        return new Response(null, { status: 204 });
+      }
+
       const ASSET_ROUTES = {
         '/': 'pages/home/index.html',
         '/auth/login': 'pages/auth/login.html',

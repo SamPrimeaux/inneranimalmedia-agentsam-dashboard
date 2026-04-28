@@ -142,12 +142,28 @@ export default {
           k.endsWith('.html') && (!fromMeta || mainType === 'text/plain')
             ? 'text/html; charset=utf-8'
             : base;
-        return new Response(obj.body, {
-          headers: {
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=300',
-          },
-        });
+        if (!k.endsWith('.html')) {
+          return new Response(obj.body, {
+            headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=300' },
+          });
+        }
+        // Inject shared header/footer via HTMLRewriter
+        const [headerObj, footerObj] = await Promise.all([
+          env.ASSETS.get('src/components/iam-header.html'),
+          env.ASSETS.get('src/components/iam-footer.html'),
+        ]);
+        const headerHtml = headerObj ? await headerObj.text() : '';
+        const footerHtml = footerObj ? await footerObj.text() : '';
+        return new HTMLRewriter()
+          .on('body', {
+            element(el) {
+              if (headerHtml) el.prepend(headerHtml, { html: true });
+              if (footerHtml) el.append(footerHtml, { html: true });
+            }
+          })
+          .transform(new Response(obj.body, {
+            headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=300' },
+          }));
       }
 
       // 1a. Same-origin R2 assets passthrough (GLB, images, etc.)

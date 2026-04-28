@@ -132,12 +132,6 @@ queue = "74b3155b36334b69852411c083d50322"
 binding = "WAE"
 dataset = "inneranimalmedia"
 
-[triggers]
-crons = [
-  "0 6 * * *",    # RAG/knowledge sync
-  "0 0 * * *"     # Daily digest email
-]
-
 [vars]
 OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 RAG_DOCUMENTS_PROJECT_ID = "inneranimalmedia"

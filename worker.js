@@ -6232,26 +6232,71 @@ const worker = {
         }
       }
 
-      // ----- Public (ASSETS) -----
+      // ----- Public site pages (ASSETS bucket: inneranimalmedia) -----
+      // New R2 contract:
+      //   /                     -> pages/home/index.html
+      //   /about                -> pages/about/index.html
+      //   /services             -> pages/services/index.html
+      //   /work                 -> pages/work/index.html
+      //   /contact              -> pages/contact/index.html
+      //   /pricing              -> pages/pricing/index.html
+      //   /games                -> pages/games/index.html
+      //   /privacy              -> pages/privacy/index.html
+      //   /terms                -> pages/terms/index.html
+      //   /sitemap              -> pages/sitemap/index.html
+      //   /login                -> pages/auth/login.html
+      //   /auth/login           -> pages/auth/login.html
+      //   /signup               -> pages/auth/signup.html
+      //   /auth/signup          -> pages/auth/signup.html
+      //   /reset                -> pages/auth/reset.html
+      //   /auth/reset           -> pages/auth/reset.html
+
+      async function servePublicAssetPage(key, contentType = 'text/html') {
+        if (!env.ASSETS) return null;
+        const obj = await env.ASSETS.get(key);
+        if (!obj) return null;
+        return respondWithR2Object(obj, contentType, { noCache: key.endsWith('.html') });
+      }
+
       if (path === '/' || path === '/index.html') {
-        const obj = await env.ASSETS.get('index-v3.html') ?? await env.ASSETS.get('index-v2.html') ?? await env.ASSETS.get('index.html');
-        if (obj) return respondWithR2Object(obj, 'text/html');
-        if (env.DASHBOARD) {
-          const signin =
-            (await env.DASHBOARD.get('static/auth-signin.html')) ??
-            (await env.DASHBOARD.get('static/static_auth-signin.html'));
-          if (signin) return respondWithR2Object(signin, 'text/html', { noCache: true });
-        }
+        const res = await servePublicAssetPage('pages/home/index.html');
+        if (res) return res;
         return notFound(path);
       }
 
-      // Auth sign-in / login / signup (DASHBOARD) -- same page for all
-      if (pathLower === '/auth/login' || pathLower === '/auth/signin' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
-        const isSignup = pathLower === '/auth/signup' || pathLower === '/auth/register';
-        const obj = isSignup
-          ? ((await env.DASHBOARD.get('static/auth-signup.html')) ?? (await env.DASHBOARD.get('static/auth-signin.html')))
-          : ((await env.DASHBOARD.get('static/auth-signin.html')) ?? (await env.DASHBOARD.get('static/static_auth-signin.html')));
-        if (obj) return respondWithR2Object(obj, 'text/html');
+      if (pathLower === '/login' || pathLower === '/auth/login' || pathLower === '/auth/signin') {
+        const res = await servePublicAssetPage('pages/auth/login.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      if (pathLower === '/signup' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
+        const res = await servePublicAssetPage('pages/auth/signup.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      if (pathLower === '/reset' || pathLower === '/auth/reset') {
+        const res = await servePublicAssetPage('pages/auth/reset.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      const publicPageMap = {
+        '/about': 'pages/about/index.html',
+        '/services': 'pages/services/index.html',
+        '/work': 'pages/work/index.html',
+        '/contact': 'pages/contact/index.html',
+        '/pricing': 'pages/pricing/index.html',
+        '/games': 'pages/games/index.html',
+        '/privacy': 'pages/privacy/index.html',
+        '/terms': 'pages/terms/index.html',
+        '/sitemap': 'pages/sitemap/index.html'
+      };
+
+      if (publicPageMap[pathLower]) {
+        const res = await servePublicAssetPage(publicPageMap[pathLower]);
+        if (res) return res;
         return notFound(path);
       }
 

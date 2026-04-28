@@ -105,15 +105,18 @@ export default {
       }
 
       const ASSET_ROUTES = {
-        '/work': 'process.html',
-        '/about': 'about.html',
-        '/services': 'services.html',
-        '/contact': 'contact.html',
-        '/pricing': 'pricing.html',
-        '/terms': 'terms-of-service.html',
-        '/privacy': 'privacy-policy.html',
+        '/login': 'pages/auth/login.html',
+        '/signup': 'pages/auth/signup.html',
+        '/reset': 'pages/auth/reset.html',
+        '/work': 'pages/work/index.html',
+        '/about': 'pages/about/index.html',
+        '/services': 'pages/services/index.html',
+        '/contact': 'pages/contact/index.html',
+        '/pricing': 'pages/pricing/index.html',
+        '/terms': 'pages/terms/index.html',
+        '/privacy': 'pages/privacy/index.html',
         '/learn': 'learn.html',
-        '/games': 'games.html',
+        '/games': 'pages/games/index.html',
         '/start': 'start-project.html',
         // Old-school: serve the raw TSX guide from ASSETS R2
         '/apiguide/providers': 'ApiProviderGuide.tsx',

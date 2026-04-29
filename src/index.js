@@ -1,3 +1,48 @@
+
+const IAM_PAGE_ROUTES = {
+  "/": "pages/home/index.html",
+  "/home": "pages/home/index.html",
+  "/about": "pages/about/index.html",
+  "/contact": "pages/contact/index.html",
+  "/games": "pages/games/index.html",
+  "/pricing": "pages/pricing/index.html",
+  "/privacy": "pages/privacy/index.html",
+  "/services": "pages/services/index.html",
+  "/sitemap": "pages/sitemap/index.html",
+  "/terms": "pages/terms/index.html",
+  "/work": "pages/work/index.html",
+  "/auth/login": "pages/auth/login.html",
+  "/auth/reset": "pages/auth/reset.html",
+  "/auth/signup": "pages/auth/signup.html"
+};
+
+async function serveIamR2Page(request, env) {
+  const url = new URL(request.url);
+
+    const iamR2Page = await serveIamR2Page(request, env);
+    if (iamR2Page) return iamR2Page;
+  const clean = url.pathname.replace(/\/+$/, "") || "/";
+  const key = IAM_PAGE_ROUTES[clean];
+  if (!key || !env.ASSETS) return null;
+
+  const obj = await env.ASSETS.get(key);
+  if (!obj) {
+    return new Response(`Missing R2 page: ${key}`, {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" }
+    });
+  }
+
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=60"
+    }
+  });
+}
+
+
 /**
  * Agent Sam: Modular Worker Entry Point
  * Orchestrates domain-specific services and handles request routing.

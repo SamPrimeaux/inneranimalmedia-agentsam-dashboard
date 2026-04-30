@@ -13,6 +13,7 @@ import { handleMeetApi } from "./src/api/meet.js";
 import { authUserIsSuperadmin } from "./src/core/auth.js";
 import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
+import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
@@ -1767,6 +1768,15 @@ async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
     console.warn('[cicd] deployments INSERT', e?.message ?? e);
   }
 
+  // Push email template substitution (repo/branch/notes/etc.)
+  try {
+    notifySam(env, {
+      subject: `[Agent Sam] Push: ${repoFull || 'unknown'} on ${branch || 'main'}`,
+      body: `Repo: ${repoFull || 'unknown'}\nBranch: ${branch || 'main'}\nActor: ${actor || 'github'}\nVersion: ${versionShort || 'unknown'}\nCommit: ${commitSha || 'unknown'}\n\nNotes:\n${notes || '(no commit message)'}`,
+      category: 'deploy',
+    }, hookCtx?.waitUntil ? hookCtx : null);
+  } catch (_) { }
+
   const repoKey = repoFull.toLowerCase().replace(/\s+/g, '');
   const mappedWf = GITHUB_REPO_CIDI_WORKFLOW[repoKey];
   if (!mappedWf) return;
@@ -2830,6 +2840,68 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
   return null;
 }
 
+async function autoStartWorkSession(env, userId, tenantId, pageContext) {
+  if (!env?.DB) return null;
+  const sessionId = 'ws_' + String(userId || '').slice(-8) + '_' + Date.now();
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO work_sessions
+      (session_id, tenant_id, started_at, last_activity_at,
+       total_active_seconds, project_context, page_context, auto_paused)
+    VALUES (?, ?, datetime('now'), datetime('now'), 0, 'inneranimalmedia', ?, 0)
+  `).bind(sessionId, tenantId, pageContext || '/dashboard/agent').run().catch(() => { });
+  return sessionId;
+}
+
+async function bumpWorkSession(env, userId, tenantId) {
+  if (!env?.DB) return;
+  // Find open session for this user (no ended_at, not auto_paused, started in last 8h)
+  const sess = await env.DB.prepare(`
+    SELECT session_id, total_active_seconds
+    FROM work_sessions
+    WHERE tenant_id=? AND ended_at IS NULL AND auto_paused=0
+      AND started_at >= datetime('now','-8 hours')
+    ORDER BY started_at DESC LIMIT 1
+  `).bind(tenantId).first().catch(() => null);
+  if (!sess) return;
+  await env.DB.prepare(`
+    UPDATE work_sessions
+    SET last_activity_at=datetime('now'),
+        total_active_seconds=total_active_seconds+30
+    WHERE session_id=?
+  `).bind(sess.session_id).run().catch(() => { });
+}
+
+async function closeWorkSessionAndLog(env, sessionId, tenantId) {
+  if (!env?.DB || !sessionId) return;
+  const sess = await env.DB.prepare(`
+    SELECT * FROM work_sessions WHERE session_id=? AND ended_at IS NULL
+  `).bind(sessionId).first().catch(() => null);
+  if (!sess) return;
+  const hours = Math.round((sess.total_active_seconds || 0) / 36) / 100;
+  if (hours < 0.05) {
+    await env.DB.prepare(`UPDATE work_sessions SET ended_at=datetime('now') WHERE session_id=?`).bind(sessionId).run().catch(() => { });
+    return;
+  }
+  const signals = (() => { try { return JSON.parse(sess.work_signals || '{}'); } catch { return {}; } })();
+  const desc = signals.features?.length
+    ? `Work session: ${signals.features.slice(0, 4).join(', ')}`
+    : `Work session — ${sess.project_context || 'inneranimalmedia'} (${sess.page_context || '/dashboard'})`;
+  await env.DB.prepare(`UPDATE work_sessions SET ended_at=datetime('now') WHERE session_id=?`).bind(sessionId).run().catch(() => { });
+  await env.DB.prepare(`
+    INSERT INTO time_entries
+      (id, user_id, tenant_id, project_id, description, hours,
+       rate_cents, started_at, ended_at, source, work_session_id, billable)
+    VALUES (?,?,?,?,?,?,0,?,datetime('now'),'auto',?,0)
+  `).bind(
+    'te_' + sessionId,
+    'au_871d920d1233cbd1', tenantId,
+    sess.project_context || 'inneranimalmedia',
+    desc, hours,
+    sess.started_at, sessionId
+  ).run().catch(() => { });
+}
+
 const worker = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(Promise.allSettled([
@@ -2838,6 +2910,18 @@ const worker = {
       runAgentMemoryDecay(env),
       runFinancialCommandCron(env, ctx),
       updateRoutingPerformanceScores(env),
+      (async () => {
+        if (!env?.DB) return;
+        const stale = await env.DB.prepare(`
+          SELECT session_id, tenant_id FROM work_sessions
+          WHERE ended_at IS NULL
+            AND last_activity_at < datetime('now','-30 minutes')
+            AND total_active_seconds > 0
+        `).all().catch(() => ({ results: [] }));
+        for (const s of stale.results || []) {
+          await closeWorkSessionAndLog(env, s.session_id, s.tenant_id);
+        }
+      })(),
     ]));
   },
   async fetch(request, env, ctx) {
@@ -7125,16 +7209,15 @@ async function writeDailySnapshot(env, reason = 'cron') {
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
   const [tt, dt] = await Promise.all([
     safe(env.DB.prepare(
-      `SELECT COALESCE(SUM(input_tokens), 0) AS tokens_in,
-        COALESCE(SUM(output_tokens), 0) AS tokens_out,
-        ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd
-       FROM agent_telemetry
-       WHERE created_at >= unixepoch('now', 'start of day')`
+      `SELECT COALESCE(SUM(tokens_input),0) AS tokens_in,
+        COALESCE(SUM(tokens_output),0) AS tokens_out,
+        ROUND(COALESCE(SUM(cost_estimate),0),4) AS cost_usd
+       FROM ai_usage_log WHERE date=date('now')`
     ).first()),
     safe(env.DB.prepare(
       `SELECT COUNT(*) AS total
-       FROM deployments
-       WHERE created_at >= unixepoch('now', 'start of day')`
+       FROM deployment_tracking
+       WHERE created_at >= date('now')`
     ).first()),
   ]);
   const digestSummary = `snapshot:${String(reason)} spend $${tt?.cost_usd ?? 0} | deploys ${dt?.total ?? 0}`;
@@ -7153,6 +7236,24 @@ async function writeDailySnapshot(env, reason = 'cron') {
     tt?.cost_usd ?? 0,
     digestSummary
   ).run().catch(() => { });
+
+  // workspace_usage_metrics
+  const _wsId = IAM_DEFAULT_WORKSPACE_ID;
+  const _tid = 'tenant_sam_primeaux';
+  const [_wai, _wtc, _wmc, _wdc] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) as c,COALESCE(SUM(tokens_input+tokens_output),0) as t,COALESCE(SUM(cost_estimate),0) as cost FROM ai_usage_log WHERE date=date('now')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM agentsam_tool_call_log WHERE created_at>=unixepoch('now','start of day')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM mcp_tool_calls WHERE created_at>=datetime('now','-1 day')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM deployment_tracking WHERE created_at>=date('now')").first().catch(() => null),
+  ]);
+  await env.DB.prepare("INSERT OR REPLACE INTO workspace_usage_metrics (workspace_id,metric_date,ai_calls,tokens_used,cost_estimate_cents,tool_calls,mcp_calls,deployments_count,rollup_source,updated_at) VALUES (?,date('now'),?,?,?,?,?,?,'daily_cron',unixepoch())").bind(_wsId, _wai?.c || 0, _wai?.t || 0, (_wai?.cost || 0) * 100, _wtc?.c || 0, _wmc?.c || 0, _wdc?.c || 0).run().catch(() => { });
+
+  // agentsam_tool_stats_compacted
+  await env.DB.prepare("INSERT OR REPLACE INTO agentsam_tool_stats_compacted (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at) SELECT tenant_id,tool_name,COUNT(*),SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),MIN(created_at),MAX(created_at),unixepoch() FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name").run().catch(() => { });
+
+  // agentsam_health_daily
+  const _hs = await env.DB.prepare("SELECT COUNT(*) as total,SUM(CASE WHEN health_status='green' THEN 1 ELSE 0 END) as g,SUM(CASE WHEN health_status='yellow' THEN 1 ELSE 0 END) as y,SUM(CASE WHEN health_status='red' THEN 1 ELSE 0 END) as r,ROUND(AVG(tools_degraded),2) as ad,ROUND(AVG(tel_cost_24h),6) as ac FROM system_health_snapshots WHERE snapshot_at>=unixepoch('now','start of day')").first().catch(() => null);
+  if (_hs?.total > 0) await env.DB.prepare("INSERT OR REPLACE INTO agentsam_health_daily (tenant_id,day,snapshot_count,green_count,yellow_count,red_count,avg_tools_degraded,avg_tel_cost_24h,health_status) VALUES (?,date('now'),?,?,?,?,?,?,CASE WHEN ?>0 THEN 'red' WHEN ?>0 THEN 'yellow' ELSE 'green' END)").bind(_tid, _hs.total || 0, _hs.g || 0, _hs.y || 0, _hs.r || 0, _hs.ad || 0, _hs.ac || 0, _hs.r || 0, _hs.y || 0).run().catch(() => { });
 }
 
 /** Set for the lifetime of one `worker.fetch` invocation so `jsonResponse` can log 5xx without per-call plumbing. */
@@ -7847,14 +7948,14 @@ async function runIntegritySnapshot(env, triggeredBy = 'cron') {
     FROM routing_decisions`;
   const sqlQ2 = `
     SELECT
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN 1 ELSE 0 END), 0) AS tel_total_24h,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN 1 ELSE 0 END), 0) AS tel_total_7d,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_24h,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_7d
-    FROM agent_telemetry`;
+      COALESCE(SUM(CASE WHEN date=date('now') THEN calls ELSE 0 END),0) AS tel_total_24h,
+      COALESCE(SUM(CASE WHEN date>=date('now','-7 days') THEN calls ELSE 0 END),0) AS tel_total_7d,
+      COALESCE(SUM(CASE WHEN date=date('now') THEN cost_estimate ELSE 0 END),0) AS tel_cost_24h,
+      COALESCE(SUM(CASE WHEN date>=date('now','-7 days') THEN cost_estimate ELSE 0 END),0) AS tel_cost_7d
+    FROM ai_usage_log`;
   const sqlQ3 = `
-    SELECT provider, COUNT(*) AS n, SUM(computed_cost_usd) AS cost
-    FROM agent_telemetry WHERE created_at >= (unixepoch() - 604800)
+    SELECT provider, COUNT(*) AS n, SUM(cost_estimate) AS cost
+    FROM ai_usage_log WHERE date >= date('now','-7 days')
     GROUP BY provider ORDER BY n DESC`;
   const sqlQ4 = `
     SELECT
@@ -16658,6 +16759,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!authUser || !authUserIsSuperadmin(authUser)) {
         return jsonResponse({ terminal_enabled: false });
       }
+      if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
       const origin = new URL(request.url).origin;
       const wsOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
       return jsonResponse({ terminal_enabled: true, url: `${wsOrigin}/api/agent/terminal/ws` });
@@ -16674,6 +16776,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
           direct_wss_available: false,
         });
       }
+      if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
       const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
       const secret = (env.TERMINAL_SECRET || '').trim();
       return jsonResponse({
@@ -16702,6 +16805,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         if (!authUserIsSuperadmin(authUser)) {
           return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
         }
+        if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
         const body = await request.json().catch(() => ({}));
         const command = typeof body?.command === 'string' ? body.command.trim() : '';
         const session_id = body?.session_id ?? null;
@@ -32007,6 +32111,8 @@ async function handleEmailSignup(request, url, env) {
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
   ).bind(sessionId, sessionUserId, expiresAt, ip, ua, tidSignup).run();
 
+  autoStartWorkSession(env, sessionUserId, tidSignup, url.pathname).catch(() => { });
+
   await writeIamSessionToKv(env, sessionId, sessionUserId, tidSignup, expiresAt);
 
   const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
@@ -32075,6 +32181,7 @@ async function handleEmailPasswordLogin(request, url, env) {
     await env.DB.prepare(
       `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
     ).bind(sessionId, userId, expiresAt, ip, ua, tidLogin).run();
+    autoStartWorkSession(env, userId, tidLogin, url.pathname).catch(() => { });
     await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
     const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
@@ -32994,6 +33101,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
   await env.DB.prepare(
     `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
   ).bind(sessionId, userId, expiresAt, ip, ua, tidGh).run();
+  autoStartWorkSession(env, userId, tidGh, url.pathname).catch(() => { });
   await writeIamSessionToKv(env, sessionId, userId, tidGh, expiresAt);
   const ghLogin = (userInfo.login || '').toString() || 'github';
   if (tokens.access_token && env.DB) {

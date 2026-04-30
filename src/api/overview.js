@@ -67,6 +67,18 @@ export async function fetchCicdPipelineRunsForOverview(env) {
   const stepTot =
     sCols.has('id') ? `COUNT(s.id)` : sCols.size ? `COUNT(*)` : `0`;
 
+  // cicd_pipeline_runs may be a VIEW — SQLite does not allow p.rowid on all views.
+  const orderTsParts = [
+    pCols.has('updated_at') ? 'p.updated_at' : null,
+    pCols.has('completed_at') ? 'p.completed_at' : null,
+    pCols.has('started_at') ? 'p.started_at' : null,
+    pCols.has('created_at') ? 'p.created_at' : null,
+  ].filter(Boolean);
+  const orderByClause =
+    orderTsParts.length > 0
+      ? `ORDER BY COALESCE(${orderTsParts.join(', ')}) DESC`
+      : `ORDER BY ${pk} DESC`;
+
   const sql = `
     SELECT
       ${pk} AS id,
@@ -86,7 +98,7 @@ export async function fetchCicdPipelineRunsForOverview(env) {
     ${joinG}
     ${joinS}
     GROUP BY ${pk}
-    ORDER BY p.rowid DESC
+    ${orderByClause}
     LIMIT 10
   `;
 

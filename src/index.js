@@ -173,9 +173,20 @@ export default {
 
 
       if (pathLower.startsWith('/api/collab/room/')) {
+        if (env.IAM_COLLAB) {
+          const rest = pathLower.slice('/api/collab/'.length).replace(/^\/+/, '');
+          const room = decodeURIComponent(rest);
+          const id = env.IAM_COLLAB.idFromName(room);
+          const stub = env.IAM_COLLAB.get(id);
+          return stub.fetch(request);
+        }
+        const isWs = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
+        if (isWs) {
+          return new Response('Collaboration binding unavailable', { status: 404 });
+        }
         return jsonResponse(
-          { status: 'unavailable', reason: 'collaboration_suspended' },
-          503,
+          { ok: false, available: false, reason: 'iam_collab_binding_missing' },
+          404,
         );
       }
 

@@ -3,6 +3,19 @@
 **Branch:** `production`  
 **Purpose:** Single source of truth for what shipped locally today, how components fit together, and how teammates stay aligned while iterating.
 
+**Pushed to `origin/production` (2026-04-30):** `aee7e16..def45d0`
+
+| Commit | Subject |
+|--------|---------|
+| `eec05cc` | docs: daily Cursor sync log + ignore `supabase/.temp` |
+| `5f3b569` | feat(core): Thompson routing arms + daily retention |
+| `082bdcb` | feat(api): CI/CD overview, Supabase OAuth, Thompson chat wiring |
+| `f8edfde` | feat(dashboard): polling, integrations UX, overview visibility |
+| `9931ea7` | feat(supabase): embed-on-ingest Edge Function |
+| `def45d0` | feat(worker): retention cron + shared CI/CD overview fetch |
+
+*(Earlier on production:* `aee7e16` *BrowserView / browser trust.)*
+
 ---
 
 ## Quick sync checklist (start of day)

@@ -4,6 +4,7 @@
  */
 import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
 import { maxAgentsamWorkflowTimeoutSeconds } from '../core/agentsam-workflows.js';
+import { AGENTSAM_WORKFLOW_RUNS_TABLE } from '../core/agentsam-supabase-sync.js';
 
 const MCP_CARD_AGENT_IDS = [
   'mcp_agent_architect',
@@ -305,12 +306,12 @@ export async function handleMcpApi(request, url, env, ctx) {
       }
       try {
         await env.DB.prepare(
-          `UPDATE mcp_workflow_runs
+          `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE}
               SET status = 'cancelled', completed_at = unixepoch()
             WHERE tenant_id = ? AND status = 'running'`
         ).bind(tenantId).run();
-      } catch (_) {
-        /* table may differ in older DBs */
+      } catch (e) {
+        return jsonResponse({ error: String(e?.message || e) }, 500);
       }
       return jsonResponse({ ok: true });
     }

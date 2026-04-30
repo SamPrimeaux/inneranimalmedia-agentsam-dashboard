@@ -22,6 +22,14 @@ import {
   getAgentSamWorkflow,
   normalizeAgentSamWorkflowRow,
 } from './src/core/agentsam-workflows.js';
+import {
+  AGENTSAM_WORKFLOW_RUNS_TABLE,
+  assertD1Write,
+  createSupabaseWorkflowRun,
+  markWorkflowRunSupabaseFailed,
+  markWorkflowRunSupabaseSynced,
+  updateSupabaseWorkflowRun,
+} from './src/core/agentsam-supabase-sync.js';
 
 const IAM_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
 const IAM_EMBED_DIMS = 1024;
@@ -18897,18 +18905,97 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
   }
 
   const runId = `wfr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-  await env.DB.prepare(
-    `INSERT INTO mcp_workflow_runs
-       (id, workflow_id, session_id, tenant_id, status, triggered_by, started_at)
-     VALUES (?, ?, ?, ?, 'running', ?, unixepoch())`
-  ).bind(runId, workflow_id, sid, MCP_WF_TENANT, trig).run();
+  const workflowKey = wf.workflow_key != null ? String(wf.workflow_key) : String(workflow_id);
+  const displayName =
+    wf.display_name != null ? String(wf.display_name) : wf.name != null ? String(wf.name) : workflowKey;
 
-      await env.DB.prepare(
-        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET run_count = run_count + 1, last_run_at = datetime('now'),
+  const ins = await env.DB.prepare(
+    `INSERT INTO ${AGENTSAM_WORKFLOW_RUNS_TABLE}
+       (id, workflow_id, session_id, tenant_id, status, triggered_by, started_at, workflow_key, display_name)
+     VALUES (?, ?, ?, ?, 'running', ?, unixepoch(), ?, ?)`
+  ).bind(runId, workflow_id, sid, MCP_WF_TENANT, trig, workflowKey, displayName).run();
+
+  try {
+    assertD1Write(ins, 'agentsam_workflow_runs insert');
+  } catch (e) {
+    return { error: String(e?.message || e), status: 500 };
+  }
+
+  let supRow;
+  try {
+    supRow = await createSupabaseWorkflowRun(env, {
+      d1_workflow_run_id: runId,
+      workflow_id: String(workflow_id),
+      workflow_key: workflowKey,
+      display_name: displayName,
+      tenant_id: MCP_WF_TENANT,
+      session_id: sid,
+      status: 'running',
+      triggered_by: trig,
+      started_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    const failRun = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?, completed_at = unixepoch() WHERE id = ?`
+    ).bind(`supabase_sync_start: ${msg}`, runId).run();
+    assertD1Write(failRun, 'agentsam_workflow_runs fail after supabase insert error');
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Supabase sync failed: ${msg}`, status: 503, sync_error: msg };
+  }
+
+  const supabaseRunId = String(supRow.id);
+
+  try {
+    await markWorkflowRunSupabaseSynced(env, runId, supabaseRunId);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: `d1_sync_meta_failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (e2) {
+      const e2m = String(e2?.message || e2);
+      await markWorkflowRunSupabaseFailed(env, runId, `${msg}; supabase_rollback: ${e2m}`);
+      return { error: `Failed to record Supabase id on D1: ${msg}`, status: 500, sync_error: `${msg} | ${e2m}` };
+    }
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Failed to record Supabase id on D1: ${msg}`, status: 500, sync_error: msg };
+  }
+
+  const bump = await env.DB.prepare(
+    `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET run_count = run_count + 1, last_run_at = datetime('now'),
      updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
   ).bind(workflow_id, MCP_WF_TENANT).run();
 
-  ctx.waitUntil(executeWorkflowSteps(env, wf, runId, sid));
+  try {
+    assertD1Write(bump, 'agentsam_mcp_workflows run_count');
+  } catch (e) {
+    const msg = String(e?.message || e);
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: `run_count_bump_failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (e2) {
+      const e2m = String(e2?.message || e2);
+      await markWorkflowRunSupabaseFailed(env, runId, `${msg}; supabase_note: ${e2m}`);
+      return {
+        error: `Workflow run started but definition bump failed: ${msg}`,
+        status: 500,
+        sync_error: `${msg} | ${e2m}`,
+      };
+    }
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Workflow run started but definition bump failed: ${msg}`, status: 500, sync_error: msg };
+  }
+
+  ctx.waitUntil(executeWorkflowSteps(env, wf, runId, sid, supabaseRunId));
   return { run_id: runId, status: 'running' };
 }
 
@@ -20823,8 +20910,14 @@ async function handleMcpApi(req, u, e, ctx) {
       if (data.error) {
         const msg = data.error;
         const status =
-          msg === 'Workflow not found or not active' ? 404 : 500;
-        return jsonResponse({ error: msg }, status);
+          data.status != null && Number.isFinite(Number(data.status))
+            ? Number(data.status)
+            : msg === 'Workflow not found or not active'
+              ? 404
+              : 500;
+        const body = { error: msg };
+        if (data.sync_error) body.sync_error = data.sync_error;
+        return jsonResponse(body, status);
       }
       if (dry_run) return jsonResponse(data, 200);
       return jsonResponse({ run_id: data.run_id, status: data.status }, 202);
@@ -20839,7 +20932,7 @@ async function handleMcpApi(req, u, e, ctx) {
       const { results } = await e.DB.prepare(
         `SELECT id, status, triggered_by, cost_usd, duration_ms,
                     started_at, completed_at, error_message
-             FROM mcp_workflow_runs
+             FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE}
              WHERE workflow_id = ?
              ORDER BY created_at DESC LIMIT 50`
       ).bind(workflow_id).all();
@@ -22860,7 +22953,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       safeAll(
         env.DB.prepare(
           `SELECT w.display_name AS name, r.status, datetime(r.started_at, 'unixepoch') as started
-           FROM mcp_workflow_runs r JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON r.workflow_id = w.id
+           FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} r JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON r.workflow_id = w.id
            WHERE r.started_at >= unixepoch(?) ORDER BY r.started_at DESC`
         ).bind(`${today} 00:00:00`).all()
       ),
@@ -24143,18 +24236,29 @@ async function dispatchMcpTool(env, tool_name, input_template, session_id) {
   return out.result;
 }
 
-async function executeWorkflowSteps(env, workflow, run_id, session_id) {
+async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseRunId) {
   const MCP_WF_TENANT =
     workflow?.tenant_id != null && String(workflow.tenant_id).trim()
       ? String(workflow.tenant_id).trim()
       : null;
   if (!MCP_WF_TENANT) {
-    try {
-      await env.DB.prepare(
-        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?,
+    const r = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?,
          completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
-      ).bind('Unauthorized', run_id).run();
-    } catch (_) { }
+    ).bind('Unauthorized', run_id).run();
+    assertD1Write(r, 'agentsam_workflow_runs unauthorized tenant');
+    await updateSupabaseWorkflowRun(env, supabaseRunId, {
+      status: 'failed',
+      success: false,
+      error_message: 'Unauthorized',
+      completed_at: new Date().toISOString(),
+    });
+    try {
+      await markWorkflowRunSupabaseSynced(env, run_id, null);
+    } catch (metaErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+      throw metaErr;
+    }
     return;
   }
   let lastError = null;
@@ -24164,10 +24268,23 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       steps = typeof workflow.steps_json === 'string' ? JSON.parse(workflow.steps_json || '[]') : (workflow.steps_json || []);
     } catch (parseErr) {
       lastError = String(parseErr?.message || parseErr);
-      await env.DB.prepare(
-        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?, step_results_json = '[]',
+      const pr = await env.DB.prepare(
+        `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?, step_results_json = '[]',
          cost_usd = 0, duration_ms = 0, completed_at = unixepoch() WHERE id = ?`
       ).bind(lastError, run_id).run();
+      assertD1Write(pr, 'agentsam_workflow_runs parse error');
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: lastError,
+        completed_at: new Date().toISOString(),
+      });
+      try {
+        await markWorkflowRunSupabaseSynced(env, run_id, null);
+      } catch (metaErr) {
+        await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+        throw metaErr;
+      }
       return;
     }
     if (!Array.isArray(steps)) steps = [];
@@ -24260,39 +24377,36 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       const callStatus = stepStatus === 'completed' ? 'completed' : 'failed';
       const outSlice = output != null ? String(output).slice(0, 50000) : null;
       const stepNow = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      try {
-        await env.DB.prepare(
-          `INSERT INTO mcp_tool_calls
-             (id, tenant_id, session_id, tool_name, tool_category, input_schema,
-              output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workflow_runner', ?, ?, ?, ?, ?)`
-        ).bind(
-          tcId,
-          MCP_WF_TENANT,
-          session_id ?? null,
-          tool_name,
-          step.tool_category != null ? String(step.tool_category) : 'unknown',
-          JSON.stringify(input_template),
-          outSlice,
-          callStatus,
-          stepNow,
-          stepNow,
-          stepNow,
-          stepNow,
-          errorMsg ? String(errorMsg).slice(0, 8000) : null
-        ).run();
-        fireForgetAgentToolChainRow(env, {
-          toolName: tool_name,
-          agentSessionId: session_id ?? null,
-          error: stepStatus === 'completed' ? null : errorMsg,
-          costUsd: 0,
-          mcpToolCallId: tcId,
-          durationMs: 0,
-          terminalSessionId: null,
-        });
-      } catch (dbErr) {
-        console.warn('[executeWorkflowSteps] mcp_tool_calls insert', dbErr?.message ?? dbErr);
-      }
+      const tcIns = await env.DB.prepare(
+        `INSERT INTO mcp_tool_calls
+           (id, tenant_id, session_id, tool_name, tool_category, input_schema,
+            output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workflow_runner', ?, ?, ?, ?, ?)`
+      ).bind(
+        tcId,
+        MCP_WF_TENANT,
+        session_id ?? null,
+        tool_name,
+        step.tool_category != null ? String(step.tool_category) : 'unknown',
+        JSON.stringify(input_template),
+        outSlice,
+        callStatus,
+        stepNow,
+        stepNow,
+        stepNow,
+        stepNow,
+        errorMsg ? String(errorMsg).slice(0, 8000) : null
+      ).run();
+      assertD1Write(tcIns, 'mcp_tool_calls workflow step');
+      fireForgetAgentToolChainRow(env, {
+        toolName: tool_name,
+        agentSessionId: session_id ?? null,
+        error: stepStatus === 'completed' ? null : errorMsg,
+        costUsd: 0,
+        mcpToolCallId: tcId,
+        durationMs: 0,
+        terminalSessionId: null,
+      });
 
       stepResults.push({ tool_name, status: callStatus, tool_call_id: tcId });
       if (stepStatus === 'completed' && output && output !== '(no output)') {
@@ -24311,9 +24425,10 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
 
     const duration = Date.now() - startMs;
     const finalStatus = failed ? 'failed' : 'success';
+    const completedIso = new Date().toISOString();
 
-    await env.DB.prepare(
-      `UPDATE mcp_workflow_runs SET
+    const d1Final = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET
          status = ?, step_results_json = ?, cost_usd = ?,
          duration_ms = ?, completed_at = unixepoch(), error_message = ?
        WHERE id = ?`
@@ -24325,22 +24440,68 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       failed ? (lastError || 'Workflow step failed') : null,
       run_id
     ).run();
+    assertD1Write(d1Final, 'agentsam_workflow_runs finalize');
 
     if (!failed) {
-      await env.DB.prepare(
+      const defUp = await env.DB.prepare(
         `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET success_count = success_count + 1,
          last_run_status = 'success',
          updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
       ).bind(workflow.id, MCP_WF_TENANT).run();
+      assertD1Write(defUp, 'agentsam_mcp_workflows success_count');
+    }
+
+    const supPatch = failed
+      ? {
+          status: 'failed',
+          success: false,
+          error_message: lastError || 'Workflow step failed',
+          completed_at: completedIso,
+          duration_ms: duration,
+          cost_usd: totalCost,
+          step_results_json: JSON.stringify(stepResults),
+        }
+      : {
+          status: 'completed',
+          success: true,
+          error_message: null,
+          completed_at: completedIso,
+          duration_ms: duration,
+          cost_usd: totalCost,
+          step_results_json: JSON.stringify(stepResults),
+        };
+    await updateSupabaseWorkflowRun(env, supabaseRunId, supPatch);
+    try {
+      await markWorkflowRunSupabaseSynced(env, run_id, null);
+    } catch (metaErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+      throw metaErr;
     }
   } catch (err) {
     const msg = String(err?.message || err);
-    try {
-      await env.DB.prepare(
-        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?,
+    const r = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?,
          completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
-      ).bind(msg, run_id).run();
-    } catch (_) { }
+    ).bind(msg, run_id).run();
+    assertD1Write(r, 'agentsam_workflow_runs outer-catch');
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: msg,
+        completed_at: new Date().toISOString(),
+      });
+      try {
+        await markWorkflowRunSupabaseSynced(env, run_id, null);
+      } catch (metaErr) {
+        await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+        throw metaErr;
+      }
+    } catch (syncErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(syncErr?.message || syncErr));
+      throw syncErr;
+    }
+    throw err;
   }
 }
 
@@ -27020,7 +27181,7 @@ const RETENTION_PURGE_TABLE_CONFIG = {
   mcp_audit_log: { dateColumn: 'created_at', compare: 'unix' },
   mcp_agent_sessions: { dateColumn: 'created_at', compare: 'unix' },
   mcp_tool_call_stats: { dateColumn: 'date', compare: 'date_col' },
-  mcp_workflow_runs: { dateColumn: 'created_at', compare: 'unix' },
+  agentsam_workflow_runs: { dateColumn: 'created_at', compare: 'unix' },
   mcp_command_suggestions: { dateColumn: 'created_at', compare: 'unix' },
   terminal_sessions: { dateColumn: 'updated_at', compare: 'unix' },
   cicd_runs: { dateColumn: 'created_at', compare: 'datetime' },
@@ -31269,9 +31430,9 @@ async function handleOverviewCommandsWorkflows(request, env) {
     const [slash, never, runs, workflows, runDistinct, dependencies] = await Promise.all([
       overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name, call_count FROM agentsam_slash_commands ORDER BY call_count DESC LIMIT 10`, []),
       overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name FROM agentsam_slash_commands WHERE COALESCE(call_count,0) = 0 AND COALESCE(is_active,1) = 1 ORDER BY sort_order ASC LIMIT 12`, []),
-      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT w.display_name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM mcp_workflow_runs r LEFT JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
+      overviewQuery(env, failed, 'agentsam_workflow_runs', `SELECT w.display_name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} r LEFT JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
       overviewQuery(env, failed, 'agentsam_mcp_workflows', `SELECT COUNT(*) AS total FROM ${AGENTSAM_MCP_WORKFLOWS} WHERE tenant_id = ?`, [tenantId], 'first'),
-      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT COUNT(DISTINCT workflow_id) AS run_once FROM mcp_workflow_runs WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'agentsam_workflow_runs', `SELECT COUNT(DISTINCT workflow_id) AS run_once FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE tenant_id = ?`, [tenantId], 'first'),
       overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
     ]);
     const total = overviewNumber(workflows?.total);

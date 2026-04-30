@@ -945,20 +945,57 @@ async function handleDeploymentLog(request, env, ctx, secretFn) {
   const durationSeconds = typeof body.duration_seconds === 'number' ? body.duration_seconds : null;
   const deployDurationMs = durationSeconds != null ? durationSeconds * 1000 : null;
   const changes = Array.isArray(body.changes) ? body.changes : [];
+  const changedFiles = (() => {
+    try {
+      const paths = changes
+        .map((ch) => (ch?.file_path || ch?.path || '').toString().trim())
+        .filter(Boolean)
+        .slice(0, 500);
+      return paths.length ? JSON.stringify(paths) : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  const workerName = (body.worker_name || body.workerName || 'inneranimalmedia').toString().trim() || 'inneranimalmedia';
+  const triggeredBy = (body.triggered_by || body.triggeredBy || deployedBy || 'deploy_log').toString().trim() || 'deploy_log';
+  const notes = (body.notes || '').toString().slice(0, 4000) || null;
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
   if (ctx && typeof ctx.waitUntil === 'function') {
     ctx.waitUntil(
       (async () => {
         try {
           await env.DB.prepare(
-            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-          ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+            `INSERT INTO deployments (
+              id, timestamp, version, git_hash, changed_files, description,
+              status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+              worker_name, triggered_by, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+          ).bind(
+            id,
+            timestamp,
+            version,
+            gitHash || null,
+            changedFiles,
+            description || null,
+            status,
+            deployedBy,
+            environment,
+            deployDurationMs,
+            durationSeconds,
+            workerName,
+            triggeredBy,
+            notes
+          ).run();
           appendCidiPipelineRunFromDeploy(env, {
             deploymentId: id,
             environment,
             gitHash: gitHash || 'unknown',
+            branch: body.branch || body.git_branch || 'production',
             versionId: version || id,
             description: description || 'deploy via script',
+            workerName,
+            actor: body.actor || deployedBy,
+            notes: notes || description || null,
           });
           for (let i = 0; i < changes.length; i++) {
             const ch = changes[i];
@@ -988,14 +1025,37 @@ async function handleDeploymentLog(request, env, ctx, secretFn) {
   } else {
     try {
       await env.DB.prepare(
-        `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-      ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+        `INSERT INTO deployments (
+          id, timestamp, version, git_hash, changed_files, description,
+          status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+          worker_name, triggered_by, notes, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      ).bind(
+        id,
+        timestamp,
+        version,
+        gitHash || null,
+        changedFiles,
+        description || null,
+        status,
+        deployedBy,
+        environment,
+        deployDurationMs,
+        durationSeconds,
+        workerName,
+        triggeredBy,
+        notes
+      ).run();
       appendCidiPipelineRunFromDeploy(env, {
         deploymentId: id,
         environment,
         gitHash: gitHash || 'unknown',
+        branch: body.branch || body.git_branch || 'production',
         versionId: version || id,
         description: description || 'deploy via script',
+        workerName,
+        actor: body.actor || deployedBy,
+        notes: notes || description || null,
       });
       for (let i = 0; i < changes.length; i++) {
         const ch = changes[i];
@@ -1753,16 +1813,20 @@ async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO deployments (
-        id, timestamp, version, git_hash, description, status, deployed_by,
-        environment, deploy_time_seconds, worker_name, triggered_by, notes
-      ) VALUES (?, datetime('now'), ?, ?, ?, 'success', ?, 'production', 0, ?, 'github_push', ?)`
+        id, timestamp, version, git_hash, changed_files, description, status, deployed_by,
+        environment, deploy_duration_ms, deploy_time_seconds, worker_name, triggered_by, notes, created_at
+      ) VALUES (?, datetime('now'), ?, ?, NULL, ?, 'success', ?, 'production', 0, 0, ?, 'github_push', ?, datetime('now'))`
     ).bind(deployId, versionShort, commitSha || null, desc, actor, workerName, notes || null).run();
     appendCidiPipelineRunFromDeploy(env, {
       deploymentId: deployId,
       environment: 'production',
       gitHash: commitSha || 'unknown',
+      branch: branch || 'production',
       versionId: versionShort || deployId,
       description: desc || 'deploy via script',
+      workerName,
+      actor,
+      notes: notes || null,
     });
   } catch (e) {
     console.warn('[cicd] deployments INSERT', e?.message ?? e);
@@ -2902,6 +2966,62 @@ async function closeWorkSessionAndLog(env, sessionId, tenantId) {
   ).run().catch(() => { });
 }
 
+async function runDeploymentsWeeklyRollup(env) {
+  if (!env?.DB) return;
+  try {
+    const weekKey = await env.DB.prepare(`SELECT strftime('%Y-W%W','now') as wk`).first().catch(() => null);
+    const wk = weekKey?.wk || new Date().toISOString().slice(0, 10);
+    const stats = await env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(COALESCE(deploy_duration_ms,0)) AS total_duration_ms
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime('now','-7 days')
+    `).first().catch(() => null);
+    const workers = await env.DB.prepare(`
+      SELECT worker_name, COUNT(*) AS c
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime('now','-7 days')
+      GROUP BY worker_name
+      ORDER BY c DESC
+      LIMIT 25
+    `).all().catch(() => ({ results: [] }));
+    const workersJson = JSON.stringify(Object.fromEntries((workers.results || []).map(r => [r.worker_name || 'unknown', Number(r.c) || 0])));
+
+    // Best-effort persistence (table may or may not exist yet)
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO deployments_weekly_rollup
+        (week_key, total, success, failed, total_duration_ms, workers_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, unixepoch())`
+    ).bind(
+      wk,
+      Number(stats?.total) || 0,
+      Number(stats?.success) || 0,
+      Number(stats?.failed) || 0,
+      Number(stats?.total_duration_ms) || 0,
+      workersJson
+    ).run().catch(() => { });
+
+    // Always log for analysis, even if rollup table doesn't exist
+    await env.DB.prepare(
+      `INSERT INTO agentsam_tool_call_log
+        (tenant_id, tool_name, status, duration_ms, input_summary, output_summary, tool_category, user_id)
+       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','success',0,?,?,'rollup','au_871d920d1233cbd1')`
+    ).bind(
+      `week=${wk}`,
+      `total=${Number(stats?.total) || 0} success=${Number(stats?.success) || 0} failed=${Number(stats?.failed) || 0} workers=${workers.results?.length || 0}`
+    ).run().catch(() => { });
+  } catch (e) {
+    await env.DB.prepare(
+      `INSERT INTO agentsam_tool_call_log
+        (tenant_id, tool_name, status, error_message, tool_category, user_id)
+       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','error',?,'rollup','au_871d920d1233cbd1')`
+    ).bind(e?.message ?? String(e)).run().catch(() => { });
+  }
+}
+
 const worker = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(Promise.allSettled([
@@ -2910,6 +3030,7 @@ const worker = {
       runAgentMemoryDecay(env),
       runFinancialCommandCron(env, ctx),
       updateRoutingPerformanceScores(env),
+      runDeploymentsWeeklyRollup(env),
       (async () => {
         if (!env?.DB) return;
         const stale = await env.DB.prepare(`
@@ -3123,15 +3244,22 @@ const worker = {
             const now = new Date().toISOString();
             // Audit: deployments table has id, timestamp, version, git_hash, status, deployed_by, notes, worker_name
             await env.DB.prepare(
-              `INSERT INTO deployments (id, worker_name, version, git_hash, description, status, deployed_by, environment, created_at, timestamp)
-               VALUES (?, 'agentsam', ?, ?, ?, 'success', 'agentsam_bot', 'production', ?, ?)`
-            ).bind(id, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', now, now).run();
+              `INSERT INTO deployments (
+                id, timestamp, version, git_hash, changed_files, description,
+                status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+                worker_name, triggered_by, notes, created_at
+              ) VALUES (?, ?, ?, ?, NULL, ?, 'success', 'agentsam_bot', 'production', NULL, NULL, 'agentsam', 'internal_api', ?, datetime('now'))`
+            ).bind(id, now, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', (body.note ?? '').toString().slice(0, 4000) || null).run();
             appendCidiPipelineRunFromDeploy(env, {
               deploymentId: id,
               environment: 'production',
               gitHash: body.git_hash ?? 'unknown',
+              branch: body.branch || body.git_branch || 'production',
               versionId: body.version_id ?? id,
               description: body.note ?? 'deploy via script',
+              workerName: 'agentsam',
+              actor: 'agentsam_bot',
+              notes: (body.note ?? '').toString().slice(0, 4000) || null,
             });
             return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
           } catch (e) {
@@ -3251,8 +3379,25 @@ const worker = {
         try {
           const deployTimeSeconds = Math.round((Date.now() - deployStart) / 1000);
           await env.DB.prepare(
-            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES (?, datetime('now'), ?, ?, 'Internal record-deploy (API)', 'success', ?, 'production', ?, 'inneranimalmedia', ?, ?)`
-          ).bind(deployId, versionId || deployId, gitHash || null, triggeredBy, deployTimeSeconds, triggeredBy, notes).run();
+            `INSERT INTO deployments (
+              id, timestamp, version, git_hash, changed_files, description,
+              status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+              rollback_from, worker_name, triggered_by, notes, created_at
+            ) VALUES (
+              ?, datetime('now'), ?, ?, NULL, 'Internal record-deploy (API)',
+              'success', ?, 'production', NULL, ?,
+              NULL, ?, ?, ?, datetime('now')
+            )`
+          ).bind(
+            deployId,
+            versionId || deployId,
+            gitHash || null,
+            triggeredBy,
+            deployTimeSeconds,
+            body.worker_name || body.workerName || 'inneranimalmedia',
+            triggeredBy,
+            notes || null
+          ).run();
           appendCidiPipelineRunFromDeploy(env, {
             deploymentId: deployId,
             environment: 'production',

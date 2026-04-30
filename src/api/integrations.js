@@ -4,6 +4,7 @@
  * Owns /api/integrations/* plus inbound provider webhooks.
  */
 import { getAuthUser, isSamOnlyUser, jsonResponse } from '../core/auth.js';
+import { ensureOauthTokenColumns } from './oauth.js';
 import { recordWorkerAnalyticsError } from './telemetry.js';
 
 const DEFAULT_TENANT_ID = 'tenant_sam_primeaux';
@@ -138,6 +139,10 @@ export async function handleIntegrationsRequest(request, envArg, ctxArg, authUse
     }
     if (method === 'POST' && pathLower === '/api/integrations/api-keys') {
         return handleCreateApiKey(env, authUser, request);
+    }
+
+    if (method === 'DELETE' && pathLower === '/api/integrations/supabase') {
+        return handleSupabaseIntegrationDelete(env, authUser);
     }
 
     const actionMatch = pathLower.match(/^\/api\/integrations\/([^/]+)\/(test|sync|disconnect|settings|detail)$/);
@@ -275,6 +280,7 @@ async function handleSummary(env, authUser) {
     if (!env?.DB) return jsonResponse({ providers: [], summary: emptySummary(), error: 'DB not configured' }, 503);
     const tenantId = resolveTenantId(authUser, env);
     const userId = integrationUserId(authUser);
+    await ensureOauthTokenColumns(env.DB);
     const [registry, oauth, toolCounts, webhookCounts, allowlistCount, events, providerColors] = await Promise.all([
         env.DB.prepare(
             `SELECT r.*,
@@ -291,7 +297,7 @@ async function handleSummary(env, authUser) {
              WHERE r.tenant_id = ? AND COALESCE(r.is_enabled, 1) = 1
              ORDER BY r.sort_order`
         ).bind(tenantId).all(),
-        safeAll(env.DB, `SELECT provider, account_identifier, scope, expires_at, created_at, updated_at FROM user_oauth_tokens WHERE user_id = ?`, [userId]),
+        safeAll(env.DB, `SELECT provider, account_identifier, scope, expires_at, created_at, updated_at, metadata_json, workspace_id FROM user_oauth_tokens WHERE user_id = ?`, [userId]),
         getMcpToolCounts(env),
         getWebhookCounts(env),
         safeFirst(env.DB, `SELECT COUNT(*) AS count FROM agentsam_mcp_allowlist WHERE user_id = ?`, [userId]),
@@ -315,15 +321,29 @@ async function handleSummary(env, authUser) {
             issued_at: epochToIso(token.created_at),
             expires_at: epochToIso(token.expires_at),
             status: oauthTokenStatus(token.expires_at),
+            metadata_json: token.metadata_json || null,
+            workspace_id: token.workspace_id || null,
         });
     }
 
     const providers = (registry.results || []).map((r) => {
-        const oauthAccounts = oauthByProvider.get(normalizeProviderKey(r.provider_key)) || [];
-        const status = oauthAccounts.some((a) => a.status === 'expired') ? 'auth_expired' : r.status;
-        const providerColorSlug = colorSlugForProvider(r.provider_key);
+        let regRow = r;
+        if (r.provider_key === 'supabase_oauth') {
+            regRow = {
+                ...r,
+                status: env.SUPABASE_OAUTH_CLIENT_ID ? r.status : 'disconnected',
+                secret_binding_name: env.SUPABASE_OAUTH_CLIENT_ID ? r.secret_binding_name : null,
+            };
+        }
+        let oauthAccounts = oauthByProvider.get(normalizeProviderKey(regRow.provider_key)) || [];
+        if (regRow.provider_key === 'supabase_oauth' && oauthAccounts.length === 0) {
+            oauthAccounts = oauthByProvider.get('supabase') || [];
+        }
+        let status = oauthAccounts.some((a) => a.status === 'expired') ? 'auth_expired' : regRow.status;
+        if (oauthAccounts.length > 0 && status !== 'auth_expired') status = 'connected';
+        const providerColorSlug = colorSlugForProvider(regRow.provider_key);
         return {
-            ...r,
+            ...regRow,
             status,
             provider_color_slug: providerColorSlug,
             provider_color: colorBySlug.get(providerColorSlug) || null,
@@ -592,6 +612,18 @@ async function handleProviderSync(env, authUser, provider) {
     await env.DB.prepare(`UPDATE integration_registry SET last_sync_at = datetime('now'), updated_at = datetime('now') WHERE tenant_id = ? AND provider_key = ?`).bind(tenantId, provider).run();
     await recordIntegrationEvent(env, tenantId, provider, 'sync_completed', authUser.email || authUser.id, 'Integration sync completed', { changes });
     return jsonResponse({ synced: true, changes });
+}
+
+async function handleSupabaseIntegrationDelete(env, authUser) {
+    if (!env?.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+    const userId = integrationUserId(authUser);
+    const tenantId = resolveTenantId(authUser, env);
+    await env.DB.prepare(`DELETE FROM user_oauth_tokens WHERE user_id = ? AND provider = 'supabase'`).bind(userId).run();
+    await env.DB.prepare(
+        `UPDATE integration_registry SET status = 'disconnected', account_display = NULL, updated_at = datetime('now') WHERE tenant_id = ? AND provider_key = 'supabase_oauth'`,
+    ).bind(tenantId).run();
+    await recordIntegrationEvent(env, tenantId, 'supabase_oauth', 'disconnected', authUser.email || authUser.id, 'Supabase OAuth disconnected', {});
+    return jsonResponse({ disconnected: true });
 }
 
 async function handleProviderDisconnect(env, authUser, provider) {

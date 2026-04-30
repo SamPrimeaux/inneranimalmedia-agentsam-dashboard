@@ -25,6 +25,7 @@ import { notifySam }                                    from '../core/notificati
 import { getAgentMetadata, logSkillInvocation,
          getActivePromptByWeight, getPromptMetadata }   from './agentsam.js';
 import { runBuiltinTool }                               from '../tools/ai-dispatch.js';
+import { getDefaultModelForTask, recordRoutingArmOutcome } from '../core/routing.js';
 
 const WRITE_LIKE_PREFIXES = ['d1_', 'worker_', 'resend_', 'meshyai_'];
 const TERM_WRITE_TOOLS = new Set(['terminal_execute', 'run_command', 'bash']);
@@ -710,10 +711,23 @@ export async function agentChatSseHandler(env, request, ctx, session) {
   const threshold = Number(modeConfig?.escalation_threshold);
   const escalationThreshold = Number.isFinite(threshold) ? threshold : 0;
 
+  let routingPick = null;
+  try {
+    routingPick = await getDefaultModelForTask(env, { taskKey: intentSlug, tenantId });
+  } catch (_) {
+    routingPick = null;
+  }
+  const thompsonRow =
+    routingPick?.source === 'thompson' && routingPick?.modelId
+      ? await resolveAiModelRowById(env, routingPick.modelId)
+      : null;
+
   const primaryRow = await resolveAiModelRowById(env, modeConfig?.model_preference ?? null);
   const escalationRow = await resolveAiModelRowById(env, modeConfig?.escalation_model ?? null);
   const lastResort = await loadLastResortModels(env);
-  const chainRows = dedupeModelsByKey([primaryRow, escalationRow, ...(lastResort || [])].filter(Boolean));
+  const chainRows = dedupeModelsByKey(
+    [...(thompsonRow ? [thompsonRow] : []), primaryRow, escalationRow, ...(lastResort || [])].filter(Boolean),
+  );
   const fallbackModelKeys = chainRows.map((r) => r.model_key).filter(Boolean);
   if (!fallbackModelKeys.length) {
     return jsonResponse({ error: 'All providers exhausted', tried: [] }, 503);
@@ -812,9 +826,16 @@ export async function agentChatSseHandler(env, request, ctx, session) {
       if (!succeeded) {
         emit('error', { message: 'All providers exhausted', tried });
       }
+
+      if (routingPick?.armId) {
+        await recordRoutingArmOutcome(env, { armId: routingPick.armId, success: succeeded }).catch(() => {});
+      }
     } catch (e) {
       console.warn('[agent] Agent loop failed', e?.message ?? e);
       emit('error', { message: 'Agent loop failed' });
+      if (routingPick?.armId) {
+        await recordRoutingArmOutcome(env, { armId: routingPick.armId, success: false }).catch(() => {});
+      }
     } finally {
       await writer.close().catch(() => {});
     }

@@ -69,7 +69,7 @@ async function pragmaColumns(DB, tableName) {
   return cols;
 }
 
-async function ensureOauthTokenColumns(DB) {
+export async function ensureOauthTokenColumns(DB) {
   const cols = await pragmaColumns(DB, 'user_oauth_tokens');
   const alters = [];
   const want = [
@@ -78,6 +78,8 @@ async function ensureOauthTokenColumns(DB) {
     ['scopes', 'TEXT'],
     ['account_email', 'TEXT'],
     ['account_display', 'TEXT'],
+    ['workspace_id', 'TEXT'],
+    ['metadata_json', 'TEXT'],
     ['created_at', 'INTEGER'],
     ['updated_at', 'INTEGER'],
   ];
@@ -106,7 +108,27 @@ function integrationUserId(authUser) {
   return authUser?.id;
 }
 
-async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider, access_token, refresh_token, scope, expires_at, account_identifier, account_email, account_display }) {
+/** Workspace-scoped Supabase OAuth row key (multi-workspace per user). */
+export function supabaseOAuthAccountIdentifier(workspaceId) {
+  const w = String(workspaceId || '').trim();
+  return w ? `workspace:${w}` : 'Supabase';
+}
+
+async function fetchSupabaseManagementProjects(accessToken) {
+  const res = await fetch('https://api.supabase.com/v1/projects', {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+  });
+  const data = await res.json().catch(() => []);
+  if (!Array.isArray(data)) return [];
+  return data.map((p) => ({
+    id: p.id,
+    name: p.name,
+    ref: p.ref,
+    region: p.region,
+  }));
+}
+
+async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider, access_token, refresh_token, scope, expires_at, account_identifier, account_email, account_display, workspace_id, metadata_json }) {
   if (!env?.DB) throw new Error('DB not configured');
   if (!env.VAULT_MASTER_KEY) throw new Error('VAULT_MASTER_KEY not configured');
 
@@ -139,6 +161,8 @@ async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider
        ${hasEncrypted ? 'access_token_encrypted, refresh_token_encrypted,' : ''}
        ${cols.has('scope') ? 'scope,' : ''} ${cols.has('scopes') ? 'scopes,' : ''}
        expires_at,
+       ${cols.has('workspace_id') ? 'workspace_id,' : ''}
+       ${cols.has('metadata_json') ? 'metadata_json,' : ''}
        ${cols.has('account_email') ? 'account_email,' : ''} ${cols.has('account_display') ? 'account_display,' : ''}
        ${cols.has('created_at') ? 'created_at,' : ''} ${cols.has('updated_at') ? 'updated_at,' : ''}
        created_at
@@ -149,6 +173,8 @@ async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider
       ${hasEncrypted ? '?, ?,': ''}
       ${cols.has('scope') ? '?,' : ''} ${cols.has('scopes') ? '?,' : ''}
       ?,
+      ${cols.has('workspace_id') ? '?,' : ''}
+      ${cols.has('metadata_json') ? '?,' : ''}
       ${cols.has('account_email') ? '?,' : ''} ${cols.has('account_display') ? '?,' : ''}
       ${cols.has('created_at') ? '?,' : ''} ${cols.has('updated_at') ? '?,' : ''}
       ?
@@ -168,6 +194,8 @@ async function upsertOauthToken(env, { user_id, tenant_id, person_uuid, provider
   if (cols.has('scope')) binds.push(scopesVal);
   if (cols.has('scopes')) binds.push(scopesVal);
   binds.push(expires_at || null);
+  if (cols.has('workspace_id')) binds.push(workspace_id ?? null);
+  if (cols.has('metadata_json')) binds.push(metadata_json ?? null);
   if (cols.has('account_email')) binds.push(account_email || null);
   if (cols.has('account_display')) binds.push(account_display || null);
   if (cols.has('created_at')) binds.push(createdAt);
@@ -539,7 +567,16 @@ export async function handleOAuthApi(request, env, ctx) {
 
     const state = crypto.randomUUID();
     const returnTo = safeReturnTo(url.searchParams.get('return_to'));
-    await kvPutState(env, state, { user_id: userId, tenant_id: tenantId, person_uuid: personUuid, provider, initiated_at: Date.now(), return_to: returnTo });
+    const workspace_id = String(url.searchParams.get('workspace_id') || '').trim() || String(env.WORKSPACE_ID || '').trim() || '';
+    await kvPutState(env, state, {
+      user_id: userId,
+      tenant_id: tenantId,
+      person_uuid: personUuid,
+      provider,
+      initiated_at: Date.now(),
+      return_to: returnTo,
+      workspace_id,
+    });
 
     let redirectUrl = null;
     if (provider === 'github') redirectUrl = githubAuthUrl(env, state);
@@ -571,6 +608,7 @@ export async function handleOAuthApi(request, env, ctx) {
     const userId = stored.user_id;
     const tenantId = stored.tenant_id || '';
     const personUuid = stored.person_uuid || '';
+    const oauthWorkspaceId = String(stored.workspace_id || '').trim() || null;
     const returnTo = safeReturnTo(stored.return_to);
 
     try {
@@ -623,6 +661,17 @@ export async function handleOAuthApi(request, env, ctx) {
         });
       } else if (provider === 'supabase') {
         const tok = await exchangeSupabase(env, code);
+        const supabaseAcct = supabaseOAuthAccountIdentifier(oauthWorkspaceId);
+        let metadata_json = null;
+        try {
+          const projects = await fetchSupabaseManagementProjects(tok.access_token);
+          metadata_json = JSON.stringify({
+            projects,
+            workspace_id: oauthWorkspaceId,
+          });
+        } catch {
+          metadata_json = JSON.stringify({ projects: [], workspace_id: oauthWorkspaceId });
+        }
         await upsertOauthToken(env, {
           user_id: userId,
           tenant_id: tenantId,
@@ -632,9 +681,11 @@ export async function handleOAuthApi(request, env, ctx) {
           refresh_token: tok.refresh_token || null,
           scope: tok.scope || null,
           expires_at: tok.expires_in ? nowSeconds() + Number(tok.expires_in) : null,
-          account_identifier: 'Supabase',
+          account_identifier: supabaseAcct,
           account_email: null,
           account_display: 'Supabase',
+          workspace_id: oauthWorkspaceId,
+          metadata_json,
         });
       }
     } catch (e) {
@@ -665,5 +716,92 @@ export async function getOAuthToken(env, userId, provider) {
   const providerForDb = mapTokenProviderForStorage(p);
   const row = await getOauthTokenRow(env, userId, providerForDb);
   return row?.access_token || null;
+}
+
+async function refreshSupabaseAccessToken(env, refreshToken) {
+  if (!env.SUPABASE_OAUTH_CLIENT_ID || !env.SUPABASE_OAUTH_CLIENT_SECRET || !refreshToken) return null;
+  const res = await fetch('https://api.supabase.com/v1/oauth/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: env.SUPABASE_OAUTH_CLIENT_ID,
+      client_secret: env.SUPABASE_OAUTH_CLIENT_SECRET,
+    }).toString(),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) return null;
+  return data;
+}
+
+/**
+ * Decrypted Supabase OAuth token for Management API; includes linked projects from stored metadata.
+ * Rows are scoped per workspace via account_identifier workspace:<workspace_id> when workspace_id was set at connect time.
+ */
+export async function getUserSupabaseToken(env, userId, workspaceId = null) {
+  if (!env?.DB || !userId || !env.VAULT_MASTER_KEY) return null;
+  await ensureOauthTokenColumns(env.DB);
+  const acct = supabaseOAuthAccountIdentifier(workspaceId);
+  const fullRow = await env.DB.prepare(
+    `SELECT * FROM user_oauth_tokens
+     WHERE user_id = ? AND provider = 'supabase' AND account_identifier = ?
+     ORDER BY updated_at DESC LIMIT 1`,
+  )
+    .bind(String(userId), acct)
+    .first();
+  if (!fullRow) return null;
+
+  let access =
+    fullRow.access_token_encrypted && env.VAULT_MASTER_KEY
+      ? await decryptWithVault(env, fullRow.access_token_encrypted).catch(() => fullRow.access_token || null)
+      : fullRow.access_token || null;
+  let refresh =
+    fullRow.refresh_token_encrypted && env.VAULT_MASTER_KEY
+      ? await decryptWithVault(env, fullRow.refresh_token_encrypted).catch(() => fullRow.refresh_token || null)
+      : fullRow.refresh_token || null;
+
+  const exp = Number(fullRow.expires_at);
+  const needsRefresh =
+    refresh &&
+    env.SUPABASE_OAUTH_CLIENT_ID &&
+    env.SUPABASE_OAUTH_CLIENT_SECRET &&
+    (!Number.isFinite(exp) || exp <= nowSeconds() + 300);
+
+  if (needsRefresh) {
+    const tok = await refreshSupabaseAccessToken(env, refresh);
+    if (tok?.access_token) {
+      access = tok.access_token;
+      refresh = tok.refresh_token || refresh;
+      const newExp = tok.expires_in ? nowSeconds() + Number(tok.expires_in) : exp;
+      await upsertOauthToken(env, {
+        user_id: fullRow.user_id,
+        tenant_id: fullRow.tenant_id || '',
+        person_uuid: fullRow.person_uuid || '',
+        provider: 'supabase',
+        access_token: access,
+        refresh_token: refresh,
+        scope: tok.scope || fullRow.scope || null,
+        expires_at: newExp,
+        account_identifier: acct,
+        account_email: fullRow.account_email || null,
+        account_display: fullRow.account_display || 'Supabase',
+        workspace_id: fullRow.workspace_id ?? workspaceId,
+        metadata_json: fullRow.metadata_json || null,
+      });
+    }
+  }
+
+  let meta = {};
+  try {
+    meta = JSON.parse(fullRow.metadata_json || '{}');
+  } catch {
+    meta = {};
+  }
+  return {
+    access_token: access,
+    projects: Array.isArray(meta.projects) ? meta.projects : [],
+    metadata: meta,
+  };
 }
 

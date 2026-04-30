@@ -4,6 +4,101 @@
  */
 import { getAuthUser, jsonResponse } from '../core/auth.js';
 
+/** @param {import('@cloudflare/workers-types').D1Database} db */
+async function pragmaColumnSet(db, tableName) {
+  const safe = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(tableName || '')) ? String(tableName) : '';
+  if (!safe || !db) return new Set();
+  try {
+    const { results } = await db.prepare(`PRAGMA table_info(${safe})`).all();
+    return new Set((results || []).map((r) => String(r.name || '').toLowerCase()));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * CI/CD pipeline rows for overview + worker (schema-safe via PRAGMA).
+ * @param {{ DB?: import('@cloudflare/workers-types').D1Database }} env
+ */
+export async function fetchCicdPipelineRunsForOverview(env) {
+  const db = env?.DB;
+  if (!db) return [];
+
+  const pCols = await pragmaColumnSet(db, 'cicd_pipeline_runs');
+  if (!pCols.size) return [];
+
+  const runKey = pCols.has('run_id') ? 'run_id' : pCols.has('id') ? 'id' : null;
+  if (!runKey) return [];
+
+  const pk = `p.${runKey}`;
+  const envSel = pCols.has('env')
+    ? `p.env AS environment`
+    : pCols.has('environment')
+      ? `p.environment AS environment`
+      : `NULL AS environment`;
+  const branchSel = pCols.has('branch') ? `p.branch` : `NULL`;
+  const statusSel = pCols.has('status') ? `p.status` : `NULL`;
+  const startedSel = pCols.has('triggered_at')
+    ? `p.triggered_at AS started_at`
+    : pCols.has('started_at')
+      ? `p.started_at AS started_at`
+      : `NULL AS started_at`;
+  const completedSel = pCols.has('completed_at') ? `p.completed_at` : `NULL`;
+  const notesSel = pCols.has('notes') ? `p.notes` : `NULL`;
+
+  const gCols = await pragmaColumnSet(db, 'cicd_github_runs');
+  const sCols = await pragmaColumnSet(db, 'cicd_run_steps');
+
+  const joinG =
+    gCols.size && gCols.has('run_id')
+      ? `LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(${pk}, 6)`
+      : ``;
+
+  const joinS = sCols.size && sCols.has('run_id') ? `LEFT JOIN cicd_run_steps s ON s.run_id = ${pk}` : ``;
+
+  const wf = gCols.has('workflow_name') ? `g.workflow_name` : `NULL`;
+  const cm = gCols.has('commit_message') ? `g.commit_message` : `NULL`;
+  const dm = gCols.has('duration_ms') ? `g.duration_ms` : `NULL`;
+
+  const stepPass =
+    sCols.has('status') ? `COUNT(CASE WHEN s.status = 'pass' THEN 1 END)` : `0`;
+  const stepFail =
+    sCols.has('status') ? `COUNT(CASE WHEN s.status = 'fail' THEN 1 END)` : `0`;
+  const stepTot =
+    sCols.has('id') ? `COUNT(s.id)` : sCols.size ? `COUNT(*)` : `0`;
+
+  const sql = `
+    SELECT
+      ${pk} AS id,
+      ${envSel},
+      ${statusSel},
+      ${branchSel},
+      ${startedSel},
+      ${completedSel},
+      ${notesSel},
+      ${wf} AS workflow_name,
+      ${cm} AS commit_message,
+      ${dm} AS duration_ms,
+      ${stepPass} AS steps_passed,
+      ${stepFail} AS steps_failed,
+      ${stepTot} AS steps_total
+    FROM cicd_pipeline_runs p
+    ${joinG}
+    ${joinS}
+    GROUP BY ${pk}
+    ORDER BY p.rowid DESC
+    LIMIT 10
+  `;
+
+  try {
+    const { results } = await db.prepare(sql).all();
+    return results || [];
+  } catch (e) {
+    console.warn('[overview/deployments] cicd_pipeline_runs', e?.message || e);
+    return [];
+  }
+}
+
 export async function handleOverviewApi(request, url, env, ctx) {
   const pathLower = url.pathname.toLowerCase().replace(/\/$/, '') || '/';
 
@@ -263,27 +358,7 @@ async function handleOverviewDeployments(env) {
     `SELECT worker_name, environment, status, timestamp AS deployed_at, notes AS deployment_notes
      FROM deployments ORDER BY timestamp DESC LIMIT 20`
   ).all();
-  const { results: cicd } = await env.DB.prepare(
-    `SELECT
-       p.run_id AS id,
-       p.env AS environment,
-       p.status,
-       p.branch,
-       p.triggered_at AS started_at,
-       p.completed_at,
-       p.notes,
-       g.workflow_name,
-       g.commit_message,
-       g.duration_ms,
-       COUNT(CASE WHEN s.status = 'pass' THEN 1 END) AS steps_passed,
-       COUNT(CASE WHEN s.status = 'fail' THEN 1 END) AS steps_failed,
-       COUNT(s.id) AS steps_total
-     FROM cicd_pipeline_runs p
-     LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(p.run_id, 6)
-     LEFT JOIN cicd_run_steps s ON s.run_id = p.run_id
-     GROUP BY p.run_id
-     ORDER BY p.rowid DESC LIMIT 10`
-  ).all();
+  const cicd = await fetchCicdPipelineRunsForOverview(env);
   return jsonResponse({ deployments: deployments || [], cicd_runs: cicd || [] });
 }
 

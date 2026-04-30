@@ -75,6 +75,7 @@ import { handleAuthApi } from './api/auth';
 import { handleHealthCheck } from './api/health';
 import { handleVaultApi } from './api/vault';
 import { runIntegritySnapshot } from './api/integrity';
+import { runMasterDailyRetention } from './core/retention.js';
 import { handleDashboardApi } from './api/dashboard';
 import { handleMailApi } from './api/mail';
 import { handleLearnApi } from './api/learn';
@@ -140,6 +141,19 @@ export default {
         return handleHealthCheck(request, env);
       }
 
+      if (pathLower === '/api/admin/run-retention' && request.method === 'POST') {
+        const { verifyInternalApiSecret, jsonResponse } = await import('./core/auth.js');
+        if (!verifyInternalApiSecret(request, env)) {
+          return jsonResponse({ error: 'Unauthorized' }, 401);
+        }
+        const out = await runMasterDailyRetention(env);
+        return jsonResponse({
+          rollups: out.rollups,
+          purges: out.purges,
+          duration_ms: out.duration_ms,
+        });
+      }
+
       // 1. Provider Colors (D1-driven palette registry)
       if (pathLower === '/api/provider-colors' && request.method === 'GET') {
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -159,14 +173,10 @@ export default {
 
 
       if (pathLower.startsWith('/api/collab/room/')) {
-        const upgrade = request.headers.get('Upgrade') || '';
-        if (upgrade.toLowerCase() === 'websocket') {
-          const [client, server] = Object.values(new WebSocketPair());
-          server.accept();
-          server.close(1001, 'collab_stub');
-          return new Response(null, { status: 101, webSocket: client });
-        }
-        return new Response(null, { status: 204 });
+        return jsonResponse(
+          { status: 'unavailable', reason: 'collaboration_suspended' },
+          503,
+        );
       }
 
       const ASSET_ROUTES = {
@@ -524,12 +534,16 @@ export default {
    */
   async scheduled(event, env, ctx) {
     console.log('[Cron] Execution starting:', event.cron);
-    if (event.cron === '0 0 * * *') {
-      // Daily cleanup task
-    }
     ctx.waitUntil(
       runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
     );
+    if (event.cron === '0 0 * * *') {
+      ctx.waitUntil(
+        Promise.allSettled([runMasterDailyRetention(env)]).then((results) => {
+          console.log('[retention] rollup complete', { results });
+        })
+      );
+    }
   },
 
   /**

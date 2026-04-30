@@ -271,16 +271,12 @@ export async function handleRequest(request, env, ctx) {
     return handleAccessEvaluate(request, env, service);
   }
 
-  // ── Collab WebSocket — stubbed (IAM_COLLAB DO suspended) ─
+  // ── Collab room — IAM_COLLAB not wired on this edge path; explicit 503 for clients ─
   if (path.startsWith('/api/collab/room/')) {
-    const upgrade = request.headers.get('Upgrade') || '';
-    if (upgrade.toLowerCase() === 'websocket') {
-      const [client, server] = Object.values(new WebSocketPair());
-      server.accept();
-      server.close(1001, 'collab_stub');
-      return new Response(null, { status: 101, webSocket: client });
-    }
-    return new Response(null, { status: 204 });
+    return jsonResponse(
+      { status: 'unavailable', reason: 'collaboration_suspended' },
+      503,
+    );
   }
 
   // ── Internal / Webhook Routes (no auth required) ───────────────────────────

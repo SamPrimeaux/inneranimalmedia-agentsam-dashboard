@@ -67,9 +67,26 @@ export const PlaywrightConsole: React.FC = () => {
     };
 
     useEffect(() => {
-        fetchJobs();
-        const interval = setInterval(fetchJobs, 10000); 
-        return () => clearInterval(interval);
+        let interval: ReturnType<typeof setInterval> | null = null;
+        const start = () => {
+            if (interval) clearInterval(interval);
+            interval = null;
+            if (typeof document !== 'undefined' && document.hidden) return;
+            void fetchJobs();
+            interval = setInterval(fetchJobs, 30_000);
+        };
+        start();
+        const onVis = () => {
+            if (typeof document !== 'undefined' && document.hidden) {
+                if (interval) clearInterval(interval);
+                interval = null;
+            } else start();
+        };
+        document.addEventListener('visibilitychange', onVis);
+        return () => {
+            document.removeEventListener('visibilitychange', onVis);
+            if (interval) clearInterval(interval);
+        };
     }, []);
 
     const handleLaunchJob = async (e: React.FormEvent) => {

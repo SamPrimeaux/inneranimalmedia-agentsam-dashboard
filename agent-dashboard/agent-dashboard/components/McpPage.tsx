@@ -619,11 +619,27 @@ export const McpPage: React.FC = () => {
     } catch { /* silent */ }
   }, []);
 
-  useEffect(() => { void loadAgentStatus(); }, [loadAgentStatus]);
-
   useEffect(() => {
-    const t = setInterval(() => void loadAgentStatus(), 5000);
-    return () => clearInterval(t);
+    let t: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (t) clearInterval(t);
+      t = null;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void loadAgentStatus();
+      t = setInterval(() => void loadAgentStatus(), 30_000);
+    };
+    start();
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (t) clearInterval(t);
+        t = null;
+      } else start();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      if (t) clearInterval(t);
+    };
   }, [loadAgentStatus]);
 
   const resetStaleSession = useCallback(async (sessionRowId: string) => {

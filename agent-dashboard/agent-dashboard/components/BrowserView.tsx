@@ -1041,16 +1041,64 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
     };
   }, []);
 
-  // ── WebSocket bridge to IAM_COLLAB ──────────────────────────────────────────
-  useEffect(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/api/collab/room/browser`;
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-    let reconnectAttempts = 0;
+  // ── WebSocket bridge to IAM_COLLAB (exponential backoff; no retry storm on stub/503) ─
+  const [collabBridge, setCollabBridge] = useState<'live' | 'offline' | 'unavailable'>('live');
 
-    const connect = () => {
-      ws = new WebSocket(wsUrl);
+  useEffect(() => {
+    const host = window.location.host;
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/api/collab/room/browser`;
+    const httpProbeUrl = `${window.location.protocol === 'https:' ? 'https:' : 'http:'}//${host}/api/collab/room/browser`;
+
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectAttempts = 0;
+    const maxReconnects = 5;
+    const delayMs = (n: number) =>
+      n <= 0 ? 5000 : n === 1 ? 15000 : n === 2 ? 60000 : 300000;
+
+    let cancelled = false;
+
+    const stopReconnects = (reason: 'offline' | 'unavailable') => {
+      setCollabBridge(reason);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled || reconnectAttempts >= maxReconnects) {
+        if (reconnectAttempts >= maxReconnects) stopReconnects('offline');
+        return;
+      }
+      const wait = delayMs(reconnectAttempts);
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(() => void connect(), wait);
+    };
+
+    const connect = async () => {
+      if (cancelled) return;
+
+      try {
+        const probe = await fetch(httpProbeUrl, { credentials: 'same-origin', cache: 'no-store' });
+        if (probe.status === 503) {
+          stopReconnects('unavailable');
+          return;
+        }
+        if (probe.status === 204) {
+          stopReconnects('unavailable');
+          return;
+        }
+      } catch {
+        stopReconnects('unavailable');
+        return;
+      }
+
+      if (cancelled) return;
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        scheduleReconnect();
+        return;
+      }
 
       ws.onmessage = (e) => {
         try {
@@ -1061,7 +1109,6 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
               break;
             case 'screenshot':
               if (msg.screenshot_url) {
-                // Surface to primary pane via event
                 window.dispatchEvent(new CustomEvent('iam-browser-screenshot', {
                   detail: { screenshot_url: msg.screenshot_url },
                 }));
@@ -1078,21 +1125,42 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
         } catch { /* ignore */ }
       };
 
-      ws.onerror  = () => {};
-      ws.onclose  = () => {
-        reconnectTimer = setTimeout(connect, Math.min(30000, 5000 * Math.pow(2, reconnectAttempts++)));
+      ws.onerror = () => {};
+      ws.onopen = () => {
+        setCollabBridge('live');
+        reconnectAttempts = 0;
+      };
+      ws.onclose = () => {
+        ws = null;
+        if (cancelled) return;
+        scheduleReconnect();
       };
     };
 
-    connect();
+    void connect();
+
     return () => {
-      clearTimeout(reconnectTimer);
-      try { ws?.close(); } catch { /* ignore */ }
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try {
+        ws?.close();
+      } catch { /* ignore */ }
     };
   }, []);
 
   return (
-    <div className="flex w-full h-full overflow-hidden bg-[var(--bg-app)]">
+    <div className="flex w-full h-full overflow-hidden bg-[var(--bg-app)] flex-col">
+      {collabBridge !== 'live' && (
+        <div
+          className="shrink-0 px-2 py-1 text-[11px] text-center border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-muted)]"
+          role="status"
+        >
+          {collabBridge === 'unavailable'
+            ? 'Collaboration bridge unavailable (live sync off).'
+            : 'Collaboration offline — live browser sync paused.'}
+        </div>
+      )}
+      <div className="flex w-full min-h-0 flex-1 overflow-hidden">
       <div className={`flex flex-col min-h-0 min-w-0 overflow-hidden transition-all duration-200 ${
         secondaryUrl ? 'w-1/2 border-r border-[var(--border-subtle)]' : 'w-full'
       }`}>
@@ -1117,6 +1185,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
           />
         </div>
       )}
+      </div>
     </div>
   );
 };

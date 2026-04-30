@@ -279,6 +279,7 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
   const iceRef          = useRef<RTCIceServer[]>([]);
   const pollTimer       = useRef<number | null>(null);
   const hbTimer         = useRef<number | null>(null);
+  const meetVisCleanup  = useRef<(() => void) | null>(null);
   const knownSessions   = useRef<Set<string>>(new Set());
   const remoteStreams    = useRef<Map<string, MediaStream>>(new Map());
   const chatEnd         = useRef<HTMLDivElement>(null);
@@ -422,7 +423,6 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
       setPhase('in-call');
       startPolling(rid);
-      startHb(rid);
     } catch (err: any) {
       setError(err.message || 'Failed to join'); setPhase('lobby');
     }
@@ -461,7 +461,18 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
 
   // ── Polling / HB ──────────────────────────────────────────────────────
 
+  /** In-call sync: poll room state (5s) + presence heartbeat (30s); pause when tab hidden. */
   const startPolling = (rid: string) => {
+    meetVisCleanup.current?.();
+    meetVisCleanup.current = null;
+    if (pollTimer.current) clearInterval(pollTimer.current);
+    if (hbTimer.current) clearInterval(hbTimer.current);
+    pollTimer.current = null;
+    hbTimer.current = null;
+
+    const POLL_MS = 5000;
+    const HB_MS = 30000;
+
     const poll = async () => {
       if (!rid || rid === 'undefined') return;
       try {
@@ -488,15 +499,36 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
         });
       } catch { /* poll errors ignored */ }
     };
-    poll();
-    pollTimer.current = window.setInterval(poll, 2000);
-  };
 
-  const startHb = (rid: string) => {
-    hbTimer.current = window.setInterval(() => {
-      if (!rid || rid === 'undefined') return;
-      api(`/room/${rid}/heartbeat`, { method: 'POST' }).catch(() => {});
-    }, 5000);
+    const startTimers = () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      if (hbTimer.current) clearInterval(hbTimer.current);
+      pollTimer.current = null;
+      hbTimer.current = null;
+      if (typeof document !== 'undefined' && document.hidden) return;
+
+      void poll();
+      pollTimer.current = window.setInterval(poll, POLL_MS);
+      hbTimer.current = window.setInterval(() => {
+        if (!rid || rid === 'undefined') return;
+        api(`/room/${rid}/heartbeat`, { method: 'POST' }).catch(() => {});
+      }, HB_MS);
+    };
+
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (pollTimer.current) clearInterval(pollTimer.current);
+        if (hbTimer.current) clearInterval(hbTimer.current);
+        pollTimer.current = null;
+        hbTimer.current = null;
+      } else {
+        startTimers();
+      }
+    };
+
+    startTimers();
+    document.addEventListener('visibilitychange', onVis);
+    meetVisCleanup.current = () => document.removeEventListener('visibilitychange', onVis);
   };
 
   const subscribeTo = async (rid: string, p: Participant) => {
@@ -559,6 +591,8 @@ export default function MeetPage({ onContextReady }: { onContextReady?: (ctx: Me
   // ── End call ───────────────────────────────────────────────────────────
 
   const endCall = useCallback(async (silent = false) => {
+    meetVisCleanup.current?.();
+    meetVisCleanup.current = null;
     if (pollTimer.current) clearInterval(pollTimer.current);
     if (hbTimer.current)   clearInterval(hbTimer.current);
     localRef.current?.getTracks().forEach(t => t.stop());

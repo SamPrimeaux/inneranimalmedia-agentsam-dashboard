@@ -4095,6 +4095,7 @@ const worker = {
                   SELECT id, content, workspace_id
                   FROM agent_memory
                   WHERE embedding IS NULL
+                    AND length(content) <= 4000
                   LIMIT ${limit}
                 `;
                 if (!rows || rows.length === 0) break;

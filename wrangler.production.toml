@@ -147,6 +147,8 @@ dataset = "inneranimalmedia"
 
 [vars]
 OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+SUPABASE_S3_ENDPOINT = "https://dpmuvynqixblxsilnlut.storage.supabase.co/storage/v1/s3"
+SUPABASE_S3_REGION = "us-east-2"
 RAG_DOCUMENTS_PROJECT_ID = "inneranimalmedia"
 RAG_AGENT_ID = "agent-sam"
 RAG_OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"

@@ -4035,73 +4035,82 @@ const worker = {
         const body = await request.json().catch(() => ({}));
         const mode = String(body.mode || '').trim().toLowerCase();
         const wsIdDefault = resolveWorkspaceId(env, body || {});
+        const limit = Math.min(200, Math.max(1, Number(body.limit) || 20));
+        const maxBatches = Math.min(500, Math.max(1, Number(body.max_batches) || 1));
+        const processAll = body.process_all === true || body.processAll === true;
         let processed = 0;
         let errors = 0;
 
         if (mode === 'd1') {
-          const rows = await env.DB.prepare(
-            `SELECT id, content, knowledge_id, chunk_index, workspace_id
-             FROM ai_knowledge_chunks
-             WHERE embedding_vector IS NULL
-                OR embedding_model != ?
-             LIMIT 20`
-          ).bind(IAM_EMBED_MODEL).all().catch(() => ({ results: [] }));
-          for (const r of (rows.results || [])) {
-            try {
-              const content = String(r.content || '');
-              if (!content) continue;
-              const wsId = r.workspace_id || wsIdDefault;
-              const vec = await generateEmbedding(env, content);
-              await env.DB.prepare(
-                `UPDATE ai_knowledge_chunks SET
-                  embedding_vector=?,
-                  embedding_model=?,
-                  is_indexed=1,
-                  workspace_id=COALESCE(NULLIF(workspace_id,''), ?)
-                 WHERE id=?`
-              ).bind(JSON.stringify(vec), IAM_EMBED_MODEL, wsId, r.id).run().catch(() => { });
-              if (env.VECTORIZE_INDEX) {
-                await env.VECTORIZE_INDEX.upsert([{
-                  id: r.id,
-                  values: vec,
-                  namespace: wsId,
-                  metadata: {
-                    knowledge_id: r.knowledge_id,
-                    chunk_index: r.chunk_index,
-                    workspace_id: wsId,
-                  }
-                }]).catch(() => { });
-              }
-              processed++;
-            } catch (_) { errors++; }
+          for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+            const rows = await env.DB.prepare(
+              `SELECT id, content, knowledge_id, chunk_index, workspace_id
+               FROM ai_knowledge_chunks
+               WHERE embedding_vector IS NULL
+                  OR embedding_model != ?
+               LIMIT ?`
+            ).bind(IAM_EMBED_MODEL, limit).all().catch(() => ({ results: [] }));
+            const batchRows = rows.results || [];
+            if (batchRows.length === 0) break;
+            for (const r of batchRows) {
+              try {
+                const content = String(r.content || '');
+                if (!content) continue;
+                const wsId = r.workspace_id || wsIdDefault;
+                const vec = await generateEmbedding(env, content);
+                await env.DB.prepare(
+                  `UPDATE ai_knowledge_chunks SET
+                    embedding_vector=?,
+                    embedding_model=?,
+                    is_indexed=1,
+                    workspace_id=COALESCE(NULLIF(workspace_id,''), ?)
+                   WHERE id=?`
+                ).bind(JSON.stringify(vec), IAM_EMBED_MODEL, wsId, r.id).run().catch(() => { });
+                if (env.VECTORIZE_INDEX) {
+                  await env.VECTORIZE_INDEX.upsert([{
+                    id: r.id,
+                    values: vec,
+                    namespace: wsId,
+                    metadata: {
+                      knowledge_id: r.knowledge_id,
+                      chunk_index: r.chunk_index,
+                      workspace_id: wsId,
+                    }
+                  }]).catch(() => { });
+                }
+                processed++;
+              } catch (_) { errors++; }
+            }
           }
           return jsonResponse({ processed, errors, mode: 'd1' });
         }
 
         if (mode === 'supabase') {
-          const limit = 20;
           if (env.HYPERDRIVE?.connectionString) {
             try {
               const { neon } = await import('@neondatabase/serverless');
               const sql = neon(env.HYPERDRIVE.connectionString);
-              const rows = await sql`
-                SELECT id, content, workspace_id
-                FROM agent_memory
-                WHERE embedding IS NULL
-                LIMIT ${limit}
-              `;
-              for (const r of rows || []) {
-                try {
-                  const wsId = r.workspace_id || wsIdDefault;
-                  const vec = await generateEmbedding(env, String(r.content || ''));
-                  await sql`
-                    UPDATE agent_memory
-                    SET embedding = ${JSON.stringify(vec)}::vector,
-                        workspace_id = COALESCE(workspace_id, ${wsId})
-                    WHERE id = ${r.id}
-                  `;
-                  processed++;
-                } catch (_) { errors++; }
+              for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+                const rows = await sql`
+                  SELECT id, content, workspace_id
+                  FROM agent_memory
+                  WHERE embedding IS NULL
+                  LIMIT ${limit}
+                `;
+                if (!rows || rows.length === 0) break;
+                for (const r of rows || []) {
+                  try {
+                    const wsId = r.workspace_id || wsIdDefault;
+                    const vec = await generateEmbedding(env, String(r.content || ''));
+                    await sql`
+                      UPDATE agent_memory
+                      SET embedding = ${JSON.stringify(vec)}::vector,
+                          workspace_id = COALESCE(workspace_id, ${wsId})
+                      WHERE id = ${r.id}
+                    `;
+                    processed++;
+                  } catch (_) { errors++; }
+                }
               }
               return jsonResponse({ processed, errors, mode: 'supabase', source: 'hyperdrive' });
             } catch (e) {
@@ -4110,28 +4119,31 @@ const worker = {
           }
 
           if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-            const sel = await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?select=id,content,workspace_id&embedding=is.null&limit=${limit}`, {
+            for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+              const sel = await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?select=id,content,workspace_id&embedding=is.null&limit=${limit}`, {
               headers: {
                 'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
                 'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
               }
-            }).then(r => r.json()).catch(() => []);
-            for (const row of sel || []) {
-              try {
-                const wsId = row.workspace_id || wsIdDefault;
-                const vec = await generateEmbedding(env, String(row.content || ''));
-                await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?id=eq.${encodeURIComponent(row.id)}`, {
-                  method: 'PATCH',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-                    'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
-                    'Prefer': 'return=minimal',
-                  },
-                  body: JSON.stringify({ embedding: vec, workspace_id: wsId, project_id: wsId }),
-                }).catch(() => { });
-                processed++;
-              } catch (_) { errors++; }
+              }).then(r => r.json()).catch(() => []);
+              if (!sel || sel.length === 0) break;
+              for (const row of sel || []) {
+                try {
+                  const wsId = row.workspace_id || wsIdDefault;
+                  const vec = await generateEmbedding(env, String(row.content || ''));
+                  await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?id=eq.${encodeURIComponent(row.id)}`, {
+                    method: 'PATCH',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                      'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
+                      'Prefer': 'return=minimal',
+                    },
+                    body: JSON.stringify({ embedding: vec, workspace_id: wsId, project_id: wsId }),
+                  }).catch(() => { });
+                  processed++;
+                } catch (_) { errors++; }
+              }
             }
             return jsonResponse({ processed, errors, mode: 'supabase', source: 'rest' });
           }
@@ -27177,6 +27189,66 @@ async function runSpendLedgerRollup(env) {
   console.log(`[rollup] Completed. ${months.length} provider/month combos rolled up.`);
 }
 
+async function runAgentsamWebhookWeeklyRollup(env) {
+  if (!env?.DB) return;
+  const now = new Date();
+  const thisMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const day = thisMonday.getUTCDay();
+  thisMonday.setUTCDate(thisMonday.getUTCDate() - ((day + 6) % 7));
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+  const weekStart = lastMonday.toISOString().slice(0, 10);
+  const weekEnd = thisMonday.toISOString().slice(0, 10);
+  try {
+    const stats = await env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='processed' THEN 1 ELSE 0 END) AS processed,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+    `).bind(weekStart, weekEnd).first().catch(() => null);
+    const bySource = await env.DB.prepare(`
+      SELECT source, COUNT(*) AS c
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+      GROUP BY source
+      ORDER BY c DESC
+      LIMIT 50
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
+    const byType = await env.DB.prepare(`
+      SELECT event_type, COUNT(*) AS c
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+      GROUP BY event_type
+      ORDER BY c DESC
+      LIMIT 100
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
+    const perSourceJson = JSON.stringify(Object.fromEntries((bySource.results || []).map(r => [r.source || 'unknown', Number(r.c) || 0])));
+    const perTypeJson = JSON.stringify(Object.fromEntries((byType.results || []).map(r => [r.event_type || 'unknown', Number(r.c) || 0])));
+
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO agentsam_webhook_weekly
+        (tenant_id, week_start, week_end, total_events, processed_count, failed_count,
+         per_source_json, per_event_type_json, rolled_up_at)
+       VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+    ).bind(
+      weekStart,
+      weekEnd,
+      Number(stats?.total) || 0,
+      Number(stats?.processed) || 0,
+      Number(stats?.failed) || 0,
+      perSourceJson,
+      perTypeJson
+    ).run().catch(() => { });
+  } catch (e) {
+    console.warn('[cron] agentsam_webhook_weekly rollup', e?.message ?? e);
+  }
+}
+
 worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '*/30 * * * *') {
     ctx.waitUntil(processQueues(env));
@@ -27203,6 +27275,10 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(writeDailySnapshot(env, 'cron_midnight').catch(() => { }));
     ctx.waitUntil(sendDailyDigest(env));
     return;
+  }
+  if (event.cron === '10 0 * * *') {
+    if (!env?.DB) return;
+    ctx.waitUntil(writeDailySnapshot(env, 'cron_0010').catch(() => { }));
   }
   if (event.cron === '0 6 * * *') {
     console.log('[cron] Starting daily doc sync (compact -> knowledge sync -> Vectorize index)');
@@ -27233,6 +27309,12 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(
       runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
     );
+  }
+  if (event.cron === '10 0 * * 1') {
+    if (env?.DB) {
+      ctx.waitUntil(runDeploymentsWeeklyRollup(env));
+      ctx.waitUntil(runAgentsamWebhookWeeklyRollup(env));
+    }
   }
   if (event.cron === '30 13 * * *') {
     ctx.waitUntil(sendDailyPlanEmail(env));

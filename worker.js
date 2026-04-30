@@ -3257,9 +3257,28 @@ const worker = {
             deploymentId: deployId,
             environment: 'production',
             gitHash: gitHash || 'unknown',
+            branch: body.branch || 'production',
             versionId: versionId || deployId,
             description: notes || 'deploy via script',
+            workerName: body.worker_name || body.workerName || 'inneranimalmedia',
+            actor: body.actor || 'sam_primeaux',
+            notes,
           });
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO cicd_events
+              (tenant_id, source, event_type, git_branch, git_commit_sha,
+               git_commit_message, git_actor, worker_name, triggered_run_id)
+             VALUES
+              ('tenant_sam_primeaux', 'github_webhook', 'workflow_run_completed',
+               ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            (body.branch || 'production'),
+            (body.commit_sha || body.commitSha || gitHash || null),
+            (body.notes || body.deployment_notes || notes || null),
+            (body.actor || 'sam_primeaux'),
+            (body.worker_name || body.workerName || 'inneranimalmedia'),
+            (body.run_id || body.runId || null)
+          ).run().catch(() => { });
           if (ctx && typeof ctx.waitUntil === 'function') {
             ctx.waitUntil(runPostDeployQualityChecks(env, deployId).catch(() => { }));
           } else {
@@ -3290,6 +3309,7 @@ const worker = {
         } catch (_) { }
         const deployId = (body.deploy_id != null ? String(body.deploy_id) : '').trim();
         if (!deployId) return jsonResponse({ error: 'deploy_id required' }, 400);
+        const commitSha = (body.commit_sha != null ? String(body.commit_sha) : (body.commitSha != null ? String(body.commitSha) : '')).trim();
         const statusVal = (body.status != null ? String(body.status) : 'success').trim();
         const workerName = body.worker_name != null ? String(body.worker_name).trim() : null;
         const versionId = body.version_id != null ? String(body.version_id).trim() : '';
@@ -3298,6 +3318,23 @@ const worker = {
         const notesPatch = body.notes != null ? String(body.notes).slice(0, 4000) : null;
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         try {
+          await env.DB.prepare(
+            `UPDATE cicd_runs SET
+              phase_promote_status='success',
+              phase_promote_completed_at=unixepoch(),
+              cf_deployment_id=?,
+              status='success',
+              conclusion='success',
+              completed_at=unixepoch(),
+              updated_at=unixepoch()
+             WHERE id=? OR git_commit_sha=?
+             ORDER BY queued_at DESC
+             LIMIT 1`
+          ).bind(
+            versionId,
+            deployId,
+            commitSha
+          ).run().catch(() => { });
           const run = await env.DB.prepare(
             `UPDATE deployments SET
               status = ?,
@@ -7123,22 +7160,62 @@ function appendCidiPipelineRunFromDeploy(env, {
   deploymentId,
   environment = 'production',
   gitHash = 'unknown',
+  branch = 'production',
   versionId = null,
   description = 'deploy via script',
+  workerName = 'inneranimalmedia',
+  actor = null,
+  notes = null,
 }) {
   if (!env?.DB || !deploymentId) return;
+  const envName = String(environment || 'production');
+  const commitSha = String(gitHash || 'unknown');
+  const br = String(branch || 'production');
+  const wName = String(workerName || 'inneranimalmedia');
+  const gitActor = actor != null ? String(actor) : null;
+  const commitMsg = notes != null ? String(notes) : String(description || '').slice(0, 4000);
   env.DB.prepare(
-    `INSERT OR IGNORE INTO cicd_pipeline_runs
-      (run_id, branch, env, status, commit_hash,
-       worker_version_id, notes, created_at)
-    VALUES (?, 'main', ?, 'passed', ?, ?, ?, datetime('now'))`
+    `INSERT OR IGNORE INTO cicd_runs (
+      id, tenant_id, environment, git_commit_sha, git_branch, worker_name,
+      status, conclusion,
+      phase_promote_status, phase_promote_completed_at,
+      triggered_by, trigger_source,
+      git_actor, git_commit_message,
+      cf_deployment_id,
+      queued_at, completed_at, updated_at
+    )
+    SELECT
+      ('run_' || lower(hex(randomblob(8)))) AS id,
+      'tenant_sam_primeaux' AS tenant_id,
+      ? AS environment,
+      ? AS git_commit_sha,
+      ? AS git_branch,
+      ? AS worker_name,
+      'success' AS status,
+      'success' AS conclusion,
+      'success' AS phase_promote_status,
+      unixepoch() AS phase_promote_completed_at,
+      'github_push' AS triggered_by,
+      'webhook' AS trigger_source,
+      ? AS git_actor,
+      ? AS git_commit_message,
+      ? AS cf_deployment_id,
+      unixepoch() AS queued_at,
+      unixepoch() AS completed_at,
+      unixepoch() AS updated_at
+    WHERE NOT EXISTS (
+      SELECT 1 FROM cicd_runs WHERE git_commit_sha = ? LIMIT 1
+    )`
   ).bind(
-    'cidi_' + String(deploymentId),
-    String(environment || 'production'),
-    String(gitHash || 'unknown'),
+    envName,
+    commitSha,
+    br,
+    wName,
+    gitActor,
+    commitMsg,
     String(versionId || deploymentId),
-    String(description || 'deploy via script')
-  ).run().catch((e) => console.warn('[cicd_pipeline_runs]', e?.message ?? e));
+    commitSha
+  ).run().catch((e) => console.warn('[cicd_runs]', e?.message ?? e));
 }
 
 async function runPostDeployQualityChecks(env, deploymentId) {
@@ -7207,7 +7284,7 @@ async function runPostDeployQualityChecks(env, deploymentId) {
 async function writeDailySnapshot(env, reason = 'cron') {
   if (!env?.DB) return;
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
-  const [tt, dt] = await Promise.all([
+  const [tt, dt, providerBreakdown, modelBreakdown] = await Promise.all([
     safe(env.DB.prepare(
       `SELECT COALESCE(SUM(tokens_input),0) AS tokens_in,
         COALESCE(SUM(tokens_output),0) AS tokens_out,
@@ -7219,14 +7296,20 @@ async function writeDailySnapshot(env, reason = 'cron') {
        FROM deployment_tracking
        WHERE created_at >= date('now')`
     ).first()),
+    env.DB.prepare("SELECT provider, COUNT(*) as c, SUM(cost_estimate) as cost FROM ai_usage_log WHERE date=date('now') GROUP BY provider").all().catch(() => ({ results: [] })),
+    env.DB.prepare("SELECT model, COUNT(*) as c FROM ai_usage_log WHERE date=date('now') GROUP BY model ORDER BY c DESC LIMIT 5").all().catch(() => ({ results: [] })),
   ]);
+  const providerJson = JSON.stringify(Object.fromEntries((providerBreakdown?.results || []).map(r => [r.provider, { calls: r.c, cost: r.cost }])));
+  const modelJson = JSON.stringify(Object.fromEntries((modelBreakdown?.results || []).map(r => [r.model, r.c])));
   const digestSummary = `snapshot:${String(reason)} spend $${tt?.cost_usd ?? 0} | deploys ${dt?.total ?? 0}`;
   await env.DB.prepare(
     `INSERT OR REPLACE INTO daily_snapshots (
       snapshot_date, deploy_count, tokens_in, tokens_out, cost_usd,
+      provider_breakdown, model_breakdown,
       active_workflows, digest_text, created_at, updated_at
     ) VALUES (
       date('now'), ?, ?, ?, ?,
+      ?, ?,
       15, ?, unixepoch(), unixepoch()
     )`
   ).bind(
@@ -7234,6 +7317,8 @@ async function writeDailySnapshot(env, reason = 'cron') {
     tt?.tokens_in ?? 0,
     tt?.tokens_out ?? 0,
     tt?.cost_usd ?? 0,
+    providerJson,
+    modelJson,
     digestSummary
   ).run().catch(() => { });
 
@@ -7248,8 +7333,16 @@ async function writeDailySnapshot(env, reason = 'cron') {
   ]);
   await env.DB.prepare("INSERT OR REPLACE INTO workspace_usage_metrics (workspace_id,metric_date,ai_calls,tokens_used,cost_estimate_cents,tool_calls,mcp_calls,deployments_count,rollup_source,updated_at) VALUES (?,date('now'),?,?,?,?,?,?,'daily_cron',unixepoch())").bind(_wsId, _wai?.c || 0, _wai?.t || 0, (_wai?.cost || 0) * 100, _wtc?.c || 0, _wmc?.c || 0, _wdc?.c || 0).run().catch(() => { });
 
-  // agentsam_tool_stats_compacted
-  await env.DB.prepare("INSERT OR REPLACE INTO agentsam_tool_stats_compacted (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at) SELECT tenant_id,tool_name,COUNT(*),SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),MIN(created_at),MAX(created_at),unixepoch() FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name").run().catch(() => { });
+  // agentsam_tool_stats_compacted (backfill job wrapper)
+  const _bjToolsId = 'bj_' + Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by) VALUES (?,?,?,'cron','running',unixepoch(),?)")
+    .bind(_bjToolsId, 'agentsam_tool_stats_compacted_rollup', 'agentsam_tool_stats_compacted', 'system')
+    .run().catch(() => { });
+  const _toolsRes = await env.DB.prepare("INSERT OR REPLACE INTO agentsam_tool_stats_compacted (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at) SELECT tenant_id,tool_name,COUNT(*),SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),MIN(created_at),MAX(created_at),unixepoch() FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name").run().catch(() => null);
+  const _toolsInserted = Number(_toolsRes?.meta?.changes ?? _toolsRes?.changes ?? 0) || 0;
+  await env.DB.prepare("UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?")
+    .bind(_toolsInserted, _toolsInserted, _bjToolsId)
+    .run().catch(() => { });
 
   // agentsam_health_daily
   const _hs = await env.DB.prepare("SELECT COUNT(*) as total,SUM(CASE WHEN health_status='green' THEN 1 ELSE 0 END) as g,SUM(CASE WHEN health_status='yellow' THEN 1 ELSE 0 END) as y,SUM(CASE WHEN health_status='red' THEN 1 ELSE 0 END) as r,ROUND(AVG(tools_degraded),2) as ad,ROUND(AVG(tel_cost_24h),6) as ac FROM system_health_snapshots WHERE snapshot_at>=unixepoch('now','start of day')").first().catch(() => null);
@@ -26666,7 +26759,11 @@ async function runWebhookEventsMaintenanceCron(env) {
     console.warn('[cron] webhook_events payload compress', e?.message ?? e);
   }
   try {
-    await env.DB.prepare(
+    const _bjId = 'bj_' + Date.now();
+    await env.DB.prepare("INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by) VALUES (?,?,?,'cron','running',unixepoch(),?)")
+      .bind(_bjId, 'webhook_event_stats_rollup', 'webhook_event_stats', 'system')
+      .run().catch(() => { });
+    const _res = await env.DB.prepare(
       `INSERT OR REPLACE INTO webhook_event_stats
         (date, source, event_type, total, succeeded, failed)
        SELECT
@@ -26679,7 +26776,11 @@ async function runWebhookEventsMaintenanceCron(env) {
        FROM webhook_events
        WHERE date(received_at) = date('now', '-1 day')
        GROUP BY date, source, event_type`
-    ).run();
+    ).run().catch(() => null);
+    const inserted = Number(_res?.meta?.changes ?? _res?.changes ?? 0) || 0;
+    await env.DB.prepare("UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?")
+      .bind(inserted, inserted, _bjId)
+      .run().catch(() => { });
     console.log('[cron] webhook_event_stats rollup completed');
   } catch (e) {
     console.warn('[cron] webhook_event_stats rollup', e?.message ?? e);

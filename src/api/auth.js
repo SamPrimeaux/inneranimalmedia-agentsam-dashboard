@@ -194,7 +194,6 @@ async function handleLogout(request, url, env) {
 }
 
 /**
- * /**
  * Shared Session Finalizer
  */
 async function finishLogin(request, url, env, userId, redirectPath) {

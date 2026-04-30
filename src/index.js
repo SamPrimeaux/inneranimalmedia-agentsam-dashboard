@@ -81,6 +81,11 @@ import { handleLearnApi } from './api/learn';
 import { handleOnboardingApi } from './api/onboarding';
 import { handleOAuthApi } from './api/oauth';
 import { handleSearchApi } from './api/search';
+import { handleIntakeApi } from './api/intake';
+import { handleCadApi } from './api/cad';
+import { handleStudioSessionApi } from './api/studio-session';
+import { handleStatusBundle } from './api/status-bundle';
+import { handleCursorAgentApi } from './api/cursor-agent';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -326,6 +331,26 @@ export default {
         return handleVaultApi(request, new URL(request.url), env, ctx);
       }
 
+      // Agent Sam Studio (before generic /api/agent/* dashboard)
+      if (pathLower === '/api/dashboard/status-bundle' && request.method === 'GET') {
+        return handleStatusBundle(request, url, env, ctx);
+      }
+      if (pathLower.startsWith('/api/agent/intake')) {
+        return handleIntakeApi(request, url, env, ctx);
+      }
+      if (pathLower.startsWith('/api/cad/') || pathLower === '/api/cad') {
+        return handleCadApi(request, url, env, ctx);
+      }
+      if (pathLower.startsWith('/api/studio/') || pathLower === '/api/studio') {
+        return handleStudioSessionApi(request, url, env, ctx);
+      }
+      if (pathLower.startsWith('/api/artifacts')) {
+        return handleStudioSessionApi(request, url, env, ctx);
+      }
+      if (pathLower.startsWith('/api/cursor/')) {
+        return handleCursorAgentApi(request, url, env, ctx);
+      }
+
       if (pathLower.startsWith('/api/agent') || pathLower.startsWith('/api/terminal') || pathLower.startsWith('/api/chat') || pathLower.startsWith('/api/playwright')) {
         const dashRes = await handleDashboardApi(request, url, env, ctx);
         if (dashRes.status !== 404) return dashRes;
@@ -463,6 +488,14 @@ export default {
           }, 404);
         }
         return legacyRes;
+      }
+
+      if (!pathLower.startsWith('/api/')) {
+        const { globeErrorPage } = await import('./core/error-pages');
+        return new Response(
+          globeErrorPage({ status: 404, title: 'Page not found', url: url.pathname }),
+          { status: 404, headers: { 'Content-Type': 'text/html;charset=UTF-8' } },
+        );
       }
 
       return new Response('Not Found', { status: 404 });

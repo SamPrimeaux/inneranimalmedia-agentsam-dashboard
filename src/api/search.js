@@ -52,8 +52,20 @@ export async function handleSearchApi(request, url, env, ctx) {
         headers,
         body: JSON.stringify(requestBody)
       });
-      
-      const data = await upstream.json();
+
+      const raw = await upstream.text();
+      let data;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        return jsonResponse(
+          {
+            error: 'AI Search returned non-JSON response',
+            status: upstream.status,
+          },
+          upstream.ok ? 502 : upstream.status,
+        );
+      }
       return jsonResponse(data, upstream.status);
     } catch (e) {
       return jsonResponse({ error: 'AI Search request failed', detail: e.message }, 502);

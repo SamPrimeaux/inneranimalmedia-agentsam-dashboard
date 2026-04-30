@@ -171,20 +171,20 @@ export default {
 
 
 
-      // Collab workspace room -> IAM_COLLAB DO (same room key as worker.js /api/collab/<segment>)
-      if (pathLower.startsWith('/api/collab/room/')) {
-        if (env.IAM_COLLAB) {
-          const rest = pathLower.slice('/api/collab/'.length).replace(/^\/+/, '');
-          const room = decodeURIComponent(rest);
-          if (!room) {
-            return jsonResponse(
-              { ok: false, available: false, reason: 'iam_collab_room_invalid' },
-              400,
-            );
-          }
+      // Collab workspace room -> IAM_COLLAB DO (path segment after /api/collab/; casing preserved)
+      if (/^\/api\/collab\/room\//i.test(path)) {
+        const collabMatch = path.match(/^\/api\/collab\/(.+)$/i);
+        const room = collabMatch ? decodeURIComponent(collabMatch[1]) : '';
+        if (env.IAM_COLLAB && room) {
           const id = env.IAM_COLLAB.idFromName(room);
           const stub = env.IAM_COLLAB.get(id);
           return stub.fetch(request);
+        }
+        if (env.IAM_COLLAB && !room) {
+          return jsonResponse(
+            { ok: false, available: false, reason: 'iam_collab_room_invalid' },
+            400,
+          );
         }
         const upgrade = (request.headers.get('Upgrade') || '').toLowerCase();
         if (upgrade === 'websocket') {

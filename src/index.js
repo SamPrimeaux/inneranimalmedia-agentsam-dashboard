@@ -86,6 +86,7 @@ import { handleCadApi } from './api/cad';
 import { handleStudioSessionApi } from './api/studio-session';
 import { handleStatusBundle } from './api/status-bundle';
 import { handleCursorAgentApi } from './api/cursor-agent';
+import { handleCalendarApi } from './api/calendar.js';
 import legacyWorker from '../worker.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -310,6 +311,10 @@ export default {
       
       if (pathLower.startsWith('/api/search')) {
         return handleSearchApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/calendar')) {
+        return handleCalendarApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/storage')) {

@@ -3,7 +3,7 @@
 **Branch:** `production`  
 **Purpose:** Single source of truth for what shipped locally today, how components fit together, and how teammates stay aligned while iterating.
 
-**Pushed to `origin/production` (2026-04-30):** cumulative from `aee7e16` through tip **`28f6ff2`** (`git pull origin production`).
+**Pushed to `origin/production` (2026-04-30):** cumulative from `aee7e16` through the commits below. **Authoritative tip SHA:** run `git fetch origin && git rev-parse origin/production` after pull (avoids doc drift from doc-only commits).
 
 | Commit | Subject |
 |--------|---------|
@@ -15,6 +15,9 @@
 | `def45d0` | feat(worker): retention cron + shared CI/CD overview fetch |
 | `94fafe2` | docs: record production push commit range |
 | `28f6ff2` | docs: refresh push SHA range table |
+| `81aa8d5` | docs: finalize Cursor sync log commit table |
+
+Further doc-only commits may appear after this table; use `git rev-parse origin/production` for the true tip.
 
 *(Earlier on production:* `aee7e16` *BrowserView / browser trust.)*
 

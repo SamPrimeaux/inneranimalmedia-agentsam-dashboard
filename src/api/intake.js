@@ -3,6 +3,10 @@
  */
 import { getAuthUser, jsonResponse } from '../core/auth.js';
 
+function resolveWorkspaceIdForPlan(env, authUser, body) {
+  return (body?.workspace_id || body?.workspaceId || authUser?.workspace_id || env?.WORKSPACE_ID || '').toString().trim();
+}
+
 export async function handleIntakeApi(request, url, env, ctx) {
   const method = request.method.toUpperCase();
   const path = url.pathname.toLowerCase();
@@ -20,6 +24,8 @@ export async function handleIntakeApi(request, url, env, ctx) {
       const body = await request.json().catch(() => ({}));
       const goal = String(body.goal || '').trim();
       if (!goal) return jsonResponse({ error: 'goal is required' }, 400);
+      const wsId = resolveWorkspaceIdForPlan(env, authUser, body);
+      if (!wsId) return jsonResponse({ error: 'workspace_id required (or configure WORKSPACE_ID)' }, 400);
 
       const planId = 'plan_studio_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 
@@ -108,12 +114,13 @@ Rules:
         INSERT INTO agentsam_plans
           (id, plan_date, title, plan_type, status, morning_brief,
            workspace_id, default_model, created_at, updated_at)
-        VALUES (?, date('now'), ?, 'studio_session', 'active', ?, 'ws_inneranimalmedia',
+        VALUES (?, date('now'), ?, 'studio_session', 'active', ?, ?,
                 'claude-haiku-4-5', unixepoch(), unixepoch())
       `).bind(
         planId,
         goal.slice(0, 120),
         JSON.stringify({ questions: parsed.questions, goal_type: parsed.goal_type, risk_flags: parsed.risk_flags }),
+        wsId,
       ).run();
 
       return jsonResponse({

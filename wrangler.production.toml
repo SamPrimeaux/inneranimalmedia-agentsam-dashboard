@@ -6,6 +6,9 @@ workers_dev = true
 preview_urls = true
 no_bundle = false
 
+[triggers]
+crons = ["10 0 * * *"]
+
 [build]
 command = ""
 

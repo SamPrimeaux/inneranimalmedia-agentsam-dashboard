@@ -2989,8 +2989,15 @@ async function closeWorkSessionAndLog(env, sessionId, tenantId) {
 async function runDeploymentsWeeklyRollup(env) {
   if (!env?.DB) return;
   try {
-    const weekKey = await env.DB.prepare(`SELECT strftime('%Y-W%W','now') as wk`).first().catch(() => null);
-    const wk = weekKey?.wk || new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    // This function is gated to Mondays (UTC) by the scheduler.
+    const thisMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const day = thisMonday.getUTCDay();
+    thisMonday.setUTCDate(thisMonday.getUTCDate() - ((day + 6) % 7)); // move to Monday of current week
+    const lastMonday = new Date(thisMonday);
+    lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+    const weekStart = lastMonday.toISOString().slice(0, 10);
+    const weekEnd = thisMonday.toISOString().slice(0, 10);
     const stats = await env.DB.prepare(`
       SELECT
         COUNT(*) AS total,
@@ -2998,30 +3005,48 @@ async function runDeploymentsWeeklyRollup(env) {
         SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
         SUM(COALESCE(deploy_duration_ms,0)) AS total_duration_ms
       FROM deployments
-      WHERE datetime(timestamp) >= datetime('now','-7 days')
-    `).first().catch(() => null);
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
+    `).bind(weekStart, weekEnd).first().catch(() => null);
     const workers = await env.DB.prepare(`
       SELECT worker_name, COUNT(*) AS c
       FROM deployments
-      WHERE datetime(timestamp) >= datetime('now','-7 days')
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
       GROUP BY worker_name
       ORDER BY c DESC
       LIMIT 25
-    `).all().catch(() => ({ results: [] }));
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
     const workersJson = JSON.stringify(Object.fromEntries((workers.results || []).map(r => [r.worker_name || 'unknown', Number(r.c) || 0])));
+    const topTrig = await env.DB.prepare(`
+      SELECT triggered_by, COUNT(*) AS c
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
+      GROUP BY triggered_by
+      ORDER BY c DESC
+      LIMIT 1
+    `).bind(weekStart, weekEnd).first().catch(() => null);
+    const totalDeploys = Number(stats?.total) || 0;
+    const totalDurationMs = Number(stats?.total_duration_ms) || 0;
+    const avgDurationMs = totalDeploys > 0 ? (totalDurationMs / totalDeploys) : 0;
 
-    // Best-effort persistence (table may or may not exist yet)
     await env.DB.prepare(
       `INSERT OR REPLACE INTO deployments_weekly_rollup
-        (week_key, total, success, failed, total_duration_ms, workers_json, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, unixepoch())`
+        (tenant_id, week_start, week_end, total_deploys, success_count, failed_count,
+         total_duration_ms, avg_duration_ms, per_worker_json, top_triggered_by, notes, rolled_up_at)
+       VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
     ).bind(
-      wk,
-      Number(stats?.total) || 0,
+      weekStart,
+      weekEnd,
+      totalDeploys,
       Number(stats?.success) || 0,
       Number(stats?.failed) || 0,
-      Number(stats?.total_duration_ms) || 0,
-      workersJson
+      totalDurationMs,
+      avgDurationMs,
+      workersJson,
+      topTrig?.triggered_by != null ? String(topTrig.triggered_by) : null,
+      `auto rollup ${weekStart}..${weekEnd}`
     ).run().catch(() => { });
 
     // Always log for analysis, even if rollup table doesn't exist
@@ -3030,8 +3055,8 @@ async function runDeploymentsWeeklyRollup(env) {
         (tenant_id, tool_name, status, duration_ms, input_summary, output_summary, tool_category, user_id)
        VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','success',0,?,?,'rollup','au_871d920d1233cbd1')`
     ).bind(
-      `week=${wk}`,
-      `total=${Number(stats?.total) || 0} success=${Number(stats?.success) || 0} failed=${Number(stats?.failed) || 0} workers=${workers.results?.length || 0}`
+      `week_start=${weekStart} week_end=${weekEnd}`,
+      `total=${totalDeploys} success=${Number(stats?.success) || 0} failed=${Number(stats?.failed) || 0} workers=${workers.results?.length || 0} top_triggered_by=${topTrig?.triggered_by || 'n/a'}`
     ).run().catch(() => { });
   } catch (e) {
     await env.DB.prepare(
@@ -3044,13 +3069,14 @@ async function runDeploymentsWeeklyRollup(env) {
 
 const worker = {
   async scheduled(event, env, ctx) {
+    const isMonday = new Date().getUTCDay() === 1;
     ctx.waitUntil(Promise.allSettled([
       generateDailySummaryEmail(env),
       sweepStaleTerminalSessions(env),
       runAgentMemoryDecay(env),
       runFinancialCommandCron(env, ctx),
       updateRoutingPerformanceScores(env),
-      runDeploymentsWeeklyRollup(env),
+      isMonday ? runDeploymentsWeeklyRollup(env) : Promise.resolve(),
       (async () => {
         if (!env?.DB) return;
         const stale = await env.DB.prepare(`
@@ -7537,7 +7563,7 @@ async function runPostDeployQualityChecks(env, deploymentId) {
 async function writeDailySnapshot(env, reason = 'cron') {
   if (!env?.DB) return;
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
-  const [tt, dt, providerBreakdown, modelBreakdown] = await Promise.all([
+  const [tt, dt, providerBreakdown, modelBreakdown, planRow] = await Promise.all([
     safe(env.DB.prepare(
       `SELECT COALESCE(SUM(tokens_input),0) AS tokens_in,
         COALESCE(SUM(tokens_output),0) AS tokens_out,
@@ -7551,6 +7577,11 @@ async function writeDailySnapshot(env, reason = 'cron') {
     ).first()),
     env.DB.prepare("SELECT provider, COUNT(*) as c, SUM(cost_estimate) as cost FROM ai_usage_log WHERE date=date('now') GROUP BY provider").all().catch(() => ({ results: [] })),
     env.DB.prepare("SELECT model, COUNT(*) as c FROM ai_usage_log WHERE date=date('now') GROUP BY model ORDER BY c DESC LIMIT 5").all().catch(() => ({ results: [] })),
+    env.DB.prepare(`
+      SELECT id, tasks_done, tasks_total FROM agentsam_plans
+      WHERE status='active' AND plan_type='daily'
+      ORDER BY plan_date DESC LIMIT 1
+    `).first().catch(() => null),
   ]);
   const providerJson = JSON.stringify(Object.fromEntries((providerBreakdown?.results || []).map(r => [r.provider, { calls: r.c, cost: r.cost }])));
   const modelJson = JSON.stringify(Object.fromEntries((modelBreakdown?.results || []).map(r => [r.model, r.c])));
@@ -7559,11 +7590,15 @@ async function writeDailySnapshot(env, reason = 'cron') {
     `INSERT OR REPLACE INTO daily_snapshots (
       snapshot_date, deploy_count, tokens_in, tokens_out, cost_usd,
       provider_breakdown, model_breakdown,
-      active_workflows, digest_text, created_at, updated_at
+      active_workflows,
+      completed_steps, total_steps, active_plan_id,
+      digest_text, created_at, updated_at
     ) VALUES (
       date('now'), ?, ?, ?, ?,
       ?, ?,
-      15, ?, unixepoch(), unixepoch()
+      15,
+      ?, ?, ?,
+      ?, unixepoch(), unixepoch()
     )`
   ).bind(
     dt?.total ?? 0,
@@ -7572,6 +7607,9 @@ async function writeDailySnapshot(env, reason = 'cron') {
     tt?.cost_usd ?? 0,
     providerJson,
     modelJson,
+    planRow?.tasks_done ?? 0,
+    planRow?.tasks_total ?? 0,
+    planRow?.id ?? null,
     digestSummary
   ).run().catch(() => { });
 

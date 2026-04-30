@@ -14,11 +14,31 @@ import { authUserIsSuperadmin } from "./src/core/auth.js";
 import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
 import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
+
+const IAM_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
+const IAM_EMBED_DIMS = 1024;
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
 const DOCS_SCREENSHOTS_PUBLIC_BASE = 'https://docs.inneranimalmedia.com';
 const DASHBOARD_SCREENSHOTS_PUBLIC_BASE = 'https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev';
+
+function resolveWorkspaceId(env, params = {}) {
+  return params?.workspace_id
+    || params?.workspaceId
+    || env?.WORKSPACE_ID
+    || IAM_DEFAULT_WORKSPACE_ID;
+}
+
+async function generateEmbedding(env, text) {
+  if (!env?.AI) throw new Error('Workers AI binding not configured');
+  const resp = await env.AI.run(IAM_EMBED_MODEL, {
+    text: Array.isArray(text) ? text : [text]
+  });
+  const vecs = resp?.data || resp?.result || [];
+  if (!vecs.length) throw new Error('No embeddings returned');
+  return Array.isArray(text) ? vecs : vecs[0];
+}
 
 /**
  * Store agent/browser tool screenshots. Prefer env.DOCS_BUCKET (public: docs.inneranimalmedia.com).
@@ -435,7 +455,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
         role: 'superadmin',
         permissions,
         tenant_id: row.tenant_id || null,
-        workspace_id: 'ws_inneranimalmedia',
+        workspace_id: IAM_DEFAULT_WORKSPACE_ID,
         is_active: 1,
         is_superadmin: 1,
         superadmin_uuid: row.superadmin_uuid,
@@ -482,7 +502,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
     (userProfile && userProfile.display_name) || authRow.name || 'User';
   const role = (userProfile && userProfile.role) || 'superadmin';
   const workspaceId =
-    (userProfile && userProfile.default_workspace_id) || 'ws_inneranimalmedia';
+    (userProfile && userProfile.default_workspace_id) || IAM_DEFAULT_WORKSPACE_ID;
   return {
     id: sessionId,
     email: loginEmail,
@@ -3593,7 +3613,7 @@ const worker = {
               r.http_method, r.http_status, r.http_url,
               r.d1_query, r.d1_rows_read, r.d1_rows_written,
               r.r2_operation, r.r2_bucket, r.r2_key,
-              r.do_class, r.do_method, r.batch_id, 'ws_inneranimalmedia'
+              r.do_class, r.do_method, r.batch_id, IAM_DEFAULT_WORKSPACE_ID
             )
           );
           await env.DB.batch(stmts);
@@ -3932,7 +3952,7 @@ const worker = {
           ).all();
           const docs = rows.results || [];
           let totalChunks = 0;
-          const KB_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+          const KB_EMBED_MODEL = IAM_EMBED_MODEL;
           const KB_CHUNK_CHARS = 2048;
           const KB_CHUNK_OVERLAP = 200;
           for (const doc of docs) {
@@ -3945,9 +3965,7 @@ const worker = {
             const vectors = [];
             for (let i = 0; i < chunks.length; i += RAG_EMBED_BATCH_SIZE) {
               const batch = chunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
-              const modelResp = await env.AI.run(KB_EMBED_MODEL, { text: batch });
-              const data = modelResp?.data || modelResp;
-              const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
+              const values = await generateEmbedding(env, batch);
               batch.forEach((c, j) => {
                 const vec = values[j];
                 if (vec && Array.isArray(vec)) {
@@ -3980,6 +3998,121 @@ const worker = {
       // POST /api/admin/reindex-codebase — index R2 source/ (worker.js, agent-dashboard, mcp-server, docs) into Vectorize
       if (pathLower === '/api/admin/reindex-codebase' && (request.method || 'GET').toUpperCase() === 'POST') {
         return handleReindexCodebase(request, env, ctx);
+      }
+
+      // POST /api/admin/rag-backfill — re-embed D1 + Supabase agent_memory, sync to Vectorize
+      if (pathLower === '/api/admin/rag-backfill' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const expected = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        const token = (request.headers.get('X-Internal-Secret') || request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        if (!expected || token !== expected) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const mode = String(body.mode || '').trim().toLowerCase();
+        const wsIdDefault = resolveWorkspaceId(env, body || {});
+        let processed = 0;
+        let errors = 0;
+
+        if (mode === 'd1') {
+          const rows = await env.DB.prepare(
+            `SELECT id, content, knowledge_id, chunk_index, workspace_id
+             FROM ai_knowledge_chunks
+             WHERE embedding_vector IS NULL
+                OR embedding_model != ?
+             LIMIT 20`
+          ).bind(IAM_EMBED_MODEL).all().catch(() => ({ results: [] }));
+          for (const r of (rows.results || [])) {
+            try {
+              const content = String(r.content || '');
+              if (!content) continue;
+              const wsId = r.workspace_id || wsIdDefault;
+              const vec = await generateEmbedding(env, content);
+              await env.DB.prepare(
+                `UPDATE ai_knowledge_chunks SET
+                  embedding_vector=?,
+                  embedding_model=?,
+                  is_indexed=1,
+                  workspace_id=COALESCE(NULLIF(workspace_id,''), ?)
+                 WHERE id=?`
+              ).bind(JSON.stringify(vec), IAM_EMBED_MODEL, wsId, r.id).run().catch(() => { });
+              if (env.VECTORIZE_INDEX) {
+                await env.VECTORIZE_INDEX.upsert([{
+                  id: r.id,
+                  values: vec,
+                  namespace: wsId,
+                  metadata: {
+                    knowledge_id: r.knowledge_id,
+                    chunk_index: r.chunk_index,
+                    workspace_id: wsId,
+                  }
+                }]).catch(() => { });
+              }
+              processed++;
+            } catch (_) { errors++; }
+          }
+          return jsonResponse({ processed, errors, mode: 'd1' });
+        }
+
+        if (mode === 'supabase') {
+          const limit = 20;
+          if (env.HYPERDRIVE?.connectionString) {
+            try {
+              const { neon } = await import('@neondatabase/serverless');
+              const sql = neon(env.HYPERDRIVE.connectionString);
+              const rows = await sql`
+                SELECT id, content, workspace_id
+                FROM agent_memory
+                WHERE embedding IS NULL
+                LIMIT ${limit}
+              `;
+              for (const r of rows || []) {
+                try {
+                  const wsId = r.workspace_id || wsIdDefault;
+                  const vec = await generateEmbedding(env, String(r.content || ''));
+                  await sql`
+                    UPDATE agent_memory
+                    SET embedding = ${JSON.stringify(vec)}::vector,
+                        workspace_id = COALESCE(workspace_id, ${wsId})
+                    WHERE id = ${r.id}
+                  `;
+                  processed++;
+                } catch (_) { errors++; }
+              }
+              return jsonResponse({ processed, errors, mode: 'supabase', source: 'hyperdrive' });
+            } catch (e) {
+              console.warn('[rag-backfill] hyperdrive failed', e?.message ?? e);
+            }
+          }
+
+          if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+            const sel = await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?select=id,content,workspace_id&embedding=is.null&limit=${limit}`, {
+              headers: {
+                'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
+              }
+            }).then(r => r.json()).catch(() => []);
+            for (const row of sel || []) {
+              try {
+                const wsId = row.workspace_id || wsIdDefault;
+                const vec = await generateEmbedding(env, String(row.content || ''));
+                await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?id=eq.${encodeURIComponent(row.id)}`, {
+                  method: 'PATCH',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                    'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
+                    'Prefer': 'return=minimal',
+                  },
+                  body: JSON.stringify({ embedding: vec, workspace_id: wsId, project_id: wsId }),
+                }).catch(() => { });
+                processed++;
+              } catch (_) { errors++; }
+            }
+            return jsonResponse({ processed, errors, mode: 'supabase', source: 'rest' });
+          }
+          return jsonResponse({ processed: 0, errors: 0, mode: 'supabase', source: 'none' }, 503);
+        }
+
+        return jsonResponse({ error: 'mode must be d1 or supabase' }, 400);
       }
 
       // POST /api/admin/trigger-workflow — trigger ai_workflow_pipelines, log to ai_workflow_executions
@@ -5513,7 +5646,7 @@ const worker = {
               ok: true,
               rows: res.rows || [],
               count: (res.rows || []).length,
-              pgvector_default_project_id: PGVECTOR_DEFAULT_PROJECT_ID,
+              workspace_id: IAM_DEFAULT_WORKSPACE_ID,
             });
           } finally {
             await client.end().catch(() => { });
@@ -5537,9 +5670,7 @@ const worker = {
         if (!q) return jsonResponse({ error: 'query required' }, 400);
         const limit = Math.min(20, Math.max(1, Number(body?.limit) || 5));
         try {
-          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [q] });
-          const data = modelResp?.data ?? modelResp;
-          const vector = (Array.isArray(data) ? data : data?.data)?.[0];
+          const vector = await generateEmbedding(env, q);
           if (!vector || !Array.isArray(vector)) return jsonResponse({ error: 'embedding failed' }, 502);
           const vectorMatches = await env.VECTORIZE_DOCS.query(vector, { topK: limit, returnMetadata: 'all' });
           const matches = vectorMatches?.matches ?? vectorMatches ?? [];
@@ -5618,10 +5749,10 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { object_key, force: _ingForce = false, workspace_id: _ingWs = 'ws_inneranimalmedia' } = _ingBody || {};
+          const { object_key, force: _ingForce = false, workspace_id: _ingWs = IAM_DEFAULT_WORKSPACE_ID } = _ingBody || {};
           _ingObjKey = object_key != null ? String(object_key) : null;
           if (!_ingObjKey) return jsonResponse({ error: 'object_key required' }, 400);
-          const _ingWid = String(_ingWs || 'ws_inneranimalmedia').slice(0, 200);
+          const _ingWid = String(_ingWs || IAM_DEFAULT_WORKSPACE_ID).slice(0, 200);
 
           const _out = await runRagIngestSingle(env, {
             object_key: _ingObjKey,
@@ -5650,8 +5781,8 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = 'ws_inneranimalmedia' } = _ingBody || {};
-          const _ingWid = String(_ingWsBatch || 'ws_inneranimalmedia').slice(0, 200);
+          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = IAM_DEFAULT_WORKSPACE_ID } = _ingBody || {};
+          const _ingWid = String(_ingWsBatch || IAM_DEFAULT_WORKSPACE_ID).slice(0, 200);
           const keyList = Array.isArray(_rawKeys) ? _rawKeys.map((k) => String(k || '').trim()).filter(Boolean) : [];
           if (keyList.length === 0) return jsonResponse({ error: 'keys array required' }, 400);
           const results = [];
@@ -5697,19 +5828,23 @@ const worker = {
           const { query: _qText, top_k: _qTopK = 5, conversation_id: _qConv, mode: _qMode, intent: _qIntent } = _qBody || {};
           if (!_qText) return jsonResponse({ error: 'query required' }, { status: 400 });
           const _t0q = Date.now();
-          const _EMBED_MODEL_Q = '@cf/baai/bge-base-en-v1.5';
           const _CPT_Q = 4;
           const _qTokens = Math.ceil(String(_qText).length / _CPT_Q);
 
-          const _qEmb = await env.AI.run(_EMBED_MODEL_Q, { text: _qText });
-          const _qVec = _qEmb?.data?.[0] ?? _qEmb?.result?.data?.[0];
+          const _qVec = await generateEmbedding(env, _qText);
           if (!_qVec) throw new Error('Embedding failed');
 
+          // NOTE: this endpoint is legacy; it runs without an explicit workspace param.
+          // Default to env/workspace binding + IAM_DEFAULT_WORKSPACE_ID.
+          const _wsId = resolveWorkspaceId(env, _qBody || {});
           const _chunkRows = await env.DB.prepare(
             `SELECT id, content, token_count, embedding_vector
              FROM ai_knowledge_chunks
-             WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
-          ).all();
+             WHERE workspace_id = ?
+               AND embedding_vector IS NOT NULL
+               AND is_indexed = 1
+             LIMIT 500`
+          ).bind(_wsId).all();
           const _allCh = _chunkRows.results ?? [];
           const _cosQ = (a, b) => {
             let dot = 0, na = 0, nb = 0;
@@ -5734,7 +5869,7 @@ const worker = {
                chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `).bind(_qConv ?? null, String(_qText).slice(0, 500), _qTokens, _allCh.length, _qTop,
-            _qScored.length, _qInjectTokens, _qInjectText.length, _EMBED_MODEL_Q, _qMode ?? null, _qIntent ?? null,
+            _qScored.length, _qInjectTokens, _qInjectText.length, IAM_EMBED_MODEL, _qMode ?? null, _qIntent ?? null,
             'd1_cosine', _qDur, 0, 0, 0).run();
 
           const _ragTid = tenantIdFromEnv(env);
@@ -5774,7 +5909,7 @@ const worker = {
           if (_fbUse === 0) {
             await env.DB.prepare(
               `UPDATE agentsam_code_index_job SET status = 'queued' WHERE workspace_id = ? AND status != 'running'`
-            ).bind('ws_inneranimalmedia').run().catch(() => { });
+            ).bind(IAM_DEFAULT_WORKSPACE_ID).run().catch(() => { });
           }
           return jsonResponse({ ok: true });
         } catch (e) {
@@ -5805,46 +5940,19 @@ const worker = {
         }
         const query = body.query ?? url.searchParams.get('q');
         if (!query) return Response.json({ error: 'query required' }, { status: 400 });
-        const threshold = typeof body.match_threshold === 'number' ? body.match_threshold : 0.25;
+        const threshold = typeof body.match_threshold === 'number' ? body.match_threshold : 0.5;
         const matchCount = typeof body.match_count === 'number' ? body.match_count : 10;
-        const projectId = typeof body.project_id === 'string' && body.project_id.trim() ? body.project_id.trim() : undefined;
+        const wsId = resolveWorkspaceId(env, body || {});
 
-        if (env.HYPERDRIVE?.connectionString) {
-          const pgRes = await pgMatchDocuments(env, query, {
-            match_threshold: threshold,
-            match_count: matchCount,
-            project_id: projectId,
-          });
-          const contextUsed = JSON.stringify({
-            source: 'pgvector',
-            row_count: pgRes.rows?.length ?? 0,
-            error: pgRes.error,
-            embedding_dims: pgRes.embedding?.length ?? null,
-          }).slice(0, 8000);
-          if (env.DB) {
-            const _st = tenantIdFromEnv(env);
-            if (_st) {
-              await env.DB.prepare("INSERT INTO ai_rag_search_history (id,tenant_id,query_text,context_used,created_at) VALUES (?,?,?,?,unixepoch())")
-                .bind(crypto.randomUUID(), _st, query, contextUsed || '[]').run().catch(() => { });
-            }
-          }
-          return Response.json({
-            query,
-            results: pgRes.rows ?? [],
-            error: pgRes.error,
-            embedding_dims: pgRes.embedding?.length ?? null,
-          });
-        }
-
-        const search = await vectorizeRagSearch(env, query, { topK: 5 });
-        const data = search?.results ?? search?.data ?? [];
-        const answer = data.map(r => r.content ?? r.text ?? '').filter(Boolean).join('\n\n').slice(0, 8000);
+        const out = await knowledgeSearch(env, String(query), { topK: matchCount, workspace_id: wsId, threshold });
+        const data = (out?.results || []).map(r => r.chunk ?? r.chunk?.content ? r.chunk : r.chunk);
+        const answer = (out?.results || []).map(r => r.chunk?.content || r.chunk?.content_preview || r.chunk?.content || r.chunk?.text || '').filter(Boolean).join('\n\n').slice(0, 8000);
         const _vt = tenantIdFromEnv(env);
         if (_vt) {
           await env.DB.prepare("INSERT INTO ai_rag_search_history (id,tenant_id,query_text,context_used,created_at) VALUES (?,?,?,?,unixepoch())")
-            .bind(crypto.randomUUID(), _vt, query, answer || '[]').run();
+            .bind(crypto.randomUUID(), _vt, String(query), answer || '[]').run();
         }
-        return Response.json({ answer, sources: data });
+        return Response.json({ answer, sources: out?.results || [], workspace_id: wsId, source: out?.source || 'none' });
       }
 
       // ----- API: Settings (profile, preferences, sessions, change-password) -----
@@ -6221,9 +6329,9 @@ const worker = {
         return jsonResponse({ error: 'Method not allowed' }, 405);
       }
 
-      const CORE_WORKSPACE_IDS = ['ws_inneranimalmedia', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
+      const CORE_WORKSPACE_IDS = [IAM_DEFAULT_WORKSPACE_ID, 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
       const CORE_WORKSPACES_DATA = [
-        { id: 'ws_inneranimalmedia', name: 'Inner Animal Media', category: 'entity' },
+        { id: IAM_DEFAULT_WORKSPACE_ID, name: 'Inner Animal Media', category: 'entity' },
         { id: 'ws_inneranimal', name: 'InnerAnimal', category: 'entity' },
         { id: 'ws_meauxbility', name: 'Meauxbility', category: 'entity' },
         { id: 'ws_innerautodidact', name: 'InnerAutodidact', category: 'entity' },
@@ -6255,7 +6363,7 @@ const worker = {
         }
         if (method === 'GET') {
           if (!env.DB) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {} });
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: IAM_DEFAULT_WORKSPACE_ID, workspaceThemes: {}, workspaces: {} });
           }
           try {
             const [wsRows, rows, us] = await Promise.all([
@@ -6307,10 +6415,10 @@ const worker = {
               };
               if (r.theme != null && r.theme.trim()) workspaceThemes[r.workspace_id] = r.theme.trim();
             }
-            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : 'ws_inneranimalmedia';
+            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : IAM_DEFAULT_WORKSPACE_ID;
             return jsonResponse({ data: wsRows.results || CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
           } catch (e) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: IAM_DEFAULT_WORKSPACE_ID, workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
           }
         }
         if (method === 'PATCH' || method === 'PUT') {
@@ -7553,6 +7661,7 @@ async function generateConversationName(env, conversationId, firstUserMessage) {
 /** Persist user + assistant turns to Supabase agent_memory (Hyperdrive pg + Workers AI embed). Never throws. */
 async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistantText, modelKey, provider }) {
   if (!env.HYPERDRIVE?.connectionString) return;
+  const wsId = resolveWorkspaceId(env, {});
   const sid = String(sessionId || '').trim();
   const u = String(userText || '').slice(0, 50000);
   const a = String(assistantText || '').slice(0, 50000);
@@ -7568,29 +7677,27 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
     let userVecLiteral = null;
     if (env.AI && u) {
       try {
-        const _uResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [u] });
-        const _uRaw = _uResp?.data ?? _uResp;
-        const _uVec = (Array.isArray(_uRaw) ? _uRaw : _uRaw?.data)?.[0];
+        const _uVec = await generateEmbedding(env, u);
         if (_uVec && Array.isArray(_uVec)) userVecLiteral = '[' + _uVec.join(',') + ']';
       } catch (e) { console.warn('[agent_memory] user embed failed', e?.message ?? e); }
     }
     if (userVecLiteral) {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata, embedding) VALUES ($1, $2, 'user', $3, $4::jsonb, $5::vector)`,
-        [sid, 'agent-sam', u, metaUser, userVecLiteral]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata, embedding)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6::jsonb, $7::vector)`,
+        [wsId, wsId, sid, 'agent-sam', u, metaUser, userVecLiteral]
       );
     } else {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'user', $3, $4::jsonb)`,
-        [sid, 'agent-sam', u, metaUser]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6::jsonb)`,
+        [wsId, wsId, sid, 'agent-sam', u, metaUser]
       );
     }
     let vecLiteral = null;
     if (env.AI && a) {
       try {
-        const modelResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [a] });
-        const raw = modelResp?.data ?? modelResp;
-        const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+        const vector = await generateEmbedding(env, a);
         if (vector && Array.isArray(vector)) vecLiteral = '[' + vector.join(',') + ']';
       } catch (e) {
         console.warn('[agent_memory] embed failed', e?.message ?? e);
@@ -7598,13 +7705,15 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
     }
     if (vecLiteral) {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata, embedding) VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5::vector)`,
-        [sid, 'agent-sam', a, metaAsst, vecLiteral]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata, embedding)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, $6::jsonb, $7::vector)`,
+        [wsId, wsId, sid, 'agent-sam', a, metaAsst, vecLiteral]
       );
     } else {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'assistant', $3, $4::jsonb)`,
-        [sid, 'agent-sam', a, metaAsst]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, $6::jsonb)`,
+        [wsId, wsId, sid, 'agent-sam', a, metaAsst]
       );
     }
   } catch (e) {
@@ -9700,10 +9809,11 @@ async function insertQualityCheckRagIngest(env, chunkCount) {
   if (!env?.DB) return;
   const met = chunkCount >= 3;
   try {
+    const wsId = resolveWorkspaceId(env, {});
     await env.DB.prepare(
       `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
        VALUES (?,?,?,?,?,?,?,?)`
-    ).bind('inneranimalmedia', 'rag_ingest', 'chunk_count_minimum', met ? 'passed' : 'failed', String(chunkCount), '3', met ? 1 : 0, 'high').run();
+    ).bind(wsId, 'rag_ingest', 'chunk_count_minimum', met ? 'passed' : 'failed', String(chunkCount), '3', met ? 1 : 0, 'high').run();
   } catch (e) {
     console.warn('[quality_checks rag_ingest]', e?.message ?? e);
   }
@@ -9713,10 +9823,11 @@ async function insertQualityCheckRagQuery(env, topScore) {
   if (!env?.DB) return;
   const met = topScore >= 0.75;
   try {
+    const wsId = resolveWorkspaceId(env, {});
     await env.DB.prepare(
       `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
        VALUES (?,?,?,?,?,?,?,?)`
-    ).bind('inneranimalmedia', 'rag_query', 'top_score_threshold', met ? 'passed' : 'failed', String(topScore), '0.75', met ? 1 : 0, 'high').run();
+    ).bind(wsId, 'rag_query', 'top_score_threshold', met ? 'passed' : 'failed', String(topScore), '0.75', met ? 1 : 0, 'high').run();
   } catch (e) {
     console.warn('[quality_checks rag_query]', e?.message ?? e);
   }
@@ -9733,6 +9844,7 @@ async function runRagIngestSingle(env, p) {
   const _ingUserId = p._ingUserId;
   const _ingWid = p._ingWid;
   const triggeredBy = p.triggeredBy || 'api';
+  const wsId = resolveWorkspaceId(env, { workspace_id: _ingWid });
   try {
     const _existing = await env.DB.prepare(
       `SELECT id, index_status FROM autorag WHERE object_key = ?`
@@ -9750,7 +9862,7 @@ async function runRagIngestSingle(env, p) {
     ).bind(_ingUserId, _ingWid).run().catch(() => { });
 
     const _t0i = Date.now();
-    const _EMBED_MODEL_I = '@cf/baai/bge-base-en-v1.5';
+    const _EMBED_MODEL_I = IAM_EMBED_MODEL;
     const _CHUNK_CHARS = 1600;
     const _CPT = 4;
 
@@ -9800,15 +9912,40 @@ async function runRagIngestSingle(env, p) {
       const _ct = _chunks[_idx];
       const _ctTokens = Math.ceil(_ct.length / _CPT);
       const _chunkId = `${_kbId}_c${_idx}`;
-      const _emb = await env.AI.run(_EMBED_MODEL_I, { text: _ct });
-      const _vec = _emb?.data?.[0] ?? _emb?.result?.data?.[0];
+      const _vec = await generateEmbedding(env, _ct);
       _embedCalls++;
       const _vecJson = _vec ? JSON.stringify(_vec) : null;
+
+      // Upsert to Vectorize with workspace namespace
+      if (env.VECTORIZE_INDEX) {
+        await env.VECTORIZE_INDEX.upsert([{
+          id: _chunkId,
+          values: _vec,
+          namespace: wsId,
+          metadata: {
+            knowledge_id: _kbId,
+            object_key: _ingObjKey,
+            chunk_index: _idx,
+            workspace_id: wsId,
+            token_count: _ctTokens,
+          }
+        }]).catch((e) => console.warn('[rag] vectorize upsert:', e?.message));
+      }
       await env.DB.prepare(`
-              INSERT INTO ai_knowledge_chunks (id, knowledge_id, tenant_id, chunk_index, content, content_preview, token_count, embedding_model, is_indexed, embedding_vector, created_at)
-              VALUES (?,?,?,?,?,?,?,?,1,?,unixepoch())
-              ON CONFLICT(id) DO UPDATE SET content=excluded.content, token_count=excluded.token_count, embedding_vector=excluded.embedding_vector, is_indexed=1
-            `).bind(_chunkId, _kbId, 'system', _idx, _ct, _ct.slice(0, 200), _ctTokens, _EMBED_MODEL_I, _vecJson).run();
+        INSERT OR REPLACE INTO ai_knowledge_chunks
+          (id, knowledge_id, tenant_id, workspace_id, chunk_index, content,
+           embedding_model, embedding_vector, is_indexed, created_at)
+        VALUES (?,?,?,?,?, ?,?,?,1,unixepoch())
+      `).bind(
+        _chunkId,
+        _kbId,
+        _ingTid,
+        wsId,
+        _idx,
+        _ct,
+        IAM_EMBED_MODEL,
+        _vecJson
+      ).run();
     }
 
     const _durI = Date.now() - _t0i;
@@ -9818,9 +9955,16 @@ async function runRagIngestSingle(env, p) {
     ).bind(_chunks.length, _tokenCount, _kbId).run();
     invalidateCompiledContextCache(env);
     await env.DB.prepare(`
-            INSERT INTO rag_ingest_log (object_key, status, char_count, token_count, chunk_count, embed_calls, embed_model, duration_ms, triggered_by)
-            VALUES (?,?,?,?,?,?,?,?,?)
-          `).bind(_ingObjKey, 'ok', _charCount, _tokenCount, _chunks.length, _embedCalls, _EMBED_MODEL_I, _durI, triggeredBy).run();
+      INSERT INTO rag_ingest_log
+        (object_key, triggered_by, status, chunk_count,
+         embed_model, duration_ms, workspace_id, autorag_id)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).bind(
+      _ingObjKey, triggeredBy, 'ok', _chunks.length,
+      IAM_EMBED_MODEL, _durI,
+      wsId,
+      _kbId
+    ).run().catch(() => { });
     await insertQualityCheckRagIngest(env, _chunks.length);
 
     await env.DB.prepare(
@@ -10838,7 +10982,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = `Terminal error: ${e.message}`;
         }
         const runLoopUserId = request?.user?.id || request?.user_id || null;
-        const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+        const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
         console.log('[cmd_audit] runToolLoop terminal_execute identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
         insertAgentCommandAuditLog(env, {
           userId: runLoopUserId ?? 'unknown',
@@ -10874,7 +11018,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         if (blocked.test(sql)) {
           resultText = 'Blocked: DROP TABLE and TRUNCATE require manual approval';
           const runLoopUserId = request?.user?.id || request?.user_id || null;
-          const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+          const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
           console.log('[cmd_audit] runToolLoop d1_write blocked identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
           insertAgentCommandAuditLog(env, {
             userId: runLoopUserId ?? 'unknown',
@@ -10894,7 +11038,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             resultText = JSON.stringify({ changes, success: true });
             void writeAuditLog(env, { event_type: 'd1_write', message: 'D1 write executed', metadata: { changes } }).catch(() => { });
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+            const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
             console.log('[cmd_audit] runToolLoop d1_write success identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -10920,7 +11064,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           } catch (e) {
             resultText = `D1 error: ${e.message}`;
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+            const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
             console.log('[cmd_audit] runToolLoop d1_write error identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -10966,17 +11110,12 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = JSON.stringify({ error: 'query required' });
         } else {
           try {
-            const { merged, answer, query: q } = await runKnowledgeSearchMerged(env, query, max_results);
-            resultText = JSON.stringify({
-              query: q,
-              answer,
-              results: merged.map(item => ({
-                content: item.content,
-                source: item.sourceTag ?? item.source ?? 'unknown',
-                score: item.score,
-                title: item.title,
-              })),
+            const out = await knowledgeSearch(env, query, {
+              topK: max_results,
+              workspace_id: params.workspace_id ?? params.workspaceId ?? null,
+              threshold: params.threshold != null ? Number(params.threshold) : undefined,
             });
+            resultText = JSON.stringify(out);
           } catch (e) {
             resultText = JSON.stringify({ error: e?.message ?? String(e) });
           }
@@ -11654,7 +11793,7 @@ async function resolveIamWorkspaceRoot(env) {
       if (env?.DB) {
         try {
           const row = await env.DB.prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?')
-            .bind('ws_inneranimalmedia')
+            .bind(IAM_DEFAULT_WORKSPACE_ID)
             .first();
           if (row?.settings_json) {
             const j = JSON.parse(String(row.settings_json));
@@ -16034,7 +16173,7 @@ function riskLevelFromCommandProposalText(cmd) {
 
 const CODEBASE_REINDEX_CHUNK_SIZE = 500;
 const CODEBASE_REINDEX_OVERLAP = 50;
-const CODEBASE_REINDEX_PROJECT_ID = 'inneranimalmedia';
+const CODEBASE_REINDEX_PROJECT_ID = IAM_DEFAULT_WORKSPACE_ID;
 const CODEBASE_REINDEX_MAX_FILES = 500;
 const CODEBASE_REINDEX_MAX_CHUNKS = 4000;
 const CODEBASE_SKIP_EXT = /\.(png|jpe?g|gif|webp|ico|woff2?|ttf|eot|pdf|zip|mp4|mp3|bin)$/i;
@@ -16092,15 +16231,13 @@ async function reindexCodebaseFromDocsBucket(env) {
       for (const chunk of parts) {
         if (chunksInserted >= CODEBASE_REINDEX_MAX_CHUNKS) break;
         ci += 1;
-        const modelResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [chunk] });
-        const raw = modelResp?.data ?? modelResp;
-        const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+        const vector = await generateEmbedding(env, chunk);
         if (!vector || !Array.isArray(vector)) continue;
         const vecLiteral = '[' + vector.join(',') + ']';
         const title = `${key} [chunk ${ci}]`;
         await client.query(
-          `INSERT INTO documents (source, title, content, embedding, project_id) VALUES ($1, $2, $3, $4::vector, $5)`,
-          [source, title, chunk, vecLiteral, CODEBASE_REINDEX_PROJECT_ID]
+          `INSERT INTO documents (source, title, content, embedding, project_id, workspace_id) VALUES ($1, $2, $3, $4::vector, $5, $6)`,
+          [source, title, chunk, vecLiteral, CODEBASE_REINDEX_PROJECT_ID, CODEBASE_REINDEX_PROJECT_ID]
         );
         chunksInserted += 1;
       }
@@ -19009,7 +19146,7 @@ async function handleAgentsamApi(request, url, env) {
         const row = await env.DB.prepare(
           'SELECT settings_json FROM workspace_settings WHERE workspace_id = ?'
         )
-          .bind('ws_inneranimalmedia')
+          .bind(IAM_DEFAULT_WORKSPACE_ID)
           .first();
         let workspace_cd_command = null;
         let iam_origin = null;
@@ -21354,7 +21491,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     await recordMcpToolCall(env, { ...o, tenantId: tid });
   };
   const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'anonymous');
-  const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_inneranimalmedia');
+  const cmdAuditWorkspaceId = String(resolveWorkspaceId(env, { workspace_id: opts.workspaceId || params?.workspace_id || params?.workspaceId }));
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
   if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && (!needsScreenshotBucket || env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
@@ -21750,33 +21887,35 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
     try {
       console.log('[knowledge_search] D1 + AI Search + Supabase pgvector (parallel)', { query, max_results });
-      const [{ merged, answer, query: q }, pgDocs] = await Promise.all([
-        runKnowledgeSearchMerged(env, query, max_results),
+      const wsId = resolveWorkspaceId(env, params || {});
+      const [kb, mem] = await Promise.all([
+        knowledgeSearch(env, query, { topK: max_results, workspace_id: wsId, threshold: 0.5 }),
         (async () => {
-          if (!env.HYPERDRIVE?.connectionString || !env.AI) return [];
           try {
-            const _emb = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [query] });
-            const _raw = _emb?.data ?? _emb;
-            const _vec = (Array.isArray(_raw) ? _raw : _raw?.data)?.[0];
-            if (!_vec || !Array.isArray(_vec)) return [];
-            const _vecLit = '[' + _vec.join(',') + ']';
-            const { Client } = await import('pg');
-            const _pg = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-            await _pg.connect();
-            try {
-              const _r = await _pg.query(
-                `SELECT title, content, source, similarity FROM match_documents($1::vector, 0.65, $2)`,
-                [_vecLit, max_results]
-              );
-              return (_r.rows || []).map(row => ({
-                content: row.content, title: row.title, source: row.source,
-                score: row.similarity, sourceTag: 'supabase:' + (row.source || 'documents'),
-              }));
-            } finally { await _pg.end().catch(() => {}); }
-          } catch (e) { console.warn('[knowledge_search] supabase arm failed', e?.message ?? e); return []; }
+            const qVec = await generateEmbedding(env, query);
+            const out = await searchAgentMemory(env, qVec, { workspace_id: wsId, limit: max_results, threshold: 0.7 });
+            return (out.rows || []).map(r => ({
+              content: r.content,
+              title: r.agent_id || 'agent_memory',
+              source: 'agent_memory',
+              score: r.similarity ?? null,
+              sourceTag: out.source,
+            }));
+          } catch (e) { console.warn('[knowledge_search] agent_memory arm failed', e?.message ?? e); return []; }
         })(),
       ]);
-      const results = [...merged, ...pgDocs].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, max_results);
+      const results = [
+        ...(kb?.results || []).map(r => ({
+          content: r.chunk?.content,
+          title: r.chunk?.knowledge_id || r.chunk?.id || 'chunk',
+          source: 'ai_knowledge_chunks',
+          score: r.score,
+          sourceTag: kb.source,
+        })),
+        ...mem,
+      ].filter(r => r.content).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, max_results);
+      const q = query;
+      const answer = results.map(r => r.content).join('\n\n').slice(0, 10000);
       if (env.DB) {
         const _mcpKsTid = tenantIdFromEnv(env);
         try {
@@ -27987,7 +28126,7 @@ async function handleAgentDbSnippetsPost(request, env) {
 
 async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, source, payload) {
   if (!env?.DB || !userId) return;
-  const wsId = workspaceId || 'ws_inneranimalmedia';
+  const wsId = workspaceId || IAM_DEFAULT_WORKSPACE_ID;
   const nowIso = new Date().toISOString();
   const sessionId = `wsess_${userId}_${wsId}`;
   const signalId = crypto.randomUUID();
@@ -28716,6 +28855,85 @@ async function runKnowledgeSearchMerged(env, query, max_results) {
   return { query, merged, answer };
 }
 
+async function knowledgeSearch(env, query, opts = {}) {
+  const topK = opts.topK || 5;
+  const wsId = resolveWorkspaceId(env, opts);
+  const threshold = opts.threshold || 0.5;
+  const q = String(query || '').trim();
+  if (!q) return { source: 'none', workspace_id: wsId, results: [] };
+  if (!env?.DB) return { source: 'none', workspace_id: wsId, results: [] };
+
+  const queryVec = await generateEmbedding(env, q);
+
+  // Primary: CF Vectorize
+  if (env.VECTORIZE_INDEX) {
+    try {
+      const r = await env.VECTORIZE_INDEX.query(queryVec, {
+        topK,
+        returnMetadata: true,
+        namespace: wsId
+      });
+      if (r?.matches?.length > 0) {
+        const ids = r.matches.map(m => m.id);
+        const ph = ids.map(() => '?').join(',');
+        const rows = await env.DB.prepare(
+          `SELECT id, content, knowledge_id, chunk_index, metadata_json
+           FROM ai_knowledge_chunks
+           WHERE workspace_id = ?
+             AND id IN (${ph})`
+        ).bind(wsId, ...ids).all();
+        await env.DB.prepare(
+          `INSERT INTO rag_query_log
+             (id, query_text, workspace_id, results_count, source, created_at)
+           VALUES (?,?,?,?,'vectorize',unixepoch())`
+        ).bind(
+          crypto.randomUUID(), q.slice(0, 500), wsId, r.matches.length
+        ).run().catch(() => { });
+        return {
+          source: 'vectorize',
+          workspace_id: wsId,
+          results: r.matches.map(m => ({
+            score: m.score,
+            chunk: (rows.results || []).find(c => c.id === m.id),
+            metadata: m.metadata
+          })).filter(x => x.chunk && x.score >= threshold)
+        };
+      }
+    } catch (e) {
+      console.warn('[rag] vectorize failed, d1 fallback:', e?.message);
+    }
+  }
+
+  // Fallback: D1 cosine similarity
+  const chunks = await env.DB.prepare(
+    `SELECT id, content, knowledge_id, chunk_index, embedding_vector
+     FROM ai_knowledge_chunks
+     WHERE workspace_id = ?
+       AND embedding_vector IS NOT NULL
+       AND is_indexed = 1
+     LIMIT 500`
+  ).bind(wsId).all();
+  const cos = (a, b) => {
+    let d = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; }
+    return d / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+  };
+  const scored = (chunks.results || []).map(c => {
+    try {
+      return { chunk: c, score: cos(queryVec, JSON.parse(c.embedding_vector)) };
+    } catch { return null; }
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, topK)
+    .filter(x => x.score >= threshold);
+
+  await env.DB.prepare(
+    `INSERT INTO rag_query_log
+       (id, query_text, workspace_id, results_count, source, created_at)
+     VALUES (?,?,?,?,'d1_fallback',unixepoch())`
+  ).bind(crypto.randomUUID(), q.slice(0, 500), wsId, scored.length)
+    .run().catch(() => { });
+  return { source: 'd1_fallback', workspace_id: wsId, results: scored };
+}
+
 async function ensureRagSearchToolRegistered(env) {
   if (_ragSearchToolEnsured || !env.DB) return;
   try {
@@ -28739,54 +28957,57 @@ async function ensureRagSearchToolRegistered(env) {
   _ragSearchToolEnsured = true;
 }
 
-const RAG_MEMORY_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
+const RAG_MEMORY_EMBED_MODEL = IAM_EMBED_MODEL;
 const RAG_CHUNK_MAX_CHARS = 600;
 const RAG_CHUNK_OVERLAP = 80;
 const RAG_EMBED_BATCH_SIZE = 32;
 const RAG_COMPACT_MAX_MSG_CHARS = 800;
 const RAG_COMPACT_HOURS = 48;
 
-/** Default for match_documents p_project_id — must match documents.project_id from ingest (e.g. inneranimalmedia). */
-const PGVECTOR_DEFAULT_PROJECT_ID = 'inneranimalmedia';
+async function searchAgentMemory(env, queryVec, opts = {}) {
+  const wsId = resolveWorkspaceId(env, opts);
+  const limit = opts.limit || 10;
+  const threshold = opts.threshold || 0.7;
 
-/**
- * Embed query with Workers AI, then call Supabase match_documents via Hyperdrive (raw pg).
- * Expects DB function: match_documents(vector, float, int, text). Embedding dims must match the DB (bge-large-en-v1.5 = 1024).
- */
-async function pgMatchDocuments(env, queryText, opts = {}) {
-  const fail = (msg) => ({ rows: [], error: msg, embedding: null });
-  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
-  if (!env.AI) return fail('AI binding missing');
-  const q = String(queryText || '').trim();
-  if (!q) return fail('query required');
-  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.25;
-  const matchCount = typeof opts.match_count === 'number'
-    ? Math.min(Math.max(1, opts.match_count), 50)
-    : 8;
-  const projectId = (typeof opts.project_id === 'string' && opts.project_id.trim())
-    ? opts.project_id.trim()
-    : PGVECTOR_DEFAULT_PROJECT_ID;
-  try {
-    const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [q] });
-    const raw = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
-    if (!vector || !Array.isArray(vector)) return fail('embedding failed or empty vector');
-    const { Client } = await import('pg');
-    const vecLiteral = '[' + vector.join(',') + ']';
-    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-    await client.connect();
+  if (env.HYPERDRIVE?.connectionString) {
     try {
-      const res = await client.query(
-        `SELECT * FROM match_documents($1::vector, $2::float, $3::int, $4::text)`,
-        [vecLiteral, threshold, matchCount, projectId]
-      );
-      return { rows: res.rows || [], error: null, embedding: vector };
-    } finally {
-      await client.end().catch(() => { });
+      const { neon } = await import('@neondatabase/serverless');
+      const sql = neon(env.HYPERDRIVE.connectionString);
+      const rows = await sql`
+        SELECT id, session_id, agent_id, role, content, metadata,
+               1 - (embedding <=> ${JSON.stringify(queryVec)}::vector) AS similarity
+        FROM agent_memory
+        WHERE workspace_id = ${wsId}
+          AND embedding IS NOT NULL
+          AND 1 - (embedding <=> ${JSON.stringify(queryVec)}::vector) > ${threshold}
+        ORDER BY similarity DESC
+        LIMIT ${limit}
+      `;
+      return { source: 'hyperdrive_pgvector', workspace_id: wsId, rows };
+    } catch (e) {
+      console.warn('[rag] hyperdrive pgvector failed:', e?.message);
     }
-  } catch (e) {
-    return { rows: [], error: e?.message || String(e), embedding: null };
   }
+
+  // Fallback: Supabase REST rpc
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_agent_memory`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': env.SUPABASE_SERVICE_ROLE_KEY
+      },
+      body: JSON.stringify({
+        query_embedding: queryVec,
+        match_threshold: threshold,
+        match_count: limit,
+        p_workspace_id: wsId
+      })
+    });
+    return { source: 'supabase_rpc', workspace_id: wsId, rows: await res.json().catch(() => []) };
+  }
+  return { source: 'none', workspace_id: wsId, rows: [] };
 }
 
 function formatPgvectorRowsForPrompt(rows) {
@@ -28807,7 +29028,7 @@ function formatPgvectorRowsForPrompt(rows) {
 }
 
 /** Unified RAG: D1 cosine over ai_knowledge_chunks + keyword sources; optional VECTORIZE_INDEX secondary (never AI_SEARCH / VECTORIZE_DOCS). */
-const UNIFIED_RAG_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+const UNIFIED_RAG_EMBED_MODEL = IAM_EMBED_MODEL;
 const VECTORIZE_INDEX_KNOWN_VECTOR_COUNT = 34;
 
 function sanitizeUnifiedRagLike(q) {
@@ -28874,11 +29095,11 @@ async function unifiedRagSearch(env, query, opts = {}) {
   const conversationId = opts.conversation_id ?? null;
   const mode = opts.mode ?? null;
   const intent = opts.intent ?? null;
+  const wsId = resolveWorkspaceId(env, opts);
   const _t0 = Date.now();
   const likePct = `%${sanitizeUnifiedRagLike(q)}%`;
 
-  const emb = await env.AI.run(UNIFIED_RAG_EMBED_MODEL, { text: q });
-  const qVec = emb?.data?.[0] ?? emb?.result?.data?.[0];
+  const qVec = await generateEmbedding(env, q);
   if (!qVec || !Array.isArray(qVec)) {
     return { matches: [], results: [], count: 0, _error: 'embedding_failed' };
   }
@@ -28886,7 +29107,7 @@ async function unifiedRagSearch(env, query, opts = {}) {
   const runVec = async () => {
     if (!env.VECTORIZE_INDEX) return [];
     try {
-      const res = await env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all' });
+      const res = await env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all', namespace: wsId });
       return res?.matches ?? res ?? [];
     } catch (e) {
       console.warn('[unifiedRagSearch] VECTORIZE_INDEX', e?.message ?? e);
@@ -29231,9 +29452,7 @@ async function vectorizeRagSearch(env, query, opts = {}) {
   const debug = { indexUsed, hasIndex: !!index, hasAi: !!env.AI, hasR2: !!env.R2, topK };
   if (!index || !env.AI) return { results: [], data: [], _debug: { ...debug, error: 'missing index or AI binding' } };
   try {
-    const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [query] });
-    const data = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(data) ? data : data?.data)?.[0];
+    const vector = await generateEmbedding(env, query);
     if (!vector || !Array.isArray(vector)) return { results: [], data: [], _debug: { ...debug, error: 'embedding failed or empty vector' } };
     const vectorMatches = await index.query(vector, { topK, returnMetadata: 'all' });
     const matches = vectorMatches?.matches ?? vectorMatches ?? [];
@@ -29378,15 +29597,14 @@ async function performDocsBucketVectorizeIndex(env, keyFilter) {
       for (let i = 0; i < parts.length; i += RAG_EMBED_BATCH_SIZE) {
         const batchParts = parts.slice(i, i + RAG_EMBED_BATCH_SIZE);
         const texts = batchParts.map((c) => c);
-        let data;
+        let values;
         try {
-          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-          data = modelResp?.data || modelResp;
+          const vecs = await generateEmbedding(env, texts);
+          values = Array.isArray(vecs) ? vecs : [];
         } catch (e) {
           console.warn('[docs-vector-index] embed batch failed', key, e?.message ?? e);
           continue;
         }
-        const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
         const vectors = [];
         batchParts.forEach((_, j) => {
           const chunkIndex = i + j;
@@ -29867,7 +30085,7 @@ async function archiveOldConversations(env) {
 
 /**
  * Index R2 memory markdown (memory/daily/*.md, memory/schema-and-records.md) into Vectorize.
- * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-docs-search).
+ * Uses Workers AI IAM_EMBED_MODEL (IAM_EMBED_DIMS). Requires Vectorize index with dimensions=IAM_EMBED_DIMS, metric=cosine (matches AI Search iam-docs-search).
  * Returns { indexed: number of keys, chunks: number of vectors upserted, error?: string }.
  */
 async function indexMemoryMarkdownToVectorize(env) {
@@ -29920,14 +30138,13 @@ async function indexMemoryMarkdownToVectorize(env) {
   for (let i = 0; i < allChunks.length; i += RAG_EMBED_BATCH_SIZE) {
     const batch = allChunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
     const texts = batch.map(b => b.text);
-    let data;
+    let values;
     try {
-      const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-      data = modelResp?.data || modelResp;
+      const vecs = await generateEmbedding(env, texts);
+      values = Array.isArray(vecs) ? vecs : [];
     } catch (e) {
       throw new Error(`Embedding batch failed: ${e?.message || e}`);
     }
-    const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
     batch.forEach((b, j) => {
       const vec = values[j];
       if (vec && Array.isArray(vec)) {
@@ -30006,14 +30223,13 @@ async function performCodebaseIndexing(env) {
         for (let i = 0; i < chunks.length; i += RAG_EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
           const texts = batch.map((c) => c.text);
-          let data;
+          let values;
           try {
-            const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-            data = modelResp?.data || modelResp;
+            const vecs = await generateEmbedding(env, texts);
+            values = Array.isArray(vecs) ? vecs : [];
           } catch (e) {
             return { success: false, error: `Embedding failed: ${e?.message || e}`, stats };
           }
-          const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
           const vectors = [];
           batch.forEach((c, j) => {
             const vec = values[j];
@@ -31595,7 +31811,7 @@ async function handleTimeTrack(request, url, env) {
         await env.DB.prepare(
           `UPDATE project_time_entries SET duration_seconds = (julianday('now') - julianday(start_time)) * 86400 WHERE id = ?`
         ).bind(active.id).run();
-        await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
+        await ensureWorkSessionAndSignal(env, userId, resolveWorkspaceId(env, {}), 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
         return jsonResponse({ success: true, entry_id: active.id, duration_updated: true });
       }
       const id = crypto.randomUUID();
@@ -31603,7 +31819,7 @@ async function handleTimeTrack(request, url, env) {
         `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'))`
       ).bind(id, userId, PROJECT_ID, session.id, now, null, 'dashboard_heartbeat').run();
-      await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
+      await ensureWorkSessionAndSignal(env, userId, resolveWorkspaceId(env, {}), 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
       return jsonResponse({ success: true, entry_id: id, started_at: now });
     }
 

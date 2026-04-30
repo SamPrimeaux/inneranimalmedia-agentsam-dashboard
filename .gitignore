@@ -64,3 +64,6 @@ migrations/._*
 ._*
 .DS_Store
 paperclip
+
+# Supabase CLI — local link cache (versions, project-ref, pooler URL); never commit
+supabase/.temp/

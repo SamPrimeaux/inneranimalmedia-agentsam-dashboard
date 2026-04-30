@@ -984,7 +984,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const fetchTunnelAndTerminal = useCallback(async () => {
+  const fetchTunnelStatusOnly = useCallback(async () => {
     const cred = { credentials: 'same-origin' as const };
     try {
       const tr = await fetch('/api/tunnel/status', cred);
@@ -1006,7 +1006,10 @@ const App: React.FC = () => {
       setTunnelHealthy(null);
       setTunnelLabel(null);
     }
+  }, []);
 
+  const fetchTerminalConfigOnly = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
     try {
       const ter = await fetch('/api/agent/terminal/config-status', cred);
       const tej = await ter.json().catch(() => ({}));
@@ -1016,7 +1019,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const fetchDeploymentsAndTelemetry = useCallback(async () => {
+  const fetchDeploymentsPoll = useCallback(async () => {
     const cred = { credentials: 'same-origin' as const };
     try {
       const dr = await fetch('/api/overview/deployments', cred);
@@ -1035,7 +1038,9 @@ const App: React.FC = () => {
     } catch {
       setLastDeployLine(null);
     }
+  }, []);
 
+  const fetchTelemetryPoll = useCallback(async () => {
     fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
   }, []);
 
@@ -1071,52 +1076,9 @@ const App: React.FC = () => {
       /* ignore */
     }
 
-    try {
-      const tr = await fetch('/api/tunnel/status', cred);
-      const tj = await tr.json().catch(() => ({}));
-      if (tr.ok && typeof tj.healthy === 'boolean') {
-        setTunnelHealthy(tj.healthy);
-        const st = tj.status != null ? String(tj.status) : '';
-        const n = typeof tj.connections === 'number' ? tj.connections : 0;
-        setTunnelLabel(st ? `${st} · ${n} conn` : `${n} conn`);
-      } else if (tr.status === 401) {
-        setTunnelHealthy(null);
-        setTunnelLabel(null);
-      } else {
-        setTunnelHealthy(false);
-        const err = tj && typeof tj === 'object' && 'error' in tj ? String((tj as { error?: string }).error || '') : '';
-        setTunnelLabel(err ? err.slice(0, 72) : `tunnel ${tr.status}`);
-      }
-    } catch {
-      setTunnelHealthy(null);
-      setTunnelLabel(null);
-    }
-
-    try {
-      const ter = await fetch('/api/agent/terminal/config-status', cred);
-      const tej = await ter.json().catch(() => ({}));
-      if (ter.ok) setTerminalOk(!!tej.terminal_configured);
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      const dr = await fetch('/api/overview/deployments', cred);
-      const dj = await dr.json().catch(() => ({}));
-      if (dr.ok && Array.isArray(dj.deployments) && dj.deployments[0]) {
-        const d = dj.deployments[0] as {
-          worker_name?: string;
-          environment?: string;
-          status?: string;
-        };
-        const bits = [d.worker_name, d.environment, d.status].filter(Boolean).map(String);
-        setLastDeployLine(bits.join(' · ') || null);
-      } else {
-        setLastDeployLine(null);
-      }
-    } catch {
-      setLastDeployLine(null);
-    }
+    void fetchTunnelStatusOnly();
+    void fetchTerminalConfigOnly();
+    void fetchDeploymentsPoll();
 
     try {
       const nr = await fetch('/api/agent/notifications', cred);
@@ -1128,32 +1090,60 @@ const App: React.FC = () => {
       /* ignore */
     }
 
-    fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
-  }, [fetchHealth]);
+    void fetchTelemetryPoll();
+  }, [fetchHealth, fetchTunnelStatusOnly, fetchTerminalConfigOnly, fetchDeploymentsPoll, fetchTelemetryPoll]);
 
   useEffect(() => {
-    // Tiered polling intervals (ms):
-    // health=60s, notifications=30s, git/problems=60s, tunnel/terminal=120s, deployments/telemetry=120s.
-    void fetchHealth();
-    void fetchNotifications();
-    void fetchGitAndProblems();
-    void fetchTunnelAndTerminal();
-    void fetchDeploymentsAndTelemetry();
+    // Polling (ms): health 5m, notifications 2m, git+problems 3m, tunnel 5m, terminal config 10m,
+    // deployments 2m, telemetry 5m. Paused while tab hidden (visibilitychange).
+    const ids: number[] = [];
+    const clearAll = () => {
+      ids.forEach((id) => clearInterval(id));
+      ids.length = 0;
+    };
 
-    const h = window.setInterval(() => void fetchHealth(), 60_000);
-    const n = window.setInterval(() => void fetchNotifications(), 30_000);
-    const gp = window.setInterval(() => void fetchGitAndProblems(), 60_000);
-    const tt = window.setInterval(() => void fetchTunnelAndTerminal(), 120_000);
-    const dt = window.setInterval(() => void fetchDeploymentsAndTelemetry(), 120_000);
+    const startAll = () => {
+      clearAll();
+      if (typeof document !== 'undefined' && document.hidden) return;
+
+      void fetchHealth();
+      void fetchNotifications();
+      void fetchGitAndProblems();
+      void fetchTunnelStatusOnly();
+      void fetchTerminalConfigOnly();
+      void fetchDeploymentsPoll();
+      void fetchTelemetryPoll();
+
+      ids.push(window.setInterval(() => void fetchHealth(), 300_000));
+      ids.push(window.setInterval(() => void fetchNotifications(), 120_000));
+      ids.push(window.setInterval(() => void fetchGitAndProblems(), 180_000));
+      ids.push(window.setInterval(() => void fetchTunnelStatusOnly(), 300_000));
+      ids.push(window.setInterval(() => void fetchTerminalConfigOnly(), 600_000));
+      ids.push(window.setInterval(() => void fetchDeploymentsPoll(), 120_000));
+      ids.push(window.setInterval(() => void fetchTelemetryPoll(), 300_000));
+    };
+
+    startAll();
+
+    const onVis = () => {
+      if (document.hidden) clearAll();
+      else startAll();
+    };
+    document.addEventListener('visibilitychange', onVis);
 
     return () => {
-      clearInterval(h);
-      clearInterval(n);
-      clearInterval(gp);
-      clearInterval(tt);
-      clearInterval(dt);
+      document.removeEventListener('visibilitychange', onVis);
+      clearAll();
     };
-  }, [fetchHealth, fetchNotifications, fetchGitAndProblems, fetchTunnelAndTerminal, fetchDeploymentsAndTelemetry]);
+  }, [
+    fetchHealth,
+    fetchNotifications,
+    fetchGitAndProblems,
+    fetchTunnelStatusOnly,
+    fetchTerminalConfigOnly,
+    fetchDeploymentsPoll,
+    fetchTelemetryPoll,
+  ]);
 
   const markNotificationRead = useCallback(async (id: string) => {
     try {

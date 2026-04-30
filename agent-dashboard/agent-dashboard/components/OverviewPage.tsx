@@ -258,9 +258,25 @@ export const OverviewPage: React.FC = () => {
 
   useEffect(() => {
     fetchProviderColors();
-    load();
-    const t = setInterval(load, 60000);
-    return () => clearInterval(t);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) clearInterval(timer);
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load();
+      timer = setInterval(load, 120_000);
+    };
+    start();
+    const onVis = () => {
+      if (document.hidden) {
+        if (timer) clearInterval(timer);
+        timer = null;
+      } else start();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      if (timer) clearInterval(timer);
+    };
   }, [fetchProviderColors, load]);
 
   const financeDaily = useMemo(() => {

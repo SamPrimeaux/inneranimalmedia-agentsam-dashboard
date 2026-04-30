@@ -345,11 +345,26 @@ export const IntegrationsPage: React.FC = () => {
     return p;
   }, []);
 
-  const startOAuth = useCallback(async (providerKey: string) => {
+  const startOAuth = useCallback((providerKey: string) => {
     const prov = providerForOAuthStart(providerKey);
-    const res = await fetchJson<{ redirect_url: string }>(`/api/oauth/${encodeURIComponent(prov)}/start?return_to=${encodeURIComponent('/dashboard/integrations')}`);
-    window.location.href = res.redirect_url;
+    const qs = new URLSearchParams({ return_to: '/dashboard/integrations' });
+    window.location.href = `/api/oauth/${encodeURIComponent(prov)}/start?${qs.toString()}`;
   }, [providerForOAuthStart]);
+
+  const disconnectSupabase = useCallback(async () => {
+    setBusy('supabase:disconnect');
+    try {
+      const res = await fetch('/api/integrations/supabase', { method: 'DELETE', credentials: 'same-origin' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string })?.error || res.statusText);
+      setToast({ type: 'success', message: 'Supabase OAuth disconnected' });
+      await refresh(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh]);
 
   const connectApiKey = useCallback(async () => {
     if (!apiKeyDrawer) return;
@@ -461,6 +476,7 @@ export const IntegrationsPage: React.FC = () => {
                       if (provider.status === 'auth_expired' && provider.auth_type === 'oauth2') return void startOAuth(provider.provider_key);
                       return void openDrawer(provider);
                     }}
+                    onDisconnect={provider.provider_key === 'supabase_oauth' ? () => void disconnectSupabase() : undefined}
                   />
                 ))}
               </section>
@@ -640,18 +656,34 @@ const KpiStrip: React.FC<{ summary: Record<string, number> }> = ({ summary }) =>
   );
 };
 
+function parseSupabaseOAuthProjects(provider: Provider): { name?: string; ref?: string; id?: string }[] {
+  if (provider.provider_key !== 'supabase_oauth') return [];
+  const raw = (provider.oauth_accounts?.[0] as { metadata_json?: string } | undefined)?.metadata_json;
+  if (!raw || typeof raw !== 'string') return [];
+  try {
+    const m = JSON.parse(raw) as { projects?: { name?: string; ref?: string; id?: string }[] };
+    return Array.isArray(m.projects) ? m.projects : [];
+  } catch {
+    return [];
+  }
+}
+
 const ProviderCard: React.FC<{
   provider: Provider;
   busy: string | null;
   colorRegistry: Map<string, ProviderPalette>;
   colorAliases: Record<string, string>;
   onPrimary: () => void;
-}> = ({ provider, busy, colorRegistry, colorAliases, onPrimary }) => {
+  onDisconnect?: () => void;
+}> = ({ provider, busy, colorRegistry, colorAliases, onPrimary, onDisconnect }) => {
   const latency = provider.health?.latency_ms ?? provider.last_health_latency_ms;
   const palette = paletteFor(provider.provider_key, provider.category, colorRegistry, provider.provider_color, colorAliases);
   const primary = palette.primary_color!;
   const secondary = palette.secondary_color!;
   const text = palette.text_on_color!;
+  const supabaseProjects = parseSupabaseOAuthProjects(provider);
+  const connectLabel =
+    provider.provider_key === 'supabase_oauth' && provider.status === 'disconnected' ? 'Connect Supabase' : null;
   return (
     <article
       className="rounded-xl border bg-[var(--bg-panel)] p-4 flex flex-col gap-3 min-h-[190px] overflow-hidden"
@@ -687,6 +719,12 @@ const ProviderCard: React.FC<{
         </div>
         <Meta label="Tools" value={String(provider.tool_count || 0)} />
       </div>
+      {provider.provider_key === 'supabase_oauth' && provider.status === 'connected' && supabaseProjects.length > 0 && (
+        <div className="text-[11px] text-[var(--text-muted)] leading-snug border-t border-[var(--border-subtle)] pt-2">
+          <span className="font-semibold text-[var(--text-heading)]">Linked Supabase projects: </span>
+          {supabaseProjects.map((p) => p.name || p.ref || (p.id != null ? String(p.id) : '') || 'project').join(', ')}
+        </div>
+      )}
       <div className="mt-auto flex gap-2">
         <button
           type="button"
@@ -700,13 +738,23 @@ const ProviderCard: React.FC<{
               ? <Shield size={13} />
               : <Settings size={13} />
           }
-          {provider.status === 'disconnected'
-            ? 'Connect'
-            : provider.status === 'auth_expired'
-              ? 'Re-authorize'
-              : 'Manage'
-          }
+          {connectLabel ||
+            (provider.status === 'disconnected'
+              ? 'Connect'
+              : provider.status === 'auth_expired'
+                ? 'Re-authorize'
+                : 'Manage')}
         </button>
+        {provider.provider_key === 'supabase_oauth' && provider.status === 'connected' && onDisconnect ? (
+          <button
+            type="button"
+            onClick={onDisconnect}
+            disabled={!!busy}
+            className="text-[11px] font-bold px-3 py-2 rounded-lg border border-[var(--solar-red)]/50 text-[var(--solar-red)] hover:bg-[var(--solar-red)]/10 disabled:opacity-50"
+          >
+            Disconnect
+          </button>
+        ) : null}
       </div>
     </article>
   );

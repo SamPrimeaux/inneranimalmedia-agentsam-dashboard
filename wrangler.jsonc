@@ -127,23 +127,6 @@
     "DEPLOY_ENV": "production"
   },
   "observability": {
-    "logs": {
-      "enabled": true,
-      "invocation_logs": true,
-      "destinations": [
-        "meauxbility-central-analytics"
-      ]
-    },
-    "traces": {
-      "enabled": true,
-      "destinations": [
-        "inneranimalmedia-selfhosted"
-      ]
-    }
-  },
-  "tail_consumers": [
-    {
-      "service": "inneranimalmedia-tail"
-    }
-  ]
+    "enabled": false
+  }
 }

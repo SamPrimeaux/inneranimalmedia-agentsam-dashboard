@@ -3,7 +3,7 @@
 **Branch:** `production`  
 **Purpose:** Single source of truth for what shipped locally today, how components fit together, and how teammates stay aligned while iterating.
 
-**Pushed to `origin/production` (2026-04-30):** `aee7e16..94fafe2`
+**Pushed to `origin/production` (2026-04-30):** cumulative from `aee7e16` through tip **`28f6ff2`** (`git pull origin production`).
 
 | Commit | Subject |
 |--------|---------|
@@ -14,6 +14,7 @@
 | `9931ea7` | feat(supabase): embed-on-ingest Edge Function |
 | `def45d0` | feat(worker): retention cron + shared CI/CD overview fetch |
 | `94fafe2` | docs: record production push commit range |
+| `28f6ff2` | docs: refresh push SHA range table |
 
 *(Earlier on production:* `aee7e16` *BrowserView / browser trust.)*
 

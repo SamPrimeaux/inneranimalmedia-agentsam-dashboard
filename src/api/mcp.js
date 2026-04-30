@@ -3,6 +3,7 @@
  * Handles agent session tracking, tool registration listings, and intent-based routing.
  */
 import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
+import { maxAgentsamWorkflowTimeoutSeconds } from '../core/agentsam-workflows.js';
 
 const MCP_CARD_AGENT_IDS = [
   'mcp_agent_architect',
@@ -28,11 +29,7 @@ async function resolveWorkflowTimeoutSeconds(env, tenantId) {
   const fallback = 300;
   if (!env.DB) return fallback;
   try {
-    const row = await env.DB.prepare(
-      `SELECT COALESCE(MAX(timeout_seconds), ?) AS t FROM mcp_workflows WHERE tenant_id = ?`
-    ).bind(fallback, tenantId).first();
-    const t = row?.t != null ? Number(row.t) : fallback;
-    return Number.isFinite(t) && t > 0 ? t : fallback;
+    return await maxAgentsamWorkflowTimeoutSeconds(env.DB, fallback, tenantId);
   } catch (_) {
     return fallback;
   }

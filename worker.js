@@ -16,6 +16,12 @@ import { handleVaultApi } from "./src/api/vault.js";
 import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
 import { runMasterDailyRetention } from './src/core/retention.js';
 import { fetchCicdPipelineRunsForOverview } from './src/api/overview.js';
+import {
+  AGENTSAM_MCP_WORKFLOWS,
+  buildAgentSamWorkflowListSelect,
+  getAgentSamWorkflow,
+  normalizeAgentSamWorkflowRow,
+} from './src/core/agentsam-workflows.js';
 
 const IAM_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
 const IAM_EMBED_DIMS = 1024;
@@ -18859,9 +18865,7 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
   await ensureMcpWorkflowStepDefaults(env);
   const sid = session_id != null ? String(session_id) : null;
   const trig = triggered_by != null ? String(triggered_by) : 'manual';
-  const wf = await env.DB.prepare(
-    `SELECT * FROM mcp_workflows WHERE id = ? AND status = 'active' AND tenant_id = ?`
-  ).bind(workflow_id, MCP_WF_TENANT).first();
+  const wf = await getAgentSamWorkflow(env.DB, workflow_id, MCP_WF_TENANT);
 
   if (!wf) return { error: 'Workflow not found or not active' };
 
@@ -18899,9 +18903,9 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
      VALUES (?, ?, ?, ?, 'running', ?, unixepoch())`
   ).bind(runId, workflow_id, sid, MCP_WF_TENANT, trig).run();
 
-  await env.DB.prepare(
-    `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
-     updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+      await env.DB.prepare(
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET run_count = run_count + 1, last_run_at = datetime('now'),
+     updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
   ).bind(workflow_id, MCP_WF_TENANT).run();
 
   ctx.waitUntil(executeWorkflowSteps(env, wf, runId, sid));
@@ -18936,7 +18940,7 @@ async function ensureMcpWorkflowStepDefaults(env) {
   for (const [id, steps] of Object.entries(MCP_WORKFLOW_STEP_DEFAULTS)) {
     try {
       await env.DB.prepare(
-        `UPDATE mcp_workflows
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS}
          SET steps_json = ?
          WHERE id = ?
            AND (steps_json IS NULL OR TRIM(steps_json) = '' OR TRIM(steps_json) = '[]')`
@@ -20690,13 +20694,7 @@ async function handleMcpApi(req, u, e, ctx) {
     }
 
     if (pathLower === '/api/mcp/workflows' && method === 'GET') {
-      const { results } = await e.DB.prepare(
-        `SELECT id, name, description, category, trigger_type, status,
-                    run_count, success_count, last_run_at, estimated_cost_usd, created_at
-             FROM mcp_workflows
-             WHERE tenant_id = ?
-             ORDER BY updated_at DESC`
-      ).bind(MCP_WF_TENANT).all();
+      const { results } = await e.DB.prepare(buildAgentSamWorkflowListSelect()).bind(MCP_WF_TENANT).all();
       return jsonResponse({ workflows: results || [] }, 200);
     }
     if (pathLower === '/api/mcp/workflows' && method === 'POST') {
@@ -20710,26 +20708,66 @@ async function handleMcpApi(req, u, e, ctx) {
       let trigStr = body.trigger_config_json;
       if (trigStr != null && typeof trigStr !== 'string') trigStr = JSON.stringify(trigStr);
       else if (trigStr == null) trigStr = JSON.stringify({});
-      const statusIns = body.status != null ? String(body.status) : 'draft';
-      const row = await e.DB.prepare(
-        `INSERT INTO mcp_workflows
-               (tenant_id, name, description, category, trigger_type, trigger_config_json,
-                steps_json, timeout_seconds, requires_approval, estimated_cost_usd, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      const statusIns = body.status != null ? String(body.status) : 'ready';
+      const wfId =
+        body.id != null && String(body.id).trim()
+          ? String(body.id).trim()
+          : `wf_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const slugKey = String(name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 128);
+      const workflowKey =
+        body.workflow_key != null && String(body.workflow_key).trim()
+          ? String(body.workflow_key).trim()
+          : slugKey || wfId;
+      const workspaceIns =
+        body.workspace_id != null && String(body.workspace_id).trim()
+          ? String(body.workspace_id).trim()
+          : IAM_DEFAULT_WORKSPACE_ID;
+      const categoryIns = body.category != null ? String(body.category) : 'general';
+      const taskTypeIns = body.task_type != null ? String(body.task_type) : 'mcp_workflow';
+      const triggerTypeIns = body.trigger_type != null ? String(body.trigger_type) : 'manual';
+      const subSlug =
+        body.agent_id != null && String(body.agent_id).trim() ? String(body.agent_id).trim() : null;
+      const rowRaw = await e.DB.prepare(
+        `INSERT INTO ${AGENTSAM_MCP_WORKFLOWS}
+               (id, workflow_key, display_name, description, status, priority,
+                steps_json, tools_json, acceptance_criteria_json, input_schema_json, output_schema_json,
+                tenant_id, workspace_id, trigger_type, trigger_config_json, category, task_type,
+                requires_approval, risk_level, is_active, model_id, timeout_seconds,
+                tags_json, environment, visibility, input_defaults_json,
+                total_cost_usd, subagent_slug,
+                created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'medium',
+                ?, '[]', '[]', '{}', '{}',
+                ?, ?, ?, ?, ?, ?,
+                ?, 'low', 1, 'claude-sonnet-4-5', ?,
+                '[]', 'production', 'workspace', '{}',
+                ?, ?,
+                datetime('now'), datetime('now'))
              RETURNING *`
       ).bind(
-        MCP_WF_TENANT,
+        wfId,
+        workflowKey,
         name,
         body.description != null ? String(body.description) : null,
-        body.category != null ? String(body.category) : null,
-        body.trigger_type != null ? String(body.trigger_type) : 'manual',
-        trigStr,
+        statusIns,
         stepsStr,
-        body.timeout_seconds != null ? Number(body.timeout_seconds) || 300 : 300,
+        MCP_WF_TENANT,
+        workspaceIns,
+        triggerTypeIns,
+        trigStr,
+        categoryIns,
+        taskTypeIns,
         body.requires_approval ? 1 : 0,
+        body.timeout_seconds != null ? Number(body.timeout_seconds) || 300 : 300,
         body.estimated_cost_usd != null ? Number(body.estimated_cost_usd) || 0 : 0,
-        statusIns
+        subSlug
       ).first();
+      const row = rowRaw ? normalizeAgentSamWorkflowRow(rowRaw) : rowRaw;
       return jsonResponse(row, 201);
     }
     const wfPatchMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)$/);
@@ -20739,22 +20777,37 @@ async function handleMcpApi(req, u, e, ctx) {
       try { body = await req.json(); } catch (_) { }
       const fields = [];
       const vals = [];
-      const allowed = ['name', 'description', 'category', 'trigger_type', 'trigger_config_json',
-        'steps_json', 'timeout_seconds', 'requires_approval', 'estimated_cost_usd', 'status'];
-      for (const key of allowed) {
-        if (key in body) {
-          fields.push(`${key} = ?`);
-          let v = body[key];
-          if (key === 'requires_approval') vals.push(v ? 1 : 0);
-          else if ((key === 'trigger_config_json' || key === 'steps_json') && typeof v === 'object' && v !== null) vals.push(JSON.stringify(v));
-          else vals.push(v);
-        }
+      const allowedMap = {
+        name: 'display_name',
+        description: 'description',
+        category: 'category',
+        trigger_type: 'trigger_type',
+        trigger_config_json: 'trigger_config_json',
+        steps_json: 'steps_json',
+        timeout_seconds: 'timeout_seconds',
+        requires_approval: 'requires_approval',
+        estimated_cost_usd: 'total_cost_usd',
+        total_cost_usd: 'total_cost_usd',
+        status: 'status',
+        agent_id: 'subagent_slug',
+        subagent_slug: 'subagent_slug',
+        display_name: 'display_name',
+        workflow_key: 'workflow_key',
+      };
+      for (const [bodyKey, col] of Object.entries(allowedMap)) {
+        if (!(bodyKey in body)) continue;
+        fields.push(`${col} = ?`);
+        let v = body[bodyKey];
+        if (bodyKey === 'requires_approval') vals.push(v ? 1 : 0);
+        else if ((bodyKey === 'trigger_config_json' || bodyKey === 'steps_json') && typeof v === 'object' && v !== null)
+          vals.push(JSON.stringify(v));
+        else vals.push(v);
       }
       if (!fields.length) return jsonResponse({ error: 'No valid fields to update' }, 400);
-      fields.push('updated_at = unixepoch()');
+      fields.push(`updated_at = datetime('now')`);
       vals.push(id, MCP_WF_TENANT);
       await e.DB.prepare(
-        `UPDATE mcp_workflows SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`
       ).bind(...vals).run();
       return jsonResponse({ success: true }, 200);
     }
@@ -20780,7 +20833,7 @@ async function handleMcpApi(req, u, e, ctx) {
     if (wfRunsListMatch && method === 'GET') {
       const workflow_id = wfRunsListMatch[1];
       const own = await e.DB.prepare(
-        `SELECT id FROM mcp_workflows WHERE id = ? AND tenant_id = ?`
+        `SELECT id FROM ${AGENTSAM_MCP_WORKFLOWS} WHERE id = ? AND tenant_id = ?`
       ).bind(workflow_id, MCP_WF_TENANT).first();
       if (!own) return jsonResponse({ error: 'Workflow not found' }, 404);
       const { results } = await e.DB.prepare(
@@ -22806,8 +22859,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT w.name, r.status, datetime(r.started_at, 'unixepoch') as started
-           FROM mcp_workflow_runs r JOIN mcp_workflows w ON r.workflow_id = w.id
+          `SELECT w.display_name AS name, r.status, datetime(r.started_at, 'unixepoch') as started
+           FROM mcp_workflow_runs r JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON r.workflow_id = w.id
            WHERE r.started_at >= unixepoch(?) ORDER BY r.started_at DESC`
         ).bind(`${today} 00:00:00`).all()
       ),
@@ -24275,8 +24328,9 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
 
     if (!failed) {
       await env.DB.prepare(
-        `UPDATE mcp_workflows SET success_count = success_count + 1,
-         updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET success_count = success_count + 1,
+         last_run_status = 'success',
+         updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
       ).bind(workflow.id, MCP_WF_TENANT).run();
     }
   } catch (err) {
@@ -26949,7 +27003,7 @@ async function runFinancialCommandCron(env, ctx) {
 /**
  * Allowlisted tables for D1 data_retention_policies purge (column + compare mode).
  * compare: datetime | unix | date_col (TEXT YYYY-MM-DD day bucket: date(col) < date('now','-Nd'))
- * Do NOT add config/registry tables here (mcp_registered_tools, mcp_services, mcp_workflows,
+ * Do NOT add config/registry tables here (mcp_registered_tools, mcp_services, agentsam_mcp_workflows,
  * mcp_server_allowlist, mcp_service_credentials, terminal_connections) — policies on those names are skipped.
  */
 const RETENTION_PURGE_TABLE_CONFIG = {
@@ -31215,8 +31269,8 @@ async function handleOverviewCommandsWorkflows(request, env) {
     const [slash, never, runs, workflows, runDistinct, dependencies] = await Promise.all([
       overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name, call_count FROM agentsam_slash_commands ORDER BY call_count DESC LIMIT 10`, []),
       overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name FROM agentsam_slash_commands WHERE COALESCE(call_count,0) = 0 AND COALESCE(is_active,1) = 1 ORDER BY sort_order ASC LIMIT 12`, []),
-      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT w.name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM mcp_workflow_runs r LEFT JOIN mcp_workflows w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
-      overviewQuery(env, failed, 'mcp_workflows', `SELECT COUNT(*) AS total FROM mcp_workflows WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT w.display_name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM mcp_workflow_runs r LEFT JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
+      overviewQuery(env, failed, 'agentsam_mcp_workflows', `SELECT COUNT(*) AS total FROM ${AGENTSAM_MCP_WORKFLOWS} WHERE tenant_id = ?`, [tenantId], 'first'),
       overviewQuery(env, failed, 'mcp_workflow_runs', `SELECT COUNT(DISTINCT workflow_id) AS run_once FROM mcp_workflow_runs WHERE tenant_id = ?`, [tenantId], 'first'),
       overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
     ]);

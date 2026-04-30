@@ -89,13 +89,6 @@ interface NetworkReq {
   status?: number;
 }
 
-interface PlaywrightJobRow {
-  id:         string;
-  url:        string;
-  status:     string;
-  created_at: string;
-}
-
 interface InspectedElement {
   tag:        string;
   id:         string | null;
@@ -770,9 +763,6 @@ const BrowserPane: React.FC<PaneProps> = ({
   const [devToolsOpen,   setDevToolsOpen]   = useState(false);
   const [devToolsWidth,  setDevToolsWidth]  = useState(40);
   const [devToolsTab,    setDevToolsTab]    = useState<DevToolsTab>('elements');
-  const [jobsOpen,       setJobsOpen]       = useState(false);
-  const [jobs,           setJobs]           = useState<PlaywrightJobRow[]>([]);
-  const [jobCount,       setJobCount]       = useState(0);
   const [toastMsg,       setToastMsg]       = useState<string | null>(null);
 
   const inputRef     = useRef<HTMLInputElement>(null);
@@ -856,55 +846,6 @@ const BrowserPane: React.FC<PaneProps> = ({
     window.addEventListener('message', h);
     return () => window.removeEventListener('message', h);
   }, []);
-
-  useEffect(() => {
-    if (!jobsOpen) return;
-    void fetch('/api/d1/query', {
-      method:      'POST',
-      headers:     { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body:        JSON.stringify({
-        sql: 'SELECT id, url, status, created_at FROM playwright_jobs ORDER BY created_at DESC LIMIT 10',
-      }),
-    })
-      .then(r => r.json())
-      .then((d: { results?: PlaywrightJobRow[] }) => {
-        const list = Array.isArray(d.results) ? d.results : [];
-        setJobs(list);
-        setJobCount(list.length);
-      })
-      .catch(() => { setJobs([]); setJobCount(0); });
-  }, [jobsOpen]);
-
-  const runPlaywrightTest = useCallback(() => {
-    const u = currentUrl.trim();
-    if (!u) return;
-    void fetch('/api/agent/playwright', {
-      method:      'POST',
-      headers:     { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body:        JSON.stringify({
-        url: u, job_type: 'screenshot', triggered_by: 'browser_panel',
-      }),
-    }).catch(() => {});
-    window.setTimeout(() => {
-      void fetch('/api/d1/query', {
-        method:      'POST',
-        headers:     { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body:        JSON.stringify({
-          sql: 'SELECT id, url, status, created_at FROM playwright_jobs ORDER BY created_at DESC LIMIT 10',
-        }),
-      })
-        .then(r => r.json())
-        .then((d: { results?: PlaywrightJobRow[] }) => {
-          const list = Array.isArray(d.results) ? d.results : [];
-          setJobs(list);
-          setJobCount(list.length);
-        })
-        .catch(() => {});
-    }, 2000);
-  }, [currentUrl]);
 
   // ── Inject picker script when mode = picker ─────────────────────────────────
   useEffect(() => {
@@ -1234,7 +1175,7 @@ const BrowserPane: React.FC<PaneProps> = ({
         </div>
       )}
 
-      {/* Browser + DevTools + jobs */}
+      {/* Browser + DevTools */}
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         <div className="flex flex-1 flex overflow-hidden min-h-0" ref={containerRef}>
           <div
@@ -1355,71 +1296,6 @@ const BrowserPane: React.FC<PaneProps> = ({
                 />
               </div>
             </>
-          )}
-        </div>
-
-        <div className="border-t border-[var(--border-subtle)] shrink-0">
-          <button
-            type="button"
-            className="w-full flex items-center justify-between px-3 py-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors"
-            onClick={() => setJobsOpen(v => !v)}
-          >
-            <span className="font-medium tracking-wide">PLAYWRIGHT JOBS</span>
-            <span className="flex items-center gap-2">
-              {jobCount > 0 && (
-                <span className="bg-[var(--color-primary)] text-white rounded px-1.5 py-0.5 text-[10px] font-medium">
-                  {jobCount}
-                </span>
-              )}
-              <span style={{ transform: jobsOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
-            </span>
-          </button>
-
-          {jobsOpen && (
-            <div className="max-h-48 overflow-y-auto border-t border-[var(--border-subtle)]">
-              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--border-subtle)]">
-                <input
-                  type="text"
-                  value={currentUrl}
-                  readOnly
-                  className="flex-1 text-xs bg-[var(--bg-app)] rounded px-2 py-1 text-[var(--text-muted)] border border-[var(--border-subtle)]"
-                />
-                <button
-                  type="button"
-                  onClick={runPlaywrightTest}
-                  className="text-xs px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:opacity-90"
-                >
-                  Run Test
-                </button>
-              </div>
-              {jobs.map(job => {
-                const disp = job.status === 'completed' ? 'success' : job.status;
-                return (
-                  <div
-                    key={job.id}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-[var(--border-subtle)] last:border-0"
-                  >
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                      disp === 'success'
-                        ? 'bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
-                        : disp === 'failed'
-                          ? 'bg-red-500/15 text-red-400'
-                          : 'bg-[var(--bg-hover)] text-[var(--text-muted)]'
-                    }`}
-                    >{job.status}</span>
-                    <span className="truncate flex-1 text-[var(--text-muted)]">{job.url}</span>
-                    <span className="text-[var(--text-muted)] shrink-0 tabular-nums opacity-70">
-                      {new Date(job.created_at).toLocaleTimeString()}
-                    </span>
-                  </div>
-                );
-              })}
-              {jobs.length === 0 && (
-                <div className="px-3 py-3 text-xs text-[var(--text-muted)] text-center opacity-80">
-                  No jobs yet — open Jobs and use Run Test
-                </div>
-              )}
-            </div>
           )}
         </div>
       </div>

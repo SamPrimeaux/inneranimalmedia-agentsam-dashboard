@@ -29,7 +29,6 @@ import { AISearchPanel } from './components/AISearchPanel';
 import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
-import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { SourcePanel } from './components/SourcePanel';
 import LearnPage from './components/LearnPage';
 import { ProjectType, type ActiveFile } from './types';
@@ -186,7 +185,7 @@ const App: React.FC = () => {
 
   // IDE State
   type TabId = 'Workspace' | 'welcome' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database' | 'autorag' | null>(() =>
+  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'database' | 'autorag' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
   const LS_SIDEBAR_RAIL = 'iam_sidebar_expanded';
@@ -236,7 +235,7 @@ const App: React.FC = () => {
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
   /** ≤768px: secondary rail actions (sheet above bottom tab bar). */
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  /** Desktop: Draw / Search / Playwright / History (Addendum A). */
+  /** Desktop: Draw / Search / History (Addendum A). */
   const [topChromeMoreOpen, setTopChromeMoreOpen] = useState(false);
   const topChromeMoreRef = useRef<HTMLDivElement>(null);
   const [isWorkspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false);
@@ -856,7 +855,7 @@ const App: React.FC = () => {
   }, []);
 
   const toggleActivity = (
-    activity: 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'playwright' | 'database',
+    activity: 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'database',
   ) => {
     if (activity === 'files' && typeof window !== 'undefined') {
       const p = window.location.pathname;
@@ -1683,17 +1682,6 @@ const App: React.FC = () => {
                               className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
                               onClick={() => {
                                   setTopChromeMoreOpen(false);
-                                  toggleActivity('playwright');
-                              }}
-                          >
-                              <Monitor size={14} className="text-[var(--text-muted)]" />
-                              Playwright
-                          </button>
-                          <button
-                              type="button"
-                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
-                              onClick={() => {
-                                  setTopChromeMoreOpen(false);
                                   navigate('/dashboard/overview');
                               }}
                           >
@@ -1882,8 +1870,6 @@ const App: React.FC = () => {
                               revealMainWorkspaceIfNarrow();
                           }}
                       />
-                  ) : activeActivity === 'playwright' ? (
-                      <PlaywrightConsole />
                   ) : activeActivity === 'debug' ? (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Redirecting to terminal problems...</div>
                   ) : activeActivity === 'git' ? (
@@ -2350,7 +2336,6 @@ const App: React.FC = () => {
               <MobileMoreRow icon={Network} label="Remote Explorers" onClick={() => { setMobileMoreOpen(false); toggleActivity('remote'); }} />
               <MobileMoreRow icon={Layers} label="Tools & MCP" onClick={() => { setMobileMoreOpen(false); toggleActivity('mcps'); }} />
               <MobileMoreRow icon={Cloud} label="Cloud Sync" onClick={() => { setMobileMoreOpen(false); toggleActivity('drive'); }} />
-              <MobileMoreRow icon={Monitor} label="Playwright Jobs" onClick={() => { setMobileMoreOpen(false); toggleActivity('playwright'); }} />
               <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); navigate('/dashboard/designstudio'); }} />
             </div>
           </div>

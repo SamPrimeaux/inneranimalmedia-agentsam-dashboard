@@ -4,7 +4,18 @@
  * Interfaces with agentsam_ai, agentsam_skill, and agentsam_skill_invocation.
  */
 import { handlers as db } from '../tools/db.js';
-import { jsonResponse } from '../core/auth.js';
+import { getAuthUser, jsonResponse } from '../core/auth.js';
+
+/**
+ * HTTP entry for /api/agentsam/* (registry, prompts, etc.).
+ */
+export async function handleAgentSamApi(request, url, env, ctx) {
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const out = await handleAgentSamRegistryRequest(request, env, ctx, authUser);
+  if (out) return out;
+  return jsonResponse({ error: 'API route not found' }, 404);
+}
 
 /**
  * Main switch-board for Agent Sam Registry requests.

@@ -23,6 +23,7 @@ import { handleMcpApi }              from '../api/mcp.js';
 import { handleNotifyDeployComplete } from '../api/notify-deploy.js';
 import { handleAgentApi }            from '../api/agent.js';
 import { handleAgentSamApi }         from '../api/agentsam.js';
+import { handleBrowserTrust }        from '../api/browser-trust.js';
 import { handleOverviewApi }         from '../api/overview.js';
 import { handleDeploymentsApi }      from '../api/deployments.js';
 import { handleDashboardApi }        from '../api/dashboard.js';
@@ -406,6 +407,9 @@ export async function handleRequest(request, env, ctx) {
   }
 
   // ── Agent Sam ──────────────────────────────────────────────────────────────
+  if (path.startsWith('/api/agentsam/browser/trust')) {
+    return handleBrowserTrust(request, env);
+  }
   if (path.startsWith('/api/agentsam')) {
     return handleAgentSamApi(request, url, env, ctx);
   }

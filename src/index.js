@@ -171,22 +171,28 @@ export default {
 
 
 
-
+      // Collab workspace room -> IAM_COLLAB DO (same room key as worker.js /api/collab/<segment>)
       if (pathLower.startsWith('/api/collab/room/')) {
         if (env.IAM_COLLAB) {
           const rest = pathLower.slice('/api/collab/'.length).replace(/^\/+/, '');
           const room = decodeURIComponent(rest);
+          if (!room) {
+            return jsonResponse(
+              { ok: false, available: false, reason: 'iam_collab_room_invalid' },
+              400,
+            );
+          }
           const id = env.IAM_COLLAB.idFromName(room);
           const stub = env.IAM_COLLAB.get(id);
           return stub.fetch(request);
         }
-        const isWs = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
-        if (isWs) {
-          return new Response('Collaboration binding unavailable', { status: 404 });
+        const upgrade = (request.headers.get('Upgrade') || '').toLowerCase();
+        if (upgrade === 'websocket') {
+          return new Response(null, { status: 404 });
         }
         return jsonResponse(
           { ok: false, available: false, reason: 'iam_collab_binding_missing' },
-          404,
+          200,
         );
       }
 

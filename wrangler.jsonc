@@ -142,6 +142,9 @@
     "DEPLOY_ENV": "production"
   },
   "observability": {
-    "enabled": false
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
   }
 }

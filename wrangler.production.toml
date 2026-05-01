@@ -165,4 +165,7 @@ DEPLOY_ENV = "production"
 AI_SEARCH_ENDPOINT = "https://2da31515-2005-42e4-9efe-a4e6a425a627.search.ai.cloudflare.com"
 
 [observability]
-enabled = false
+
+[observability.logs]
+enabled = true
+invocation_logs = true

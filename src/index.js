@@ -129,7 +129,12 @@ export default {
         }
       }
 
-
+      // Canonical sign-in URL is /auth/login (ASSETS pages/auth/login.html). /login is legacy SPA path only.
+      if (request.method === 'GET' && pathLower === '/login') {
+        const u = new URL(request.url);
+        u.pathname = '/auth/login';
+        return Response.redirect(u.toString(), 302);
+      }
 
       // Collab workspace room -> IAM_COLLAB DO (path segment after /api/collab/; casing preserved)
       if (/^\/api\/collab\/room\//i.test(path)) {

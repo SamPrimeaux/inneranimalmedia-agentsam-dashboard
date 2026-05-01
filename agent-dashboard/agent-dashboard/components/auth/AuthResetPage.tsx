@@ -32,7 +32,7 @@ export function AuthResetPage() {
         setError(data?.error || 'Reset failed');
         return;
       }
-      navigate('/login?reset=1', { replace: true });
+      navigate('/auth/login?reset=1', { replace: true });
     } finally {
       setSubmitting(false);
     }
@@ -142,7 +142,7 @@ export function AuthResetPage() {
         </form>
 
         <div style={{ marginTop: 16, fontSize: 12, color: 'var(--text-muted)' }}>
-          <a href="/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
+          <a href="/auth/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
             Back to sign in
           </a>
         </div>

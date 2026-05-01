@@ -202,7 +202,7 @@ export function OnboardingPage() {
         const res = await fetch('/api/settings/profile', { credentials: 'include' });
         if (res.status === 401) {
           const next = `/onboarding?step=profile_setup`;
-          navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
+          navigate(`/auth/login?next=${encodeURIComponent(next)}`, { replace: true });
           return;
         }
       } catch {

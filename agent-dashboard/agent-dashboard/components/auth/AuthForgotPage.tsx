@@ -111,7 +111,7 @@ export function AuthForgotPage() {
         </form>
 
         <div style={{ marginTop: 16, fontSize: 12, color: 'var(--text-muted)' }}>
-          <a href="/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
+          <a href="/auth/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
             Back to sign in
           </a>
         </div>

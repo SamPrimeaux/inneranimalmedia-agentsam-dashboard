@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 const SUPABASE_OAUTH_AUTHORIZE = 'https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize';
 
@@ -23,7 +23,6 @@ function buildDenyUrl(redirectUri: string, state: string): string {
 
 export function AuthOAuthConsentPage() {
   const location = useLocation();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   const [checkedAuth, setCheckedAuth] = useState(false);
@@ -59,13 +58,13 @@ export function AuthOAuthConsentPage() {
           setAuthOk(true);
         } else {
           const next = encodeURIComponent(`${location.pathname}${location.search || ''}`);
-          navigate(`/login?next=${next}`, { replace: true });
+          window.location.replace(`${window.location.origin}/auth/login?next=${next}`);
           return;
         }
       } catch {
         if (!cancelled) {
           const next = encodeURIComponent(`${location.pathname}${location.search || ''}`);
-          navigate(`/login?next=${next}`, { replace: true });
+          window.location.replace(`${window.location.origin}/auth/login?next=${next}`);
         }
       } finally {
         if (!cancelled) setCheckedAuth(true);
@@ -74,7 +73,7 @@ export function AuthOAuthConsentPage() {
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, location.search, navigate]);
+  }, [location.pathname, location.search]);
 
   function onAllow() {
     const p = new URLSearchParams();
@@ -245,7 +244,7 @@ export function AuthOAuthConsentPage() {
         )}
 
         <div style={{ marginTop: 16, fontSize: 12, color: 'var(--text-muted)' }}>
-          <a href="/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
+          <a href="/auth/login" style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}>
             Back to sign in
           </a>
         </div>

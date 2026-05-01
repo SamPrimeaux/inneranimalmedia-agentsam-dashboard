@@ -173,12 +173,13 @@ const App: React.FC = () => {
     return (
       <Routes>
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/auth/login" element={<AuthSignInPage />} />
         <Route path="/login" element={<AuthSignInPage />} />
         <Route path="/signup" element={<AuthSignUpPage />} />
         <Route path="/forgot-password" element={<AuthForgotPage />} />
         <Route path="/reset-password" element={<AuthResetPage />} />
         <Route path="/api/auth/oauth/consent" element={<AuthOAuthConsentPage />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/auth/login" replace />} />
       </Routes>
     );
   }

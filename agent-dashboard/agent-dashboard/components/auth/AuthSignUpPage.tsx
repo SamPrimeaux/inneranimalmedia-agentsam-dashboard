@@ -204,7 +204,7 @@ export function AuthSignUpPage() {
 
         <div style={{ marginTop: 16, fontSize: 12, color: 'var(--text-muted)' }}>
           <a
-            href={next ? `/login?next=${encodeURIComponent(next)}` : '/login'}
+            href={next ? `/auth/login?next=${encodeURIComponent(next)}` : '/auth/login'}
             style={{ color: 'var(--solar-cyan)', textDecoration: 'none' }}
           >
             Already have an account? Sign in

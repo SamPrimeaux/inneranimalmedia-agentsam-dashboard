@@ -119,6 +119,7 @@ export function useSettingsData({
   const [usageData, setUsageData] = useState<any | null>(null);
 
   const [billingPlans, setBillingPlans] = useState<any[]>([]);
+  const [billingCoupons, setBillingCoupons] = useState<any[]>([]);
   const [billingPlansLoading, setBillingPlansLoading] = useState(false);
   const [billingPlansError, setBillingPlansError] = useState<string | null>(null);
   const [activeSubscription, setActiveSubscription] = useState<any | null>(null);
@@ -326,9 +327,11 @@ export function useSettingsData({
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Load failed (${r.status})`);
       setBillingPlans(Array.isArray(j.plans) ? j.plans : []);
+      setBillingCoupons(Array.isArray(j.coupons) ? j.coupons : []);
     } catch (e) {
       setBillingPlansError(e instanceof Error ? e.message : 'Failed to load plans');
       setBillingPlans([]);
+      setBillingCoupons([]);
     } finally {
       setBillingPlansLoading(false);
     }
@@ -1186,6 +1189,7 @@ export function useSettingsData({
     loadUsage,
 
     billingPlans,
+    billingCoupons,
     billingPlansLoading,
     billingPlansError,
     activeSubscription,

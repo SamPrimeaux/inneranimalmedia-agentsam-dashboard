@@ -9,6 +9,30 @@ function formatInvoiceWhen(ts: number | null | undefined) {
   return new Date(Number(ts) * 1000).toLocaleDateString();
 }
 
+function parseEligiblePlanIds(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.map((x) => String(x));
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p.map((x: unknown) => String(x)) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function couponsForPlan(planId: string, coupons: any[] | undefined): any[] {
+  if (!Array.isArray(coupons) || !planId) return [];
+  const out: any[] = [];
+  for (const c of coupons) {
+    const ids = parseEligiblePlanIds(c?.eligible_plan_ids);
+    if (ids.length === 0 || ids.includes(planId)) out.push(c);
+  }
+  return out;
+}
+
 export function PlanUsageSection({ data }: PlanUsageSectionProps) {
   const u = data.usageData;
   const sub = data.activeSubscription;
@@ -64,6 +88,41 @@ export function PlanUsageSection({ data }: PlanUsageSectionProps) {
                       <div>Requests / day: {Number(plan.daily_request_limit).toLocaleString()}</div>
                     ) : null}
                   </div>
+                  {(() => {
+                    const cc = couponsForPlan(id, data.billingCoupons);
+                    if (!cc.length) return null;
+                    return (
+                      <div className="mt-2 flex flex-col gap-1.5 border-t border-[var(--border-subtle)] pt-2">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)]">
+                          Offers
+                        </div>
+                        {cc.map((c: any) => (
+                          <div key={String(c.id ?? c.stripe_coupon_id)} className="text-[10px] text-[var(--text-main)]">
+                            {Number(c.requires_verification) === 1 ? (
+                              <span className="text-[var(--text-muted)]">
+                                Contact us for nonprofit pricing{c?.name ? ` (${String(c.name)})` : ''}
+                              </span>
+                            ) : (
+                              <span>
+                                <span className="font-semibold">{String(c.name ?? 'Discount')}</span>
+                                {c.percent_off != null ? (
+                                  <span className="text-[var(--text-muted)]">
+                                    {' '}
+                                    — {Number(c.percent_off)}% off
+                                    {c.duration === 'repeating' && c.duration_in_months
+                                      ? ` for ${Number(c.duration_in_months)} mo`
+                                      : c.duration === 'forever'
+                                        ? ' ongoing'
+                                        : ''}
+                                  </span>
+                                ) : null}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <div className="mt-auto pt-2 flex flex-wrap gap-2">
                     {isHighlight ? (
                       <span className="text-[10px] uppercase tracking-widest text-[var(--solar-cyan)] font-bold">

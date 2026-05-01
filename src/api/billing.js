@@ -31,22 +31,120 @@ async function resolveTenantId(env, authUser) {
 function pickStripePriceId(plan, billingPeriod) {
   const p = String(billingPeriod || 'monthly').toLowerCase();
   const yearly = p === 'year' || p === 'yearly' || p === 'annual';
-  const monthly =
-    plan.stripe_price_id_monthly || plan.stripe_price_id || plan.stripe_price_monthly || null;
-  const yearlyId =
-    plan.stripe_price_id_yearly || plan.stripe_price_yearly || plan.stripe_price_id || null;
-  if (yearly && yearlyId) return yearlyId;
-  return monthly || yearlyId || null;
+  if (yearly && plan.stripe_price_id_annual) {
+    return String(plan.stripe_price_id_annual).trim();
+  }
+  return (
+    plan.stripe_price_id_monthly ||
+    plan.stripe_price_id ||
+    plan.stripe_price_monthly ||
+    plan.stripe_price_id_yearly ||
+    null
+  );
+}
+
+/** @param {any} env @param {string} stripeCustomerId */
+async function tenantIdFromStripeCustomer(env, stripeCustomerId) {
+  if (!env?.DB || !stripeCustomerId) return null;
+  const row = await env.DB.prepare(
+    `SELECT tenant_id FROM billing_customers WHERE stripe_customer_id = ? LIMIT 1`,
+  )
+    .bind(String(stripeCustomerId).trim())
+    .first();
+  return row?.tenant_id != null ? String(row.tenant_id).trim() : null;
+}
+
+/** @param {any} env @param {string} tenantId */
+async function billingAccountIdForTenant(env, tenantId) {
+  if (!env?.DB || !tenantId) return null;
+  const row = await env.DB.prepare(
+    `SELECT id FROM billing_accounts WHERE tenant_id = ? LIMIT 1`,
+  )
+    .bind(tenantId)
+    .first();
+  return row?.id != null ? String(row.id).trim() : null;
+}
+
+/** @param {any} env @param {string} stripePriceId */
+async function planIdFromStripePriceId(env, stripePriceId) {
+  if (!env?.DB || !stripePriceId) return null;
+  const pid = String(stripePriceId).trim();
+  const row = await env.DB.prepare(
+    `SELECT id FROM billing_plans
+     WHERE stripe_price_id = ? OR stripe_price_id_annual = ?
+     LIMIT 1`,
+  )
+    .bind(pid, pid)
+    .first();
+  return row?.id != null ? String(row.id).trim() : null;
+}
+
+/** @param {number | null | undefined} unixSec */
+function monthYmFromUnix(unixSec) {
+  if (unixSec == null || !Number.isFinite(Number(unixSec))) return null;
+  const d = new Date(Number(unixSec) * 1000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+/** @param {any} v */
+function safeJsonString(v) {
+  try {
+    return JSON.stringify(v ?? {});
+  } catch {
+    return '{}';
+  }
+}
+
+/**
+ * Primary webhook audit row (matches D1 agentsam_webhook_events schema).
+ * @param {any} env
+ * @param {string | undefined} eventType
+ * @param {string} rawBody
+ * @param {string | null} [tenantId]
+ */
+async function logAgentsamWebhookEvent(env, eventType, rawBody, tenantId = null) {
+  if (!env.DB) return;
+  const id = crypto.randomUUID();
+  const tid = tenantId || 'tenant_sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agentsam_webhook_events (id, tenant_id, provider, event_type, payload_json, status, processed_at)
+       VALUES (?, ?, 'stripe', ?, ?, 'received', datetime('now'))`,
+    )
+      .bind(id, tid, eventType || 'unknown', rawBody)
+      .run();
+  } catch (e) {
+    console.warn('[agentsam_webhook_events]', e?.message ?? e);
+  }
+}
+
+/** Extra structured log for handlers that need payload-only trace (after primary raw log). */
+async function logAgentsamWebhookPayloadJson(env, eventType, payloadObj, tenantId = null) {
+  if (!env.DB) return;
+  const id = crypto.randomUUID();
+  const tid = tenantId || 'tenant_sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agentsam_webhook_events (id, tenant_id, provider, event_type, payload_json, status, processed_at)
+       VALUES (?, ?, 'stripe', ?, ?, 'received', datetime('now'))`,
+    )
+      .bind(id, tid, `${eventType}:parsed`, safeJsonString(payloadObj))
+      .run();
+  } catch (e) {
+    console.warn('[agentsam_webhook_events payload]', e?.message ?? e);
+  }
 }
 
 /** @param {any} env @param {string} tenantId @param {string} stripeCustomerId */
 async function upsertBillingCustomer(env, tenantId, stripeCustomerId) {
   const row = await env.DB.prepare(
-    `SELECT id FROM billing_customers WHERE tenant_id = ? LIMIT 1`,
+    `SELECT tenant_id FROM billing_customers WHERE tenant_id = ? LIMIT 1`,
   )
     .bind(tenantId)
     .first();
-  if (row?.id) {
+  if (row?.tenant_id) {
     await env.DB.prepare(
       `UPDATE billing_customers SET stripe_customer_id = ?, updated_at = datetime('now') WHERE tenant_id = ?`,
     )
@@ -63,6 +161,42 @@ async function upsertBillingCustomer(env, tenantId, stripeCustomerId) {
 }
 
 /**
+ * @param {any} sub Stripe Subscription object
+ */
+function deriveSubscriptionFields(sub) {
+  const item0 = sub?.items?.data?.[0];
+  const price = item0?.price;
+  const qty = item0?.quantity != null ? Number(item0.quantity) : 1;
+  const seats = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1;
+  const interval = price?.recurring?.interval ? String(price.recurring.interval).toLowerCase() : '';
+  let billingPeriod = 'monthly';
+  if (interval === 'year') billingPeriod = 'annual';
+  else if (interval === 'month' || interval === 'monthly') billingPeriod = 'monthly';
+  const amountCents =
+    price?.unit_amount != null ? Number(price.unit_amount) : sub?.plan?.amount != null ? Number(sub.plan.amount) : null;
+  const trialEndsUnix = sub?.trial_end != null ? Number(sub.trial_end) : null;
+  const trialEndsAt =
+    trialEndsUnix != null && Number.isFinite(trialEndsUnix)
+      ? new Date(trialEndsUnix * 1000).toISOString()
+      : null;
+  const wsMeta = sub?.metadata?.workspace_id ? String(sub.metadata.workspace_id).trim() : null;
+  const cps =
+    sub?.current_period_start != null ? String(Math.floor(Number(sub.current_period_start))) : null;
+  const cpe =
+    sub?.current_period_end != null ? String(Math.floor(Number(sub.current_period_end))) : null;
+  return {
+    seats,
+    billingPeriod,
+    amountCents,
+    trialEndsAt,
+    workspaceId: wsMeta || null,
+    priceId: price?.id ? String(price.id) : null,
+    current_period_start: cps,
+    current_period_end: cpe,
+  };
+}
+
+/**
  * @param {any} env
  * @param {{
  *   tenant_id: string,
@@ -70,22 +204,26 @@ async function upsertBillingCustomer(env, tenantId, stripeCustomerId) {
  *   stripe_subscription_id: string,
  *   stripe_customer_id: string,
  *   status: string,
- *   current_period_start: number | null,
- *   current_period_end: number | null,
+ *   current_period_start: string | null,
+ *   current_period_end: string | null,
  *   amount_cents: number | null,
+ *   billing_period?: string | null,
+ *   seats?: number | null,
+ *   trial_ends_at?: string | null,
+ *   workspace_id?: string | null,
  * }} row
  */
 async function upsertBillingSubscriptionFromStripe(env, row) {
   const ex = await env.DB.prepare(
-    `SELECT id FROM billing_subscriptions WHERE tenant_id = ? LIMIT 1`,
+    `SELECT tenant_id FROM billing_subscriptions WHERE tenant_id = ? LIMIT 1`,
   )
     .bind(row.tenant_id)
     .first();
-  const cps = row.current_period_start != null ? Number(row.current_period_start) : null;
-  const cpe = row.current_period_end != null ? Number(row.current_period_end) : null;
   const amt = row.amount_cents != null ? Number(row.amount_cents) : null;
+  const seats = row.seats != null ? Number(row.seats) : 1;
+  const bp = row.billing_period || 'monthly';
 
-  if (ex?.id) {
+  if (ex?.tenant_id) {
     await env.DB.prepare(
       `UPDATE billing_subscriptions SET
         plan_id = ?,
@@ -95,6 +233,10 @@ async function upsertBillingSubscriptionFromStripe(env, row) {
         current_period_start = ?,
         current_period_end = ?,
         amount_cents = ?,
+        billing_period = ?,
+        seats = ?,
+        trial_ends_at = ?,
+        workspace_id = COALESCE(?, workspace_id),
         updated_at = datetime('now')
        WHERE tenant_id = ?`,
     )
@@ -103,9 +245,13 @@ async function upsertBillingSubscriptionFromStripe(env, row) {
         row.status,
         row.stripe_subscription_id,
         row.stripe_customer_id,
-        cps,
-        cpe,
+        row.current_period_start,
+        row.current_period_end,
         amt,
+        bp,
+        seats,
+        row.trial_ends_at ?? null,
+        row.workspace_id ?? null,
         row.tenant_id,
       )
       .run();
@@ -114,8 +260,9 @@ async function upsertBillingSubscriptionFromStripe(env, row) {
       `INSERT INTO billing_subscriptions (
         tenant_id, plan_id, status, stripe_subscription_id, stripe_customer_id,
         current_period_start, current_period_end, amount_cents,
-        started_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), datetime('now'), datetime('now'))`,
+        billing_period, seats, trial_ends_at, workspace_id,
+        cancel_at_period_end, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`,
     )
       .bind(
         row.tenant_id,
@@ -123,28 +270,67 @@ async function upsertBillingSubscriptionFromStripe(env, row) {
         row.status,
         row.stripe_subscription_id,
         row.stripe_customer_id,
-        cps,
-        cpe,
+        row.current_period_start,
+        row.current_period_end,
         amt,
+        bp,
+        seats,
+        row.trial_ends_at ?? null,
+        row.workspace_id ?? null,
       )
       .run();
   }
 }
 
-/** @param {any} env @param {string | undefined} eventType @param {string} rawBody */
-async function logAgentsamWebhookEvent(env, eventType, rawBody) {
-  if (!env.DB) return;
-  const id = crypto.randomUUID();
-  try {
-    await env.DB.prepare(
-      `INSERT INTO agentsam_webhook_events (id, event_type, payload_json, source, processed_at)
-       VALUES (?, ?, ?, 'stripe', datetime('now'))`,
+/** @param {any} env @param {string} tenantId @param {any} n */
+async function insertNotification(env, tenantId, n) {
+  const id = `notif_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  await env.DB.prepare(
+    `INSERT INTO notifications (
+      id, recipient_id, recipient_type, channel, subject, message,
+      entity_type, entity_id, priority, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      tenantId,
+      n.recipient_type || 'tenant',
+      n.channel || 'email',
+      n.subject || '',
+      n.message || '',
+      n.entity_type || null,
+      n.entity_id != null ? String(n.entity_id) : null,
+      n.priority || 'normal',
+      n.status || 'pending',
     )
-      .bind(id, eventType || 'unknown', rawBody)
-      .run();
-  } catch (e) {
-    console.warn('[agentsam_webhook_events]', e?.message ?? e);
+    .run();
+}
+
+/** @param {any} session checkout.session object */
+function extractCheckoutCouponId(session) {
+  const d = session?.discount;
+  if (d?.coupon?.id) return String(d.coupon.id);
+  if (typeof d?.coupon === 'string') return d.coupon;
+  const td = session?.total_details;
+  const discounts = td?.breakdown?.discounts;
+  if (Array.isArray(discounts) && discounts[0]?.discount?.coupon?.id) {
+    return String(discounts[0].discount.coupon.id);
   }
+  if (Array.isArray(session?.discounts) && session.discounts[0]?.coupon?.id) {
+    return String(session.discounts[0].coupon.id);
+  }
+  return null;
+}
+
+/** @param {any} env @param {string | null} stripeCouponId */
+async function incrementCouponRedemption(env, stripeCouponId) {
+  if (!stripeCouponId || !env.DB) return;
+  await env.DB.prepare(
+    `UPDATE billing_coupons SET redemption_count = COALESCE(redemption_count, 0) + 1
+     WHERE stripe_coupon_id = ? AND COALESCE(is_active, 1) = 1`,
+  )
+    .bind(stripeCouponId)
+    .run();
 }
 
 /** @param {any} env @param {any} event */
@@ -172,21 +358,84 @@ async function dispatchStripeEvent(env, event) {
     if (tenantId && customerId) {
       await upsertBillingCustomer(env, tenantId, customerId);
     }
-    if (tenantId && planId && subId && customerId) {
+    const couponId = extractCheckoutCouponId(session);
+    if (couponId) void incrementCouponRedemption(env, couponId);
+
+    if (tenantId && subId && customerId) {
       const sub = await stripeRequest(env, 'GET', `/subscriptions/${encodeURIComponent(subId)}`);
-      const amountCents =
-        sub?.items?.data?.[0]?.price?.unit_amount ?? sub?.plan?.amount ?? null;
-      await upsertBillingSubscriptionFromStripe(env, {
-        tenant_id: tenantId,
-        plan_id: planId,
-        stripe_subscription_id: subId,
-        stripe_customer_id: customerId,
-        status: 'active',
-        current_period_start: sub?.current_period_start ?? null,
-        current_period_end: sub?.current_period_end ?? null,
-        amount_cents: amountCents,
-      });
+      const der = deriveSubscriptionFields(sub);
+      const resolvedFromPrice = der.priceId ? await planIdFromStripePriceId(env, der.priceId) : null;
+      const resolvedPlanId = planId || resolvedFromPrice;
+      if (resolvedPlanId) {
+        await upsertBillingSubscriptionFromStripe(env, {
+          tenant_id: tenantId,
+          plan_id: resolvedPlanId,
+          stripe_subscription_id: subId,
+          stripe_customer_id: customerId,
+          status: String(sub?.status || 'active'),
+          current_period_start: der.current_period_start,
+          current_period_end: der.current_period_end,
+          amount_cents: der.amountCents,
+          billing_period: der.billingPeriod,
+          seats: der.seats,
+          trial_ends_at: der.trialEndsAt,
+          workspace_id: der.workspaceId,
+        });
+      }
     }
+    return;
+  }
+
+  if (type === 'customer.subscription.created') {
+    const o = data;
+    const stripeSubId = o?.id ? String(o.id) : '';
+    const custRef = o?.customer;
+    const customerId =
+      typeof custRef === 'string' ? custRef : custRef?.id ? String(custRef.id) : '';
+    if (!stripeSubId || !customerId) return;
+    void logAgentsamWebhookPayloadJson(env, type, o, await tenantIdFromStripeCustomer(env, customerId));
+    const tenantId = await tenantIdFromStripeCustomer(env, customerId);
+    if (!tenantId) return;
+    const der = deriveSubscriptionFields(o);
+    const planId =
+      (der.priceId && (await planIdFromStripePriceId(env, der.priceId))) ||
+      (o?.metadata?.plan_id ? String(o.metadata.plan_id).trim() : '');
+    if (!planId) return;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO billing_subscriptions (
+        tenant_id, stripe_subscription_id, plan_id, status,
+        current_period_start, current_period_end, cancel_at_period_end,
+        workspace_id, seats, trial_ends_at, stripe_customer_id, billing_period, amount_cents,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+    )
+      .bind(
+        tenantId,
+        stripeSubId,
+        planId,
+        String(o.status || 'active'),
+        der.current_period_start,
+        der.current_period_end,
+        o.cancel_at_period_end ? 1 : 0,
+        der.workspaceId,
+        der.seats,
+        der.trialEndsAt,
+        customerId,
+        der.billingPeriod,
+        der.amountCents != null ? der.amountCents : 0,
+      )
+      .run();
+    await insertNotification(env, tenantId, {
+      recipient_type: 'tenant',
+      channel: 'email',
+      subject: 'Welcome — your subscription is active',
+      message:
+        'Your plan is now active. Visit your dashboard to get started.',
+      entity_type: 'billing_subscription',
+      entity_id: stripeSubId,
+      priority: 'high',
+      status: 'pending',
+    });
     return;
   }
 
@@ -194,20 +443,30 @@ async function dispatchStripeEvent(env, event) {
     const o = data;
     const stripeSubId = o?.id ? String(o.id) : '';
     if (!stripeSubId) return;
+    void logAgentsamWebhookPayloadJson(env, type, o);
+    const der = deriveSubscriptionFields(o);
     await env.DB.prepare(
       `UPDATE billing_subscriptions SET
         status = ?,
         current_period_start = ?,
         current_period_end = ?,
         cancel_at_period_end = ?,
+        billing_period = ?,
+        seats = ?,
+        trial_ends_at = ?,
+        amount_cents = COALESCE(?, amount_cents),
         updated_at = datetime('now')
        WHERE stripe_subscription_id = ?`,
     )
       .bind(
         String(o.status || ''),
-        o.current_period_start != null ? Number(o.current_period_start) : null,
-        o.current_period_end != null ? Number(o.current_period_end) : null,
+        der.current_period_start,
+        der.current_period_end,
         o.cancel_at_period_end ? 1 : 0,
+        der.billingPeriod,
+        der.seats,
+        der.trialEndsAt,
+        der.amountCents,
         stripeSubId,
       )
       .run();
@@ -218,6 +477,7 @@ async function dispatchStripeEvent(env, event) {
     const o = data;
     const stripeSubId = o?.id ? String(o.id) : '';
     if (!stripeSubId) return;
+    void logAgentsamWebhookPayloadJson(env, type, o);
     await env.DB.prepare(
       `UPDATE billing_subscriptions SET status = 'canceled', updated_at = datetime('now') WHERE stripe_subscription_id = ?`,
     )
@@ -226,8 +486,166 @@ async function dispatchStripeEvent(env, event) {
     return;
   }
 
+  if (type === 'invoice.paid') {
+    const inv = data;
+    void logAgentsamWebhookPayloadJson(env, type, inv);
+    const amountPaid = inv?.amount_paid != null ? Number(inv.amount_paid) : 0;
+    if (!amountPaid) return;
+    const custRef = inv?.customer;
+    const customerId =
+      typeof custRef === 'string' ? custRef : custRef?.id ? String(custRef.id) : '';
+    if (!customerId) return;
+    const tenantId = await tenantIdFromStripeCustomer(env, customerId);
+    if (!tenantId) return;
+    const billingAccountId = await billingAccountIdForTenant(env, tenantId);
+    if (!billingAccountId) return;
+    const periodEnd = inv?.period_end != null ? Number(inv.period_end) : null;
+    const month = monthYmFromUnix(periodEnd);
+    if (!month) return;
+    const cu = await env.DB.prepare(
+      `SELECT email FROM billing_customers WHERE tenant_id = ? LIMIT 1`,
+    )
+      .bind(tenantId)
+      .first();
+    const ba = await env.DB.prepare(
+      `SELECT account_email FROM billing_accounts WHERE id = ? LIMIT 1`,
+    )
+      .bind(billingAccountId)
+      .first();
+    const userEmail = String(cu?.email || ba?.account_email || 'billing@inneranimalmedia.com');
+    const subtotalUsd = amountPaid / 100;
+    const summaryId = `bsum_${billingAccountId}_${month}`;
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO billing_summary (
+        id, billing_account_id, user_email, month, provider,
+        subscription_total_usd, total_spend_usd, total_calls,
+        total_input_tokens, total_output_tokens, updated_at
+      ) VALUES (?, ?, ?, ?, 'stripe', ?, ?, 0, 0, 0, unixepoch())`,
+    )
+      .bind(summaryId, billingAccountId, userEmail, month, subtotalUsd, subtotalUsd)
+      .run();
+    return;
+  }
+
+  if (type === 'invoice.finalized') {
+    void logAgentsamWebhookPayloadJson(env, type, data);
+    return;
+  }
+
+  if (type === 'invoice.finalization_failed') {
+    const inv = data;
+    void logAgentsamWebhookPayloadJson(env, type, inv);
+    const custRef = inv?.customer;
+    const customerId =
+      typeof custRef === 'string' ? custRef : custRef?.id ? String(custRef.id) : '';
+    const tenantId = customerId ? await tenantIdFromStripeCustomer(env, customerId) : null;
+    const invId = inv?.id != null ? String(inv.id) : 'unknown';
+    const fid = `find_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+    if (tenantId) {
+      await env.DB.prepare(
+        `INSERT INTO security_findings (
+          id, tenant_id, source_type, source_ref, finding_type,
+          severity, status, created_by, metadata_json
+        ) VALUES (?, ?, 'stripe', ?, 'invoice_finalization_failed', 'high', 'open', 'stripe_webhook', ?)`,
+      )
+        .bind(fid, tenantId, invId, safeJsonString(inv))
+        .run();
+      await insertNotification(env, tenantId, {
+        channel: 'dashboard',
+        subject: 'Invoice finalization failed',
+        message: `Stripe could not finalize invoice ${invId}. Check billing settings.`,
+        entity_type: 'invoice',
+        entity_id: invId,
+        priority: 'high',
+        status: 'pending',
+      });
+    }
+    return;
+  }
+
+  if (type === 'invoice.upcoming') {
+    const inv = data;
+    void logAgentsamWebhookPayloadJson(env, type, inv);
+    const custRef = inv?.customer;
+    const customerId =
+      typeof custRef === 'string' ? custRef : custRef?.id ? String(custRef.id) : '';
+    if (!customerId) return;
+    const tenantId = await tenantIdFromStripeCustomer(env, customerId);
+    if (!tenantId) return;
+    const amtDue = inv?.amount_due != null ? Number(inv.amount_due) / 100 : 0;
+    const nextPay = inv?.next_payment_attempt != null ? Number(inv.next_payment_attempt) : null;
+    const dateStr =
+      nextPay != null && Number.isFinite(nextPay)
+        ? new Date(nextPay * 1000).toLocaleDateString()
+        : 'soon';
+    await insertNotification(env, tenantId, {
+      channel: 'email',
+      subject: 'Your subscription renews soon',
+      message: `Your next invoice of $${amtDue.toFixed(2)} will be charged on ${dateStr}.`,
+      entity_type: 'invoice',
+      entity_id: inv?.id != null ? String(inv.id) : null,
+      priority: 'normal',
+      status: 'pending',
+    });
+    return;
+  }
+
+  if (type === 'invoice.payment_action_required') {
+    const inv = data;
+    void logAgentsamWebhookPayloadJson(env, type, inv);
+    const custRef = inv?.customer;
+    const customerId =
+      typeof custRef === 'string' ? custRef : custRef?.id ? String(custRef.id) : '';
+    if (!customerId) return;
+    const tenantId = await tenantIdFromStripeCustomer(env, customerId);
+    if (!tenantId) return;
+    const url = inv?.hosted_invoice_url ? String(inv.hosted_invoice_url) : '';
+    await insertNotification(env, tenantId, {
+      channel: 'email',
+      subject: 'Action required — payment needs your attention',
+      message: url
+        ? `Complete payment: ${url}`
+        : 'Your payment requires authentication. Open your billing portal to continue.',
+      entity_type: 'invoice',
+      entity_id: inv?.id != null ? String(inv.id) : null,
+      priority: 'high',
+      status: 'pending',
+    });
+    return;
+  }
+
+  if (type === 'invoice.updated') {
+    void logAgentsamWebhookPayloadJson(env, type, data);
+    return;
+  }
+
+  if (typeof type === 'string' && type.startsWith('subscription_schedule.')) {
+    void logAgentsamWebhookPayloadJson(env, type, data);
+    return;
+  }
+
+  if (type === 'payment_intent.created') {
+    void logAgentsamWebhookPayloadJson(env, type, data);
+    return;
+  }
+
+  if (type === 'payment_intent.succeeded') {
+    const pi = data;
+    void logAgentsamWebhookPayloadJson(env, type, pi);
+    const invId = pi?.metadata?.invoice_id ? String(pi.metadata.invoice_id).trim() : '';
+    if (invId) {
+      await logAgentsamWebhookPayloadJson(
+        env,
+        'payment_intent.succeeded:invoice_ack',
+        { invoice_id: invId, payment_intent_id: pi?.id },
+      );
+    }
+    return;
+  }
+
   if (type === 'invoice.payment_failed') {
     const inv = data;
+    void logAgentsamWebhookPayloadJson(env, type, inv);
     const subRef = inv?.subscription;
     const stripeSubId =
       typeof subRef === 'string' ? subRef : subRef?.id ? String(subRef.id) : '';
@@ -312,7 +730,7 @@ export async function handleBillingApi(request, url, env, _ctx) {
 
   if (pathLower === '/api/billing/plans' && method === 'GET') {
     try {
-      const { results } = await env.DB.prepare(
+      const plansRes = await env.DB.prepare(
         `SELECT id,
           COALESCE(display_name, name) AS display_name,
           COALESCE(tagline, '') AS tagline,
@@ -328,7 +746,17 @@ export async function handleBillingApi(request, url, env, _ctx) {
          WHERE COALESCE(is_active, 1) = 1
          ORDER BY COALESCE(sort_order, 999999), id`,
       ).all();
-      return jsonResponse({ plans: results || [] });
+      const couponsRes = await env.DB.prepare(
+        `SELECT id, stripe_coupon_id, name, description, percent_off,
+                duration, duration_in_months, eligible_plan_ids,
+                requires_verification, is_active
+         FROM billing_coupons
+         WHERE COALESCE(is_active, 1) = 1`,
+      ).all();
+      return jsonResponse({
+        plans: plansRes.results || [],
+        coupons: couponsRes.results || [],
+      });
     } catch (e) {
       console.warn('[billing/plans]', e?.message ?? e);
       return jsonResponse({ error: String(e?.message || e) }, 500);

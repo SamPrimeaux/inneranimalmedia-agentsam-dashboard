@@ -331,6 +331,14 @@ function cloudflareAuthUrl(env, state) {
   return u.toString();
 }
 
+// ── Supabase MANAGEMENT OAuth (/api/oauth/supabase/*) ────────────────────────
+// Connects to Supabase Management API (api.supabase.com) — links org/projects.
+// This is NOT the project OAuth Server login flow.
+//
+// Login OAuth ("Continue with Supabase"):
+//   GET /api/auth/supabase/start    → dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize
+//   GET /api/auth/supabase/callback → establishIamSession → dashboard
+// ─────────────────────────────────────────────────────────────────────────────
 function supabaseAuthUrl(env, state) {
   if (!env.SUPABASE_OAUTH_CLIENT_ID) return null;
   const u = new URL('https://api.supabase.com/v1/oauth/authorize');

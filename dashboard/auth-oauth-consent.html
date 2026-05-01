@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorize app | Supabase</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --auth-bg: #050508;
+      --card-border: rgba(255, 255, 255, 0.12);
+      --muted: #94a3b8;
+      --text: #e2e8f0;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      background: var(--auth-bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 440px;
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 28px 28px 24px;
+      background: rgba(15, 23, 42, 0.65);
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+    .app-name {
+      font-weight: 600;
+      color: #f8fafc;
+      word-break: break-all;
+    }
+    .scope-list {
+      list-style: none;
+      margin: 12px 0 20px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--card-border);
+    }
+    .scope-list li {
+      font-size: 0.8125rem;
+      color: #cbd5e1;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .scope-list li:last-child { border-bottom: 0; }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    button, .btn-link {
+      font-family: inherit;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      border-radius: 10px;
+      padding: 12px 16px;
+      cursor: pointer;
+      border: none;
+      text-align: center;
+      text-decoration: none;
+      display: block;
+    }
+    .btn-allow {
+      background: #3ecf8e;
+      color: #042f1a;
+    }
+    .btn-allow:hover { filter: brightness(1.05); }
+    .btn-deny {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--card-border);
+    }
+    .btn-deny:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+    .err {
+      display: none;
+      font-size: 0.8125rem;
+      color: #f87171;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <svg viewBox="0 0 24 24" width="32" height="32" fill="none" aria-hidden="true">
+        <path d="M13.5 2.5L3 14h9l-1.5 7.5L21 10h-9l1.5-7.5z" fill="#3ECF8E"/>
+      </svg>
+      <h1>Authorize application</h1>
+    </div>
+    <p id="errBox" class="err" role="alert"></p>
+    <p class="sub">The application below is requesting access to your Supabase account using OpenID Connect.</p>
+    <p class="sub">Application: <span class="app-name" id="appLabel"></span></p>
+    <p class="sub" style="margin-bottom: 8px;">Requested permissions</p>
+    <ul class="scope-list" id="scopeList"></ul>
+    <form id="allowForm" class="actions" method="get" action="https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize">
+      <div id="hiddenFields"></div>
+      <button type="submit" class="btn-allow">Allow</button>
+    </form>
+    <div class="actions" style="margin-top: 10px;">
+      <button type="button" class="btn-deny" id="denyBtn">Deny</button>
+    </div>
+  </div>
+  <script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var required = ['client_id', 'redirect_uri', 'scope', 'state', 'response_type'];
+  var errBox = document.getElementById('errBox');
+  function showErr(msg) {
+    errBox.textContent = msg;
+    errBox.style.display = 'block';
+  }
+  for (var i = 0; i < required.length; i++) {
+    if (!params.get(required[i])) {
+      showErr('Missing required OAuth parameters.');
+      return;
+    }
+  }
+  var clientId = params.get('client_id') || '';
+  document.getElementById('appLabel').textContent = clientId || '(unknown client)';
+
+  var scopeRaw = params.get('scope') || '';
+  var scopes = scopeRaw.split(/\s+/).filter(Boolean);
+  var human = {
+    openid: 'Verify your identity (OpenID)',
+    profile: 'Read your basic profile',
+    email: 'Read your email address',
+  };
+  var ul = document.getElementById('scopeList');
+  scopes.forEach(function (s) {
+    var li = document.createElement('li');
+    li.textContent = human[s] || s;
+    ul.appendChild(li);
+  });
+  if (!ul.children.length) {
+    var li0 = document.createElement('li');
+    li0.textContent = scopeRaw || '(no scopes listed)';
+    ul.appendChild(li0);
+  }
+
+  var holder = document.getElementById('hiddenFields');
+  params.forEach(function (val, key) {
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = key;
+    input.value = val;
+    holder.appendChild(input);
+  });
+
+  var redirectUri = params.get('redirect_uri');
+  var state = params.get('state') || '';
+  document.getElementById('denyBtn').addEventListener('click', function () {
+    if (!redirectUri) return;
+    var join = redirectUri.indexOf('?') >= 0 ? '&' : '?';
+    window.location = redirectUri + join + 'error=access_denied&state=' + encodeURIComponent(state);
+  });
+})();
+  </script>
+</body>
+</html>

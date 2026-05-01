@@ -39,7 +39,7 @@ _Update this table after Step 0 of each sprint._
 | `/api/auth/supabase/start` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
 | `/api/auth/supabase/callback` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
 | `/auth/callback/supabase` | GET | alias | — | `src/api/auth.js` — **IN PROGRESS** |
-| `/auth/oauth/consent` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
+| `/api/auth/oauth/consent` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
 
 ### Domain: settings + AI config
 _All currently inside `handlePhase1PlatformD1Routes` (worker.js ~line 2403)_
@@ -177,7 +177,7 @@ Every extraction follows this exact sequence — no exceptions:
 ## Progress Log
 | Date | Sprint | Routes extracted | worker.js lines before | worker.js lines after |
 |------|--------|-----------------|----------------------|----------------------|
-| 2026-04-30 | Supabase OAuth + auth | `/api/auth/supabase/start`, `/api/auth/supabase/callback`, `/auth/callback/supabase`, `/auth/oauth/consent` | TBD | TBD |
+| 2026-04-30 | Supabase OAuth + auth | `/api/auth/supabase/start`, `/api/auth/supabase/callback`, `/auth/callback/supabase`, `/api/auth/oauth/consent` | TBD | TBD |
 
 ---
 

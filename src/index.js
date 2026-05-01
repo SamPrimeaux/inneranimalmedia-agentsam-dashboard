@@ -270,7 +270,7 @@ export default {
       ) {
         return handleSupabaseOAuthCallback(request, env);
       }
-      if (request.method === 'GET' && pathLower === '/auth/oauth/consent') {
+      if (request.method === 'GET' && pathLower === '/api/auth/oauth/consent') {
         return handleOAuthConsentPage(request, env);
       }
 

@@ -336,8 +336,9 @@ function cloudflareAuthUrl(env, state) {
 // This is NOT the project OAuth Server login flow.
 //
 // Login OAuth ("Continue with Supabase"):
-//   GET /api/auth/supabase/start    → dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize
-//   GET /api/auth/supabase/callback → establishIamSession → dashboard
+//   GET /api/auth/supabase/start     → dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize
+//   GET /api/auth/supabase/callback  → establishIamSession → dashboard
+//   GET /api/auth/oauth/consent      → consent HTML (DASHBOARD R2); WAF must allow this path
 // ─────────────────────────────────────────────────────────────────────────────
 function supabaseAuthUrl(env, state) {
   if (!env.SUPABASE_OAUTH_CLIENT_ID) return null;

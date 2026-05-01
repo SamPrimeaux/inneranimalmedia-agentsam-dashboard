@@ -307,12 +307,16 @@ async function handleSettingsProfileRequest(request, env) {
 }
 
 // ── Supabase project OAuth Server (login) — same auth_users + provisionNewUser pattern as Google in worker.js
+// Endpoints are hardcoded (fixed project ref). Client ID / secret: env.SUPABASE_OAUTH_CLIENT_ID, env.SUPABASE_OAUTH_CLIENT_SECRET only.
+// JWKS:     https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/.well-known/jwks.json
+// OIDC:     https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/.well-known/openid-configuration
+// Consent:  https://inneranimalmedia.com/api/auth/oauth/consent (this Worker; configure in Supabase + WAF)
 const SUPABASE_OAUTH_AUTHORIZE = 'https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/authorize';
 const SUPABASE_OAUTH_TOKEN = 'https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/token';
 const SUPABASE_OAUTH_USERINFO = 'https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/oauth/userinfo';
 const SUPABASE_REDIRECT_URI = 'https://inneranimalmedia.com/api/auth/supabase/callback';
 
-function base64urlPkce(buffer) {
+function base64url(buffer) {
   const bytes = new Uint8Array(buffer);
   let str = '';
   for (let i = 0; i < bytes.length; i++) {
@@ -354,7 +358,7 @@ export async function handleSupabaseOAuthStart(request, env) {
     'SHA-256',
     new TextEncoder().encode(codeVerifier),
   );
-  const codeChallenge = base64urlPkce(digest);
+  const codeChallenge = base64url(digest);
 
   await env.SESSION_CACHE.put(
     `oauth_state_supabase_${state}`,
@@ -489,9 +493,7 @@ export async function handleOAuthConsentPage(request, env) {
   if (!user) {
     return Response.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
   }
-  const obj =
-    (await env.DASHBOARD?.get('dashboard/auth-oauth-consent.html')) ||
-    (await env.DASHBOARD?.get('static/dashboard/auth-oauth-consent.html'));
+  const obj = await env.DASHBOARD?.get('dashboard/auth-oauth-consent.html');
   if (!obj) return new Response('Consent page not found', { status: 404 });
   return new Response(obj.body, {
     headers: { 'Content-Type': 'text/html;charset=UTF-8' },

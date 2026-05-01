@@ -42,10 +42,10 @@ Use the same commit message as this sprint.
 
 ## WAF (manual)
 
-On zone `inneranimalmedia.com`, add a Custom Rule before relying on `/auth/oauth/consent` in production:
+On zone `inneranimalmedia.com`, add a Custom Rule before relying on `/api/auth/oauth/consent` in production:
 
 - **Name:** Allow OAuth consent path  
-- **Expression:** `http.request.uri.path eq "/auth/oauth/consent"`  
+- **Expression:** `http.request.uri.path eq "/api/auth/oauth/consent"`  
 - **Action:** Skip → Bot Fight Mode  
 
 Without it, some clients receive a 403 challenge before the Worker runs.

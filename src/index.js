@@ -427,8 +427,6 @@ export default {
         return handleDesignStudioApi(request, url, env, ctx);
       }
 
-      if (pathLower.startsWith('/api/cad/') || pathLower === '/api/cad') return (await import('./api/cad.js')).handleCadApi(request, url, env, ctx);
-
       if (pathLower.startsWith('/api/deployments') || pathLower.startsWith('/api/internal/')) {
         return handleDeploymentsApi(request, url, env, ctx);
       }

@@ -1,5 +1,5 @@
 /**
- * IntegrationsPage — /dashboard/integrations
+ * IntegrationsPage (deprecated) — was /dashboard/integrations; use Settings > Integrations
  *
  * Dense operations console for provider health, OAuth, webhooks, MCP tools,
  * API key references, and integration event logs.
@@ -279,11 +279,11 @@ export const IntegrationsPage: React.FC = () => {
     const err = params.get('error');
     if (connected && success) {
       setToast({ type: 'success', message: `Connected to ${connected}` });
-      window.history.replaceState({}, '', '/dashboard/integrations');
+      window.history.replaceState({}, '', '/dashboard/settings?section=Integrations');
       void refresh(true);
     } else if (err) {
       setToast({ type: 'error', message: `Connection failed: ${String(err).replace(/_/g, ' ')}` });
-      window.history.replaceState({}, '', '/dashboard/integrations');
+      window.history.replaceState({}, '', '/dashboard/settings?section=Integrations');
     }
   }, [refresh]);
 
@@ -347,7 +347,7 @@ export const IntegrationsPage: React.FC = () => {
 
   const startOAuth = useCallback((providerKey: string) => {
     const prov = providerForOAuthStart(providerKey);
-    const qs = new URLSearchParams({ return_to: '/dashboard/integrations' });
+    const qs = new URLSearchParams({ return_to: '/dashboard/settings?section=Integrations' });
     window.location.href = `/api/oauth/${encodeURIComponent(prov)}/start?${qs.toString()}`;
   }, [providerForOAuthStart]);
 
@@ -1054,10 +1054,10 @@ function oauthStatus(expiresAt: unknown) {
 function startOauth(provider: string) {
   // Legacy (kept for internal table action buttons); main UI uses startOAuth() above.
   const normalized = normalizeUiProvider(provider);
-  if (normalized === 'github') window.location.href = '/api/oauth/github/start?return_to=' + encodeURIComponent('/dashboard/integrations');
-  if (normalized === 'google_drive' || normalized === 'google_gmail' || normalized === 'google_calendar') window.location.href = '/api/oauth/google/start?return_to=' + encodeURIComponent('/dashboard/integrations');
-  if (normalized === 'cloudflare_oauth') window.location.href = '/api/oauth/cloudflare/start?return_to=' + encodeURIComponent('/dashboard/integrations');
-  if (normalized === 'supabase_oauth') window.location.href = '/api/oauth/supabase/start?return_to=' + encodeURIComponent('/dashboard/integrations');
+  if (normalized === 'github') window.location.href = '/api/oauth/github/start?return_to=' + encodeURIComponent('/dashboard/settings?section=Integrations');
+  if (normalized === 'google_drive' || normalized === 'google_gmail' || normalized === 'google_calendar') window.location.href = '/api/oauth/google/start?return_to=' + encodeURIComponent('/dashboard/settings?section=Integrations');
+  if (normalized === 'cloudflare_oauth') window.location.href = '/api/oauth/cloudflare/start?return_to=' + encodeURIComponent('/dashboard/settings?section=Integrations');
+  if (normalized === 'supabase_oauth') window.location.href = '/api/oauth/supabase/start?return_to=' + encodeURIComponent('/dashboard/settings?section=Integrations');
 }
 
 function normalizeUiProvider(provider: string) {

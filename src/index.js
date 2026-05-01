@@ -51,6 +51,7 @@ import { handleCursorAgentApi } from './api/cursor-agent';
 import { handleCalendarApi } from './api/calendar.js';
 import legacyWorker from '../worker.js';
 import { runAgentsamMemoryDecay } from './core/memory.js';
+import { handleCatalogApi } from './api/catalog.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
@@ -129,6 +130,10 @@ export default {
         } catch (e) {
           return jsonResponse({ error: e?.message ?? String(e) }, 500);
         }
+      }
+
+      if (pathLower === '/api/catalog/integrations') {
+        return handleCatalogApi(request, url, env, ctx);
       }
 
       // Canonical sign-in URL is /auth/login (ASSETS pages/auth/login.html). /login is legacy SPA path only.
@@ -279,7 +284,7 @@ export default {
         const u = new URL(request.url);
         u.pathname = '/api/oauth/cloudflare/start';
         if (!u.searchParams.get('return_to')) {
-          u.searchParams.set('return_to', '/dashboard/integrations');
+          u.searchParams.set('return_to', '/dashboard/settings?section=Integrations');
         }
         return handleOAuthApi(new Request(u.toString(), request), env, ctx);
       }

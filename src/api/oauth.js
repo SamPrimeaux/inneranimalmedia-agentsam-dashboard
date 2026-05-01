@@ -3,7 +3,7 @@
  *
  * Pattern:
  *  - GET  /api/oauth/:provider/start    (auth required) -> { redirect_url }
- *  - GET  /api/oauth/:provider/callback (provider redirect) -> 302 back to /dashboard/integrations
+ *  - GET  /api/oauth/:provider/callback (provider redirect) -> 302 back to return_to (default: Settings > Integrations)
  *  - POST /api/oauth/apikey/:provider   (auth required) -> validate + store encrypted
  *
  * Notes:
@@ -12,6 +12,7 @@
  */
 import { getAuthUser, jsonResponse } from '../core/auth.js';
 import { getAESKey, aesGcmEncryptToB64, aesGcmDecryptFromB64 } from '../core/crypto-vault.js';
+import { syncProviderModels } from './integrations/model-sync.js';
 
 const OAUTH_STATE_TTL_SECONDS = 600;
 
@@ -26,12 +27,13 @@ function oauthStateKey(state) {
   return `oauth_state_${state}`;
 }
 
+const DEFAULT_OAUTH_RETURN = '/dashboard/settings?section=Integrations';
+
 function safeReturnTo(url) {
   const raw = String(url || '').trim();
-  if (!raw) return '/dashboard/integrations';
+  if (!raw) return DEFAULT_OAUTH_RETURN;
   if (raw.startsWith('/dashboard/')) return raw;
-  if (raw === '/dashboard/integrations') return raw;
-  return '/dashboard/integrations';
+  return DEFAULT_OAUTH_RETURN;
 }
 
 async function kvPutState(env, state, payload) {
@@ -295,38 +297,53 @@ async function maybeRefreshGoogle(env, userId) {
   return await getOauthTokenRow(env, userId, 'google_drive');
 }
 
-function githubAuthUrl(env, state) {
+function githubAuthUrl(env, state, oauthScopeString) {
   const u = new URL('https://github.com/login/oauth/authorize');
   u.searchParams.set('client_id', env.GITHUB_CLIENT_ID || '');
   u.searchParams.set('redirect_uri', 'https://inneranimalmedia.com/api/oauth/github/callback');
-  u.searchParams.set('scope', 'repo read:user read:org workflow');
+  u.searchParams.set(
+    'scope',
+    (oauthScopeString && String(oauthScopeString).trim())
+      ? String(oauthScopeString).trim()
+      : 'repo read:user read:org workflow',
+  );
   u.searchParams.set('state', state);
   return u.toString();
 }
 
-function googleAuthUrl(env, state) {
+function googleAuthUrl(env, state, oauthScopeString) {
   const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   u.searchParams.set('client_id', env.GOOGLE_CLIENT_ID || '');
   u.searchParams.set('redirect_uri', 'https://inneranimalmedia.com/api/oauth/google/callback');
   u.searchParams.set('response_type', 'code');
-  u.searchParams.set('scope', [
-    'https://www.googleapis.com/auth/drive.readonly',
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile',
-  ].join(' '));
+  u.searchParams.set(
+    'scope',
+    (oauthScopeString && String(oauthScopeString).trim())
+      ? String(oauthScopeString).trim()
+      : [
+          'https://www.googleapis.com/auth/drive.readonly',
+          'https://www.googleapis.com/auth/userinfo.email',
+          'https://www.googleapis.com/auth/userinfo.profile',
+        ].join(' '),
+  );
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
   u.searchParams.set('state', state);
   return u.toString();
 }
 
-function cloudflareAuthUrl(env, state) {
+function cloudflareAuthUrl(env, state, oauthScopeString) {
   if (!env.CLOUDFLARE_OAUTH_CLIENT_ID) return null;
   const u = new URL('https://dash.cloudflare.com/oauth2/auth');
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', env.CLOUDFLARE_OAUTH_CLIENT_ID);
   u.searchParams.set('redirect_uri', 'https://inneranimalmedia.com/api/oauth/cloudflare/callback');
-  u.searchParams.set('scope', 'account:read zone:read workers:write d1:read r2:read');
+  u.searchParams.set(
+    'scope',
+    (oauthScopeString && String(oauthScopeString).trim())
+      ? String(oauthScopeString).trim()
+      : 'account:read zone:read workers:write d1:read r2:read',
+  );
   u.searchParams.set('state', state);
   return u.toString();
 }
@@ -340,13 +357,18 @@ function cloudflareAuthUrl(env, state) {
 //   GET /api/auth/supabase/callback  → establishIamSession → dashboard
 //   GET /api/auth/oauth/consent      → consent HTML (DASHBOARD R2); WAF must allow this path
 // ─────────────────────────────────────────────────────────────────────────────
-function supabaseAuthUrl(env, state) {
+function supabaseAuthUrl(env, state, oauthScopeString) {
   if (!env.SUPABASE_OAUTH_CLIENT_ID) return null;
   const u = new URL('https://api.supabase.com/v1/oauth/authorize');
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', env.SUPABASE_OAUTH_CLIENT_ID);
   u.searchParams.set('redirect_uri', 'https://inneranimalmedia.com/api/oauth/supabase/callback');
-  u.searchParams.set('scope', 'all');
+  u.searchParams.set(
+    'scope',
+    (oauthScopeString && String(oauthScopeString).trim())
+      ? String(oauthScopeString).trim()
+      : 'all',
+  );
   u.searchParams.set('state', state);
   return u.toString();
 }
@@ -559,6 +581,9 @@ export async function handleOAuthApi(request, env, ctx) {
     if (!v.ok) return jsonResponse({ success: false, provider, error: v.error || 'Invalid API key — check and retry' }, 400);
 
     await storeApiKeyAsOauth(env, authUser, provider, apiKey);
+    try {
+      ctx?.waitUntil?.(syncProviderModels(env, provider, apiKey));
+    } catch (_) { /* non-fatal */ }
     return jsonResponse({ success: true, provider, account_display: 'API key validated' });
   }
 
@@ -606,11 +631,13 @@ export async function handleOAuthApi(request, env, ctx) {
       workspace_id,
     });
 
+    const oauthScopes = url.searchParams.get('oauth_scopes');
+
     let redirectUrl = null;
-    if (provider === 'github') redirectUrl = githubAuthUrl(env, state);
-    if (provider === 'google') redirectUrl = googleAuthUrl(env, state);
-    if (provider === 'cloudflare') redirectUrl = cloudflareAuthUrl(env, state);
-    if (provider === 'supabase') redirectUrl = supabaseAuthUrl(env, state);
+    if (provider === 'github') redirectUrl = githubAuthUrl(env, state, oauthScopes);
+    if (provider === 'google') redirectUrl = googleAuthUrl(env, state, oauthScopes);
+    if (provider === 'cloudflare') redirectUrl = cloudflareAuthUrl(env, state, oauthScopes);
+    if (provider === 'supabase') redirectUrl = supabaseAuthUrl(env, state, oauthScopes);
 
     if (!redirectUrl) {
       return jsonResponse({
@@ -628,7 +655,7 @@ export async function handleOAuthApi(request, env, ctx) {
 
     const state = url.searchParams.get('state') || '';
     const code = url.searchParams.get('code') || '';
-    if (!state || !code) return Response.redirect(`${new URL(request.url).origin}/dashboard/integrations?error=missing_params`, 302);
+    if (!state || !code) return Response.redirect(`${new URL(request.url).origin}/dashboard/settings?section=Integrations&error=missing_params`, 302);
 
     const stored = await kvGetState(env, state);
     if (!stored) return new Response(null, { status: 404 });

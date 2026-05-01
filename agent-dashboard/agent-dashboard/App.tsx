@@ -52,7 +52,6 @@ import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
 import { DatabasePage } from './components/DatabasePage';
 import { McpPage } from './components/McpPage';
-import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
 import ImagesPage from './components/ImagesPage';
@@ -127,6 +126,11 @@ const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
   const navigate = useNavigate();
+  const settingsIntegrationsActive =
+    location.pathname === '/dashboard/settings' &&
+    new URLSearchParams(location.search.startsWith('?') ? location.search.slice(1) : location.search).get(
+      'section',
+    ) === 'Integrations';
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
 
@@ -1721,7 +1725,13 @@ const App: React.FC = () => {
                   active={location.pathname === '/dashboard/storage'}
                   onClick={() => navigate('/dashboard/storage')}
               />
-              <ActivityRailItem icon={Wrench} label="Integrations" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
+              <ActivityRailItem
+                  icon={Wrench}
+                  label="Integrations"
+                  expanded={sidebarRailExpanded}
+                  active={settingsIntegrationsActive}
+                  onClick={() => navigate('/dashboard/settings?section=Integrations')}
+              />
               <ActivityRailItem icon={Layers} label="MCP & AI" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
               <ActivityRailItem
                   icon={Database}
@@ -1960,7 +1970,12 @@ const App: React.FC = () => {
                     <Route path="/dashboard/learn" element={<LearnPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
                     <Route path="/dashboard/mcp" element={<McpPage />} />
-                    <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
+                    <Route
+                      path="/dashboard/integrations"
+                      element={
+                        <Navigate to="/dashboard/settings?section=Integrations" replace />
+                      }
+                    />
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
                     <Route path="/dashboard/storage" element={<StoragePage />} />
                     <Route path="/dashboard/images" element={<ImagesPage />} />

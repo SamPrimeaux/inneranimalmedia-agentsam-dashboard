@@ -6,6 +6,7 @@
 import { getAuthUser, isSamOnlyUser, jsonResponse } from '../core/auth.js';
 import { ensureOauthTokenColumns } from './oauth.js';
 import { recordWorkerAnalyticsError } from './telemetry.js';
+import { handleIntegrationsConnectRoutes } from './integrations/connect.js';
 
 const DEFAULT_TENANT_ID = 'tenant_sam_primeaux';
 
@@ -98,6 +99,17 @@ export async function handleIntegrationsRequest(request, envArg, ctxArg, authUse
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     await ensureIntegrationTables(env, resolveTenantId(authUser, env));
+
+    const connectRes = await handleIntegrationsConnectRoutes(
+        request,
+        env,
+        ctx,
+        authUser,
+        url,
+        pathLower,
+        method,
+    );
+    if (connectRes) return connectRes;
 
     // ── GET /api/integrations (lightweight list) ─────────────────────────────
     if (method === 'GET' && pathLower === '/api/integrations') {

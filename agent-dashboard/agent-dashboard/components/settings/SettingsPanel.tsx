@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Package } from 'lucide-react';
 import { useSettingsData } from './hooks/useSettingsData';
 import { useSettingsSections } from './hooks/useSettingsSections';
@@ -20,6 +21,7 @@ import { SecuritySection } from './sections/SecuritySection';
 import { PlanUsageSection } from './sections/PlanUsageSection';
 import { NotificationsSection } from './sections/NotificationsSection';
 import { DocsSection } from './sections/DocsSection';
+import { IntegrationsSection } from './sections/IntegrationsSection';
 
 export interface SettingsPanelProps {
   onClose: () => void;
@@ -34,6 +36,7 @@ export default function SettingsPanel({
   onOpenInMonaco,
   workspaceId,
 }: SettingsPanelProps) {
+  const [searchParams] = useSearchParams();
   const nav = useSettingsSections();
   const data = useSettingsData({
     workspaceId,
@@ -41,6 +44,14 @@ export default function SettingsPanel({
     rulesSkillsTab: nav.rulesSkillsTab,
     modelsTab: nav.modelsTab,
   });
+
+  useEffect(() => {
+    const s = searchParams.get('section');
+    if (!s) return;
+    if (nav.menu.some((m) => m.id === s)) {
+      nav.setActiveSection(s);
+    }
+  }, [searchParams, nav.menu, nav.setActiveSection]);
 
   const sectionBody = () => {
     switch (nav.activeSection) {
@@ -78,6 +89,13 @@ export default function SettingsPanel({
         return <HooksSection data={data} />;
       case 'GitHub':
         return <GitHubSection repos={data.repos} />;
+      case 'Integrations':
+        return (
+          <IntegrationsSection
+            userId={data.profileEmail || null}
+            onOpenInMonaco={onOpenInMonaco}
+          />
+        );
       case 'CI/CD':
         return <CiCdSection />;
       case 'Network':

@@ -8,6 +8,7 @@ import {
   jsonResponse,
   fetchAuthUserTenantId,
 } from '../core/auth.js';
+import { handleSettingsIntegrationsApi } from './settings-integrations.js';
 
 const AGENTSAM_POLICY_COLS = [
   'auto_run_mode',
@@ -150,6 +151,17 @@ export async function handleSettingsRequest(request, env, ctx) {
   const authUser = await getAuthUser(request, env);
   if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
   const sessionUserId = authUser.id;
+
+  const settingsIntegrationsRes = await handleSettingsIntegrationsApi(
+    request,
+    env,
+    ctx,
+    authUser,
+    url,
+    pathLower,
+    method,
+  );
+  if (settingsIntegrationsRes) return settingsIntegrationsRes;
 
   // ── /api/settings/profile ─────────────────────────────────────────────────
   if (pathLower === '/api/settings/profile' && method === 'GET') {

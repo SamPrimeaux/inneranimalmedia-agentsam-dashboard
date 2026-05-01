@@ -16566,6 +16566,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       let mcp_tool_errors = [];
       let audit_failures = [];
       let worker_errors = [];
+      let terminal_failures = [];
       try {
         const mcpQ = await env.DB.prepare(
           `SELECT id, tool_name, status, error_message, session_id, created_at, invoked_at
@@ -16605,11 +16606,29 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       } catch (e) {
         console.warn('[api/agent/problems] worker_analytics_errors', e?.message ?? e);
       }
+      try {
+        const tenantIdProblems = authUser.tenant_id || tenantIdFromEnv(env);
+        if (tenantIdProblems) {
+          const tfQ = await env.DB.prepare(
+            `SELECT th.content, th.exit_code, th.triggered_by,
+              th.recorded_at, ts.id AS session_id
+             FROM terminal_history th
+             JOIN terminal_sessions ts ON ts.id = th.terminal_session_id
+             WHERE th.exit_code != 0 AND th.exit_code IS NOT NULL
+               AND ts.tenant_id = ?
+             ORDER BY th.recorded_at DESC LIMIT 20`
+          ).bind(tenantIdProblems).all();
+          terminal_failures = tfQ.results || [];
+        }
+      } catch (e) {
+        console.warn('[api/agent/problems] terminal_history', e?.message ?? e);
+      }
       return jsonResponse({
         checked_at: checkedAt,
         mcp_tool_errors,
         audit_failures,
         worker_errors,
+        terminal_failures,
       });
     }
 
@@ -19113,6 +19132,7 @@ function resolveSubagentProfileSlug(commandSlug, args, session) {
 
 async function executeAgentsamSlashCommand(request, env, ctx) {
   try {
+    const cmdRunT0 = Date.now();
     await ensureAgentsamSlashCommandSqlDefaults(env);
     const authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
@@ -19231,6 +19251,11 @@ async function executeAgentsamSlashCommand(request, env, ctx) {
     } else {
       result = { error: 'Command not implemented', slug: command.slug };
     }
+
+    const rawInput = `/${commandName}${rawArgs ? ` ${rawArgs}` : ''}`;
+    const wsForRun = authUser.workspace_id != null ? String(authUser.workspace_id).trim() : '';
+    if (!wsForRun) console.warn('[agentsam_command_run] skip: missing workspace_id');
+    else if (env.DB) void env.DB.prepare(`INSERT INTO agentsam_command_run (workspace_id, session_id, user_input, normalized_intent, intent_category, commands_json, result_json, output_text, success, exit_code, duration_ms, selected_command_id, selected_command_slug, risk_level, requires_confirmation, approval_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`).bind(wsForRun, session.id ?? null, rawInput, command.slug, command.category ?? 'misc', JSON.stringify([command.mapped_command != null ? command.mapped_command : { slug: command.slug, handler_type: handlerType, handler_ref: handlerRef }]), JSON.stringify({ success: !result?.error }), String(result?.output ?? result?.result ?? '').slice(0, 500), result?.error ? 0 : 1, result?.exit_code ?? null, Date.now() - cmdRunT0, command.id, command.slug, command.risk_level ?? 'low', Number(command.requires_confirmation ?? 0), 'not_required').run().catch((e) => console.warn('[agentsam_command_run]', e?.message ?? e));
 
     await env.DB.prepare(
       `UPDATE agentsam_slash_commands
@@ -23167,9 +23192,21 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: JSON.stringify(payload), error: null, serviceName: 'builtin' });
     return { result: payload };
   }
+  if (tool_name === 'bridge_key_auth_test') {
+    const bridgeKey = (env.AGENTSAM_BRIDGE_KEY || '').trim();
+    if (!bridgeKey) return { error: 'AGENTSAM_BRIDGE_KEY not set' };
+    const base = (env.TERMINAL_WS_URL || '').replace('wss://', 'https://').replace('ws://', 'http://');
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${base}/api/terminal/session/register`, { method: 'POST', headers: { 'X-Bridge-Key': bridgeKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ probe: true }) });
+      const body = await res.text();
+      return { status: res.status, ok: res.ok, duration_ms: Date.now() - t0, body };
+    } catch (e) { return { error: e.message, duration_ms: Date.now() - t0 }; }
+  }
 
   if (tool_name.startsWith('fs_')) {
     const ptyToken = (env.TERMINAL_SECRET || '').trim();
+    const agentsamBridgeKey = (env.AGENTSAM_BRIDGE_KEY || '').trim();
     if (!ptyToken) {
       await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: 'TERMINAL_SECRET not configured', serviceName: 'pty_bridge' });
       return { error: 'TERMINAL_SECRET not configured on worker' };
@@ -23185,6 +23222,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
         method: 'POST',
         headers: {
           'x-pty-auth': ptyToken,
+          ...(agentsamBridgeKey ? { 'X-Bridge-Key': agentsamBridgeKey } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({

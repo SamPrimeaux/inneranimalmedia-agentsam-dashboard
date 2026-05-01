@@ -9,6 +9,25 @@ import { notifySam } from './notifications';
 export const HEADLESS_TERMINAL_SESSION_ID = 'term_headless_sam';
 
 /**
+ * Default PTY bridge from D1 (terminal_connections). Falls back to env.TERMINAL_WS_URL when absent.
+ */
+export async function getDefaultTerminalConnection(db) {
+  if (!db) return null;
+  try {
+    const conn = await db.prepare(
+      `SELECT ws_url, auth_token_secret_name, connection_type, ollama_url
+       FROM terminal_connections
+       WHERE is_default = 1 AND is_active = 1
+       LIMIT 1`,
+    ).first();
+    return conn ?? null;
+  } catch (e) {
+    console.warn('[getDefaultTerminalConnection]', e?.message ?? e);
+    return null;
+  }
+}
+
+/**
  * Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8.
  */
 export function aggregateTerminalRunOutput(parts) {
@@ -236,20 +255,6 @@ export async function resolveIamWorkspaceRoot(env) {
   if (workspaceSettingsRow?.settings_json) {
     try {
       const parsed = JSON.parse(workspaceSettingsRow.settings_json);
-      const root = typeof parsed?.workspace_root === 'string' ? parsed.workspace_root.trim() : '';
-      if (root) return root;
-    } catch (_) {}
-  }
-
-  const workspaceRow = await env.DB
-    .prepare('SELECT settings_json FROM agentsam_workspace WHERE id = ?')
-    .bind('ws_inneranimalmedia')
-    .first()
-    .catch(() => null);
-
-  if (workspaceRow?.settings_json) {
-    try {
-      const parsed = JSON.parse(workspaceRow.settings_json);
       const root = typeof parsed?.workspace_root === 'string' ? parsed.workspace_root.trim() : '';
       if (root) return root;
     } catch (_) {}

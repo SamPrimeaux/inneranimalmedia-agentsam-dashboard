@@ -2,7 +2,7 @@ import { jsonResponse } from '../core/responses.js';
 import { getAuthUser, authUserIsSuperadmin } from '../core/auth.js';
 import { getIntegrationToken } from '../integrations/tokens.js';
 import { getWorkspaceTheme, normalizeThemeSlug } from '../core/themes.js';
-import { runTerminalCommand } from '../core/terminal.js';
+import { runTerminalCommand, getDefaultTerminalConnection } from '../core/terminal.js';
 
 // Integrations
 import { chatWithAnthropic } from '../integrations/anthropic.js';
@@ -126,9 +126,23 @@ export async function handleDashboardApi(request, url, env, ctx) {
         const vpcPty = !!env.PTY_SERVICE;
         const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
         const secret = (env.TERMINAL_SECRET || '').trim();
+        let dbBridgeOk = false;
+        if (env.DB) {
+            try {
+                const conn = await getDefaultTerminalConnection(env.DB);
+                const wsPart = String(conn?.ws_url || '').trim();
+                const secretName = String(conn?.auth_token_secret_name || '').trim();
+                const tok = secretName && env[secretName] != null
+                    ? String(env[secretName]).trim()
+                    : '';
+                dbBridgeOk = !!(wsPart && tok);
+            } catch (_) {
+                dbBridgeOk = false;
+            }
+        }
         return jsonResponse({
             terminal_enabled: true,
-            terminal_configured: !!(vpcPty || (httpsUrl && secret)),
+            terminal_configured: !!(vpcPty || (httpsUrl && secret) || dbBridgeOk),
             control_plane_available: !!env.AGENT_SESSION,
             direct_wss_available: false,
         });

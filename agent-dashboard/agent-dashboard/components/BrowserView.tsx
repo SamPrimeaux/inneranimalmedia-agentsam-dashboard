@@ -1324,9 +1324,15 @@ const BrowserPane: React.FC<PaneProps> = ({
 interface BrowserViewProps {
   url?:            string;
   addressDisplay?: string | null;
+  /** When false, no collab HTTP probe or WebSocket (avoids IAM_COLLAB churn when panel is hidden). */
+  isActive?:       boolean;
 }
 
-export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, addressDisplay }) => {
+export const BrowserView: React.FC<BrowserViewProps> = ({
+  url: urlFromParent,
+  addressDisplay,
+  isActive = false,
+}) => {
   const [primaryUrl,    setPrimaryUrl]    = useState(urlFromParent || DEFAULT_URL);
   const [secondaryUrl,  setSecondaryUrl]  = useState<string | null>(null);
   const [agentActive,   setAgentActive]   = useState(false);
@@ -1355,6 +1361,11 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
   const [collabBridge, setCollabBridge] = useState<'live' | 'offline' | 'unavailable'>('live');
 
   useEffect(() => {
+    if (!isActive) {
+      setCollabBridge('live');
+      return;
+    }
+
     const host = window.location.host;
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}/api/collab/room/browser`;
     const httpProbeUrl = `${window.location.protocol === 'https:' ? 'https:' : 'http:'}//${host}/api/collab/room/browser`;
@@ -1456,7 +1467,7 @@ export const BrowserView: React.FC<BrowserViewProps> = ({ url: urlFromParent, ad
         ws?.close();
       } catch { /* ignore */ }
     };
-  }, []);
+  }, [isActive]);
 
   return (
     <div className="flex w-full h-full overflow-hidden bg-[var(--bg-app)] flex-col">

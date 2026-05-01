@@ -301,6 +301,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const intentionalCloseRef             = useRef(false);
     const activeConnectRef                = useRef<() => void>(() => {});
     const connectInFlightRef              = useRef(false);
+    const bootstrapInFlightRef            = useRef<Promise<void> | null>(null);
 
     // In global drawer mode, the parent owns the height; keep the shell expanded
     // and disable internal collapse/resize to avoid nested sizing conflicts.
@@ -308,7 +309,7 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       if (isDrawer) setIsCollapsed(false);
     }, [isDrawer]);
 
-    const refreshBootstrap = useCallback(async () => {
+    const _doBootstrap = useCallback(async () => {
       cachedBootstrapRef.current = null;
       try {
         const [resumePack, cfgPack] = await Promise.all([
@@ -348,6 +349,19 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         };
       }
     }, []);
+
+    const refreshBootstrap = useCallback(async () => {
+      if (bootstrapInFlightRef.current) {
+        return bootstrapInFlightRef.current;
+      }
+      const run = _doBootstrap();
+      bootstrapInFlightRef.current = run;
+      try {
+        await run;
+      } finally {
+        bootstrapInFlightRef.current = null;
+      }
+    }, [_doBootstrap]);
 
     // ── Config fetch ──────────────────────────────────────────────────────────
     useEffect(() => {
@@ -553,12 +567,12 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
             const resumeJson = boot.resumeJson ?? { resumable: false };
 
-            const wsParams = new URLSearchParams();
-            if (workspaceId) wsParams.set('workspace_id', workspaceId);
-            wsParams.set('execution_mode', 'pty');
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsOrigin = `${wsProtocol}//${window.location.host}`;
-            const wsUrl = `${wsOrigin}/api/agent/terminal/ws?${wsParams.toString()}`;
+            // Anchor path to window.location.origin so the route is always /api/agent/terminal/ws
+            // (never a bare /terminal/ws or path-relative mistake under /dashboard/...).
+            const wsHttpUrl = new URL('/api/agent/terminal/ws', window.location.origin);
+            if (workspaceId) wsHttpUrl.searchParams.set('workspace_id', workspaceId);
+            wsHttpUrl.searchParams.set('execution_mode', 'pty');
+            const wsUrl = wsHttpUrl.href.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
 
             const ws = new WebSocket(wsUrl);
             socketRef.current = ws;

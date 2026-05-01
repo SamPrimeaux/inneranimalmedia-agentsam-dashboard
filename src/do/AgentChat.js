@@ -274,10 +274,11 @@ export class AgentChatSqlV1 extends DurableObject {
                 batch = [
                   ...sql.exec(
                     `SELECT id, envelope_json FROM designstudio_event_outbox
-                     WHERE id > ? AND (
-                       COALESCE(json_extract(envelope_json, '$.workflow_run_id'), '') = ?
-                       OR COALESCE(json_extract(envelope_json, '$.payload.workflow_run_id'), '') = ?
-                     )
+                     WHERE id > ?
+                       AND (
+                         COALESCE(json_extract(envelope_json, '$.payload.workflow_run_id'), '') = ?
+                         OR COALESCE(json_extract(envelope_json, '$.workflow_run_id'), '') = ?
+                       )
                      ORDER BY id ASC LIMIT 50`,
                     lastId,
                     runId,
@@ -295,8 +296,8 @@ export class AgentChatSqlV1 extends DurableObject {
                   try {
                     const o = JSON.parse(row.envelope_json);
                     return (
-                      String(o?.workflow_run_id || '') === runId ||
-                      String(o?.payload?.workflow_run_id || '') === runId
+                      String(o?.payload?.workflow_run_id || '') === runId ||
+                      String(o?.workflow_run_id || '') === runId
                     );
                   } catch {
                     return false;

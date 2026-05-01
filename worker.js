@@ -7,7 +7,11 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { provisionUserWorkspace } from "./src/api/provisioning.js";
+import {
+  provisionUserWorkspace,
+  evaluatePlanForModelRequest,
+  envWithLlmKeyOverride,
+} from "./src/api/provisioning.js";
 import { handleDesignStudioApi } from "./src/api/designstudio/index.js";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
@@ -13722,6 +13726,20 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const tenantIdChatSse = ingestBypass
     ? null
     : resolveTenantIdForWorker(chatSseSession, env);
+  let billingGate = { allowed: true, billingSource: 'default', byokApiKey: null };
+  if (!ingestBypass && tenantIdChatSse && chatSseSession?.user_id && env.DB) {
+    const gate = await evaluatePlanForModelRequest(env, {
+      tenantId: tenantIdChatSse,
+      userId: chatSseSession.user_id,
+      modelKey,
+      apiPlatform,
+    });
+    if (!gate.allowed) {
+      return jsonResponse(gate.body, gate.status ?? 402);
+    }
+    billingGate = gate;
+  }
+  const envChat = envWithLlmKeyOverride(env, billingGate, apiPlatform);
   const skillWorkspaceKey = chatSseSession?.workspace_id ?? tenantIdChatSse ?? null;
   const IAM_SSE_BRAND_OUTPUT_POLICY = `## Brand and output policy (Inner Animal Media)
 - Do not use emojis in assistant replies, in files you create or edit (HTML, CSS, JavaScript, markdown, copy, etc.), or in user-visible UI text. Use plain words instead (for example "Hello" or "Looks good"). Only use emojis if the user explicitly asks for them.`;
@@ -13954,10 +13972,10 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     let toolResp = null;
     try {
       if (apiPlatform === 'anthropic_api') {
-        const ak = secretFn('ANTHROPIC_API_KEY') ?? env.ANTHROPIC_API_KEY;
+        const ak = secretFn('ANTHROPIC_API_KEY') ?? envChat.ANTHROPIC_API_KEY;
         if (ak) {
           toolResp = await chatWithToolsAnthropic(
-            env,
+            envChat,
             request,
             apiPlatform,
             modelKey,
@@ -13972,10 +13990,10 @@ You can delegate tasks directly to Claude Code running on the host machine by st
           );
         }
       } else if (apiPlatform === 'openai') {
-        const ok = secretFn('OPENAI_API_KEY') ?? env.OPENAI_API_KEY;
+        const ok = secretFn('OPENAI_API_KEY') ?? envChat.OPENAI_API_KEY;
         if (ok) {
           toolResp = await chatWithToolsOpenAI(
-            env,
+            envChat,
             chatSseSystemPrompt,
             apiMessagesForTools,
             modelRow,
@@ -13987,7 +14005,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         }
       } else if (apiPlatform === 'gemini_api' || apiPlatform === 'vertex_ai') {
         toolResp = await chatWithToolsGoogle(
-          env,
+          envChat,
           chatSseSystemPrompt,
           apiMessagesForTools,
           modelRow,
@@ -14014,7 +14032,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'anthropic_api') {
     return chatWithToolsAnthropic(
-      env,
+      envChat,
       request,
       apiPlatform,
       modelKey,
@@ -14031,7 +14049,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'gemini_api' || provider === 'gemini' || apiPlatform === 'vertex_ai') {
     return chatWithToolsGoogle(
-      env,
+      envChat,
       chatSseSystemPrompt,
       parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
       modelRow,
@@ -14050,7 +14068,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'openai' || apiPlatform === 'cursor') {
     return chatWithToolsOpenAI(
-      env,
+      envChat,
       chatSseSystemPrompt,
       parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
       modelRow,
@@ -14069,7 +14087,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'workers_ai') {
     const messages = [{ role: 'user', content: hasMedia ? flattenUserContentForWorkersAi(message, jsonImages, chatAttachments) : message }];
-  return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
+    return streamWorkersAI(envChat, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 

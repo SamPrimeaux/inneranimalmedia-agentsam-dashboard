@@ -345,9 +345,17 @@ function appendLegacySessionCookieClears(targetHeaders) {
   );
 }
 
+/** Workers Response.redirect requires an absolute URL (relative throws → CF 1101). */
+function redirectToAuthLogin(request, queryWithoutLeadingQuestion) {
+  const u = new URL(request.url);
+  u.pathname = '/auth/login';
+  u.search = queryWithoutLeadingQuestion.replace(/^\?/, '');
+  return Response.redirect(u.href, 302);
+}
+
 export async function handleSupabaseOAuthStart(request, env) {
   if (!env.SUPABASE_OAUTH_CLIENT_ID || !env.SESSION_CACHE) {
-    return Response.redirect('/auth/login?error=oauth_not_configured', 302);
+    return redirectToAuthLogin(request, 'error=oauth_not_configured');
   }
   const state = crypto.randomUUID();
   const codeVerifier =
@@ -385,15 +393,15 @@ export async function handleSupabaseOAuthCallback(request, env) {
   const state = url.searchParams.get('state');
   const error = url.searchParams.get('error');
 
-  if (error) return Response.redirect('/auth/login?error=oauth_denied', 302);
-  if (!code || !state) return Response.redirect('/auth/login?error=invalid_callback', 302);
+  if (error) return redirectToAuthLogin(request, 'error=oauth_denied');
+  if (!code || !state) return redirectToAuthLogin(request, 'error=invalid_callback');
   if (!env.SESSION_CACHE || !env.DB || !env.SUPABASE_OAUTH_CLIENT_ID || !env.SUPABASE_OAUTH_CLIENT_SECRET) {
-    return Response.redirect('/auth/login?error=oauth_not_configured', 302);
+    return redirectToAuthLogin(request, 'error=oauth_not_configured');
   }
 
   const stateKey = `oauth_state_supabase_${state}`;
   const storedRaw = await env.SESSION_CACHE.get(stateKey);
-  if (!storedRaw) return Response.redirect('/auth/login?error=state_mismatch', 302);
+  if (!storedRaw) return redirectToAuthLogin(request, 'error=state_mismatch');
   await env.SESSION_CACHE.delete(stateKey);
 
   const { code_verifier } = JSON.parse(storedRaw);
@@ -413,7 +421,7 @@ export async function handleSupabaseOAuthCallback(request, env) {
 
   if (!tokenRes.ok) {
     console.error('Supabase token exchange failed:', await tokenRes.text());
-    return Response.redirect('/auth/login?error=token_exchange_failed', 302);
+    return redirectToAuthLogin(request, 'error=token_exchange_failed');
   }
 
   const { access_token, refresh_token, expires_in } = await tokenRes.json();
@@ -429,12 +437,12 @@ export async function handleSupabaseOAuthCallback(request, env) {
       'https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/user',
       { headers: { Authorization: `Bearer ${access_token}` } },
     );
-    if (!fallbackRes.ok) return Response.redirect('/auth/login?error=userinfo_failed', 302);
+    if (!fallbackRes.ok) return redirectToAuthLogin(request, 'error=userinfo_failed');
     sbUser = await fallbackRes.json();
   }
 
   const emailRaw = sbUser.email;
-  if (!emailRaw) return Response.redirect('/auth/login?error=no_email', 302);
+  if (!emailRaw) return redirectToAuthLogin(request, 'error=no_email');
   const oauthEmail = String(emailRaw).toLowerCase().trim();
   const providerSubject = sbUser.sub || sbUser.id;
   const name = sbUser.name || sbUser.user_metadata?.full_name || oauthEmail.split('@')[0];
@@ -458,7 +466,7 @@ export async function handleSupabaseOAuthCallback(request, env) {
     }
   } catch (e) {
     console.warn('[Supabase OAuth] auth_users upsert:', e?.message ?? e);
-    return Response.redirect('/auth/login?error=provision_failed', 302);
+    return redirectToAuthLogin(request, 'error=provision_failed');
   }
 
   await provisionNewUser(env, { email: oauthEmail, name, authUserId });
@@ -491,7 +499,9 @@ export async function handleOAuthConsentPage(request, env) {
   const user = await getAuthUser(request, env);
   const url = new URL(request.url);
   if (!user) {
-    return Response.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
+    const q = new URLSearchParams();
+    q.set('next', `${url.pathname}${url.search || ''}`);
+    return redirectToAuthLogin(request, q.toString());
   }
   const obj =
     (await env.DASHBOARD?.get('static/dashboard/agent.html')) ||

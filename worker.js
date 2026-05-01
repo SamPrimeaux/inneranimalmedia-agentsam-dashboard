@@ -21,6 +21,7 @@ import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
 import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
 import { runMasterDailyRetention } from './src/core/retention.js';
+import { loadAgentMemory, runAgentsamMemoryDecay } from "./src/core/memory.js";
 import { fetchCicdPipelineRunsForOverview } from './src/api/overview.js';
 import {
   AGENTSAM_MCP_WORKFLOWS,
@@ -13746,9 +13747,15 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   const messageHasSlashForSkillBody = String(message || '').includes('/');
 
-  const buildChatSseSystemPromptResolved = async () => {
+  const buildChatSseSystemPromptResolved = async (opts = {}) => {
     let promptOut = agentBaseSystem;
     try {
+      let memoryBlock = '';
+      if (!opts.skipMemory && tenantIdChatSse && env.DB) {
+        try {
+          memoryBlock = await loadAgentMemory(env, tenantIdChatSse);
+        } catch (_) { /* non-fatal */ }
+      }
       const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
       const skillSql = message.includes('/')
         ? `SELECT name, description, content_markdown, slash_trigger
@@ -13839,6 +13846,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
       const partsSys = [];
       if (personaPrefixSse && String(personaPrefixSse).trim()) partsSys.push(String(personaPrefixSse).trim());
       if (agentBaseSystem) partsSys.push(agentBaseSystem);
+      if (memoryBlock && String(memoryBlock).trim()) partsSys.push(String(memoryBlock).trim());
       partsSys.push(toolsBlock);
       promptOut = partsSys.join('\n\n');
     } catch (e) {
@@ -13873,8 +13881,15 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         .bind(cacheHash)
         .first();
       if (cached?.compiled_context) {
-        chatSseSystemPrompt = cached.compiled_context;
-        const { tools: cachedPathTools } = await buildChatSseSystemPromptResolved();
+        let basePrompt = cached.compiled_context;
+        if (tenantIdChatSse && env.DB) {
+          try {
+            const mem = await loadAgentMemory(env, tenantIdChatSse);
+            if (mem && String(mem).trim()) basePrompt = `${basePrompt}\n\n${String(mem).trim()}`;
+          } catch (_) { /* keep cached prompt */ }
+        }
+        chatSseSystemPrompt = basePrompt;
+        const { tools: cachedPathTools } = await buildChatSseSystemPromptResolved({ skipMemory: true });
         lastLoadedToolsSse = cachedPathTools;
         try {
           const savedTok = Number(cached.token_count) || estimateCompiledContextTokens(cached.compiled_context);
@@ -27587,6 +27602,16 @@ worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '10 0 * * *') {
     if (!env?.DB) return;
     ctx.waitUntil(writeDailySnapshot(env, 'cron_0010').catch(() => { }));
+  }
+  if (event.cron === '0 1 * * *') {
+    if (env?.DB) {
+      ctx.waitUntil(
+        runAgentsamMemoryDecay(env).catch((e) =>
+          console.warn('[cron] agentsam_memory decay', e?.message ?? e),
+        ),
+      );
+    }
+    return;
   }
   if (event.cron === '0 6 * * *') {
     console.log('[cron] Starting daily doc sync (compact -> knowledge sync -> Vectorize index)');

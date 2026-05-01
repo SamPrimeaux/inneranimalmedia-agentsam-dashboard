@@ -50,6 +50,7 @@ import { handleStatusBundle } from './api/status-bundle';
 import { handleCursorAgentApi } from './api/cursor-agent';
 import { handleCalendarApi } from './api/calendar.js';
 import legacyWorker from '../worker.js';
+import { runAgentsamMemoryDecay } from './core/memory.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
 export { IAMCollaborationSession } from './do/Collaboration.js';
@@ -579,6 +580,15 @@ export default {
           console.log('[retention] rollup complete', { results });
         })
       );
+    }
+    if (event.cron === '0 1 * * *') {
+      if (env?.DB) {
+        ctx.waitUntil(
+          runAgentsamMemoryDecay(env).catch((e) =>
+            console.warn('[cron] agentsam_memory decay', e?.message ?? e),
+          ),
+        );
+      }
     }
   },
 

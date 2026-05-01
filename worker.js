@@ -21,7 +21,7 @@ import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
 import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
 import { runMasterDailyRetention } from './src/core/retention.js';
-import { loadAgentMemory, runAgentsamMemoryDecay } from "./src/core/memory.js";
+import { loadAgentMemory } from "./src/core/memory.js";
 import { fetchCicdPipelineRunsForOverview } from './src/api/overview.js';
 import {
   AGENTSAM_MCP_WORKFLOWS,
@@ -27602,16 +27602,6 @@ worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '10 0 * * *') {
     if (!env?.DB) return;
     ctx.waitUntil(writeDailySnapshot(env, 'cron_0010').catch(() => { }));
-  }
-  if (event.cron === '0 1 * * *') {
-    if (env?.DB) {
-      ctx.waitUntil(
-        runAgentsamMemoryDecay(env).catch((e) =>
-          console.warn('[cron] agentsam_memory decay', e?.message ?? e),
-        ),
-      );
-    }
-    return;
   }
   if (event.cron === '0 6 * * *') {
     console.log('[cron] Starting daily doc sync (compact -> knowledge sync -> Vectorize index)');

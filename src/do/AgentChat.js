@@ -96,6 +96,11 @@ export class AgentChatSqlV1 extends DurableObject {
       top_score REAL,
       cached_at INTEGER DEFAULT (unixepoch())
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS designstudio_event_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      envelope_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`);
 
     this.ptyWs = null;
     this.ptyConnectPromise = null;
@@ -220,7 +225,125 @@ export class AgentChatSqlV1 extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    if (url.pathname === '/designstudio/stream-event' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const envelope = body?.envelope;
+      if (!envelope || typeof envelope !== 'object') {
+        return Response.json({ error: 'envelope required' }, { status: 400 });
+      }
+      const jsonText = JSON.stringify(envelope);
+      this.sql.exec('INSERT INTO designstudio_event_outbox (envelope_json) VALUES (?)', jsonText);
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/designstudio/events' && request.method === 'GET') {
+      return this.handleDesignStudioEventStream(url);
+    }
+
     return new Response('AgentChatSqlV1 DO', { status: 200 });
+  }
+
+  /**
+   * SSE fan-out from DO SQLite outbox (live stream). Filter by workflow run id inside envelope JSON.
+   * @param {URL} url
+   */
+  handleDesignStudioEventStream(url) {
+    const runId = (url.searchParams.get('run_id') || '').trim();
+    if (!runId) {
+      return Response.json({ error: 'run_id required' }, { status: 400 });
+    }
+    let lastId = parseInt(url.searchParams.get('last_id') || '0', 10);
+    if (!Number.isFinite(lastId)) lastId = 0;
+
+    const encoder = new TextEncoder();
+    const sql = this.sql;
+    const startedMs = Date.now();
+    const maxMs = 10 * 60 * 1000;
+    const keepaliveMs = 15000;
+    const pollMs = 100;
+
+    const stream = new ReadableStream({
+      start: (controller) => {
+        let lastKeep = Date.now();
+        const pump = async () => {
+          try {
+            while (Date.now() - startedMs < maxMs) {
+              /** @type {{ id: number, envelope_json: string }[]} */
+              let batch;
+              try {
+                batch = [
+                  ...sql.exec(
+                    `SELECT id, envelope_json FROM designstudio_event_outbox
+                     WHERE id > ? AND (
+                       COALESCE(json_extract(envelope_json, '$.workflow_run_id'), '') = ?
+                       OR COALESCE(json_extract(envelope_json, '$.payload.workflow_run_id'), '') = ?
+                     )
+                     ORDER BY id ASC LIMIT 50`,
+                    lastId,
+                    runId,
+                    runId,
+                  ),
+                ];
+              } catch (_) {
+                const raw = [
+                  ...sql.exec(
+                    `SELECT id, envelope_json FROM designstudio_event_outbox WHERE id > ? ORDER BY id ASC LIMIT 200`,
+                    lastId,
+                  ),
+                ];
+                batch = raw.filter((row) => {
+                  try {
+                    const o = JSON.parse(row.envelope_json);
+                    return (
+                      String(o?.workflow_run_id || '') === runId ||
+                      String(o?.payload?.workflow_run_id || '') === runId
+                    );
+                  } catch {
+                    return false;
+                  }
+                }).slice(0, 50);
+              }
+
+              for (const row of batch) {
+                const idNum = Number(row.id);
+                const chunk = `id: ${idNum}\nevent: designstudio\ndata: ${row.envelope_json}\n\n`;
+                controller.enqueue(encoder.encode(chunk));
+                lastId = idNum;
+                try {
+                  const parsed = JSON.parse(row.envelope_json);
+                  if (parsed?.event === 'supabase.sync.completed') {
+                    controller.close();
+                    return;
+                  }
+                } catch (_) {}
+              }
+
+              if (Date.now() - lastKeep >= keepaliveMs) {
+                controller.enqueue(encoder.encode(': keepalive\n\n'));
+                lastKeep = Date.now();
+              }
+
+              await new Promise((r) => setTimeout(r, pollMs));
+            }
+            controller.close();
+          } catch (e) {
+            try {
+              controller.error(e);
+            } catch (_) {}
+          }
+        };
+        void pump();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   }
 
   async handleTerminalWebSocket(request, url) {

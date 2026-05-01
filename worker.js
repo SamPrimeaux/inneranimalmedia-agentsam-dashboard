@@ -3005,6 +3005,7 @@ async function closeWorkSessionAndLog(env, sessionId, tenantId) {
 
 async function runDeploymentsWeeklyRollup(env) {
   if (!env?.DB) return;
+  const rollupT0 = Date.now();
   try {
     const now = new Date();
     // This function is gated to Mondays (UTC) by the scheduler.
@@ -3066,12 +3067,13 @@ async function runDeploymentsWeeklyRollup(env) {
       `auto rollup ${weekStart}..${weekEnd}`
     ).run().catch(() => { });
 
-    // Always log for analysis, even if rollup table doesn't exist
+    // Always log for analysis, even if rollup table doesn't exist (internal cron: tenant_id = system)
     await env.DB.prepare(
       `INSERT INTO agentsam_tool_call_log
         (tenant_id, tool_name, status, duration_ms, input_summary, output_summary, tool_category, user_id)
-       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','success',0,?,?,'rollup','au_871d920d1233cbd1')`
+       VALUES ('system','deployments_weekly_rollup','completed',?,?,?,'rollup','system')`
     ).bind(
+      Math.max(1, Date.now() - rollupT0),
       `week_start=${weekStart} week_end=${weekEnd}`,
       `total=${totalDeploys} success=${Number(stats?.success) || 0} failed=${Number(stats?.failed) || 0} workers=${workers.results?.length || 0} top_triggered_by=${topTrig?.triggered_by || 'n/a'}`
     ).run().catch(() => { });
@@ -3079,7 +3081,7 @@ async function runDeploymentsWeeklyRollup(env) {
     await env.DB.prepare(
       `INSERT INTO agentsam_tool_call_log
         (tenant_id, tool_name, status, error_message, tool_category, user_id)
-       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','error',?,'rollup','au_871d920d1233cbd1')`
+       VALUES ('system','deployments_weekly_rollup','failed',?,'rollup','system')`
     ).bind(e?.message ?? String(e)).run().catch(() => { });
   }
 }
@@ -3386,6 +3388,8 @@ const worker = {
       if (pathLower.startsWith('/api/internal/designstudio/') || pathLower.startsWith('/api/designstudio/')) {
         return handleDesignStudioApi(request, url, env, ctx);
       }
+
+      if (pathLower.startsWith('/api/cad/') || pathLower === '/api/cad') return (await import('./src/api/cad.js')).handleCadApi(request, url, env, ctx);
 
       // ----- API: Internal post-deploy (knowledge sync to R2) -----
       if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/post-deploy') {
@@ -7598,6 +7602,89 @@ async function runPostDeployQualityChecks(env, deploymentId) {
   }
 }
 
+/** Hourly MCP tool rollup: agentsam_tool_call_log -> agentsam_tool_stats_compacted */
+async function compactToolStats(env) {
+  if (!env?.DB) return null;
+  try {
+    return await env.DB.prepare(`
+INSERT INTO agentsam_tool_stats_compacted
+  (tenant_id, tool_name, total_calls, success_count, failure_count,
+   success_rate, total_cost_usd, total_tokens, avg_duration_ms,
+   first_seen_at, last_seen_at, compacted_at)
+SELECT
+  tenant_id,
+  tool_name,
+  COUNT(*),
+  SUM(CASE WHEN status IN ('success','completed') THEN 1 ELSE 0 END),
+  SUM(CASE WHEN status NOT IN ('success','completed') THEN 1 ELSE 0 END),
+  ROUND(1.0 * SUM(CASE WHEN status IN ('success','completed') THEN 1 ELSE 0 END) / COUNT(*), 4),
+  SUM(COALESCE(cost_usd, 0)),
+  SUM(COALESCE(input_tokens,0) + COALESCE(output_tokens,0)),
+  AVG(CASE WHEN duration_ms > 0 THEN duration_ms END),
+  MIN(created_at),
+  MAX(created_at),
+  unixepoch()
+FROM agentsam_tool_call_log
+WHERE tenant_id IS NOT NULL
+GROUP BY tenant_id, tool_name
+ON CONFLICT(tenant_id, tool_name) DO UPDATE SET
+  total_calls=excluded.total_calls, success_count=excluded.success_count,
+  failure_count=excluded.failure_count, success_rate=excluded.success_rate,
+  total_cost_usd=excluded.total_cost_usd, total_tokens=excluded.total_tokens,
+  avg_duration_ms=excluded.avg_duration_ms, last_seen_at=excluded.last_seen_at,
+  compacted_at=excluded.compacted_at
+`).run();
+  } catch (e) {
+    console.warn('[compactToolStats]', e?.message ?? e);
+    return null;
+  }
+}
+
+/** Daily rollup: yesterday's agentsam_command_run -> execution_performance_metrics (1am UTC) */
+async function rollupCommandMetrics(env) {
+  if (!env?.DB) return null;
+  try {
+    return await env.DB.prepare(`
+INSERT INTO execution_performance_metrics
+  (tenant_id, command_id, metric_date, execution_count, success_count, failure_count,
+   avg_duration_ms, min_duration_ms, max_duration_ms, success_rate_percent,
+   total_tokens_consumed, total_cost_cents, last_computed_at)
+SELECT
+  w.tenant_id,
+  c.id,
+  date(r.created_at, 'unixepoch'),
+  COUNT(*),
+  SUM(r.success),
+  SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END),
+  ROUND(AVG(CASE WHEN r.duration_ms > 0 THEN r.duration_ms END), 2),
+  MIN(CASE WHEN r.duration_ms > 0 THEN r.duration_ms END),
+  MAX(CASE WHEN r.duration_ms > 0 THEN r.duration_ms END),
+  ROUND(100.0 * SUM(r.success) / COUNT(*), 2),
+  SUM(COALESCE(r.input_tokens,0) + COALESCE(r.output_tokens,0)),
+  ROUND(SUM(COALESCE(r.cost_usd, 0)) * 100, 6),
+  unixepoch()
+FROM agentsam_command_run r
+JOIN agentsam_commands c ON c.id = r.selected_command_id
+JOIN agentsam_workspace w ON w.id = r.workspace_id
+WHERE date(r.created_at, 'unixepoch') = date('now', '-1 day')
+  AND r.selected_command_id IS NOT NULL
+  AND w.tenant_id IS NOT NULL
+GROUP BY w.tenant_id, c.id, date(r.created_at, 'unixepoch')
+ON CONFLICT(tenant_id, command_id, metric_date) DO UPDATE SET
+  execution_count=excluded.execution_count, success_count=excluded.success_count,
+  failure_count=excluded.failure_count, avg_duration_ms=excluded.avg_duration_ms,
+  min_duration_ms=excluded.min_duration_ms, max_duration_ms=excluded.max_duration_ms,
+  success_rate_percent=excluded.success_rate_percent,
+  total_tokens_consumed=excluded.total_tokens_consumed,
+  total_cost_cents=excluded.total_cost_cents,
+  last_computed_at=excluded.last_computed_at
+`).run();
+  } catch (e) {
+    console.warn('[rollupCommandMetrics]', e?.message ?? e);
+    return null;
+  }
+}
+
 async function writeDailySnapshot(env, reason = 'cron') {
   if (!env?.DB) return;
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
@@ -7667,7 +7754,7 @@ async function writeDailySnapshot(env, reason = 'cron') {
   await env.DB.prepare("INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by) VALUES (?,?,?,'cron','running',unixepoch(),?)")
     .bind(_bjToolsId, 'agentsam_tool_stats_compacted_rollup', 'agentsam_tool_stats_compacted', 'system')
     .run().catch(() => { });
-  const _toolsRes = await env.DB.prepare("INSERT OR REPLACE INTO agentsam_tool_stats_compacted (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at) SELECT tenant_id,tool_name,COUNT(*),SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),MIN(created_at),MAX(created_at),unixepoch() FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name").run().catch(() => null);
+  const _toolsRes = await compactToolStats(env);
   const _toolsInserted = Number(_toolsRes?.meta?.changes ?? _toolsRes?.changes ?? 0) || 0;
   await env.DB.prepare("UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?")
     .bind(_toolsInserted, _toolsInserted, _bjToolsId)
@@ -19109,19 +19196,150 @@ function resolveSubagentProfileSlug(commandSlug, args, session) {
   return (isConnor && connorMap[commandSlug]) || samMap[commandSlug] || '';
 }
 
+async function insertAgentsamCommandRunRow(env, {
+  authUser,
+  slashRow,
+  body,
+  commandName,
+  rawArgs,
+  result,
+  durationMs,
+  errOuter,
+}) {
+  if (!env?.DB || !slashRow?.id) return;
+  const wsId =
+    authUser?.workspace_id != null && String(authUser.workspace_id).trim() !== ''
+      ? String(authUser.workspace_id).trim()
+      : null;
+  if (!wsId) {
+    console.warn('[agentsam_command_run] skip: missing workspace_id on session');
+    return;
+  }
+  const tenantForLookup =
+    authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+      ? String(authUser.tenant_id).trim()
+      : null;
+  let registryId = null;
+  let registrySlug = null;
+  let category =
+    slashRow.category != null && String(slashRow.category).trim() !== ''
+      ? String(slashRow.category)
+      : 'slash';
+  let riskLevel = null;
+  let requiresConfirmation = null;
+  if (tenantForLookup) {
+    try {
+      const slugBare = String(slashRow.slug || commandName || '').replace(/^\//, '');
+      const reg = await env.DB.prepare(
+        `SELECT id, slug, category, risk_level, requires_confirmation
+         FROM agentsam_commands
+         WHERE tenant_id = ?
+           AND (slug = ? OR slug = ? OR slug = ? OR LOWER(TRIM(slug)) = LOWER(TRIM(?)))
+         LIMIT 1`
+      )
+        .bind(tenantForLookup, `/${slugBare}`, slugBare, slashRow.slug || '', slugBare)
+        .first();
+      if (reg?.id) {
+        registryId = reg.id;
+        registrySlug = reg.slug != null ? String(reg.slug) : null;
+        if (reg.category != null && String(reg.category).trim() !== '') category = String(reg.category);
+        riskLevel = reg.risk_level != null ? reg.risk_level : null;
+        requiresConfirmation = reg.requires_confirmation != null ? reg.requires_confirmation : null;
+      }
+    } catch (_) {
+      /* agentsam_commands missing or mismatch */
+    }
+  }
+  const userInput =
+    typeof body?.user_input === 'string'
+      ? body.user_input.slice(0, 4000)
+      : `/${commandName}${rawArgs ? ` ${rawArgs}` : ''}`;
+  const slugStr = String(slashRow.slug || commandName || '');
+  const normalizedIntent = slugStr.startsWith('/') ? slugStr : `/${slugStr}`;
+  const commandsJson = JSON.stringify([
+    {
+      slug: slashRow.slug,
+      handler_type: slashRow.handler_type,
+      handler_ref: slashRow.handler_ref,
+    },
+  ]).slice(0, 8000);
+  let resultJson = '{}';
+  try {
+    const payload = errOuter != null ? { error: String(errOuter?.message || errOuter) } : result;
+    resultJson = JSON.stringify(payload ?? {}).slice(0, 8000);
+  } catch (_) {
+    resultJson = '{}';
+  }
+  let outputText = '';
+  try {
+    if (errOuter != null) outputText = String(errOuter?.message || errOuter).slice(0, 500);
+    else if (result?.error) outputText = String(result.error).slice(0, 500);
+    else if (result?.output != null) outputText = String(result.output).slice(0, 500);
+    else outputText = JSON.stringify(result ?? {}).slice(0, 500);
+  } catch (_) {
+    outputText = '';
+  }
+  const success = errOuter == null && result && !result.error ? 1 : 0;
+  const errMsg =
+    errOuter != null
+      ? String(errOuter?.message || errOuter).slice(0, 2000)
+      : result?.error
+        ? String(result.error).slice(0, 2000)
+        : null;
+  const runId = 'acr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+  const dur = Math.max(1, Number(durationMs) || 1);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO agentsam_command_run (
+        id, workspace_id, user_input, normalized_intent, intent_category,
+        commands_json, result_json, output_text, success, exit_code, duration_ms,
+        selected_command_id, selected_command_slug, risk_level, requires_confirmation,
+        created_at, intent, status, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), ?, ?, ?)`
+    ).bind(
+      runId,
+      wsId,
+      userInput,
+      normalizedIntent,
+      category,
+      commandsJson,
+      resultJson,
+      outputText,
+      success,
+      null,
+      dur,
+      registryId,
+      registrySlug,
+      riskLevel,
+      requiresConfirmation,
+      normalizedIntent,
+      success ? 'completed' : 'failed',
+      errMsg
+    ).run();
+  } catch (e) {
+    console.warn('[agentsam_command_run]', e?.message ?? e);
+  }
+}
+
 async function executeAgentsamSlashCommand(request, env, ctx) {
+  const cmdT0 = Date.now();
+  let command = null;
+  let authUser = null;
+  let body = {};
+  let commandName = '';
+  let rawArgs = '';
   try {
     await ensureAgentsamSlashCommandSqlDefaults(env);
-    const authUser = await getAuthUser(request, env);
+    authUser = await getAuthUser(request, env);
     if (!authUser) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
-    const body = await request.json().catch(() => ({}));
-    const commandName = String(body.command_name || body.name || body.slug || body.id || '').replace(/^\//, '').trim();
+    body = await request.json().catch(() => ({}));
+    commandName = String(body.command_name || body.name || body.slug || body.id || '').replace(/^\//, '').trim();
     const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : (body.args && typeof body.args === 'object' ? body.args : {});
-    const rawArgs = String(parameters.raw || body.raw || '').trim();
+    rawArgs = String(parameters.raw || body.raw || '').trim();
     const args = Array.isArray(body.args) ? body.args.map((v) => String(v)) : rawArgs ? rawArgs.split(/\s+/).filter(Boolean) : [];
     if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
 
-    const command = await env.DB.prepare(
+    command = await env.DB.prepare(
       `SELECT * FROM agentsam_slash_commands
        WHERE (slug = ? OR id = ?) AND is_active = 1
        LIMIT 1`
@@ -19230,6 +19448,16 @@ async function executeAgentsamSlashCommand(request, env, ctx) {
       result = { error: 'Command not implemented', slug: command.slug };
     }
 
+    await insertAgentsamCommandRunRow(env, {
+      authUser,
+      slashRow: command,
+      body,
+      commandName,
+      rawArgs,
+      result,
+      durationMs: Math.max(1, Date.now() - cmdT0),
+      errOuter: null,
+    });
     await env.DB.prepare(
       `UPDATE agentsam_slash_commands
        SET call_count = COALESCE(call_count, 0) + 1,
@@ -19238,6 +19466,18 @@ async function executeAgentsamSlashCommand(request, env, ctx) {
     ).bind(command.id).run();
     return jsonResponse({ success: !result?.error, command: command.slug, result });
   } catch (e) {
+    if (command && authUser) {
+      await insertAgentsamCommandRunRow(env, {
+        authUser,
+        slashRow: command,
+        body,
+        commandName,
+        rawArgs,
+        result: null,
+        durationMs: Math.max(1, Date.now() - cmdT0),
+        errOuter: e,
+      });
+    }
     return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
   }
 }
@@ -21338,6 +21578,8 @@ async function recordMcpToolCall(env, opts) {
   }
   const inTok = Number(optInTok) || 0;
   const outTok = Number(optOutTok) || 0;
+  const asmStatus = error ? 'failed' : 'completed';
+  const durVal = durationMs != null && Number(durationMs) > 0 ? Number(durationMs) : null;
   try {
     await env.DB.prepare(
       `INSERT INTO mcp_tool_calls (id, tenant_id, session_id, tool_name, tool_category, input_schema, output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message, cost_usd, input_tokens, output_tokens)
@@ -21360,6 +21602,28 @@ async function recordMcpToolCall(env, opts) {
       inTok,
       outTok
     ).run();
+    try {
+      await env.DB.prepare(
+        `INSERT INTO agentsam_tool_call_log (
+          tenant_id, tool_name, status, duration_ms, input_summary, output_summary,
+          error_message, tool_category, cost_usd, input_tokens, output_tokens
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        tenant,
+        toolName,
+        asmStatus,
+        durVal,
+        JSON.stringify(toolInput || {}).slice(0, 500),
+        error ? null : outputSlice.slice(0, 500),
+        error ? String(error).slice(0, 2000) : null,
+        cat,
+        toolCostUsd,
+        inTok,
+        outTok
+      ).run();
+    } catch (eLog) {
+      console.warn('[agentsam_tool_call_log]', eLog?.message ?? eLog);
+    }
     fireForgetAgentToolChainRow(env, {
       toolName,
       agentSessionId: sessionId,
@@ -21688,6 +21952,7 @@ async function recordR2WriteTraceability(env, {
 async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opts = {}) {
   const allowRemoteMcp = opts.allowRemoteMcp !== false;
   const suppressTelemetry = !!opts.suppressTelemetry;
+  const toolWallStart = Date.now();
   const defaultTenantForMcp =
     (opts.tenantId != null && String(opts.tenantId).trim()) ||
     
@@ -21696,7 +21961,9 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     if (suppressTelemetry) return;
     const tid =
       (o.tenantId != null && String(o.tenantId).trim()) || defaultTenantForMcp;
-    await recordMcpToolCall(env, { ...o, tenantId: tid });
+    let dm = o.durationMs != null && Number(o.durationMs) > 0 ? Number(o.durationMs) : null;
+    if (dm == null) dm = Math.max(1, Date.now() - toolWallStart);
+    await recordMcpToolCall(env, { ...o, tenantId: tid, durationMs: dm });
   };
   const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'anonymous');
   const cmdAuditWorkspaceId = String(resolveWorkspaceId(env, { workspace_id: opts.workspaceId || params?.workspace_id || params?.workspaceId }));
@@ -27496,6 +27763,20 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(processQueues(env));
     ctx.waitUntil(runOvernightCronStep(env));
     ctx.waitUntil(sweepStaleTerminalSessions(env));
+  }
+  if (event.cron === '0 * * * *') {
+    if (env?.DB) {
+      ctx.waitUntil(
+        compactToolStats(env).catch((e) => console.warn('[cron] compactToolStats', e?.message ?? e))
+      );
+    }
+  }
+  if (event.cron === '0 1 * * *') {
+    if (env?.DB) {
+      ctx.waitUntil(
+        rollupCommandMetrics(env).catch((e) => console.warn('[cron] rollupCommandMetrics', e?.message ?? e))
+      );
+    }
   }
   if (event.cron === '0 0 * * *') {
     if (env?.DB) ctx.waitUntil(runRetentionPurge(env));

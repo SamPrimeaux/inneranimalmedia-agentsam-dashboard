@@ -44,6 +44,7 @@ import { handleOAuthApi } from './api/oauth';
 import { handleSearchApi } from './api/search';
 import { handleIntakeApi } from './api/intake';
 import { handleCadApi } from './api/cad';
+import { handleDesignStudioApi } from './api/designstudio/index.js';
 import { handleStudioSessionApi } from './api/studio-session';
 import { handleStatusBundle } from './api/status-bundle';
 import { handleCursorAgentApi } from './api/cursor-agent';
@@ -421,6 +422,12 @@ export default {
       if (pathLower === '/api/internal/post-deploy' && request.method === 'POST') {
         return handlePostDeploy(request, env, ctx);
       }
+
+      if (pathLower.startsWith('/api/internal/designstudio/') || pathLower.startsWith('/api/designstudio/')) {
+        return handleDesignStudioApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/cad/') || pathLower === '/api/cad') return (await import('./api/cad.js')).handleCadApi(request, url, env, ctx);
 
       if (pathLower.startsWith('/api/deployments') || pathLower.startsWith('/api/internal/')) {
         return handleDeploymentsApi(request, url, env, ctx);

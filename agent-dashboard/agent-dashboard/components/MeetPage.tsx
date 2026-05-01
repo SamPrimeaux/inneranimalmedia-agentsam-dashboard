@@ -1,5 +1,5 @@
 /**
- * dashboard/app/pages/MeetPage.tsx
+ * dashboard/source/components/MeetPage.tsx
  * InnerAnimalMedia Meet — Cloudflare Calls SFU
  * Fully theme-variable-driven. No hardcoded colors.
  */
@@ -13,8 +13,8 @@ import {
   BarChart2, Layout, Pin,
   Maximize2, Volume2, VolumeX, Bot, Calendar as CalendarIcon,
 } from 'lucide-react';
-import { MeetCtxValue } from '../../src/MeetContext';
-import { ExcalidrawView } from '../../components/ExcalidrawView';
+import { MeetCtxValue } from '../src/MeetContext';
+import { ExcalidrawView } from './ExcalidrawView';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

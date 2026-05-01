@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# CF Builds PROD deploy — triggered by push to `production` branch only.
-# DO NOT run manually. DO NOT use wrangler.jsonc. DO NOT deploy to sandbox bucket.
+# CF Builds PROD — Cloudflare build "Deploy command" should be:
+#   bash scripts/deploy-cf-builds-prod.sh
+#
+# Trigger: push to branch `production` (configure in CF Workers Builds).
+# Flow: wrangler deploy -c wrangler.jsonc → D1 health/deploy rows → Vite build in agent-dashboard/
+#       → prune R2 keys under dashboard/app/assets/ → sync dist/* to R2 bucket inneranimalmedia
+#       with keys dashboard/app/<basename> → upload dist/index.html as dashboard/app/agent.html.
+# R2: BUCKET=inneranimalmedia, prefix dashboard/app (DASHBOARD binding points at this bucket).
+#
+# Do not confuse with: ./scripts/deploy-sandbox.sh or promote-to-prod.sh (different pipelines).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,8 +16,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 DIST_DIR="agent-dashboard/agent-dashboard/dist"
-BUCKET="agent-sam"
-R2_PREFIX="static/dashboard/agent"
+BUCKET="inneranimalmedia"
+R2_PREFIX="dashboard/app"
 
 echo "=== CF Builds PROD: worker deploy ==="
 npx wrangler deploy -c wrangler.jsonc
@@ -88,12 +96,12 @@ if [ -d "$DIST_DIR" ]; then
 fi
 
 if [ -f "$DIST_DIR/index.html" ]; then
-  npx wrangler r2 object put "${BUCKET}/static/dashboard/agent.html" \
+  npx wrangler r2 object put "${BUCKET}/dashboard/app/agent.html" \
     --file "$DIST_DIR/index.html" \
     --content-type "text/html" \
     --remote \
     -c wrangler.jsonc
-  echo "  agent.html uploaded to prod R2."
+  echo "  agent.html uploaded to prod R2 (dashboard/app/agent.html)."
 fi
 
 echo "=== CF Builds PROD Deploy Complete ==="

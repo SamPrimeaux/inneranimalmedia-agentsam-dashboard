@@ -12,7 +12,7 @@ const RESEND_KEY = process.env.RESEND_API_KEY;
 const CF_TOKEN   = process.env.CLOUDFLARE_API_TOKEN;
 const ACCOUNT    = 'ede6590ac0d2fb7daf155b35653457b2';
 const DB_ID      = 'cf87b717-d4e2-4cf8-bab0-a81268e32d49';
-const BUCKET     = 'agent-sam';
+const BUCKET     = 'inneranimalmedia';
 const FROM       = process.env.RESEND_FROM || 'support@inneranimalmedia.com';
 const TO         = process.env.RESEND_TO || 'support@inneranimalmedia.com';
 const BASE       = 'https://inneranimalmedia.com';
@@ -382,7 +382,7 @@ async function run() {
       ${screenshotSummary}
       <p style="color:#334155;font-size:11px;border-top:1px solid #1e293b;padding-top:16px;margin-top:20px">
         Raw data: D1 → project_memory → key OVERNIGHT_STATUS<br>
-        Before: R2 agent-sam/reports/screenshots/${beforeDir}/ — After: R2 agent-sam/reports/screenshots/${afterDir}/
+        Before: R2 inneranimalmedia/reports/screenshots/${beforeDir}/ — After: R2 inneranimalmedia/reports/screenshots/${afterDir}/
       </p>
       ${FOOTER_CANCEL}
     `)

@@ -57,7 +57,7 @@ import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
 import ImagesPage from './components/ImagesPage';
 import { MailPage } from './components/MailPage';
-import MeetPage from './app/pages/MeetPage';
+import MeetPage from './components/MeetPage';
 import { MeetProvider, MeetCtxValue } from './src/MeetContext';
 import { MeetShellPanel } from './components/MeetShellPanel';
 import { AuthSignInPage } from './components/auth/AuthSignInPage';

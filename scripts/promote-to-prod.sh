@@ -36,7 +36,7 @@ export WORKER_NAME="${WORKER_NAME:-inneranimalmedia}"
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
 SOURCE_ASSETS_BUCKET="${SOURCE_ASSETS_BUCKET:-${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}}"
-PROD_BUCKET="agent-sam"
+PROD_BUCKET="inneranimalmedia"
 PROD_CFG="wrangler.production.toml"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
 # shellcheck source=/dev/null
@@ -87,7 +87,7 @@ _send_resend_notification() {
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Branch</td><td style='padding:5px 12px;color:#e2e8f0;'>${git_branch}</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Commit</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${git_sha} — ${git_msg}</td></tr>
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>ASSETS + TIMINGS</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Files</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_LINE_COUNT} files pushed to agent-sam</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Files</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_LINE_COUNT} files pushed to inneranimalmedia</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Pull</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_pull}ms</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Push</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_push}ms</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_worker}ms</td></tr>

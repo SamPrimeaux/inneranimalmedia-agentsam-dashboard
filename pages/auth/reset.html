@@ -487,7 +487,8 @@
     function showErr(el, msg) {
         if (!el) return;
         el.textContent = msg || '';
-        if (msg) el.classList.add('visible'); else el.classList.remove('visible');
+        if (msg) { el.classList.add('visible'); el.style.color = '#FF3B30'; }
+        else el.classList.remove('visible');
     }
 
     var vPassToggle = document.getElementById('vPassToggle');

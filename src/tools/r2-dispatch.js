@@ -18,7 +18,7 @@ export async function handleR2Dispatch(request, env, ctx, authUser) {
     try {
         // Expected params: bucket (string), key (string), prefix (string), limit (number)
         const body = method !== 'GET' ? await request.json() : {};
-        const bucket = body.bucket || url.searchParams.get('bucket') || 'agent-sam';
+        const bucket = body.bucket || url.searchParams.get('bucket') || 'inneranimalmedia';
         const key = body.key || url.searchParams.get('key');
         
         // Dynamic Binding lookup (falls back to S3 API if no binding exists)

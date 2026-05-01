@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upload Playwright test report (and optionally results) to R2 (agent-sam bucket).
+# Upload Playwright test report (and optionally results) to R2 (inneranimalmedia bucket).
 # Run after: npx playwright test (or npm test)
 # Usage: ./scripts/upload-playwright-report-to-r2.sh [report-dir]
 # Default report dir: playwright-report (or env PLAYWRIGHT_REPORT_DIR)
@@ -19,7 +19,7 @@ if [ ! -d "$REPORT_DIR" ]; then
   exit 1
 fi
 
-echo "Uploading $REPORT_DIR to R2 agent-sam at $PREFIX/ ..."
+echo "Uploading $REPORT_DIR to R2 inneranimalmedia at $PREFIX/ ..."
 # Upload index.html and assets (relative paths in report)
 for f in "$REPORT_DIR"/*; do
   [ -e "$f" ] || continue
@@ -32,7 +32,7 @@ for f in "$REPORT_DIR"/*; do
       [[ "$subname" == *.html ]] && content_type="text/html"
       [[ "$subname" == *.css ]] && content_type="text/css"
       [[ "$subname" == *.js ]] && content_type="application/javascript"
-      wrangler r2 object put "agent-sam/${PREFIX}/${name}/${subname}" \
+      wrangler r2 object put "inneranimalmedia/${PREFIX}/${name}/${subname}" \
         --file "$sub" \
         --content-type "$content_type" \
         --config "$CONFIG" \
@@ -43,7 +43,7 @@ for f in "$REPORT_DIR"/*; do
     [[ "$name" == *.html ]] && content_type="text/html"
     [[ "$name" == *.css ]] && content_type="text/css"
     [[ "$name" == *.js ]] && content_type="application/javascript"
-    wrangler r2 object put "agent-sam/${PREFIX}/${name}" \
+    wrangler r2 object put "inneranimalmedia/${PREFIX}/${name}" \
       --file "$f" \
       --content-type "$content_type" \
       --config "$CONFIG" \
@@ -51,5 +51,5 @@ for f in "$REPORT_DIR"/*; do
   fi
 done
 
-echo "Done. Report uploaded to R2 agent-sam at prefix: $PREFIX/"
+echo "Done. Report uploaded to R2 inneranimalmedia at prefix: $PREFIX/"
 echo "To view: use worker route for static/dashboard/ or a dedicated reports URL if configured."

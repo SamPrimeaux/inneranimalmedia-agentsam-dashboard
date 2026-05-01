@@ -130,7 +130,7 @@ export class AgentChatSqlV1 extends DurableObject {
 
   async insertTerminalHistoryRow(direction, content, opts = {}) {
     if (!this.env?.DB || !this.cachedTerminalSessionId) return;
-    const tenantId = String(this.env?.TENANT_ID || "tenant_sam_primeaux").trim();
+    const tenantId = String(this.env?.TENANT_ID || "system").trim();
     const truncated = String(content || "").slice(0, 4000);
     this.historySequence = (this.historySequence || 0) + 1;
     const seq = this.historySequence;

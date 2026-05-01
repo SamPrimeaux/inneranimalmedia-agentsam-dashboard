@@ -47,7 +47,7 @@ function unixToIso(sec) {
  * @param {string} workflowRunId
  */
 export function buildCadCreationsPrefix(tenantId, workspaceId, workflowRunId) {
-  const t = String(tenantId || 'tenant_inneranimalmedia').replace(/\/+/g, '');
+  const t = String(tenantId || 'system').replace(/\/+/g, '');
   const w = String(workspaceId || 'ws_designstudio').replace(/\/+/g, '');
   const r = String(workflowRunId || '').replace(/\/+/g, '');
   return `cad/creations/${t}/${w}/${r}/`;
@@ -270,7 +270,9 @@ export async function syncRunToSupabase(env, runId, options = {}) {
   }
   if (!Array.isArray(stepResults)) stepResults = [];
 
-  const tenantId = String(row.tenant_id || 'tenant_inneranimalmedia');
+  const tenantId = String(
+    row.tenant_id || (env.TENANT_ID != null ? String(env.TENANT_ID).trim() : '') || 'system',
+  );
   const workspaceId = String(options.workspaceId || 'ws_designstudio');
   const d1Status = String(row.status || '').toLowerCase();
   const success = d1Status === 'success' || d1Status === 'completed';

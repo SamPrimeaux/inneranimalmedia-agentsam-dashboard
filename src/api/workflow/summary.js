@@ -1,6 +1,8 @@
 /**
  * Daily rollup — model resolved from DB, never hardcoded.
  */
+import { fallbackSystemTenantId } from '../../core/auth.js';
+
 export async function generateDailySummaryEmail(env) {
   const startMs = Date.now();
   const today   = new Date().toISOString().slice(0, 10);
@@ -146,15 +148,15 @@ Deploys: ${deploys?.total||0} (${deploys?.ok||0} ok / ${deploys?.fail||0} failed
     await env.DB.prepare(`
       INSERT INTO agentsam_tool_call_log
         (tenant_id, tool_name, status, duration_ms, input_summary, output_summary, tool_category, user_id)
-      VALUES ('tenant_sam_primeaux','generate_daily_summary_email','success',?,?,?,'workflow','au_871d920d1233cbd1')
-    `).bind(ms, `rollup ${yesterday} model:${modelId}`, `calls:${aiUsage?.calls} cost:${aiUsage?.cost?.toFixed(4)}`).run().catch(()=>{});
+      VALUES (?,'generate_daily_summary_email','success',?,?,?,'workflow','au_871d920d1233cbd1')
+    `).bind(fallbackSystemTenantId(env), ms, `rollup ${yesterday} model:${modelId}`, `calls:${aiUsage?.calls} cost:${aiUsage?.cost?.toFixed(4)}`).run().catch(()=>{});
 
   } catch (err) {
     console.error('[daily-summary]', err?.message ?? err);
     await env.DB.prepare(`
       INSERT INTO agentsam_tool_call_log
         (tenant_id,tool_name,status,error_message,tool_category,user_id)
-      VALUES ('tenant_sam_primeaux','generate_daily_summary_email','error',?,'workflow','au_871d920d1233cbd1')
-    `).bind(err?.message ?? String(err)).run().catch(()=>{});
+      VALUES (?,'generate_daily_summary_email','error',?,'workflow','au_871d920d1233cbd1')
+    `).bind(fallbackSystemTenantId(env), err?.message ?? String(err)).run().catch(()=>{});
   }
 }

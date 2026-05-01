@@ -3,12 +3,10 @@
  * API Service: Integrations Controller
  * Owns /api/integrations/* plus inbound provider webhooks.
  */
-import { getAuthUser, isSamOnlyUser, jsonResponse } from '../core/auth.js';
+import { getAuthUser, isSamOnlyUser, jsonResponse, fallbackSystemTenantId } from '../core/auth.js';
 import { ensureOauthTokenColumns } from './oauth.js';
 import { recordWorkerAnalyticsError } from './telemetry.js';
 import { handleIntegrationsConnectRoutes } from './integrations/connect.js';
-
-const DEFAULT_TENANT_ID = 'tenant_sam_primeaux';
 
 const REGISTRY_SEED = [
     ['int_github', 'github', 'GitHub', 'source_control', 'oauth2', 'connected', 10, null],
@@ -187,7 +185,7 @@ function normalizeArgs(envArg, ctxArg, authUserArg) {
 }
 
 function resolveTenantId(authUser, env) {
-    return authUser?.tenant_id || env?.TENANT_ID || DEFAULT_TENANT_ID;
+    return authUser?.tenant_id || env?.TENANT_ID || fallbackSystemTenantId(env);
 }
 
 function integrationUserId(authUser) {
@@ -854,7 +852,7 @@ async function handleBlueBubblesWebhook(request, env, ctx) {
 
             // Note: In a full implementation, we might trigger an asynchronous agent reasoning task here.
         }
-        await recordIntegrationEvent(env, env.TENANT_ID || DEFAULT_TENANT_ID, 'bluebubbles', 'webhook_received', sender, `iMessage webhook received from ${sender}`, { hook_matched: !!hook, chatGuid });
+        await recordIntegrationEvent(env, env.TENANT_ID || fallbackSystemTenantId(env), 'bluebubbles', 'webhook_received', sender, `iMessage webhook received from ${sender}`, { hook_matched: !!hook, chatGuid });
         
         return jsonResponse({ 
             status: 'received', 
@@ -935,7 +933,7 @@ async function handleResendWebhook(request, env, ctx) {
                 Math.floor(Date.now() / 1000)
             ).run();
         }
-        await recordIntegrationEvent(env, env.TENANT_ID || DEFAULT_TENANT_ID, 'resend', 'webhook_received', senderEmail, `Inbound email webhook received from ${senderEmail}`, { hook_matched: !!hook, subject });
+        await recordIntegrationEvent(env, env.TENANT_ID || fallbackSystemTenantId(env), 'resend', 'webhook_received', senderEmail, `Inbound email webhook received from ${senderEmail}`, { hook_matched: !!hook, subject });
 
         return jsonResponse({ 
             status: 'received', 

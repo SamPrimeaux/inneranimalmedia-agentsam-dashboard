@@ -1,14 +1,14 @@
 /**
  * Integration connect / disconnect routes under /api/integrations/:slug/*
  */
-import { jsonResponse } from '../../core/auth.js';
+import { jsonResponse, fallbackSystemTenantId } from '../../core/auth.js';
 import { handleOAuthApi } from '../oauth.js';
 
 function tenantIdFromAuth(authUser, env) {
   return (
     (authUser?.tenant_id && String(authUser.tenant_id).trim()) ||
     (env?.TENANT_ID && String(env.TENANT_ID).trim()) ||
-    'tenant_sam_primeaux'
+    fallbackSystemTenantId(env)
   );
 }
 

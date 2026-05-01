@@ -50,7 +50,11 @@ import { handleStatusBundle } from './api/status-bundle';
 import { handleCursorAgentApi } from './api/cursor-agent';
 import { handleCalendarApi } from './api/calendar.js';
 import legacyWorker from '../worker.js';
-import { runAgentsamMemoryDecay } from './core/memory.js';
+import {
+  runAgentsamMemoryDecay,
+  compactAgentsamToolCallLogToStats,
+  rollupExecutionPerformanceMetrics,
+} from './core/memory.js';
 import { handleCatalogApi } from './api/catalog.js';
 
 // --- Durable Objects (ACTIVE: 3 production classes only) ---
@@ -591,6 +595,16 @@ export default {
         ctx.waitUntil(
           runAgentsamMemoryDecay(env).catch((e) =>
             console.warn('[cron] agentsam_memory decay', e?.message ?? e),
+          ),
+        );
+        ctx.waitUntil(
+          compactAgentsamToolCallLogToStats(env).catch((e) =>
+            console.warn('[cron] tool_stats_compacted', e?.message ?? e),
+          ),
+        );
+        ctx.waitUntil(
+          rollupExecutionPerformanceMetrics(env).catch((e) =>
+            console.warn('[cron] execution_performance_metrics', e?.message ?? e),
           ),
         );
       }

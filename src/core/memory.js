@@ -62,6 +62,86 @@ export async function loadAgentMemory(env, tenantId) {
   }
 }
 
+/** Snapshot agentsam_tool_call_log into agentsam_tool_stats_compacted (daily). */
+export async function compactAgentsamToolCallLogToStats(env) {
+  if (!env?.DB) return;
+  const id = `bj_${Date.now()}`;
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by)
+     VALUES (?,?,?,'cron','running',unixepoch(),?)`,
+  )
+    .bind(id, 'agentsam_tool_stats_compacted_rollup', 'agentsam_tool_stats_compacted', 'system')
+    .run()
+    .catch(() => {});
+  const res = await env.DB.prepare(
+    `INSERT OR REPLACE INTO agentsam_tool_stats_compacted
+      (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at)
+     SELECT tenant_id,tool_name,COUNT(*),
+       SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),
+       SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),
+       ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),
+       COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),
+       MIN(created_at),MAX(created_at),unixepoch()
+     FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name`,
+  )
+    .run()
+    .catch(() => null);
+  const n = Number(res?.meta?.changes ?? res?.changes ?? 0) || 0;
+  await env.DB.prepare(
+    `UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?`,
+  )
+    .bind(n, n, id)
+    .run()
+    .catch(() => {});
+}
+
+/** Roll up agentsam_command_run into execution_performance_metrics for the prior local day. */
+export async function rollupExecutionPerformanceMetrics(env) {
+  if (!env?.DB) return;
+  await env.DB.prepare(
+    `INSERT INTO execution_performance_metrics
+      (id, tenant_id, command_id, metric_date,
+       execution_count, success_count, failure_count,
+       avg_duration_ms, min_duration_ms, max_duration_ms,
+       success_rate_percent, total_tokens_consumed, total_cost_cents,
+       last_computed_at)
+     SELECT
+       'epm_' || lower(hex(randomblob(8))),
+       w.tenant_id,
+       acr.selected_command_id,
+       date('now', '-1 day'),
+       COUNT(*),
+       SUM(CASE WHEN acr.success=1 THEN 1 ELSE 0 END),
+       SUM(CASE WHEN acr.success=0 THEN 1 ELSE 0 END),
+       AVG(acr.duration_ms),
+       MIN(acr.duration_ms),
+       MAX(acr.duration_ms),
+       ROUND(AVG(acr.success)*100, 2),
+       SUM(COALESCE(acr.input_tokens, 0) + COALESCE(acr.output_tokens, 0)),
+       SUM(COALESCE(acr.cost_usd, 0) * 100),
+       unixepoch()
+     FROM agentsam_command_run acr
+     INNER JOIN agentsam_workspace w ON w.id = acr.workspace_id
+     WHERE acr.selected_command_id IS NOT NULL
+       AND acr.created_at >= unixepoch('now', '-1 day')
+       AND acr.created_at < unixepoch('now')
+     GROUP BY w.tenant_id, acr.selected_command_id
+     ON CONFLICT(tenant_id, command_id, metric_date) DO UPDATE SET
+       execution_count = excluded.execution_count,
+       success_count = excluded.success_count,
+       failure_count = excluded.failure_count,
+       avg_duration_ms = excluded.avg_duration_ms,
+       min_duration_ms = excluded.min_duration_ms,
+       max_duration_ms = excluded.max_duration_ms,
+       success_rate_percent = excluded.success_rate_percent,
+       total_tokens_consumed = excluded.total_tokens_consumed,
+       total_cost_cents = excluded.total_cost_cents,
+       last_computed_at = unixepoch()`,
+  )
+    .run()
+    .catch((e) => console.warn('[cron] execution_performance_metrics', e?.message ?? e));
+}
+
 export async function runAgentsamMemoryDecay(env) {
   if (!env?.DB) return;
   try {
@@ -96,7 +176,12 @@ export async function upsertAgentsamMemory(env, row) {
   if (!env?.DB) return;
   const tenantId = row.tenantId != null ? String(row.tenantId) : null;
   const userId = row.userId != null ? String(row.userId) : null;
-  const workspaceId = row.workspaceId != null ? String(row.workspaceId) : 'ws_inneranimalmedia';
+  const workspaceId =
+    row.workspaceId != null && String(row.workspaceId).trim() !== ''
+      ? String(row.workspaceId).trim()
+      : env?.WORKSPACE_ID != null && String(env.WORKSPACE_ID).trim() !== ''
+        ? String(env.WORKSPACE_ID).trim()
+        : 'system';
   const memoryType = row.memoryType != null ? String(row.memoryType) : 'fact';
   const key = row.key != null ? String(row.key) : '';
   const value = row.value != null ? String(row.value) : '';

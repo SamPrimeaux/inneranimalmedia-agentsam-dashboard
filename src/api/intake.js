@@ -1,7 +1,7 @@
 /**
  * Agent Sam studio intake: structured questions + plan steps (Anthropic).
  */
-import { getAuthUser, jsonResponse } from '../core/auth.js';
+import { getAuthUser, jsonResponse, fetchAuthUserTenantId, fallbackSystemTenantId } from '../core/auth.js';
 
 function resolveWorkspaceIdForPlan(env, authUser, body) {
   return (body?.workspace_id || body?.workspaceId || authUser?.workspace_id || env?.WORKSPACE_ID || '').toString().trim();
@@ -239,16 +239,24 @@ User answers: ${JSON.stringify(answers)}`;
         return jsonResponse({ error: 'Failed to parse plan' }, 500);
       }
 
+      let todoTenantId =
+        authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+          ? String(authUser.tenant_id).trim()
+          : null;
+      if (!todoTenantId) todoTenantId = await fetchAuthUserTenantId(env, authUser.id);
+      if (!todoTenantId) todoTenantId = fallbackSystemTenantId(env);
+
       const insertStmts = (planData.steps || []).map((step, i) =>
         env.DB.prepare(`
           INSERT INTO agentsam_todo
             (id, tenant_id, title, task_type, execution_status, plan_id,
              requires_approval, category, created_by, project_key, sort_order,
              created_at, updated_at)
-          VALUES (?, 'tenant_sam_primeaux', ?, 'execute', 'queued', ?,
+          VALUES (?, ?, ?, 'execute', 'queued', ?,
                   ?, 'studio', 'agentsam', 'studio', ?, datetime('now'), datetime('now'))
         `).bind(
           'todo_studio_' + crypto.randomUUID().replace(/-/g, '').slice(0, 8),
+          todoTenantId,
           step.title,
           plan_id,
           step.requires_approval ? 1 : 0,

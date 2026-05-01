@@ -1,7 +1,7 @@
 /**
  * Settings-scoped integration APIs: /api/settings/integrations/*
  */
-import { jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
+import { jsonResponse, fetchAuthUserTenantId, fallbackSystemTenantId } from '../core/auth.js';
 import { handleIntegrationsRequest } from './integrations.js';
 
 function resolveTenantId(env, authUser) {
@@ -19,7 +19,7 @@ async function resolveTenantIdOrFetch(env, authUser) {
     if (tid) return tid;
   }
   if (env?.TENANT_ID) return String(env.TENANT_ID).trim();
-  return 'tenant_sam_primeaux';
+  return fallbackSystemTenantId(env);
 }
 
 function parseJson(value, fallback) {

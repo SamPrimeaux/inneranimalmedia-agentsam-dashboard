@@ -334,6 +334,17 @@ export function resolveTelemetryTenantId(_env, explicitTenantId) {
   return null;
 }
 
+/** Workers `TENANT_ID` binding — platform default tenant (never hardcode a personal id in code). */
+export function platformTenantIdFromEnv(env) {
+  const t = env?.TENANT_ID != null ? String(env.TENANT_ID).trim() : '';
+  return t || null;
+}
+
+/** Fallback when no request/session tenant applies (cron, internal jobs). */
+export function fallbackSystemTenantId(env) {
+  return platformTenantIdFromEnv(env) || 'system';
+}
+
 /**
  * Legacy/Helper: Fetches the tenant ID for a user.
  */

@@ -2,7 +2,7 @@
  * Billing API — plans, subscriptions, Stripe Checkout / Portal / webhooks, invoices.
  * STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET: Worker secrets only (never D1).
  */
-import { getAuthUser, fetchAuthUserTenantId } from '../core/auth.js';
+import { getAuthUser, fetchAuthUserTenantId, fallbackSystemTenantId } from '../core/auth.js';
 import { jsonResponse } from '../core/responses.js';
 import { stripeRequest, verifyStripeSignature } from '../integrations/stripe.js';
 
@@ -107,7 +107,7 @@ function safeJsonString(v) {
 async function logAgentsamWebhookEvent(env, eventType, rawBody, tenantId = null) {
   if (!env.DB) return;
   const id = crypto.randomUUID();
-  const tid = tenantId || 'tenant_sam_primeaux';
+  const tid = tenantId || fallbackSystemTenantId(env);
   try {
     await env.DB.prepare(
       `INSERT INTO agentsam_webhook_events (id, tenant_id, provider, event_type, payload_json, status, processed_at)
@@ -124,7 +124,7 @@ async function logAgentsamWebhookEvent(env, eventType, rawBody, tenantId = null)
 async function logAgentsamWebhookPayloadJson(env, eventType, payloadObj, tenantId = null) {
   if (!env.DB) return;
   const id = crypto.randomUUID();
-  const tid = tenantId || 'tenant_sam_primeaux';
+  const tid = tenantId || fallbackSystemTenantId(env);
   try {
     await env.DB.prepare(
       `INSERT INTO agentsam_webhook_events (id, tenant_id, provider, event_type, payload_json, status, processed_at)

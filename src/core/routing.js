@@ -232,6 +232,64 @@ export async function getDefaultModelForTask(env, ctx = {}) {
  * @param {{ DB?: import('@cloudflare/workers-types').D1Database }} env
  * @param {{ armId: string, success: boolean }} outcome
  */
+/**
+ * Bayesian bandit incremental update (success_alpha / success_beta + online means).
+ * Fire-and-forget via ctx.waitUntil from callers.
+ * @param {any} env
+ * @param {any} ctx
+ * @param {{
+ *   taskType: string,
+ *   mode: string,
+ *   modelKey: string,
+ *   success: boolean,
+ *   costUsd?: number,
+ *   durationMs?: number,
+ * }} o
+ */
+export function scheduleRoutingArmBanditUpdate(env, ctx, o) {
+  if (!env?.DB || !ctx?.waitUntil) return;
+  const taskType = o?.taskType != null ? String(o.taskType).trim() : '';
+  const mode = o?.mode != null ? String(o.mode).trim() : '';
+  const modelKey = o?.modelKey != null ? String(o.modelKey).trim() : '';
+  if (!taskType || !mode || !modelKey) return;
+
+  const costUsd = Number(o.costUsd) || 0;
+  const durationMs = Number(o.durationMs) || 0;
+  const success = !!o.success;
+
+  ctx.waitUntil(
+    (async () => {
+      try {
+        if (success) {
+          await env.DB.prepare(
+            `UPDATE agentsam_routing_arms SET
+              success_alpha = success_alpha + 1,
+              cost_n = cost_n + 1,
+              cost_mean = cost_mean + (? - cost_mean) / (cost_n + 1),
+              latency_n = latency_n + 1,
+              latency_mean = latency_mean + (? - latency_mean) / (latency_n + 1),
+              updated_at = unixepoch()
+             WHERE task_type = ? AND mode = ? AND model_key = ?`,
+          )
+            .bind(costUsd, durationMs, taskType, mode, modelKey)
+            .run();
+        } else {
+          await env.DB.prepare(
+            `UPDATE agentsam_routing_arms SET
+              success_beta = success_beta + 1,
+              updated_at = unixepoch()
+             WHERE task_type = ? AND mode = ? AND model_key = ?`,
+          )
+            .bind(taskType, mode, modelKey)
+            .run();
+        }
+      } catch (e) {
+        console.warn('[routing_arms] bandit update failed', e?.message ?? e);
+      }
+    })(),
+  );
+}
+
 export async function recordRoutingArmOutcome(env, outcome) {
   const db = env?.DB;
   const armId = outcome?.armId != null ? String(outcome.armId).trim() : '';

@@ -6,6 +6,7 @@ import {
   getAuthUser,
   jsonResponse,
   fetchAuthUserTenantId,
+  fallbackSystemTenantId,
 } from '../../core/auth.js';
 import { syncRunToSupabase, buildCadCreationsPrefix } from './sync.js';
 
@@ -50,7 +51,7 @@ async function resolveTenantId(env, authUser) {
     tid = await fetchAuthUserTenantId(env, authUser.email);
     if (tid) return tid;
   }
-  return 'tenant_inneranimalmedia';
+  return fallbackSystemTenantId(env);
 }
 
 function supabaseRestBase(env) {

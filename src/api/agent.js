@@ -20,13 +20,15 @@ import { jsonResponse }                                 from '../core/responses.
 import { getAuthUser, getSession,
          isIngestSecretAuthorized,
          fetchAuthUserTenantId,
-         authUserIsSuperadmin }        from '../core/auth.js';
+         authUserIsSuperadmin,
+         platformTenantIdFromEnv }    from '../core/auth.js';
 import { formatRelativeCheckedAgo, toUnixSeconds }     from './workspaces.js';
 import { notifySam }                                    from '../core/notifications.js';
 import { getAgentMetadata, logSkillInvocation,
          getActivePromptByWeight, getPromptMetadata }   from './agentsam.js';
 import { runBuiltinTool }                               from '../tools/ai-dispatch.js';
-import { getDefaultModelForTask, recordRoutingArmOutcome } from '../core/routing.js';
+import { getDefaultModelForTask, scheduleRoutingArmBanditUpdate } from '../core/routing.js';
+import { scheduleAgentsamCommandRunInsert }                   from './command-run-telemetry.js';
 
 const WRITE_LIKE_PREFIXES = ['d1_', 'worker_', 'resend_', 'meshyai_'];
 const TERM_WRITE_TOOLS = new Set(['terminal_execute', 'run_command', 'bash']);
@@ -44,7 +46,6 @@ const AP_SYS = {
 };
 const TENANT_KNOWLEDGE_PLATFORM = 'tenant_knowledge_platform';
 const TENANT_SHINSHU = 'tenant_jake_waalk';
-const TENANT_SAM_PRIMEAUX = 'tenant_sam_primeaux';
 
 /** Minimal fallback if D1 has no core row (same intent as legacy single-line base). */
 const FALLBACK_CORE_SYSTEM = 'You are Agent Sam, an autonomous AI coding and operations assistant for Inner Animal Media.';
@@ -83,7 +84,8 @@ async function buildSystemPrompt(env, tenantId, mode, contextBlock, modeConfig) 
     ? prompts.find((p) => p.id === AP_SYS.shinshu)?.content || ''
     : '';
 
-  const clientPrompt = tenantId && tenantId !== TENANT_SAM_PRIMEAUX
+  const platformTid = platformTenantIdFromEnv(env);
+  const clientPrompt = platformTid && tenantId && tenantId !== platformTid
     ? prompts.find((p) => p.id === AP_SYS.client)?.content || ''
     : '';
 
@@ -478,15 +480,18 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     temperature, maxToolCalls,
     mode, modeConfig, userPolicy,
     sessionId, tenantId, userId,
+    routingTaskType,
   } = params;
 
   const conversationMessages = [...messages];
   let toolCallsUsed = 0;
+  const executedToolNames = [];
   let totalUsage    = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   let turnCount     = 0;
 
   while (turnCount < 10) {
     turnCount++;
+    const modelT0 = Date.now();
     let stream;
     let isWorkersAiStream = false;
     try {
@@ -503,6 +508,14 @@ async function runAgentToolLoop(env, ctx, emit, params) {
     } catch (e) {
       if (String(e?.message || '') === OLLAMA_SKIP_MESSAGE) throw e;
       console.warn('[agent] model call failed:', e?.message ?? e);
+      scheduleRoutingArmBanditUpdate(env, ctx, {
+        taskType: routingTaskType || 'auto',
+        mode: mode || 'ask',
+        modelKey,
+        success: false,
+        costUsd: 0,
+        durationMs: Date.now() - modelT0,
+      });
       emit('error', { message: 'Model call failed' });
       break;
     }
@@ -604,6 +617,14 @@ async function runAgentToolLoop(env, ctx, emit, params) {
       if (!stream.ok) {
         const detail = await stream.text().catch(() => '');
         console.warn('[agent] model stream HTTP error', stream.status);
+        scheduleRoutingArmBanditUpdate(env, ctx, {
+          taskType: routingTaskType || 'auto',
+          mode: mode || 'ask',
+          modelKey,
+          success: false,
+          costUsd: 0,
+          durationMs: Date.now() - modelT0,
+        });
         emit('error', { message: 'Model stream failed' });
         break;
       }
@@ -661,6 +682,15 @@ async function runAgentToolLoop(env, ctx, emit, params) {
       }
     }
 
+    scheduleRoutingArmBanditUpdate(env, ctx, {
+      taskType: routingTaskType || 'auto',
+      mode: mode || 'ask',
+      modelKey,
+      success: true,
+      costUsd: 0,
+      durationMs: Date.now() - modelT0,
+    });
+
     if (turnUsage) {
       totalUsage.input_tokens                += turnUsage.input_tokens                || 0;
       totalUsage.output_tokens               += turnUsage.output_tokens               || 0;
@@ -693,6 +723,7 @@ async function runAgentToolLoop(env, ctx, emit, params) {
         continue;
       }
       toolCallsUsed++;
+      executedToolNames.push(call.name);
       emit('tool_call', { tool: call.name, args: call.input });
       await auditToolDecision(env, { tenantId, toolName: call.name, eventType: 'tool_executed', message: `Executing: ${call.name}`, riskLevel: validation.riskLevel, reason: 'allowed' });
       let toolOutput = '';
@@ -730,6 +761,12 @@ async function runAgentToolLoop(env, ctx, emit, params) {
   }
 
   emit('done', { tool_calls_used: toolCallsUsed, turns: turnCount });
+  return {
+    totalUsage,
+    toolCallsUsed,
+    executedToolNames,
+    modelKey,
+  };
 }
 
 // ─── SSE Chat Handler ─────────────────────────────────────────────────────────
@@ -848,10 +885,12 @@ export async function agentChatSseHandler(env, request, ctx, session) {
   emit('context', { intent: intentSlug, mode: requestedMode, model: fallbackModelKeys[0] || null, tool_count: tools.length });
 
   ;(async () => {
+    const chatT0 = Date.now();
     try {
       const tried = [];
       const startIdx = (confidence < escalationThreshold && fallbackModelKeys.length > 1) ? 1 : 0;
       let succeeded = false;
+      let lastLoopStats = null;
 
       for (let i = startIdx; i < chainRows.length; i++) {
         const row = chainRows[i];
@@ -864,7 +903,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
             if (type === 'text' && payload?.text) textEmitted += String(payload.text).length;
             emit(type, payload);
           };
-          await withTimeout(
+          lastLoopStats = await withTimeout(
             runAgentToolLoop(env, ctx, emitWrapped, {
               messages: body.messages || [{ role: 'user', content: gate.rewritten_query || message }],
               tools, systemPrompt, modelKey,
@@ -872,6 +911,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
               maxToolCalls: modeConfig.max_tool_calls || 20,
               mode: requestedMode, modeConfig, userPolicy,
               sessionId, tenantId, userId,
+              routingTaskType: intentSlug,
             }),
             15000
           );
@@ -899,7 +939,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
               if (type === 'text' && payload?.text) textEmitted += String(payload.text).length;
               emit(type, payload);
             };
-            await withTimeout(
+            lastLoopStats = await withTimeout(
               runAgentToolLoop(env, ctx, emitWrapped, {
                 messages: body.messages || [{ role: 'user', content: gate.rewritten_query || message }],
                 tools, systemPrompt, modelKey: finalKey,
@@ -907,6 +947,7 @@ export async function agentChatSseHandler(env, request, ctx, session) {
                 maxToolCalls: modeConfig.max_tool_calls || 20,
                 mode: requestedMode, modeConfig, userPolicy,
                 sessionId, tenantId, userId,
+                routingTaskType: intentSlug,
               }),
               15000
             );
@@ -921,15 +962,71 @@ export async function agentChatSseHandler(env, request, ctx, session) {
         emit('error', { message: 'All providers exhausted', tried });
       }
 
-      if (routingPick?.armId) {
-        await recordRoutingArmOutcome(env, { armId: routingPick.armId, success: succeeded }).catch(() => {});
-      }
+      scheduleAgentsamCommandRunInsert(env, ctx, {
+        workspaceId: String(workspaceId || '').trim(),
+        sessionId: sessionId ? String(sessionId) : null,
+        conversationId: sessionId ? String(sessionId) : null,
+        userInput: message,
+        normalizedIntent: intentSlug,
+        intentCategory: 'chat',
+        modelKey: lastLoopStats?.modelKey || fallbackModelKeys[0] || null,
+        commandsExecuted: lastLoopStats?.executedToolNames || [],
+        result: { succeeded, tried },
+        outputText: null,
+        confidenceScore: confidence,
+        success: succeeded,
+        exitCode: null,
+        durationMs: Date.now() - chatT0,
+        inputTokens: lastLoopStats?.totalUsage?.input_tokens ?? 0,
+        outputTokens: lastLoopStats?.totalUsage?.output_tokens ?? 0,
+        costUsd: 0,
+        errorMessage: succeeded ? null : 'all_providers_exhausted',
+        selectedCommandId: null,
+        selectedCommandSlug: null,
+        riskLevel: 'low',
+        requiresConfirmation: false,
+        approvalStatus: 'not_required',
+        cwd: null,
+        filesOpen: [],
+        recentError: succeeded ? null : 'all_providers_exhausted',
+        goal: null,
+        contextTokenEstimate:
+          (lastLoopStats?.totalUsage?.input_tokens ?? 0) +
+          (lastLoopStats?.totalUsage?.output_tokens ?? 0),
+      });
     } catch (e) {
       console.warn('[agent] Agent loop failed', e?.message ?? e);
       emit('error', { message: 'Agent loop failed' });
-      if (routingPick?.armId) {
-        await recordRoutingArmOutcome(env, { armId: routingPick.armId, success: false }).catch(() => {});
-      }
+      scheduleAgentsamCommandRunInsert(env, ctx, {
+        workspaceId: String(workspaceId || '').trim(),
+        sessionId: sessionId ? String(sessionId) : null,
+        conversationId: sessionId ? String(sessionId) : null,
+        userInput: message,
+        normalizedIntent: intentSlug,
+        intentCategory: 'chat',
+        modelKey: fallbackModelKeys[0] || null,
+        commandsExecuted: [],
+        result: { fatal: true },
+        outputText: null,
+        confidenceScore: confidence,
+        success: false,
+        exitCode: null,
+        durationMs: Date.now() - chatT0,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        errorMessage: e?.message != null ? String(e.message).slice(0, 8000) : 'agent_loop_failed',
+        selectedCommandId: null,
+        selectedCommandSlug: null,
+        riskLevel: 'low',
+        requiresConfirmation: false,
+        approvalStatus: 'not_required',
+        cwd: null,
+        filesOpen: [],
+        recentError: e?.message != null ? String(e.message).slice(0, 2000) : null,
+        goal: null,
+        contextTokenEstimate: 0,
+      });
     } finally {
       await writer.close().catch(() => {});
     }

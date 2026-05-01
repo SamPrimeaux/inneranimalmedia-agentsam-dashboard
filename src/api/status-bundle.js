@@ -1,7 +1,7 @@
 /**
  * Single dashboard status payload — reduces parallel D1 polling.
  */
-import { getAuthUser, jsonResponse } from '../core/auth.js';
+import { getAuthUser, jsonResponse, fallbackSystemTenantId } from '../core/auth.js';
 
 export async function handleStatusBundle(request, url, env, ctx) {
   if (request.method.toUpperCase() !== 'GET') {
@@ -28,9 +28,15 @@ export async function handleStatusBundle(request, url, env, ctx) {
     (async () => {
       if (!env.DB) return { status: 'unknown' };
       try {
+        const tid =
+          authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+            ? String(authUser.tenant_id).trim()
+            : fallbackSystemTenantId(env);
         const ws = await env.DB.prepare(
-          "SELECT metadata_json FROM agentsam_workspace WHERE tenant_id = 'tenant_inneranimalmedia' LIMIT 1",
-        ).first();
+          'SELECT metadata_json FROM agentsam_workspace WHERE tenant_id = ? LIMIT 1',
+        )
+          .bind(tid)
+          .first();
         const meta = (() => {
           try {
             return JSON.parse(ws?.metadata_json || '{}');

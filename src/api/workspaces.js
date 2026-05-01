@@ -7,6 +7,7 @@
 import {
   jsonResponse,
   fetchAuthUserTenantId,
+  platformTenantIdFromEnv,
 } from '../core/auth.js';
 
 /** @param {any} env */
@@ -244,7 +245,8 @@ export async function handleAgentsamWorkspacesApi(request, url, env, ctx, authUs
   if (!userId) return jsonResponse({ error: 'Invalid user' }, 401);
 
   const db = env.DB;
-  const seeNullTenantUnowned = isSuper || tenantId === 'tenant_sam_primeaux' ? 1 : 0;
+  const platformTid = platformTenantIdFromEnv(env);
+  const seeNullTenantUnowned = isSuper || (platformTid && tenantId === platformTid) ? 1 : 0;
 
   // ── GET /api/workspaces/list ────────────────────────────────────────────
   if (pathLower === '/api/workspaces/list' && method === 'GET') {
@@ -889,7 +891,7 @@ export async function handleAgentsamWorkspacesApi(request, url, env, ctx, authUs
       const ws = await db.prepare(`SELECT * FROM workspaces WHERE id = ?`).bind(workspaceId).first();
       if (!ws) return jsonResponse({ error: 'Not found' }, 404);
 
-      if (!isSuper && ws.tenant_id === 'tenant_sam_primeaux') {
+      if (!isSuper && platformTid && ws.tenant_id === platformTid) {
         return jsonResponse({ error: 'Forbidden' }, 403);
       }
 

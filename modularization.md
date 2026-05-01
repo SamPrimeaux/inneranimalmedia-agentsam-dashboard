@@ -39,7 +39,7 @@ _Update this table after Step 0 of each sprint._
 | `/api/auth/supabase/start` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
 | `/api/auth/supabase/callback` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
 | `/auth/callback/supabase` | GET | alias | — | `src/api/auth.js` — **IN PROGRESS** |
-| `/api/auth/oauth/consent` | GET | none yet | — | `src/api/auth.js` — **IN PROGRESS** |
+| `/api/auth/oauth/consent` | GET | none yet | — | `src/api/auth.js` serves `static/dashboard/agent.html`; `AuthOAuthConsentPage.tsx` |
 
 ### Domain: settings + AI config
 _All currently inside `handlePhase1PlatformD1Routes` (worker.js ~line 2403)_

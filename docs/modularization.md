@@ -33,8 +33,9 @@ When the Cloudflare build for `production` is green, copy these paths into the m
 - `src/core/provisionNewUser.js`
 - `src/index.js`
 - `wrangler.jsonc`
-- `dashboard/auth-oauth-consent.html`
 - `dashboard/auth-signin.html`
+- `agent-dashboard/agent-dashboard/App.tsx` (route for consent)
+- `agent-dashboard/agent-dashboard/components/auth/AuthOAuthConsentPage.tsx` (OAuth consent UI; served via SPA shell at `GET /api/auth/oauth/consent`)
 - `static_auth-signin.html`
 - `docs/modularization.md`
 

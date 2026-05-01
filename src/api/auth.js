@@ -493,9 +493,16 @@ export async function handleOAuthConsentPage(request, env) {
   if (!user) {
     return Response.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`, 302);
   }
-  const obj = await env.DASHBOARD?.get('dashboard/auth-oauth-consent.html');
-  if (!obj) return new Response('Consent page not found', { status: 404 });
+  const obj =
+    (await env.DASHBOARD?.get('static/dashboard/agent.html')) ||
+    (await env.DASHBOARD?.get('index.html'));
+  if (!obj) {
+    return new Response('Agent SPA shell not found', { status: 503 });
+  }
   return new Response(obj.body, {
-    headers: { 'Content-Type': 'text/html;charset=UTF-8' },
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    },
   });
 }

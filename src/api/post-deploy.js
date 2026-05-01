@@ -5,11 +5,22 @@
  * Syncs Agent Sam's knowledge context cache
  * in KV so the AI has fresh awareness of the codebase state.
  *
- * Auth: X-Internal-Secret header (INTERNAL_API_SECRET)
+ * Auth (any one): X-Ingest-Secret (INGEST_SECRET), X-Internal-Secret or Bearer INTERNAL_API_SECRET,
+ *                 or Bearer AGENTSAM_BRIDGE_KEY (same key as MCP bridge).
  * Response: { ok: true, keys_written: N, environment: string }
  */
 
-import { isIngestSecretAuthorized, jsonResponse } from '../core/auth.js';
+import { isIngestSecretAuthorized, verifyInternalApiSecret, jsonResponse } from '../core/auth.js';
+
+function isPostDeployAuthorized(request, env) {
+  if (isIngestSecretAuthorized(request, env)) return true;
+  if (verifyInternalApiSecret(request, env)) return true;
+  const auth = request.headers.get('Authorization') || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const bridge = env?.AGENTSAM_BRIDGE_KEY != null ? String(env.AGENTSAM_BRIDGE_KEY).trim() : '';
+  if (bridge && bearer === bridge) return true;
+  return false;
+}
 
 /**
  * Main handler — registered in src/index.js as:
@@ -17,7 +28,7 @@ import { isIngestSecretAuthorized, jsonResponse } from '../core/auth.js';
  */
 export async function handlePostDeploy(request, env, ctx) {
   // ── Auth gate ────────────────────────────────────────────────────────────────
-  if (!isIngestSecretAuthorized(request, env)) {
+  if (!isPostDeployAuthorized(request, env)) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 

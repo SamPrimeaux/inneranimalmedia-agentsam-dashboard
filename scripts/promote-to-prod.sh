@@ -399,6 +399,11 @@ QUALITY_STATUS="${QUALITY_STATUS:-pass}"
 GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
 GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
 
+# Escape single quotes for SQLite string literals (prevents broken INSERT when TRIGGERED_BY etc. contain ')
+_cicd_sql_escape() {
+  printf '%s' "${1:-}" | sed "s/'/''/g"
+}
+
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
   --command="INSERT OR IGNORE INTO ai_workflow_pipelines (
@@ -425,25 +430,36 @@ GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
   );" \
   2>/dev/null || echo "  WARN: ai_workflow_pipelines template row failed (non-fatal)"
 
-WF_EXEC_ID="wfexec_${DEPLOY_TS}_prod_v${CURRENT_V:-0}"
+WF_RAND="$(openssl rand -hex 6 2>/dev/null || printf '%x' "$$")"
+WF_EXEC_ID="wfexec_${DEPLOY_TS}_${WF_RAND}_v${CURRENT_V:-0}"
 WF_TOTAL_DURATION_S=$(( (CICD_MS_PULL + CICD_MS_PUSH + CICD_MS_WORKER) / 1000 ))
+[ "${WF_TOTAL_DURATION_S:-0}" -lt 0 ] && WF_TOTAL_DURATION_S=0
+
+INPUT_VARS_JSON=$(printf '%s' "{\"dashboard_v\":\"v${CURRENT_V:-0}\",\"environment\":\"production\",\"triggered_by\":\"${TRIGGERED_BY:-promote}\"}")
+OUTPUT_VARS_JSON=$(printf '%s' "{\"worker_version_id\":\"${PROD_VERSION}\",\"health_http\":${PROD_HC:-200},\"r2_files\":${R2_LINE_COUNT:-0},\"quality\":\"${QUALITY_STATUS}\",\"vuln_high\":${GITHUB_VULN_HIGH:-0},\"vuln_moderate\":${GITHUB_VULN_MODERATE:-0}}")
+STAGES_JSON=$(printf '%s' "[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"duration_ms\":${CICD_MS_PULL:-0},\"status\":\"completed\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"status\":\"completed\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"duration_ms\":${CICD_MS_PUSH:-0},\"status\":\"completed\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"duration_ms\":${CICD_MS_WORKER:-0},\"status\":\"completed\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"status\":\"completed\",\"output\":\"${PROD_HC:-200}\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"status\":\"completed\"}]")
+INPUT_VARS_ESC=$(_cicd_sql_escape "$INPUT_VARS_JSON")
+OUTPUT_VARS_ESC=$(_cicd_sql_escape "$OUTPUT_VARS_JSON")
+STAGES_ESC=$(_cicd_sql_escape "$STAGES_JSON")
 
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
-  --command="INSERT OR IGNORE INTO ai_workflow_executions (
+  --command="INSERT INTO ai_workflow_executions (
     id, pipeline_id, tenant_id, execution_number,
     status, input_variables_json, output_json,
     stage_results_json, started_at, completed_at, duration_seconds
   ) VALUES (
-    '${WF_EXEC_ID}',
+    '$(_cicd_sql_escape "$WF_EXEC_ID")',
     'wfpipe_promote_prod',
-    'tenant_sam_primeaux',
-    (SELECT COALESCE(MAX(execution_number),0)+1 FROM ai_workflow_executions WHERE pipeline_id='wfpipe_promote_prod'),
+    COALESCE((SELECT tenant_id FROM ai_workflow_pipelines WHERE id='wfpipe_promote_prod' LIMIT 1), 'system'),
+    (SELECT COALESCE(MAX(execution_number), 0) + 1 FROM ai_workflow_executions WHERE pipeline_id = 'wfpipe_promote_prod'),
     'completed',
-    '{\"dashboard_v\":\"v${CURRENT_V:-0}\",\"environment\":\"production\",\"triggered_by\":\"${TRIGGERED_BY:-promote}\"}',
-    '{\"worker_version_id\":\"${PROD_VERSION}\",\"health_http\":${PROD_HC:-200},\"r2_files\":${R2_LINE_COUNT},\"quality\":\"${QUALITY_STATUS}\",\"vuln_high\":${GITHUB_VULN_HIGH},\"vuln_moderate\":${GITHUB_VULN_MODERATE}}',
-    '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"duration_ms\":${CICD_MS_PULL},\"status\":\"completed\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"status\":\"completed\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"duration_ms\":${CICD_MS_PUSH},\"status\":\"completed\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"duration_ms\":${CICD_MS_WORKER},\"status\":\"completed\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"status\":\"completed\",\"output\":\"${PROD_HC:-200}\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"status\":\"completed\"}]',
-    unixepoch(), unixepoch(), ${WF_TOTAL_DURATION_S}
+    '${INPUT_VARS_ESC}',
+    '${OUTPUT_VARS_ESC}',
+    '${STAGES_ESC}',
+    unixepoch() - ${WF_TOTAL_DURATION_S},
+    unixepoch(),
+    ${WF_TOTAL_DURATION_S}
   );" \
   2>/dev/null || echo "  WARN: ai_workflow_executions row failed (non-fatal)"
 
@@ -468,15 +484,27 @@ _send_resend_notification "success"
 echo ""
 echo "  Verify: curl -s https://inneranimalmedia.com/dashboard/agent | grep -o 'dashboard-v:[0-9]*'"
 
-# Post-deploy knowledge sync (non-fatal)
+# Post-deploy knowledge sync (non-fatal). Prefer AGENTSAM_BRIDGE_KEY (Bearer); else INTERNAL_API_SECRET.
 echo ""
 echo "  Syncing Agent Sam knowledge base..."
-SYNC_RESP=$(curl -s -X POST \
-  "https://inneranimalmedia.com/api/internal/post-deploy" \
-  -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" \
-  -H "Content-Type: application/json" \
-  --max-time 30 \
-  2>/dev/null || true)
+if [ -n "${AGENTSAM_BRIDGE_KEY:-}" ]; then
+  SYNC_RESP=$(curl -s -X POST \
+    "https://inneranimalmedia.com/api/internal/post-deploy" \
+    -H "Authorization: Bearer ${AGENTSAM_BRIDGE_KEY}" \
+    -H "Content-Type: application/json" \
+    --max-time 30 \
+    2>/dev/null || true)
+elif [ -n "${INTERNAL_API_SECRET:-}" ]; then
+  SYNC_RESP=$(curl -s -X POST \
+    "https://inneranimalmedia.com/api/internal/post-deploy" \
+    -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
+    -H "Content-Type: application/json" \
+    --max-time 30 \
+    2>/dev/null || true)
+else
+  SYNC_RESP=""
+  echo "  WARN: AGENTSAM_BRIDGE_KEY or INTERNAL_API_SECRET not set — knowledge sync skipped"
+fi
 if echo "$SYNC_RESP" | grep -q '"keys_written"'; then
   echo "  OK Knowledge sync complete"
   echo "$SYNC_RESP" | grep -o '"keys_written":[0-9]*' | head -1 || true

@@ -1,5 +1,8 @@
 /**
  * agentsam_memory — prompt injection for chat and scheduled decay (01:00 UTC cron).
+ *
+ * Returns a markdown-ish block for callers to concatenate **after** the main system prompt
+ * (identity + policy strings). Do not prepend ahead of core system instructions.
  */
 
 export async function loadAgentMemory(env, tenantId) {

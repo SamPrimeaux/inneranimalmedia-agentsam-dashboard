@@ -14,6 +14,7 @@
 import { chatWithAnthropic }                            from '../integrations/anthropic.js';
 import { dispatchStream, OLLAMA_SKIP_MESSAGE }         from '../core/provider.js';
 import { unifiedRagSearch, handleAgentMemorySync }      from './rag.js';
+import { loadAgentMemory }                              from '../core/memory.js';
 import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
@@ -29,6 +30,80 @@ import { getDefaultModelForTask, recordRoutingArmOutcome } from '../core/routing
 
 const WRITE_LIKE_PREFIXES = ['d1_', 'worker_', 'resend_', 'meshyai_'];
 const TERM_WRITE_TOOLS = new Set(['terminal_execute', 'run_command', 'bash']);
+
+/** Registry ids in `agent_prompts.id` — content always loaded from D1. */
+const AP_SYS = {
+  core: 'ap_core_agent_sam_system_v1',
+  dbSafety: 'ap_core_db_safety_system_v1',
+  security: 'ap_core_security_system_v1',
+  deploy: 'ap_core_deploy_safety_system_v1',
+  billing: 'ap_core_billing_system_v1',
+  learning: 'ap_core_learning_system_v1',
+  shinshu: 'ap_core_shinshu_system_v1',
+  client: 'ap_core_client_work_system_v1',
+};
+const TENANT_KNOWLEDGE_PLATFORM = 'tenant_knowledge_platform';
+const TENANT_SHINSHU = 'tenant_jake_waalk';
+const TENANT_SAM_PRIMEAUX = 'tenant_sam_primeaux';
+
+/** Minimal fallback if D1 has no core row (same intent as legacy single-line base). */
+const FALLBACK_CORE_SYSTEM = 'You are Agent Sam, an autonomous AI coding and operations assistant for Inner Animal Media.';
+
+async function buildSystemPrompt(env, tenantId, mode, contextBlock, modeConfig) {
+  const rows = await env.DB.prepare(`
+    SELECT id, prompt_kind, content
+    FROM agent_prompts
+    WHERE status = 'active'
+      AND prompt_kind = 'system'
+      AND (tenant_id IS NULL OR tenant_id = ?)
+    ORDER BY
+      CASE WHEN tenant_id IS NULL THEN 1 ELSE 0 END DESC,
+      id ASC
+  `).bind(tenantId || '').all();
+
+  const prompts = rows?.results || [];
+
+  const core = prompts.find((p) => p.id === AP_SYS.core)?.content || FALLBACK_CORE_SYSTEM;
+  const dbSafety = prompts.find((p) => p.id === AP_SYS.dbSafety)?.content || '';
+  const security = prompts.find((p) => p.id === AP_SYS.security)?.content || '';
+
+  const deployPrompt = ['build', 'deploy', 'agent'].includes(mode)
+    ? prompts.find((p) => p.id === AP_SYS.deploy)?.content || ''
+    : '';
+
+  const billingPrompt = mode === 'billing'
+    ? prompts.find((p) => p.id === AP_SYS.billing)?.content || ''
+    : '';
+
+  const learningPrompt = tenantId === TENANT_KNOWLEDGE_PLATFORM
+    ? prompts.find((p) => p.id === AP_SYS.learning)?.content || ''
+    : '';
+
+  const shinshuPrompt = tenantId === TENANT_SHINSHU
+    ? prompts.find((p) => p.id === AP_SYS.shinshu)?.content || ''
+    : '';
+
+  const clientPrompt = tenantId && tenantId !== TENANT_SAM_PRIMEAUX
+    ? prompts.find((p) => p.id === AP_SYS.client)?.content || ''
+    : '';
+
+  const modeFragment = modeConfig?.system_prompt_fragment
+    ? `\n\n${modeConfig.system_prompt_fragment}`
+    : '';
+
+  return [
+    core,
+    dbSafety,
+    security,
+    deployPrompt,
+    billingPrompt,
+    learningPrompt,
+    shinshuPrompt,
+    clientPrompt,
+    modeFragment,
+    contextBlock,
+  ].filter(Boolean).join('\n\n---\n\n');
+}
 
 function projectIdFromEnv(env) {
   const candidates = [env?.PROJECT_ID, env?.WORKER_NAME, env?.CLOUDFLARE_WORKER_NAME];
@@ -738,10 +813,29 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     tenantId,
   });
   const ragContext   = (ragResult.matches || []).join('\n\n');
-  const basePrompt   = agentMeta?.system_prompt || 'You are Agent Sam, an autonomous AI coding and operations assistant for Inner Animal Media.';
-  const modeFragment = modeConfig.system_prompt_fragment ? `\n\n${modeConfig.system_prompt_fragment}` : '';
   const contextBlock = ragContext ? `\n\nRelevant context:\n${ragContext}` : '';
-  const systemPrompt = basePrompt + modeFragment + contextBlock;
+
+  const basePrompt = agentMeta?.system_prompt || FALLBACK_CORE_SYSTEM;
+  const legacySystemPrompt = () =>
+    basePrompt
+    + (modeConfig.system_prompt_fragment ? `\n\n${modeConfig.system_prompt_fragment}` : '')
+    + contextBlock;
+
+  let systemPrompt = legacySystemPrompt();
+  if (env.DB) {
+    try {
+      systemPrompt = await buildSystemPrompt(env, tenantId, requestedMode, contextBlock, modeConfig);
+    } catch (e) {
+      console.warn('[agent] buildSystemPrompt fallback', e?.message ?? e);
+      systemPrompt = legacySystemPrompt();
+    }
+  }
+  try {
+    const mem = await loadAgentMemory(env, tenantId);
+    if (mem && String(mem).trim()) {
+      systemPrompt = `${systemPrompt}\n\n${String(mem).trim()}`;
+    }
+  } catch (_) { /* memory must not break sessions */ }
 
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream();

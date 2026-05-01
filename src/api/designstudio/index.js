@@ -11,7 +11,26 @@ import { syncRunToSupabase, buildCadCreationsPrefix } from './sync.js';
 
 const WORKFLOW_RUNS = 'agentsam_workflow_runs';
 const BLUEPRINTS = 'designstudio_design_blueprints';
-const DEFAULT_WS = 'ws_designstudio';
+const MCP_WORKFLOWS = 'agentsam_mcp_workflows';
+const WORKSPACE_TABLE = 'agentsam_workspace';
+/** Matches D1 default on designstudio_design_blueprints.workspace_id */
+const DEFAULT_WS = 'ws_inneranimalmedia';
+
+async function resolveWorkspaceId(env, tenantId, explicit) {
+  const ex = explicit != null && String(explicit).trim() !== '' ? String(explicit).trim() : null;
+  if (ex) return ex;
+  if (!env?.DB) return DEFAULT_WS;
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id FROM ${WORKSPACE_TABLE} WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT 1`,
+    )
+      .bind(tenantId)
+      .first();
+    return row?.id ? String(row.id) : DEFAULT_WS;
+  } catch (_) {
+    return DEFAULT_WS;
+  }
+}
 
 function internalSecretOk(request, env) {
   const secret = env?.INTERNAL_API_SECRET;
@@ -127,15 +146,6 @@ async function presignR2GetObjectUrl(env, bucket, key, expiresSeconds = 3600) {
   return `https://${host}/${bucket}/${encodedKey}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
 }
 
-function assetSuffix(assetType) {
-  const t = String(assetType || '').toLowerCase();
-  if (t === 'glb') return 'model.glb';
-  if (t === 'stl') return 'model.stl';
-  if (t === 'scad') return 'model.scad';
-  if (t === 'preview' || t === 'png') return 'preview.png';
-  return 'model.glb';
-}
-
 /**
  * @param {Request} request
  * @param {URL} url
@@ -155,21 +165,27 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       const runId = eventsMatch[1];
       const tenantId = await resolveTenantId(env, authUser);
       const run = await env.DB.prepare(
-        `SELECT id, tenant_id, session_id FROM ${WORKFLOW_RUNS} WHERE id = ? LIMIT 1`,
+        `SELECT r.id, r.session_id
+         FROM ${WORKFLOW_RUNS} r
+         INNER JOIN ${WORKSPACE_TABLE} w ON w.id = r.workspace_id
+         WHERE r.id = ? AND w.tenant_id = ?
+         LIMIT 1`,
       )
-        .bind(runId)
+        .bind(runId, tenantId)
         .first();
-      if (!run || String(run.tenant_id) !== String(tenantId)) {
+      if (!run) {
         return jsonResponse({ error: 'Not found' }, 404);
       }
       let sessionId = (url.searchParams.get('session_id') || '').trim();
       if (!sessionId && run.session_id) sessionId = String(run.session_id).trim();
       if (!sessionId) {
-        return jsonResponse({ error: 'session_id required for event stream' }, 400);
+        return jsonResponse({ error: 'session_id required' }, 400);
       }
       if (!env.AGENT_SESSION) return jsonResponse({ error: 'AGENT_SESSION not configured' }, 503);
       const stub = env.AGENT_SESSION.get(env.AGENT_SESSION.idFromName(sessionId));
-      const doUrl = new URL('https://internal/designstudio/events');
+      const doUrl = new URL(request.url);
+      doUrl.pathname = '/designstudio/events';
+      doUrl.search = '';
       doUrl.searchParams.set('run_id', runId);
       const lastId = url.searchParams.get('last_id');
       if (lastId) doUrl.searchParams.set('last_id', lastId);
@@ -181,11 +197,18 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'Database not configured' }, 503);
       const tenantId = await resolveTenantId(env, authUser);
-      const { results } = await env.DB.prepare(
-        `SELECT * FROM ${BLUEPRINTS} WHERE tenant_id = ? ORDER BY updated_at DESC LIMIT 100`,
-      )
-        .bind(tenantId)
-        .all();
+      const statusFilter = (url.searchParams.get('status') || '').trim();
+      const limitRaw = parseInt(url.searchParams.get('limit') || '50', 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+      let sql = `SELECT * FROM ${BLUEPRINTS} WHERE tenant_id = ?`;
+      const binds = [tenantId];
+      if (statusFilter) {
+        sql += ` AND status = ?`;
+        binds.push(statusFilter);
+      }
+      sql += ` ORDER BY created_at DESC LIMIT ?`;
+      binds.push(limit);
+      const { results } = await env.DB.prepare(sql).bind(...binds).all();
       return jsonResponse({ blueprints: results || [] }, 200);
     }
 
@@ -202,29 +225,35 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       }
       const title = String(body.title || '').trim();
       if (!title) return jsonResponse({ error: 'title required' }, 400);
-      const intentJson =
-        typeof body.intent_json === 'object' && body.intent_json !== null
-          ? JSON.stringify(body.intent_json)
-          : typeof body.intent_json === 'string'
-            ? body.intent_json
+      const workspaceId = await resolveWorkspaceId(env, tenantId, body.workspace_id);
+      const sketchJson =
+        typeof body.sketch_json === 'object' && body.sketch_json !== null
+          ? JSON.stringify(body.sketch_json)
+          : typeof body.sketch_json === 'string'
+            ? body.sketch_json
             : '{}';
-      const blueprintId = `dsb_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-      await env.DB.prepare(
-        `INSERT INTO ${BLUEPRINTS} (id, title, description, original_prompt, intent_json, tenant_id, workspace_id, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`,
+      const tagsJson = Array.isArray(body.tags)
+        ? JSON.stringify(body.tags)
+        : typeof body.tags === 'string'
+          ? body.tags
+          : '[]';
+      const row = await env.DB.prepare(
+        `INSERT INTO ${BLUEPRINTS}
+           (tenant_id, workspace_id, title, description, original_prompt, sketch_json, tags, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')
+         RETURNING *`,
       )
         .bind(
-          blueprintId,
+          tenantId,
+          workspaceId,
           title,
           body.description != null ? String(body.description) : null,
           body.original_prompt != null ? String(body.original_prompt) : null,
-          intentJson,
-          tenantId,
-          body.workspace_id != null ? String(body.workspace_id) : DEFAULT_WS,
+          sketchJson,
+          tagsJson,
         )
-        .run();
-      const created = await env.DB.prepare(`SELECT * FROM ${BLUEPRINTS} WHERE id = ?`).bind(blueprintId).first();
-      return jsonResponse({ blueprint: created }, 201);
+        .first();
+      return jsonResponse({ blueprint: row }, 201);
     }
 
     const bpOneMatch = pathLower.match(/^\/api\/designstudio\/blueprints\/([^/]+)$/);
@@ -276,7 +305,15 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
           typeof body.sketch_json === 'object' ? JSON.stringify(body.sketch_json) : String(body.sketch_json || '{}'),
         );
       }
+      if (body.tags !== undefined) {
+        push(
+          'tags',
+          Array.isArray(body.tags) ? JSON.stringify(body.tags) : String(body.tags ?? '[]'),
+        );
+      }
+      if (body.notes !== undefined) push('notes', body.notes != null ? String(body.notes) : null);
       if (body.cad_script !== undefined) push('cad_script', body.cad_script != null ? String(body.cad_script) : null);
+      if (body.cad_engine !== undefined) push('cad_engine', body.cad_engine != null ? String(body.cad_engine) : null);
       if (body.status != null) push('status', String(body.status));
       if (!sets.length) return jsonResponse({ error: 'No fields to update' }, 400);
       sets.push(`updated_at = datetime('now')`);
@@ -291,12 +328,20 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'Database not configured' }, 503);
       const tenantId = await resolveTenantId(env, authUser);
-      const { results } = await env.DB.prepare(
-        `SELECT id, workflow_id, session_id, tenant_id, status, workflow_key, display_name, started_at, completed_at, duration_ms, cost_usd, step_results_json
-         FROM ${WORKFLOW_RUNS} WHERE tenant_id = ? ORDER BY started_at DESC LIMIT 50`,
-      )
-        .bind(tenantId)
-        .all();
+      const blueprintId = (url.searchParams.get('blueprint_id') || '').trim();
+      const limitRaw = parseInt(url.searchParams.get('limit') || '20', 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 20;
+      let sql = `SELECT r.* FROM ${WORKFLOW_RUNS} r
+        INNER JOIN ${WORKSPACE_TABLE} w ON w.id = r.workspace_id
+        WHERE w.tenant_id = ? AND r.workflow_key LIKE 'designstudio%'`;
+      const binds = [tenantId];
+      if (blueprintId) {
+        sql += ` AND json_extract(r.input_json, '$.blueprint_id') = ?`;
+        binds.push(blueprintId);
+      }
+      sql += ` ORDER BY r.started_at DESC LIMIT ?`;
+      binds.push(limit);
+      const { results } = await env.DB.prepare(sql).bind(...binds).all();
       return jsonResponse({ runs: results || [] }, 200);
     }
 
@@ -305,26 +350,59 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'Database not configured' }, 503);
       const tenantId = await resolveTenantId(env, authUser);
+      const userId = authUser.id != null ? String(authUser.id).trim() : null;
       let body = {};
       try {
         body = await request.json();
       } catch (_) {
         return jsonResponse({ error: 'Invalid JSON' }, 400);
       }
-      const workflowId = String(body.workflow_id || '').trim();
-      if (!workflowId) return jsonResponse({ error: 'workflow_id required' }, 400);
-      const sessionId = body.session_id != null ? String(body.session_id).trim() : null;
-      const wfKey = String(body.workflow_key || 'designstudio_manual').trim();
-      const displayName = String(body.display_name || 'DesignStudio run').trim();
-      const runId = `wfr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-      await env.DB.prepare(
-        `INSERT INTO ${WORKFLOW_RUNS} (id, workflow_id, session_id, tenant_id, status, triggered_by, started_at, cost_usd, created_at, workflow_key, display_name)
-         VALUES (?, ?, ?, ?, 'pending', 'designstudio_api', unixepoch(), 0, unixepoch(), ?, ?)`,
+      const blueprintId = String(body.blueprint_id || '').trim();
+      if (!blueprintId) return jsonResponse({ error: 'blueprint_id required' }, 400);
+      const blueprint = await env.DB.prepare(
+        `SELECT * FROM ${BLUEPRINTS} WHERE id = ? AND tenant_id = ? LIMIT 1`,
       )
-        .bind(runId, workflowId, sessionId, tenantId, wfKey, displayName)
+        .bind(blueprintId, tenantId)
+        .first();
+      if (!blueprint) return jsonResponse({ error: 'Not found' }, 404);
+      const wf = await env.DB.prepare(
+        `SELECT id, workflow_key FROM ${MCP_WORKFLOWS}
+         WHERE workflow_key LIKE 'designstudio%' AND COALESCE(is_active, 0) = 1
+         LIMIT 1`,
+      ).first();
+      if (!wf?.id || !wf.workflow_key) {
+        return jsonResponse({ error: 'No active DesignStudio workflow configured' }, 503);
+      }
+      const workspaceId = await resolveWorkspaceId(env, tenantId, body.workspace_id ?? blueprint.workspace_id);
+      const inputPayload = {
+        blueprint_id: blueprintId,
+        prompt: blueprint.original_prompt != null ? String(blueprint.original_prompt) : null,
+      };
+      const inputJson = JSON.stringify(inputPayload);
+      const inserted = await env.DB.prepare(
+        `INSERT INTO ${WORKFLOW_RUNS}
+           (workflow_id, workflow_key, tenant_id, user_id, workspace_id,
+            trigger_type, status, input_json, started_at, environment)
+         VALUES (?, ?, ?, ?, ?, 'user', 'running', ?, unixepoch(), 'production')
+         RETURNING id`,
+      )
+        .bind(
+          String(wf.id),
+          String(wf.workflow_key),
+          tenantId,
+          userId,
+          workspaceId,
+          inputJson,
+        )
+        .first();
+      const newRunId = inserted?.id != null ? String(inserted.id) : null;
+      if (!newRunId) return jsonResponse({ error: 'run_insert_failed' }, 500);
+      await env.DB.prepare(
+        `UPDATE ${BLUEPRINTS} SET latest_run_id = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`,
+      )
+        .bind(newRunId, blueprintId, tenantId)
         .run();
-      const row = await env.DB.prepare(`SELECT * FROM ${WORKFLOW_RUNS} WHERE id = ?`).bind(runId).first();
-      return jsonResponse({ run: row }, 202);
+      return jsonResponse({ run_id: newRunId, status: 'running' }, 202);
     }
 
     const runOneMatch = pathLower.match(/^\/api\/designstudio\/runs\/([^/]+)$/);
@@ -333,8 +411,14 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'Database not configured' }, 503);
       const tenantId = await resolveTenantId(env, authUser);
-      const row = await env.DB.prepare(`SELECT * FROM ${WORKFLOW_RUNS} WHERE id = ? AND tenant_id = ?`)
-        .bind(runOneMatch[1], tenantId)
+      const rid = runOneMatch[1];
+      const row = await env.DB.prepare(
+        `SELECT r.* FROM ${WORKFLOW_RUNS} r
+         INNER JOIN ${WORKSPACE_TABLE} w ON w.id = r.workspace_id
+         WHERE r.id = ? AND w.tenant_id = ?
+         LIMIT 1`,
+      )
+        .bind(rid, tenantId)
         .first();
       if (!row) return jsonResponse({ error: 'Not found' }, 404);
       return jsonResponse({ run: row }, 200);
@@ -348,20 +432,40 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       const tenantId = await resolveTenantId(env, authUser);
       const runId = presignMatch[1];
       const assetType = presignMatch[2];
-      const run = await env.DB.prepare(`SELECT id, tenant_id, session_id FROM ${WORKFLOW_RUNS} WHERE id = ? AND tenant_id = ?`)
+      const run = await env.DB.prepare(
+        `SELECT r.id FROM ${WORKFLOW_RUNS} r
+         INNER JOIN ${WORKSPACE_TABLE} w ON w.id = r.workspace_id
+         WHERE r.id = ? AND w.tenant_id = ?
+         LIMIT 1`,
+      )
         .bind(runId, tenantId)
         .first();
       if (!run) return jsonResponse({ error: 'Not found' }, 404);
-      const ws = (url.searchParams.get('workspace_id') || '').trim() || DEFAULT_WS;
-      const prefix = buildCadCreationsPrefix(tenantId, ws, runId);
-      const suffix = assetSuffix(assetType);
-      const key = `${prefix}${suffix}`;
+      const base = supabaseRestBase(env);
+      const res = await fetch(
+        `${base}/rest/v1/designstudio_asset_metrics?workflow_run_id=eq.${encodeURIComponent(runId)}&asset_type=eq.${encodeURIComponent(
+          assetType,
+        )}&select=*`,
+        { headers: supabasePublicHeaders(env) },
+      );
+      const text = await res.text();
+      let rows = [];
+      try {
+        rows = text ? JSON.parse(text) : [];
+      } catch (_) {
+        rows = [];
+      }
+      const asset = Array.isArray(rows) && rows.length ? rows[0] : null;
+      if (!asset || !asset.r2_key) {
+        return jsonResponse({ error: 'Not found' }, 404);
+      }
+      const key = String(asset.r2_key);
       const bucket = (url.searchParams.get('bucket') || '').trim() || 'autorag';
       const signed = await presignR2GetObjectUrl(env, bucket, key, 3600);
       if (!signed) {
         return jsonResponse({ error: 'presign_unavailable', r2_key: key, bucket }, 503);
       }
-      return jsonResponse({ url: signed, r2_key: key, bucket }, 200);
+      return jsonResponse({ url: signed, r2_key: key, expires_in: 3600 }, 200);
     }
 
     const assetsMatch = pathLower.match(/^\/api\/designstudio\/assets\/([^/]+)$/);
@@ -371,7 +475,12 @@ export async function handleDesignStudioApi(request, url, env, _ctx) {
       if (!env.DB) return jsonResponse({ error: 'Database not configured' }, 503);
       const tenantId = await resolveTenantId(env, authUser);
       const runId = assetsMatch[1];
-      const run = await env.DB.prepare(`SELECT id, tenant_id FROM ${WORKFLOW_RUNS} WHERE id = ? AND tenant_id = ?`)
+      const run = await env.DB.prepare(
+        `SELECT r.id FROM ${WORKFLOW_RUNS} r
+         INNER JOIN ${WORKSPACE_TABLE} w ON w.id = r.workspace_id
+         WHERE r.id = ? AND w.tenant_id = ?
+         LIMIT 1`,
+      )
         .bind(runId, tenantId)
         .first();
       if (!run) return jsonResponse({ error: 'Not found' }, 404);

@@ -29,195 +29,50 @@
             min-height: 100vh;
         }
 
-        .site-nav {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1001;
-            min-height: 100px;
-            display: flex;
-            align-items: center;
-            background: rgba(255, 255, 255, 0.82);
-            backdrop-filter: blur(20px) saturate(1.6);
-            -webkit-backdrop-filter: blur(20px) saturate(1.6);
-            border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
-        }
-
-        .nav-container {
-            max-width: 1400px;
+        .oauth-btn.supabase-img-btn {
+            display: block;
             width: 100%;
-            margin: 0 auto;
-            padding: 0 48px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .logo-img {
-            height: 64px;
-            width: auto;
-            border-radius: 8px;
-            object-fit: cover;
-        }
-
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            list-style: none;
-            flex: 1;
-            justify-content: center;
-        }
-
-        .nav-links a {
-            color: #6b7280;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            padding: 8px 20px;
-            border-radius: 6px;
-            letter-spacing: .01em;
-            transition: color .2s, background .2s;
-        }
-
-        .nav-links a:hover {
-            color: #111827;
-            background: rgba(0, 0, 0, 0.04);
-        }
-
-        .nav-actions {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .nav-signup {
-            background: #111827;
-            color: white;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            padding: 9px 22px;
-            border-radius: 8px;
-            display: inline-block;
-            transition: background .2s, transform .15s;
-        }
-        .nav-signup:hover {
-            background: #1f2937;
-            color: white;
-            transform: translateY(-1px);
-        }
-
-        .user-icon-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            overflow: hidden;
-        }
-
-        .user-icon-btn img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .nav-toggle {
-            display: none;
-            width: 40px;
-            height: 40px;
+            text-align: center;
+            background: none;
             border: none;
-            background: transparent;
-            cursor: pointer;
             padding: 0;
-            margin: 0;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            gap: 5px;
-            transition: opacity .2s, background .2s;
+            line-height: 0;
         }
-        .nav-toggle:hover { background: rgba(0,0,0,0.04); }
-        .nav-toggle span {
-            width: 20px;
-            height: 2px;
-            background: #1E293B;
-            border-radius: 1px;
-            transition: transform .25s ease, opacity .25s ease;
+        .oauth-btn.supabase-img-btn img {
+            height: 44px;
+            width: auto;
+            max-width: 100%;
+            display: inline-block;
+            vertical-align: middle;
         }
-        .nav-toggle.open span:nth-child(1) { transform: rotate(45deg) translateY(7px); }
-        .nav-toggle.open span:nth-child(2) { opacity: 0; }
-        .nav-toggle.open span:nth-child(3) { transform: rotate(-45deg) translateY(-7px); }
-
-        .nav-sidebar {
-            position: fixed;
-            top: 0;
-            right: 0;
-            width: 50vw;
-            max-width: 320px;
-            height: 100vh;
-            background: rgba(255, 255, 255, 0.82);
-            backdrop-filter: blur(20px) saturate(1.6);
-            -webkit-backdrop-filter: blur(20px) saturate(1.6);
-            border-left: 1px solid rgba(0, 0, 0, 0.06);
-            transform: translateX(100%);
-            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-            z-index: 1003;
-            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.08);
-            overflow-y: auto;
-        }
-
-        .nav-sidebar.open { transform: translateX(0); }
-        .nav-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.2);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-            z-index: 1002;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-        }
-        .nav-overlay.open { opacity: 1; pointer-events: auto; }
-        .sidebar-auth .nav-signup { color: #fff; }
-        .sidebar-auth .nav-signup:hover { color: #fff; }
-        .sidebar-close {
-            position: absolute;
-            top: 16px;
-            right: 16px;
-            width: 40px;
-            height: 40px;
+        .oauth-btn.cloudflare-glass-btn {
+            width: 100%;
             display: flex;
             align-items: center;
+            gap: 10px;
             justify-content: center;
-            background: rgba(0,0,0,0.06);
-            border: none;
-            border-radius: 50%;
-            cursor: pointer;
-            color: #1E293B;
-            font-size: 24px;
-            line-height: 1;
-            transition: background 0.2s;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 8px;
+            padding: 10px 16px;
+            color: #fff;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            box-sizing: border-box;
         }
-        .sidebar-close:hover { background: rgba(0,0,0,0.1); }
-        .sidebar-close:focus { outline: none; box-shadow: 0 0 0 2px #2563EB; }
-        .sidebar-content { padding: 100px 32px 32px; display: flex; flex-direction: column; gap: 24px; }
-        .sidebar-content a { font-size: 18px; font-weight: 500; color: #1E293B; text-decoration: none; }
-        .sidebar-auth { margin-top: auto; padding-top: 24px; border-top: 1px solid rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 12px; }
-
-        @media (max-width: 680px) {
-            .nav-links.desktop-only { display: none; }
-            .nav-signup { display: none; }
-            .nav-toggle { display: flex; }
-            .logo-img { height: 64px; width: auto; }
-            .site-nav { min-height: 70px; }
-            .nav-container { padding: 0 18px; }
+        .oauth-btn.cloudflare-glass-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
         }
-        @media (min-width: 681px) {
-            .nav-toggle { display: none; }
+        .oauth-helper-muted {
+            margin-top: 6px;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #64748b;
+            text-align: center;
+            width: 100%;
         }
 
         #globe-canvas {
@@ -237,7 +92,7 @@
             align-items: center;
             justify-content: center;
             pointer-events: none;
-            padding: 96px 16px 72px;
+            padding: 48px 16px 72px;
             box-sizing: border-box;
         }
         .auth-layout .login-card {
@@ -422,9 +277,6 @@
         .transition-overlay.animating {
             transition: none;
         }
-        body.oauth-globe-exit .site-nav,
-        body.oauth-globe-exit .nav-overlay,
-        body.oauth-globe-exit .nav-sidebar,
         body.oauth-globe-exit .auth-min-footer,
         body.oauth-globe-exit .auth-layout .login-card {
             opacity: 0;
@@ -470,69 +322,11 @@
 </head>
 
 <body>
-
-<nav class="site-nav" data-theme="light">
-    <div class="nav-container">
-        <a href="/" class="nav-logo">
-            <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/11f6af46-0a3c-482a-abe8-83edc5a8a200/avatar"
-                alt="InnerAnimal Media" class="logo-img">
-        </a>
-        <div class="nav-links desktop-only">
-            <a href="/">Home</a>
-            <a href="/work">Work</a>
-            <a href="/about">About</a>
-            <a href="/services">Services</a>
-            <a href="/contact">Contact</a>
-        </div>
-        <div class="nav-actions">
-            <a href="/auth/signup" class="nav-signup">Sign Up</a>
-            <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">
-                <span></span><span></span><span></span>
-            </button>
-        </div>
-    </div>
-</nav>
-<div class="nav-overlay" id="navOverlay" aria-hidden="true"></div>
-<div class="nav-sidebar">
-    <button type="button" class="sidebar-close" aria-label="Close menu" id="sidebarClose">&times;</button>
-    <div class="sidebar-content">
-        <a href="/">Home</a>
-        <a href="/work">Work</a>
-        <a href="/about">About</a>
-        <a href="/services">Services</a>
-        <a href="/contact">Contact</a>
-        <div class="sidebar-auth">
-            <a href="/auth/signup" class="nav-signup">Sign Up</a>
-        </div>
-    </div>
-</div>
-
 <script>
-(function() {
-    var navToggle = document.getElementById('navToggle');
-    var navSidebar = document.querySelector('.nav-sidebar');
-    var navOverlay = document.getElementById('navOverlay');
-    var sidebarClose = document.getElementById('sidebarClose');
-    function closeSidebar() {
-        if (navToggle) navToggle.classList.remove('open');
-        if (navSidebar) navSidebar.classList.remove('open');
-        if (navOverlay) navOverlay.classList.remove('open');
-    }
-    function openSidebar() {
-        if (navToggle) navToggle.classList.add('open');
-        if (navSidebar) navSidebar.classList.add('open');
-        if (navOverlay) navOverlay.classList.add('open');
-    }
-    if (navToggle && navSidebar) {
-        navToggle.addEventListener('click', function() {
-            if (navToggle.classList.contains('open')) closeSidebar();
-            else openSidebar();
-        });
-        if (navOverlay) navOverlay.addEventListener('click', closeSidebar);
-        if (sidebarClose) sidebarClose.addEventListener('click', closeSidebar);
-        document.querySelectorAll('.nav-sidebar a').forEach(function(link) {
-            link.addEventListener('click', closeSidebar);
-        });
+(function () {
+    var nextParam = new URLSearchParams(window.location.search).get('next');
+    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')) {
+        document.cookie = 'iam_oauth_next=' + encodeURIComponent(nextParam) + '; Path=/; Max-Age=600; Secure; SameSite=Lax';
     }
 })();
 </script>
@@ -551,7 +345,7 @@
     <p class="subtitle">Sign in to Inner Animal Media</p>
     <p id="registeredMsg" class="subtitle" style="color: #10B981; display: none; margin-top: -16px; margin-bottom: 16px;">Account created. Sign in below.</p>
     <p id="oauthErrorMsg" class="subtitle" style="color: #FF3B30; display: none; margin-top: -16px; margin-bottom: 16px;"></p>
-    <p id="cfConnectNotice" class="subtitle" style="color: #fdba74; display: none; margin-top: -12px; margin-bottom: 12px; font-size: 12px; line-height: 1.45; text-align: center; max-width: 320px;">Sign in with email, Google, GitHub, or Supabase first. After you reach the dashboard, open Integrations and connect Cloudflare there.</p>
+    <p id="cfConnectNotice" class="subtitle" style="color: #fdba74; display: none; margin-top: -12px; margin-bottom: 12px; font-size: 12px; line-height: 1.45; text-align: center; max-width: 320px;">Sign in with Google, GitHub, or Supabase first, then connect Cloudflare from Integrations.</p>
 
     <form id="loginForm" style="width: 100%;">
         <div class="input-group">
@@ -594,21 +388,16 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.43 9.8 8.2 11.38.6.11.82-.26.82-.58 0-.29-.01-1.06-.01-2.08-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.83 1.23 1.83 1.23 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.41c1.02.01 2.05.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.8 5.63-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.89-.01 3.28 0 .32.21.69.83.57C20.57 21.79 24 17.3 24 12c0-6.63-5.37-12-12-12z"/></svg>
                 Sign in with GitHub
             </a>
-            <a id="supabaseSignIn" href="/api/auth/supabase/start" class="oauth-btn supabase-btn btn-primary" style="background: rgba(62, 207, 142, 0.15); color: #ecfdf5; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: 600; font-size: 14px; border: 1px solid rgba(62, 207, 142, 0.45); box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
-                    <path d="M13.5 2.5L3 14h9l-1.5 7.5L21 10h-9l1.5-7.5z" fill="#3ECF8E"/>
-                </svg>
-                Sign in with Supabase
+            <a href="/api/auth/supabase/start" class="oauth-btn supabase-img-btn">
+                <img src="https://assets.inneranimalmedia.com/dashboard/app/assets/auth/providers/connect-supabase-light.svg"
+                     alt="Connect Supabase" style="height:44px;width:auto;">
             </a>
-            <a id="cloudflareSignIn" href="/api/oauth/cloudflare/start?return_to=%2Fdashboard%2Fintegrations" class="btn-primary" style="background: rgba(243, 128, 32, 0.12); color: #fff7ed; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: 600; font-size: 14px; border: 1px solid rgba(243, 128, 32, 0.45); box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
-                <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-                    <path fill="#F38020" d="M16.6 15.9h2.3c.5 0 .9-.4.9-.9 0-.3-.1-.6-.4-.7l-1.6-1c-.2-.1-.5 0-.6.2l-.6 1.2c-.1.2-.4.3-.6.3H8.9c-.4 0-.7.3-.6.7l.4 2.1c0 .2.2.4.5.4h7.8"/>
-                    <path fill="#FAAD3F" d="M7.4 8.1h6.5c.3 0 .5-.3.4-.6L14 4.7c-.1-.3-.4-.5-.7-.5H7.3c-.3 0-.6.3-.5.6l.6 2.9c0 .2.2.4.5.4z"/>
-                    <path fill="#F38020" d="M12 19.9c-1.2 0-2.3-.4-3.2-1h9.4c.3 0 .5-.2.5-.5s-.2-.5-.5-.5H12z"/>
-                </svg>
+            <a href="/api/auth/cloudflare/start" class="oauth-btn cloudflare-glass-btn">
+                <img src="https://assets.inneranimalmedia.com/dashboard/app/assets/auth/providers/cloudflare-icon.webp"
+                     alt="" width="20" height="20">
                 Sign in with Cloudflare
             </a>
-            <p style="margin-top: 4px; font-size: 11px; line-height: 1.45; color: #64748B; max-width: 320px;">Cloudflare links your dashboard after you are signed in. If you are new here, use Google, GitHub, or Supabase first.</p>
+            <p class="oauth-helper-muted">New users: sign in with Google, GitHub, or Supabase first.</p>
             <p style="margin-top: 8px; font-size: 12px; color: #64748B;">Or use your Inner Animal email and password.</p>
         </div>
 
@@ -666,16 +455,6 @@
     if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && githubLink) {
         githubLink.href = '/api/oauth/github/start?next=' + encodeURIComponent(nextParam);
     }
-    var supabaseLink = document.getElementById('supabaseSignIn');
-    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && supabaseLink) {
-        supabaseLink.href = '/api/auth/supabase/start?next=' + encodeURIComponent(nextParam);
-    }
-    var cloudflareLink = document.getElementById('cloudflareSignIn');
-    if (cloudflareLink) {
-        var rt = encodeURIComponent('/dashboard/integrations');
-        cloudflareLink.href = '/api/oauth/cloudflare/start?return_to=' + rt;
-    }
-
     if (new URLSearchParams(window.location.search).get('cf_connect') === '1') {
         var cfN = document.getElementById('cfConnectNotice');
         if (cfN) cfN.style.display = 'block';

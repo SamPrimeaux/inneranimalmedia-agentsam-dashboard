@@ -353,10 +353,32 @@ function redirectToAuthLogin(request, queryWithoutLeadingQuestion) {
   return Response.redirect(u.href, 302);
 }
 
+function safeOauthNextPath(raw) {
+  const s = String(raw || '').trim();
+  if (!s.startsWith('/') || s.startsWith('//')) return null;
+  return s;
+}
+
+function readIamOauthNextCookie(request) {
+  const cookie = request.headers.get('Cookie') || '';
+  const m = cookie.match(/(?:^|;\s*)iam_oauth_next=([^;]+)/);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1].trim());
+  } catch {
+    return null;
+  }
+}
+
 export async function handleSupabaseOAuthStart(request, env) {
   if (!env.SUPABASE_OAUTH_CLIENT_ID || !env.SESSION_CACHE) {
     return redirectToAuthLogin(request, 'error=oauth_not_configured');
   }
+  const reqUrl = new URL(request.url);
+  let nextPath =
+    safeOauthNextPath(reqUrl.searchParams.get('next')) ||
+    safeOauthNextPath(readIamOauthNextCookie(request));
+
   const state = crypto.randomUUID();
   const codeVerifier =
     crypto.randomUUID().replace(/-/g, '') +
@@ -370,7 +392,13 @@ export async function handleSupabaseOAuthStart(request, env) {
 
   await env.SESSION_CACHE.put(
     `oauth_state_supabase_${state}`,
-    JSON.stringify({ state, provider: 'supabase', code_verifier: codeVerifier, created_at: Date.now() }),
+    JSON.stringify({
+      state,
+      provider: 'supabase',
+      code_verifier: codeVerifier,
+      created_at: Date.now(),
+      next: nextPath,
+    }),
     { expirationTtl: 600 },
   );
 
@@ -384,7 +412,14 @@ export async function handleSupabaseOAuthStart(request, env) {
     code_challenge_method: 'S256',
   });
 
-  return Response.redirect(`${SUPABASE_OAUTH_AUTHORIZE}?${params}`, 302);
+  const redirectRes = Response.redirect(`${SUPABASE_OAUTH_AUTHORIZE}?${params}`, 302);
+  if (readIamOauthNextCookie(request)) {
+    redirectRes.headers.append(
+      'Set-Cookie',
+      'iam_oauth_next=; Path=/; Max-Age=0; Secure; SameSite=Lax',
+    );
+  }
+  return redirectRes;
 }
 
 export async function handleSupabaseOAuthCallback(request, env) {
@@ -404,7 +439,9 @@ export async function handleSupabaseOAuthCallback(request, env) {
   if (!storedRaw) return redirectToAuthLogin(request, 'error=state_mismatch');
   await env.SESSION_CACHE.delete(stateKey);
 
-  const { code_verifier } = JSON.parse(storedRaw);
+  const stored = JSON.parse(storedRaw);
+  const { code_verifier } = stored;
+  const nextAfterLogin = safeOauthNextPath(stored?.next);
 
   const tokenRes = await fetch(SUPABASE_OAUTH_TOKEN, {
     method: 'POST',
@@ -486,7 +523,8 @@ export async function handleSupabaseOAuthCallback(request, env) {
 
   const sessionResponse = await establishIamSession(request, env, authUserId, { ok: true });
   const originBase = url.origin;
-  const redirectHeaders = new Headers({ Location: `${originBase}/dashboard` });
+  const destPath = nextAfterLogin || '/dashboard';
+  const redirectHeaders = new Headers({ Location: `${originBase}${destPath}` });
   for (const c of collectSetCookieValues(sessionResponse.headers)) {
     redirectHeaders.append('Set-Cookie', c);
   }

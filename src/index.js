@@ -273,6 +273,14 @@ export default {
       if (request.method === 'GET' && pathLower === '/api/auth/supabase/start') {
         return handleSupabaseOAuthStart(request, env);
       }
+      if (request.method === 'GET' && pathLower === '/api/auth/cloudflare/start') {
+        const u = new URL(request.url);
+        u.pathname = '/api/oauth/cloudflare/start';
+        if (!u.searchParams.get('return_to')) {
+          u.searchParams.set('return_to', '/dashboard/integrations');
+        }
+        return handleOAuthApi(new Request(u.toString(), request), env, ctx);
+      }
       if (
         request.method === 'GET' &&
         (pathLower === '/api/auth/supabase/callback' || pathLower === '/auth/callback/supabase')

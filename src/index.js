@@ -281,6 +281,19 @@ export default {
       }
 
       // 1c. OAuth & Auth Passthrough (Legacy Monolith)
+      // Aliases for older/doc links: same behavior as /api/oauth/{google,github}/start (legacy login flow).
+      if (
+        (pathLower === '/api/auth/google/start' || pathLower === '/api/auth/github/start') &&
+        request.method === 'GET'
+      ) {
+        const u = new URL(request.url);
+        u.pathname =
+          pathLower === '/api/auth/google/start'
+            ? '/api/oauth/google/start'
+            : '/api/oauth/github/start';
+        return legacyWorker.fetch(new Request(u.toString(), request), env, ctx);
+      }
+
       if (pathLower.startsWith('/api/oauth/')) {
         const res = await handleOAuthApi(request, env, ctx);
         if (res && res.status !== 404) return res;

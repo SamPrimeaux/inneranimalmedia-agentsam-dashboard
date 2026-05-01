@@ -559,6 +559,11 @@ export async function handleOAuthApi(request, env, ctx) {
     if (!PROVIDERS.has(provider)) return jsonResponse({ error: 'unsupported_provider' }, 400);
 
     const authUser = await getAuthUser(request, env);
+    // Login/sign-up OAuth is handled by the legacy worker (session creation on callback).
+    // Return 404 so src/index.js delegates to legacyWorker.fetch for the same URL.
+    if (!authUser && (provider === 'google' || provider === 'github')) {
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     const userId = integrationUserId(authUser);

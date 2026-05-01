@@ -573,6 +573,20 @@ export async function handleOAuthApi(request, env, ctx) {
     if (!authUser && (provider === 'google' || provider === 'github')) {
       return jsonResponse({ error: 'not_found' }, 404);
     }
+    // Dashboard Cloudflare OAuth requires a session; browser navigations get a login redirect
+    // instead of a bare 401 JSON so the marketing auth page can show a clear path.
+    if (!authUser && provider === 'cloudflare') {
+      const accept = (request.headers.get('Accept') || '').toLowerCase();
+      if (accept.includes('text/html')) {
+        const returnTo = safeReturnTo(url.searchParams.get('return_to'));
+        const next = encodeURIComponent(returnTo);
+        return Response.redirect(
+          `${url.origin}/auth/login?next=${next}&cf_connect=1`,
+          302,
+        );
+      }
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
     if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
 
     const userId = integrationUserId(authUser);

@@ -211,11 +211,15 @@ export default {
         ]);
         const headerHtml = headerObj ? await headerObj.text() : '';
         const footerHtml = footerObj ? await footerObj.text() : '';
+        // Auth shells (pages/auth/*.html) ship their own nav + compact footer; injecting
+        // iam-header/iam-footer duplicates chrome and breaks fixed globe/canvas layout.
+        const skipShellInject =
+          typeof assetHtmlKey === 'string' && assetHtmlKey.startsWith('pages/auth/');
         return new HTMLRewriter()
           .on('body', {
             element(el) {
-              if (headerHtml) el.prepend(headerHtml, { html: true });
-              if (footerHtml) el.append(footerHtml, { html: true });
+              if (!skipShellInject && headerHtml) el.prepend(headerHtml, { html: true });
+              if (!skipShellInject && footerHtml) el.append(footerHtml, { html: true });
             }
           })
           .transform(new Response(obj.body, {

@@ -3,7 +3,7 @@
  * Uses PRAGMA table_info before writes — column names are never guessed.
  */
 
-const DEFAULT_TENANT = 'tenant_sam_primeaux';
+const DEFAULT_TENANT = 'system';
 
 /** @param {import('@cloudflare/workers-types').D1Database} db */
 export async function pragmaTableInfo(db, tableName) {

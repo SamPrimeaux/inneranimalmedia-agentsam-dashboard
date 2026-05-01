@@ -16,7 +16,7 @@ import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { MonacoEditorView, type EditorModelMeta } from './components/MonacoEditorView';
 import { LocalExplorer } from './components/LocalExplorer';
 import { BrowserView } from './components/BrowserView';
-import { SettingsPanel } from './components/SettingsPanel';
+import SettingsPanel from './components/settings';
 import { StatusBar, type AgentNotificationRow } from './components/StatusBar';
 import { ExcalidrawView } from './components/ExcalidrawView';
 import { DatabaseBrowser, type DatabaseExplorerJump } from './components/DatabaseBrowser';

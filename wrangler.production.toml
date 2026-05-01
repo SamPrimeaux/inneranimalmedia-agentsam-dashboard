@@ -53,7 +53,7 @@ bucket_name = "inneranimalmedia"
 # Dashboard JS/HTML/CSS served on inneranimalmedia.com — production R2 (`agent-sam`) only.
 [[r2_buckets]]
 binding = "DASHBOARD"
-bucket_name = "agent-sam"
+bucket_name = "inneranimalmedia"
 
 [[r2_buckets]]
 binding = "AUTORAG_BUCKET"

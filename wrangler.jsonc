@@ -46,7 +46,7 @@
     },
     {
       "binding": "DASHBOARD",
-      "bucket_name": "agent-sam"
+      "bucket_name": "inneranimalmedia"
     },
     {
       "binding": "AUTORAG_BUCKET",

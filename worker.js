@@ -6760,7 +6760,7 @@ const worker = {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
         const SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "calendar", "chat", "clients", "cms", "database", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "overview", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace", "integrations", "designstudio", "storage"]);
         const wildcardSpa = segment === 'settings' || segment === 'chat' || segment === 'workspace' || segment === 'cms';
-        const key = (SPA_ROUTES.has(segment) || wildcardSpa) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
+        const key = (SPA_ROUTES.has(segment) || wildcardSpa) ? "dashboard/app/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
         if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
@@ -6772,7 +6772,7 @@ const worker = {
         const TOP_LEVEL_SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "chat", "clients", "cms", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace"]);
         const wildcardTopLevel = pathLower.startsWith('/settings/') || pathLower.startsWith('/chat/') || pathLower.startsWith('/workspace/') || pathLower.startsWith('/cms/');
         if (TOP_LEVEL_SPA_ROUTES.has(topLevelSegment) || wildcardTopLevel) {
-          const obj = await env.DASHBOARD.get("static/dashboard/agent.html");
+          const obj = await env.DASHBOARD.get("dashboard/app/agent.html") ?? await env.DASHBOARD.get("static/dashboard/agent.html");
           if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
         }
       }
@@ -6785,7 +6785,10 @@ const worker = {
       // while bundled files are stored at keys assets/chunk.js relative to dist.
       if (!obj && assetKey.startsWith('static/dashboard/agent/')) {
         const relAgent = assetKey.slice('static/dashboard/agent/'.length);
-        if (relAgent) obj = await env.ASSETS.get(relAgent);
+        if (relAgent) {
+          if (env.DASHBOARD) obj = await env.DASHBOARD.get(`dashboard/app/${relAgent}`);
+          if (!obj) obj = await env.ASSETS.get(relAgent);
+        }
       }
       if (!obj && env.DASHBOARD) obj = await env.DASHBOARD.get(assetKey);
       if (!obj && env.DASHBOARD && assetKey.startsWith('static/dashboard/agent/')) {

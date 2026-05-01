@@ -223,7 +223,10 @@ export async function handleRequest(request, env, ctx) {
     if (env.DASHBOARD) {
       const key = path.substring(1).split('?')[0];
       try {
-        const obj = await env.DASHBOARD.get(key);
+        let obj = await env.DASHBOARD.get(key);
+        if (!obj && key.startsWith('static/dashboard/agent/')) {
+          obj = await env.DASHBOARD.get(`dashboard/app/${key.slice('static/dashboard/agent/'.length)}`);
+        }
         if (obj) {
           const ct = path.endsWith('.js')   ? 'application/javascript'
                    : path.endsWith('.css')  ? 'text/css'
@@ -359,7 +362,9 @@ export async function handleRequest(request, env, ctx) {
     if (env.DASHBOARD) {
       try {
         const index =
-          (await env.DASHBOARD.get('static/dashboard/agent.html')) || (await env.DASHBOARD.get('index.html'));
+          (await env.DASHBOARD.get('dashboard/app/agent.html')) ||
+          (await env.DASHBOARD.get('static/dashboard/agent.html')) ||
+          (await env.DASHBOARD.get('index.html'));
         if (index) {
           return new Response(index.body, {
             headers: {

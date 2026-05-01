@@ -5,6 +5,7 @@
 import {
   jsonResponse,
   verifyPassword,
+  hashPassword,
   writeIamSessionToKv,
   resolveTenantAtLogin,
   AUTH_COOKIE_NAME,
@@ -54,6 +55,12 @@ export async function handleAuthApi(request, url, env) {
   }
   if (path === '/api/auth/logout' && method === 'POST') {
     return handleLogout(request, url, env);
+  }
+  if (path === '/api/auth/password-reset/request' && method === 'POST') {
+    return handlePasswordResetRequest(request, env);
+  }
+  if (path === '/api/auth/password-reset/confirm' && method === 'POST') {
+    return handlePasswordResetConfirm(request, env);
   }
   if (path === '/api/settings/profile' && method === 'GET') {
     return handleSettingsProfileRequest(request, env);
@@ -306,6 +313,137 @@ async function handleSettingsProfileRequest(request, env) {
   });
 }
 
+const PWD_RESET_KV_PREFIX = 'pwd_reset_v1:';
+const PWD_RESET_TTL_SEC = 900;
+
+function escapeHtmlPwd(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function randomSixDigitCode() {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return String(buf[0] % 1000000).padStart(6, '0');
+}
+
+/** POST /api/auth/password-reset/request — body: { email } */
+async function handlePasswordResetRequest(request, env) {
+  if (!env.DB || !env.SESSION_CACHE) {
+    return jsonResponse({ error: 'Service unavailable' }, 503);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+  const email = (body.email || '').toString().toLowerCase().trim();
+  if (!email || !email.includes('@')) {
+    return jsonResponse({ ok: true });
+  }
+  const user = await env.DB.prepare(
+    `SELECT id, email, name, password_hash FROM auth_users WHERE LOWER(email) = ? OR LOWER(id) = ? LIMIT 1`,
+  )
+    .bind(email, email)
+    .first();
+  if (!user || user.password_hash === 'oauth' || !user.password_hash) {
+    return jsonResponse({ ok: true });
+  }
+  const code = randomSixDigitCode();
+  const kvKey = `${PWD_RESET_KV_PREFIX}${email}`;
+  await env.SESSION_CACHE.put(
+    kvKey,
+    JSON.stringify({ code, exp: Date.now() + PWD_RESET_TTL_SEC * 1000, attempts: 0 }),
+    { expirationTtl: PWD_RESET_TTL_SEC },
+  );
+  if (!env.RESEND_API_KEY) {
+    console.error('[password-reset] RESEND_API_KEY missing');
+    return jsonResponse({ error: 'Email not configured' }, 503);
+  }
+  const disp = user.name || 'there';
+  const html = `<p>Hi ${escapeHtmlPwd(disp)},</p><p>Your Inner Animal Media verification code is:</p><p style="font-size:22px;font-weight:700;letter-spacing:4px;">${escapeHtmlPwd(code)}</p><p>Enter this on the reset page. Expires in 15 minutes.</p>`;
+  await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.RESEND_API_KEY}` },
+    body: JSON.stringify({
+      from: 'Inner Animal Media <hey@inneranimalmedia.com>',
+      to: [user.email],
+      subject: 'Your password reset code',
+      html,
+    }),
+  }).catch((e) => console.error('[password-reset] resend', e));
+  return jsonResponse({ ok: true });
+}
+
+/** POST /api/auth/password-reset/confirm — body: { email, code, password, confirm_password } */
+async function handlePasswordResetConfirm(request, env) {
+  if (!env.DB || !env.SESSION_CACHE) {
+    return jsonResponse({ error: 'Service unavailable' }, 503);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+  const email = (body.email || '').toString().toLowerCase().trim();
+  const code = (body.code || '').toString().replace(/\s/g, '');
+  const password = (body.password || '').toString();
+  const confirm = (body.confirm_password ?? body.confirmPassword ?? '').toString();
+  if (!email || !code || !password) {
+    return jsonResponse({ error: 'Email, code, and password required' }, 400);
+  }
+  if (password !== confirm) {
+    return jsonResponse({ error: 'Passwords do not match' }, 400);
+  }
+  if (password.length < 8) {
+    return jsonResponse({ error: 'Password must be at least 8 characters' }, 400);
+  }
+  const kvKey = `${PWD_RESET_KV_PREFIX}${email}`;
+  const raw = await env.SESSION_CACHE.get(kvKey);
+  if (!raw) {
+    return jsonResponse({ error: 'Code expired or invalid. Request a new code.' }, 400);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return jsonResponse({ error: 'Invalid reset state' }, 400);
+  }
+  if (Date.now() > payload.exp) {
+    await env.SESSION_CACHE.delete(kvKey);
+    return jsonResponse({ error: 'Code expired. Request a new code.' }, 400);
+  }
+  if (String(payload.code) !== code) {
+    payload.attempts = (payload.attempts || 0) + 1;
+    if (payload.attempts > 8) {
+      await env.SESSION_CACHE.delete(kvKey);
+      return jsonResponse({ error: 'Too many attempts. Request a new code.' }, 429);
+    }
+    await env.SESSION_CACHE.put(kvKey, JSON.stringify(payload), { expirationTtl: PWD_RESET_TTL_SEC });
+    return jsonResponse({ error: 'Invalid code' }, 400);
+  }
+  const user = await env.DB.prepare(
+    `SELECT id, password_hash FROM auth_users WHERE LOWER(email) = ? OR LOWER(id) = ? LIMIT 1`,
+  )
+    .bind(email, email)
+    .first();
+  if (!user || user.password_hash === 'oauth') {
+    await env.SESSION_CACHE.delete(kvKey);
+    return jsonResponse({ error: 'Account not eligible for password reset' }, 400);
+  }
+  const { saltHex, hashHex } = await hashPassword(password);
+  await env.DB.prepare(`UPDATE auth_users SET password_hash = ?, salt = ? WHERE id = ?`)
+    .bind(hashHex, saltHex, user.id)
+    .run();
+  await env.SESSION_CACHE.delete(kvKey);
+  return jsonResponse({ ok: true });
+}
+
 // ── Supabase project OAuth Server (login) — same auth_users + provisionNewUser pattern as Google in worker.js
 // Endpoints are hardcoded (fixed project ref). Client ID / secret: env.SUPABASE_OAUTH_CLIENT_ID, env.SUPABASE_OAUTH_CLIENT_SECRET only.
 // JWKS:     https://dpmuvynqixblxsilnlut.supabase.co/auth/v1/.well-known/jwks.json
@@ -371,55 +509,80 @@ function readIamOauthNextCookie(request) {
 }
 
 export async function handleSupabaseOAuthStart(request, env) {
-  if (!env.SUPABASE_OAUTH_CLIENT_ID || !env.SESSION_CACHE) {
-    return redirectToAuthLogin(request, 'error=oauth_not_configured');
-  }
-  const reqUrl = new URL(request.url);
-  let nextPath =
-    safeOauthNextPath(reqUrl.searchParams.get('next')) ||
-    safeOauthNextPath(readIamOauthNextCookie(request));
+  try {
+    if (!env.SUPABASE_OAUTH_CLIENT_ID) {
+      console.error(
+        '[handleSupabaseOAuthStart] SUPABASE_OAUTH_CLIENT_ID is undefined or empty; aborting OAuth start',
+      );
+      return redirectToAuthLogin(request, 'error=oauth_not_configured');
+    }
+    if (!env.SESSION_CACHE) {
+      console.error(
+        '[handleSupabaseOAuthStart] SESSION_CACHE binding missing on env; aborting OAuth start',
+      );
+      return redirectToAuthLogin(request, 'error=oauth_not_configured');
+    }
+    const reqUrl = new URL(request.url);
+    let nextPath =
+      safeOauthNextPath(reqUrl.searchParams.get('next')) ||
+      safeOauthNextPath(readIamOauthNextCookie(request));
 
-  const state = crypto.randomUUID();
-  const codeVerifier =
-    crypto.randomUUID().replace(/-/g, '') +
-    crypto.randomUUID().replace(/-/g, '');
+    const state = crypto.randomUUID();
+    const codeVerifier =
+      crypto.randomUUID().replace(/-/g, '') +
+      crypto.randomUUID().replace(/-/g, '');
 
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(codeVerifier),
-  );
-  const codeChallenge = base64url(digest);
-
-  await env.SESSION_CACHE.put(
-    `oauth_state_supabase_${state}`,
-    JSON.stringify({
-      state,
-      provider: 'supabase',
-      code_verifier: codeVerifier,
-      created_at: Date.now(),
-      next: nextPath,
-    }),
-    { expirationTtl: 600 },
-  );
-
-  const params = new URLSearchParams({
-    client_id: env.SUPABASE_OAUTH_CLIENT_ID,
-    redirect_uri: SUPABASE_REDIRECT_URI,
-    response_type: 'code',
-    scope: 'openid profile email',
-    state,
-    code_challenge: codeChallenge,
-    code_challenge_method: 'S256',
-  });
-
-  const redirectRes = Response.redirect(`${SUPABASE_OAUTH_AUTHORIZE}?${params}`, 302);
-  if (readIamOauthNextCookie(request)) {
-    redirectRes.headers.append(
-      'Set-Cookie',
-      'iam_oauth_next=; Path=/; Max-Age=0; Secure; SameSite=Lax',
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(codeVerifier),
     );
+    const codeChallenge = base64url(digest);
+
+    try {
+      await env.SESSION_CACHE.put(
+        `oauth_state_supabase_${state}`,
+        JSON.stringify({
+          state,
+          provider: 'supabase',
+          code_verifier: codeVerifier,
+          created_at: Date.now(),
+          next: nextPath,
+        }),
+        { expirationTtl: 600 },
+      );
+    } catch (kvErr) {
+      console.error(
+        '[handleSupabaseOAuthStart] SESSION_CACHE.put failed:',
+        kvErr && kvErr.stack ? kvErr.stack : kvErr,
+      );
+      return redirectToAuthLogin(request, 'error=oauth_not_configured');
+    }
+
+    const params = new URLSearchParams({
+      client_id: env.SUPABASE_OAUTH_CLIENT_ID,
+      redirect_uri: SUPABASE_REDIRECT_URI,
+      response_type: 'code',
+      scope: 'openid profile email',
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    });
+
+    const redirectRes = Response.redirect(`${SUPABASE_OAUTH_AUTHORIZE}?${params}`, 302);
+    if (readIamOauthNextCookie(request)) {
+      redirectRes.headers.append(
+        'Set-Cookie',
+        'iam_oauth_next=; Path=/; Max-Age=0; Secure; SameSite=Lax',
+      );
+    }
+    return redirectRes;
+  } catch (err) {
+    console.error(
+      '[handleSupabaseOAuthStart] unexpected error:',
+      err && err.stack ? err.stack : err,
+    );
+    return redirectToAuthLogin(request, 'error=server_error');
   }
-  return redirectRes;
 }
 
 export async function handleSupabaseOAuthCallback(request, env) {
@@ -542,6 +705,7 @@ export async function handleOAuthConsentPage(request, env) {
     return redirectToAuthLogin(request, q.toString());
   }
   const obj =
+    (await env.DASHBOARD?.get('dashboard/app/agent.html')) ||
     (await env.DASHBOARD?.get('static/dashboard/agent.html')) ||
     (await env.DASHBOARD?.get('index.html'));
   if (!obj) {

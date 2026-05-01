@@ -38,7 +38,8 @@
             justify-content: center;
             gap: 10px;
             width: 100%;
-            height: 48px;
+            min-height: 44px;
+            height: 44px;
             border-radius: 8px;
             font-size: 15px;
             font-weight: 500;
@@ -81,10 +82,12 @@
             padding: 0;
         }
         .oauth-btn.supabase-img-btn img {
-            height: 48px;
+            height: 44px;
             width: auto;
             max-width: 100%;
+            max-height: 44px;
             display: block;
+            object-fit: contain;
         }
         .oauth-btn.oauth-cloudflare-glass-btn {
             background: rgba(255, 255, 255, 0.12);
@@ -101,15 +104,6 @@
             width: 20px;
             height: 20px;
         }
-        .oauth-helper-muted {
-            margin-top: 6px;
-            font-size: 12px;
-            line-height: 1.45;
-            color: #64748b;
-            text-align: center;
-            width: 100%;
-        }
-
         #globe-canvas {
             position: fixed;
             inset: 0;
@@ -424,8 +418,6 @@
                      alt="" width="20" height="20">
                 Sign in with Cloudflare
             </a>
-            <p class="oauth-helper-muted">New users: sign in with Google, GitHub, or Supabase first.</p>
-            <p style="margin-top: 8px; font-size: 12px; color: #64748B;">Or use your Inner Animal email and password.</p>
         </div>
 
         <p class="signup-prompt" style="margin-top: 20px; font-size: 14px; color: #94A3B8;">
@@ -434,29 +426,8 @@
         <p class="forgot-prompt" style="margin-top: 8px; font-size: 13px; color: #94A3B8;">
             Forgot Password? <a href="/auth/reset" id="forgotPasswordLink" style="color: #007AFF; font-weight: 600; text-decoration: none;">Reset here.</a>
         </p>
-        <p class="forgot-prompt" style="margin-top: 6px; font-size: 13px; color: #94A3B8;">
-            <a href="#" id="backupCodeToggle" style="color: #007AFF; font-weight: 600; text-decoration: none;">Sign in with backup code</a>
-        </p>
 
         <div id="errorMsg" class="error-msg" aria-live="polite"></div>
-    </form>
-
-    <form id="backupCodeForm" style="width: 100%; display: none; margin-top: 0;">
-        <p class="subtitle" style="margin-bottom: 16px;">Enter your login email and one backup code. The code will be used once.</p>
-        <div class="input-group">
-            <input type="email" id="backupEmail" class="input-field" placeholder="Email address" required autocomplete="email">
-            <span class="input-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-            </span>
-        </div>
-        <div class="input-group">
-            <input type="text" id="backupCode" class="input-field" placeholder="Backup code (e.g. A1B2C3D4)" required autocomplete="one-time-code" inputmode="text" maxlength="20">
-        </div>
-        <button type="submit" id="backupCodeBtn" class="btn-primary">Sign in with backup code</button>
-        <p style="margin-top: 12px; font-size: 13px; color: #94A3B8;">
-            <a href="#" id="backupCodeCancel" style="color: #007AFF; text-decoration: none;">Back to password sign in</a>
-        </p>
-        <div id="backupCodeError" class="error-msg" aria-live="polite" style="margin-top: 8px;"></div>
     </form>
 </div>
 </div>
@@ -581,64 +552,6 @@
             btn.disabled = false;
             btn.textContent = 'Connect';
         }
-    });
-
-    var backupCodeToggle = document.getElementById('backupCodeToggle');
-    var backupCodeForm = document.getElementById('backupCodeForm');
-    var loginForm = document.getElementById('loginForm');
-    var backupCodeCancel = document.getElementById('backupCodeCancel');
-    if (backupCodeToggle && backupCodeForm && loginForm) {
-        backupCodeToggle.addEventListener('click', function(e) {
-            e.preventDefault();
-            loginForm.style.display = 'none';
-            backupCodeForm.style.display = 'block';
-            document.getElementById('oauthErrorMsg').style.display = 'none';
-        });
-    }
-    if (backupCodeCancel && backupCodeForm && loginForm) {
-        backupCodeCancel.addEventListener('click', function(e) {
-            e.preventDefault();
-            backupCodeForm.style.display = 'none';
-            loginForm.style.display = 'block';
-        });
-    }
-    document.getElementById('backupCodeForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        var email = document.getElementById('backupEmail').value.trim();
-        var code = document.getElementById('backupCode').value.trim().replace(/\s/g, '');
-        var btn = document.getElementById('backupCodeBtn');
-        var errEl = document.getElementById('backupCodeError');
-        errEl.textContent = '';
-        errEl.classList.remove('visible');
-        btn.disabled = true;
-        btn.textContent = 'Verifying…';
-        try {
-            var nextParam = new URLSearchParams(window.location.search).get('next');
-            var res = await fetch(origin + '/api/auth/backup-code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: email, code: code, next: nextParam || undefined }),
-                credentials: 'include'
-            });
-            var data = await res.json().catch(function() { return {}; });
-            if (res.ok && data.ok && data.redirect) {
-                if (typeof window.runGlobeExitTransition === 'function') {
-                    window.runGlobeExitTransition(data.redirect);
-                } else {
-                    window.location.href = data.redirect;
-                }
-                return;
-            }
-            errEl.textContent = data.error || 'Invalid or already used backup code';
-            errEl.style.color = '#FF3B30';
-            errEl.classList.add('visible');
-        } catch (err) {
-            errEl.textContent = 'Network error. Try again.';
-            errEl.style.color = '#FF3B30';
-            errEl.classList.add('visible');
-        }
-        btn.disabled = false;
-        btn.textContent = 'Sign in with backup code';
     });
 })();
 </script>

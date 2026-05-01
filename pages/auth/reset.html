@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign up | Inner Animal Media</title>
+    <title>Reset password | Inner Animal Media</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
         rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -12,6 +12,7 @@
         :root {
             --auth-bg: #050508;
             --auth-exit-overlay: #030308;
+            --solar-cyan: #38bdf8;
         }
         html {
             background-color: var(--auth-bg);
@@ -339,6 +340,37 @@
             opacity: 0.45;
             user-select: none;
         }
+        .recovery-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--solar-cyan);
+            margin-bottom: 8px;
+            width: 100%;
+            text-align: center;
+        }
+        .reset-info-box {
+            width: 100%;
+            padding: 14px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #cbd5e1;
+            background: rgba(10, 18, 30, 0.45);
+            backdrop-filter: blur(24px) saturate(160%);
+            -webkit-backdrop-filter: blur(24px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 14px;
+            text-align: center;
+        }
+        .text-link {
+            color: #007AFF;
+            font-weight: 600;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .text-link:hover { text-decoration: underline; }
     </style>
 </head>
 
@@ -362,73 +394,78 @@
         <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/11f6af46-0a3c-482a-abe8-83edc5a8a200/avatar" alt="InnerAnimal Logo">
     </div>
 
-    <h1>Create account</h1>
-    <p class="subtitle">Join Inner Animal Media</p>
-    <p id="registeredMsg" class="subtitle" style="color: #10B981; display: none; margin-top: -16px; margin-bottom: 16px;">Account created. Sign in below.</p>
-    <p id="oauthErrorMsg" class="subtitle" style="color: #FF3B30; display: none; margin-top: -16px; margin-bottom: 16px;"></p>
-    <p id="cfConnectNotice" class="subtitle" style="color: #fdba74; display: none; margin-top: -12px; margin-bottom: 12px; font-size: 12px; line-height: 1.45; text-align: center; max-width: 320px;">Sign in with Google, GitHub, or Supabase first, then connect Cloudflare from Integrations.</p>
-
-    <form id="loginForm" style="width: 100%;">
-        <div class="input-group">
-            <input type="email" id="email" class="input-field" placeholder="Email Address" required autocomplete="email">
-            <span class="input-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                    <circle cx="12" cy="7" r="4"></circle>
-                </svg>
-            </span>
+    <div id="stateRequest" style="width: 100%;">
+        <p class="recovery-label">Account recovery</p>
+        <h1 style="font-size: 22px; margin-bottom: 8px;">Reset password</h1>
+        <div class="reset-info-box">
+            You will receive an email from hey@inneranimalmedia.com.<br>
+            Check your inbox and spam folder.
         </div>
-        <div class="input-group">
-            <div class="input-wrap">
-                <input type="password" id="password" class="input-field" placeholder="Password" required autocomplete="current-password" style="padding-right: 44px;">
+        <form id="frmRequest" style="width: 100%;">
+            <div class="input-group">
+                <input type="email" id="reqEmail" class="input-field" placeholder="Email address" required autocomplete="email">
                 <span class="input-icon">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
                     </svg>
                 </span>
-                <button type="button" class="password-toggle" id="passwordToggle" aria-label="Show password">
-                    <svg id="passwordShowIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                    </svg>
-                    <svg id="passwordHideIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M17.94 17.94A10.07 10.07 0 0112 20c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
-                    </svg>
-                </button>
             </div>
-        </div>
-        <button type="submit" id="submitBtn" class="btn-primary">Connect</button>
-
-        <div style="margin: 20px 0; text-align: center; display: flex; flex-direction: column; gap: 12px;">
-            <a id="googleSignIn" href="/api/oauth/google/start" class="oauth-btn oauth-google-btn">
-                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                Continue with Google
-            </a>
-            <a id="githubSignIn" href="/api/oauth/github/start" class="oauth-btn oauth-github-btn">
-                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.43 9.8 8.2 11.38.6.11.82-.26.82-.58 0-.29-.01-1.06-.01-2.08-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.83 1.23 1.83 1.23 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 013-.41c1.02.01 2.05.14 3 .41 2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.8 5.63-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.89-.01 3.28 0 .32.21.69.83.57C20.57 21.79 24 17.3 24 12c0-6.63-5.37-12-12-12z"/></svg>
-                Continue with GitHub
-            </a>
-            <a href="/api/auth/supabase/start" class="oauth-btn supabase-img-btn">
-                <img src="https://assets.inneranimalmedia.com/dashboard/app/assets/auth/providers/connect-supabase-light.svg"
-                     alt="Connect Supabase">
-            </a>
-            <a href="/api/auth/cloudflare/start" class="oauth-btn oauth-cloudflare-glass-btn">
-                <img src="https://assets.inneranimalmedia.com/dashboard/app/assets/auth/providers/cloudflare-icon.webp"
-                     alt="" width="20" height="20">
-                Sign in with Cloudflare
-            </a>
-        </div>
-
-        <p class="signup-prompt" style="margin-top: 20px; font-size: 14px; color: #94A3B8;">
-            Already have an account? <a href="/auth/login" style="color: #007AFF; font-weight: 600; text-decoration: none;">Sign in</a>
+            <button type="submit" id="btnSendCode" class="btn-primary">Send reset code</button>
+            <div id="errRequest" class="error-msg" aria-live="polite" style="margin-top: 12px;"></div>
+        </form>
+        <p style="margin-top: 20px; text-align: center;">
+            <a class="text-link" href="/auth/login">Back to login</a>
         </p>
-        <p class="forgot-prompt" style="margin-top: 8px; font-size: 13px; color: #94A3B8;">
-            Forgot Password? <a href="/auth/reset" id="forgotPasswordLink" style="color: #007AFF; font-weight: 600; text-decoration: none;">Reset here.</a>
-        </p>
+    </div>
 
-        <div id="errorMsg" class="error-msg" aria-live="polite"></div>
-    </form>
+    <div id="stateVerify" style="display: none; width: 100%;">
+        <p class="recovery-label">Account recovery</p>
+        <h1 style="font-size: 22px; margin-bottom: 4px;">Check your email</h1>
+        <p class="subtitle" style="margin-bottom: 20px;">Enter the verification code we sent you</p>
+        <form id="frmVerify" style="width: 100%;">
+            <div class="input-group">
+                <input type="text" id="vCode" class="input-field" placeholder="Verification code (6 digits)" required autocomplete="one-time-code" inputmode="numeric" maxlength="8" pattern="[0-9]*">
+            </div>
+            <div class="input-group">
+                <div class="input-wrap">
+                    <input type="password" id="vPass" class="input-field" placeholder="New password" required autocomplete="new-password" style="padding-right: 44px;">
+                    <span class="input-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </span>
+                    <button type="button" class="password-toggle" id="vPassToggle" aria-label="Show password">
+                        <svg class="v-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                        <svg class="v-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M17.94 17.94A10.07 10.07 0 0112 20c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="input-group">
+                <input type="password" id="vPass2" class="input-field" placeholder="Confirm new password" required autocomplete="new-password">
+            </div>
+            <button type="submit" id="btnResetPwd" class="btn-primary">Reset password</button>
+            <div id="errVerify" class="error-msg" aria-live="polite" style="margin-top: 12px;"></div>
+        </form>
+        <p style="margin-top: 16px; text-align: center; font-size: 14px;">
+            <a href="#" id="resendLink" class="text-link">Resend code</a>
+        </p>
+        <p style="margin-top: 8px; text-align: center;">
+            <a class="text-link" href="/auth/login">Back to login</a>
+        </p>
+    </div>
+
+    <div id="stateDone" style="display: none; width: 100%; text-align: center;">
+        <h1 style="font-size: 22px; margin-bottom: 8px;">Password updated</h1>
+        <p class="subtitle" style="margin-bottom: 24px;">You can now sign in with your new password.</p>
+        <a href="/auth/login" class="btn-primary" style="display: block; text-align: center; text-decoration: none;">Back to login</a>
+    </div>
 </div>
 </div>
 
@@ -444,115 +481,111 @@
 
 <script>
 (function() {
-    var nextParam = new URLSearchParams(window.location.search).get('next');
-    var googleLink = document.getElementById('googleSignIn');
-    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && googleLink) {
-        googleLink.href = '/api/oauth/google/start?next=' + encodeURIComponent(nextParam);
-    }
-    var githubLink = document.getElementById('githubSignIn');
-    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//') && githubLink) {
-        githubLink.href = '/api/oauth/github/start?next=' + encodeURIComponent(nextParam);
-    }
-    if (new URLSearchParams(window.location.search).get('cf_connect') === '1') {
-        var cfN = document.getElementById('cfConnectNotice');
-        if (cfN) cfN.style.display = 'block';
-    }
-    if (new URLSearchParams(window.location.search).get('registered') === '1') {
-        var el = document.getElementById('registeredMsg');
-        if (el) el.style.display = 'block';
-    }
-    var err = new URLSearchParams(window.location.search).get('error');
-    if (err) {
-        var msg = {
-            access_denied: 'Access denied. Your email is not on the allowlist.',
-            account_inactive: 'Account inactive or not found.',
-            no_email: 'The provider did not return an email.',
-            oauth_failed: 'Sign-in failed. Try again.',
-            server_error: 'Server error. Try again.',
-            missing_code: 'Sign-in was cancelled or invalid.',
-            oauth_denied: 'You denied access. Try again if this was a mistake.',
-            invalid_callback: 'Invalid OAuth callback. Try signing in again.',
-            state_mismatch: 'Session expired or invalid. Try signing in again.',
-            token_exchange_failed: 'Could not complete sign-in with the provider.',
-            userinfo_failed: 'Could not read your profile from the provider.',
-            provision_failed: 'Account setup failed. Contact support if this persists.',
-            oauth_not_configured: 'Supabase sign-in is not configured on this deployment.'
-        }[err] || 'Sign-in failed. Try again.';
-        var oauthEl = document.getElementById('oauthErrorMsg');
-        if (oauthEl) { oauthEl.textContent = msg; oauthEl.style.display = 'block'; }
+    var origin = window.location.origin;
+    var resetEmail = '';
+
+    function showErr(el, msg) {
+        if (!el) return;
+        el.textContent = msg || '';
+        if (msg) el.classList.add('visible'); else el.classList.remove('visible');
     }
 
-    var forgotLink = document.getElementById('forgotPasswordLink');
-    if (forgotLink && nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')) {
-        forgotLink.href = '/auth/reset?next=' + encodeURIComponent(nextParam);
-    }
-
-    var passwordToggle = document.getElementById('passwordToggle');
-    var passwordInput = document.getElementById('password');
-    var showIcon = document.getElementById('passwordShowIcon');
-    var hideIcon = document.getElementById('passwordHideIcon');
-    if (passwordToggle && passwordInput && showIcon && hideIcon) {
-        passwordToggle.addEventListener('click', function() {
-            var isPassword = passwordInput.type === 'password';
-            passwordInput.type = isPassword ? 'text' : 'password';
-            passwordToggle.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
-            showIcon.style.display = isPassword ? 'none' : 'block';
-            hideIcon.style.display = isPassword ? 'block' : 'none';
+    var vPassToggle = document.getElementById('vPassToggle');
+    var vPass = document.getElementById('vPass');
+    if (vPassToggle && vPass) {
+        vPassToggle.addEventListener('click', function() {
+            var isP = vPass.type === 'password';
+            vPass.type = isP ? 'text' : 'password';
+            var sh = vPassToggle.querySelector('.v-show');
+            var hi = vPassToggle.querySelector('.v-hide');
+            if (sh) sh.style.display = isP ? 'none' : 'block';
+            if (hi) hi.style.display = isP ? 'block' : 'none';
         });
     }
 
-    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+    document.getElementById('frmRequest').addEventListener('submit', async function(e) {
         e.preventDefault();
-        var email = document.getElementById('email').value.trim();
-        var password = document.getElementById('password').value;
-        var btn = document.getElementById('submitBtn');
-        var error = document.getElementById('errorMsg');
-
-        error.classList.remove('visible');
+        var email = document.getElementById('reqEmail').value.trim();
+        var btn = document.getElementById('btnSendCode');
+        var err = document.getElementById('errRequest');
+        showErr(err, '');
         btn.disabled = true;
-        btn.textContent = 'Connecting...';
-
+        btn.textContent = 'Sending…';
         try {
-            var origin = window.location.origin;
-            var nextParam = new URLSearchParams(window.location.search).get('next');
-            var res = await fetch(origin + '/api/auth/login', {
+            var res = await fetch(origin + '/api/auth/password-reset/request', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: email, password: password, next: nextParam || undefined }),
-                credentials: 'include'
+                body: JSON.stringify({ email: email }),
+                credentials: 'same-origin'
             });
             var data = await res.json().catch(function() { return {}; });
-
-            if (res.ok && data.ok) {
-                btn.textContent = 'Success';
-                btn.style.background = '#10B981';
-                var redirectUrl = data.redirect || '/dashboard/overview';
-                if (typeof window.runGlobeExitTransition === 'function') {
-                    window.runGlobeExitTransition(redirectUrl);
-                } else {
-                    window.location.href = redirectUrl;
-                }
+            if (!res.ok) {
+                showErr(err, data.error || 'Could not send email. Try again.');
+                btn.disabled = false;
+                btn.textContent = 'Send reset code';
                 return;
             }
-            error.innerText = data.error || 'Invalid Identity or Access Key';
-            error.style.color = '#FF3B30';
-            error.classList.add('visible');
-            btn.disabled = false;
-            btn.textContent = 'Connect';
-            btn.animate([
-                { transform: 'translateX(0)' },
-                { transform: 'translateX(-5px)' },
-                { transform: 'translateX(5px)' },
-                { transform: 'translateX(0)' }
-            ], { duration: 300 });
-        } catch (err) {
-            error.innerText = 'Network error. Try again.';
-            error.style.color = '#FF3B30';
-            error.classList.add('visible');
-            btn.disabled = false;
-            btn.textContent = 'Connect';
+            resetEmail = email;
+            document.getElementById('stateRequest').style.display = 'none';
+            document.getElementById('stateVerify').style.display = 'block';
+        } catch (x) {
+            showErr(err, 'Network error. Try again.');
         }
+        btn.disabled = false;
+        btn.textContent = 'Send reset code';
     });
+
+    document.getElementById('frmVerify').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var code = document.getElementById('vCode').value.trim().replace(/\s/g, '');
+        var p1 = document.getElementById('vPass').value;
+        var p2 = document.getElementById('vPass2').value;
+        var btn = document.getElementById('btnResetPwd');
+        var err = document.getElementById('errVerify');
+        showErr(err, '');
+        btn.disabled = true;
+        btn.textContent = 'Updating…';
+        try {
+            var res = await fetch(origin + '/api/auth/password-reset/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: resetEmail,
+                    code: code,
+                    password: p1,
+                    confirm_password: p2
+                }),
+                credentials: 'same-origin'
+            });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) {
+                showErr(err, data.error || 'Reset failed. Try again.');
+                btn.disabled = false;
+                btn.textContent = 'Reset password';
+                return;
+            }
+            document.getElementById('stateVerify').style.display = 'none';
+            document.getElementById('stateDone').style.display = 'block';
+        } catch (x) {
+            showErr(err, 'Network error. Try again.');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Reset password';
+    });
+
+    var resendLink = document.getElementById('resendLink');
+    if (resendLink) {
+        resendLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (!resetEmail) return;
+            fetch(origin + '/api/auth/password-reset/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: resetEmail }),
+                credentials: 'same-origin'
+            }).catch(function() {});
+        });
+    }
 })();
 </script>
 

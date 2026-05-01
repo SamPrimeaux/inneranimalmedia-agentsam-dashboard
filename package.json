@@ -18,7 +18,9 @@
     "promote:prod": "./scripts/promote-to-prod.sh",
     "smoke:ai": "node scripts/ai-smoke-report.mjs",
     "smoke:mcp": "node scripts/mcp-smoke.mjs",
-    "d1:workflows-audit": "./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./scripts/d1-workflows-audit.sql"
+    "d1:workflows-audit": "./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote -c wrangler.production.toml --file=./scripts/d1-workflows-audit.sql",
+    "designstudio:check": "bash scripts/designstudio/local-check.sh",
+    "designstudio:smoke": "bash scripts/designstudio/pipeline-smoke.sh"
   },
   "keywords": [],
   "author": "",

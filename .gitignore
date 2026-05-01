@@ -67,3 +67,7 @@ paperclip
 
 # Supabase CLI — local link cache (versions, project-ref, pooler URL); never commit
 supabase/.temp/
+
+# Design Studio local CAD scratch (keep README only)
+local/designstudio/*
+!local/designstudio/README.md

@@ -9,7 +9,9 @@
 
 **Related files (this folder)**
 
-- `design-blueprints-schema.sql` — DDL for `designstudio_design_blueprints` (run via approved D1 migration).
+- `PIPELINE.md` — **implementation plan**: remote runner, Worker APIs, UI, VoxelEngine gaps, phases.
+- `E2E-TEST-PIPELINE.md` — **Meshy/Spline-free** E2E: blueprint → OpenSCAD → STL → GLB → R2 → D1 → Design Studio; test cases + iPhone proof.
+- `design-blueprints-schema.sql` — DDL for `designstudio_design_blueprints` (mirror of `migrations/247_*`).
 - `companion-tables.md` — suggested `agentsam_*` tables and how they connect.
 
 Parent product docs: `../roadmap.md`, `../goals.md`, `../page-quality-standards.md`, `../known-bugs.md`.

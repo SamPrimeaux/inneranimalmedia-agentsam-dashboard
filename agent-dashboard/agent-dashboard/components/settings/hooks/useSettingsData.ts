@@ -118,6 +118,15 @@ export function useSettingsData({
   const [usageModel, setUsageModel] = useState('');
   const [usageData, setUsageData] = useState<any | null>(null);
 
+  const [billingPlans, setBillingPlans] = useState<any[]>([]);
+  const [billingPlansLoading, setBillingPlansLoading] = useState(false);
+  const [billingPlansError, setBillingPlansError] = useState<string | null>(null);
+  const [activeSubscription, setActiveSubscription] = useState<any | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const [billingInvoices, setBillingInvoices] = useState<any[]>([]);
+  const [billingInvoicesLoading, setBillingInvoicesLoading] = useState(false);
+  const [billingInvoicesError, setBillingInvoicesError] = useState<string | null>(null);
+
   const [notifyLoading, setNotifyLoading] = useState(false);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const [notifyPrefs, setNotifyPrefs] = useState<Record<string, string>>({});
@@ -306,6 +315,92 @@ export function useSettingsData({
       setUsageData(null);
     } finally {
       setUsageLoading(false);
+    }
+  }, []);
+
+  const loadBillingPlans = useCallback(async () => {
+    setBillingPlansLoading(true);
+    setBillingPlansError(null);
+    try {
+      const r = await fetch('/api/billing/plans', { credentials: 'same-origin' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Load failed (${r.status})`);
+      setBillingPlans(Array.isArray(j.plans) ? j.plans : []);
+    } catch (e) {
+      setBillingPlansError(e instanceof Error ? e.message : 'Failed to load plans');
+      setBillingPlans([]);
+    } finally {
+      setBillingPlansLoading(false);
+    }
+  }, []);
+
+  const loadBillingSubscription = useCallback(async () => {
+    setSubscriptionLoading(true);
+    try {
+      const r = await fetch('/api/billing/subscription', { credentials: 'same-origin' });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 404) {
+        setActiveSubscription(null);
+        return;
+      }
+      if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Load failed (${r.status})`);
+      setActiveSubscription(j.subscription ?? null);
+    } catch {
+      setActiveSubscription(null);
+    } finally {
+      setSubscriptionLoading(false);
+    }
+  }, []);
+
+  const loadBillingInvoices = useCallback(async () => {
+    setBillingInvoicesLoading(true);
+    setBillingInvoicesError(null);
+    try {
+      const r = await fetch('/api/billing/invoices', { credentials: 'same-origin' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Load failed (${r.status})`);
+      setBillingInvoices(Array.isArray(j.invoices) ? j.invoices : []);
+    } catch (e) {
+      setBillingInvoicesError(e instanceof Error ? e.message : 'Failed to load invoices');
+      setBillingInvoices([]);
+    } finally {
+      setBillingInvoicesLoading(false);
+    }
+  }, []);
+
+  const startCheckout = useCallback(async (planId: string, billingPeriod?: string) => {
+    setUsageError(null);
+    try {
+      const r = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: planId, billing_period: billingPeriod || 'monthly' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Checkout failed (${r.status})`);
+      const checkoutUrl = typeof j.checkout_url === 'string' ? j.checkout_url : '';
+      if (checkoutUrl) window.location.href = checkoutUrl;
+    } catch (e) {
+      setUsageError(e instanceof Error ? e.message : 'Checkout failed');
+    }
+  }, []);
+
+  const openBillingPortal = useCallback(async () => {
+    setUsageError(null);
+    try {
+      const r = await fetch('/api/billing/portal', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === 'string' ? j.error : `Portal failed (${r.status})`);
+      const portalUrl = typeof j.portal_url === 'string' ? j.portal_url : '';
+      if (portalUrl) window.location.href = portalUrl;
+    } catch (e) {
+      setUsageError(e instanceof Error ? e.message : 'Portal failed');
     }
   }, []);
 
@@ -980,6 +1075,9 @@ export function useSettingsData({
     if (activeSection !== 'Plan & Usage') return;
     void loadUsage(usagePage, usageProvider, usageModel);
     void loadNotifications();
+    void loadBillingPlans();
+    void loadBillingSubscription();
+    void loadBillingInvoices();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mirror legacy panel
   }, [activeSection]);
 
@@ -1086,6 +1184,20 @@ export function useSettingsData({
     setUsageModel,
     usageData,
     loadUsage,
+
+    billingPlans,
+    billingPlansLoading,
+    billingPlansError,
+    activeSubscription,
+    subscriptionLoading,
+    billingInvoices,
+    billingInvoicesLoading,
+    billingInvoicesError,
+    loadBillingPlans,
+    loadBillingSubscription,
+    loadBillingInvoices,
+    startCheckout,
+    openBillingPortal,
 
     notifyLoading,
     notifyError,

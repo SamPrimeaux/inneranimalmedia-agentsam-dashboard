@@ -16,6 +16,7 @@ import { handleDesignStudioApi } from "./src/api/designstudio/index.js";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
 import { handleMeetApi } from "./src/api/meet.js";
+import { handleBillingApi } from "./src/api/billing.js";
 import { authUserIsSuperadmin } from "./src/core/auth.js";
 import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
@@ -2435,7 +2436,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
     (pathLower === '/api/spend' && method === 'GET') ||
     (pathLower === '/api/spend/summary' && method === 'GET') ||
     (pathLower === '/api/spend/unified' && method === 'GET') ||
-    (pathLower === '/api/billing' && method === 'GET') ||
     (pathLower === '/api/deploy/rollback' && method === 'POST');
   if (!isPhase1) return null;
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -2909,17 +2909,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
       const grouped = await fetchUnifiedSpendGrouped(env, periodDays, group);
       return jsonResponse(grouped);
     }
-    if (pathLower === '/api/billing' && method === 'GET') {
-      const { results } = await env.DB.prepare(
-        `SELECT bs.*, bp.name AS plan_display_name, bp.monthly_token_limit, bp.features_json,
-          ba.account_email, ba.billing_name, ba.account_status
-         FROM billing_subscriptions bs
-         LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
-         LEFT JOIN billing_accounts ba ON ba.tenant_id = bs.tenant_id
-         ORDER BY bs.updated_at DESC LIMIT 100`
-      ).all();
-      return jsonResponse({ subscriptions: results || [] });
-    }
     if (pathLower === '/api/deploy/rollback' && method === 'POST') {
       const body = await request.json().catch(() => ({}));
       const fromId = body.from_deployment_id != null ? String(body.from_deployment_id).trim() : '';
@@ -3250,6 +3239,10 @@ const worker = {
         } catch (e) {
           return jsonResponse({ error: e?.message ?? String(e) }, 500);
         }
+      }
+
+      if (pathLower.startsWith('/api/billing') || pathLower === '/api/webhooks/stripe') {
+        return handleBillingApi(request, url, env, ctx);
       }
 
       if (path === '/health' || pathLower === '/health') {

@@ -7,6 +7,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { provisionUserWorkspace } from "./src/api/provisioning.js";
 import { handleDesignStudioApi } from "./src/api/designstudio/index.js";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
@@ -33013,6 +33014,14 @@ async function handleEmailPasswordLogin(request, url, env) {
   }
 
   async function finishLogin(userId, redirectPath) {
+    try {
+      const er = await env.DB.prepare(`SELECT email FROM auth_users WHERE id = ? LIMIT 1`).bind(userId).first();
+      await provisionUserWorkspace(env, {
+        userId,
+        email: er?.email || '',
+        planId: 'free',
+      }).catch((err) => console.warn('[login provision]', err?.message ?? err));
+    } catch (_) {}
     const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const ip = request.headers.get('cf-connecting-ip') || '';
@@ -33627,6 +33636,12 @@ async function provisionNewUser(env, { email, name, authUserId }) {
        VALUES (?, ?, 'owner', unixepoch())`
     ).bind(workspace_id, authUserId || ('usr_' + user_key)).run();
 
+    await provisionUserWorkspace(env, {
+      userId: authUserId || ('usr_' + user_key),
+      email,
+      planId: 'free',
+    }).catch((err) => console.warn('[provisionNewUser] provisionUserWorkspace:', err?.message ?? err));
+
     return { user_key, workspace_id };
   } catch (e) {
     console.warn('[provisionNewUser] error:', e?.message ?? e);
@@ -33933,6 +33948,7 @@ async function handleGitHubOAuthCallback(request, url, env) {
   } catch (e) {
     console.warn('[oauth/github/callback] auth_users upsert failed:', e?.message ?? e);
   }
+  await provisionNewUser(env, { email: oauthEmail, name, authUserId: userId });
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';

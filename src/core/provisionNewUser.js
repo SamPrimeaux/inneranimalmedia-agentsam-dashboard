@@ -1,3 +1,5 @@
+import { provisionUserWorkspace } from '../api/provisioning.js';
+
 /**
  * Provision a new user account on first login (Google OAuth, Supabase OAuth, or email signup).
  * Idempotent — safe to call on every login via INSERT OR IGNORE.
@@ -48,6 +50,12 @@ export async function provisionNewUser(env, { email, name, authUserId }) {
          (workspace_id, user_id, role, joined_at)
        VALUES (?, ?, 'owner', unixepoch())`
     ).bind(workspace_id, authUserId || ('usr_' + user_key)).run();
+
+    await provisionUserWorkspace(env, {
+      userId: authUserId || ('usr_' + user_key),
+      email,
+      planId: 'free',
+    }).catch((err) => console.warn('[provisionNewUser] provisionUserWorkspace:', err?.message ?? err));
 
     return { user_key, workspace_id };
   } catch (e) {

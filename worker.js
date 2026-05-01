@@ -7,6 +7,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { handleDesignStudioApi } from "./src/api/designstudio/index.js";
 import { handleStorageApi } from "./src/api/storage.js";
 import { handleWorkspaceApi } from "./src/api/workspace.js";
 import { handleMeetApi } from "./src/api/meet.js";
@@ -3379,6 +3380,11 @@ const worker = {
         if (pathLower === '/api/hooks/supabase') {
           return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/hooks/supabase' }, ctx);
         }
+      }
+
+      // ----- API: DesignStudio (internal sync + future routes) -----
+      if (pathLower.startsWith('/api/internal/designstudio/') || pathLower.startsWith('/api/designstudio/')) {
+        return handleDesignStudioApi(request, url, env, ctx);
       }
 
       // ----- API: Internal post-deploy (knowledge sync to R2) -----
@@ -21200,7 +21206,7 @@ async function handleCidiApi(request, url, env, ctx) {
   return jsonResponse({ error: 'not found' }, 404);
 }
 
-/** Fire-and-forget agent_tool_chain row (D1 telemetry). */
+/** Fire-and-forget agentsam_tool_chain row (D1 telemetry). */
 function fireForgetAgentToolChainRow(env, {
   toolName,
   agentSessionId,
@@ -21214,10 +21220,10 @@ function fireForgetAgentToolChainRow(env, {
   const completedAt = Math.floor(Date.now() / 1000);
   const durSec = Math.max(0, Math.ceil((Number(durationMs) || 0) / 1000));
   const startedAt = Math.max(0, completedAt - durSec);
-  const outcome = error ? 'failed' : 'success';
-  const chainId = crypto.randomUUID();
+  const toolStatus = error ? 'failed' : 'completed';
+  const chainId = 'atc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   void env.DB.prepare(
-    `INSERT INTO agent_tool_chain (id, workspace_id, agent_session_id, tool_name, outcome, started_at, completed_at, cost_usd, mcp_tool_call_id, terminal_session_id)
+    `INSERT INTO agentsam_tool_chain (id, workspace_id, agent_session_id, tool_name, tool_status, started_at, completed_at, cost_usd, mcp_tool_call_id, terminal_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
@@ -21225,7 +21231,7 @@ function fireForgetAgentToolChainRow(env, {
       IAM_DEFAULT_WORKSPACE_ID,
       agentSessionId != null && String(agentSessionId).trim() !== '' ? String(agentSessionId) : null,
       toolName,
-      outcome,
+      toolStatus,
       startedAt,
       completedAt,
       costUsd != null && Number.isFinite(Number(costUsd)) ? Number(costUsd) : 0,
@@ -21233,7 +21239,7 @@ function fireForgetAgentToolChainRow(env, {
       terminalSessionId != null && String(terminalSessionId).trim() !== '' ? String(terminalSessionId) : null
     )
     .run()
-    .catch((e) => console.warn('[agent_tool_chain]', e?.message ?? e));
+    .catch((e) => console.warn('[agentsam_tool_chain]', e?.message ?? e));
 }
 
 function fireForgetWorkspaceConnectivityTunnel(env, ctx, healthy, connections) {
@@ -24479,6 +24485,21 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseR
     } catch (metaErr) {
       await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
       throw metaErr;
+    }
+
+    const wfKeyForAnalytics = String(workflow?.workflow_key ?? '').toLowerCase();
+    if (wfKeyForAnalytics.startsWith('designstudio')) {
+      try {
+        const { syncRunToSupabase } = await import('./src/api/designstudio/sync.js');
+        await syncRunToSupabase(env, run_id, {
+          sessionId: session_id ?? null,
+          r2Prefix: null,
+          assets: [],
+          skipDesignStudioKeyCheck: false,
+        });
+      } catch (dsSyncErr) {
+        console.warn('[designstudio supabase analytics]', dsSyncErr?.message ?? dsSyncErr);
+      }
     }
   } catch (err) {
     const msg = String(err?.message || err);

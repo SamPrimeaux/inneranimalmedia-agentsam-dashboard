@@ -122,17 +122,49 @@ const QUICK_COMMANDS = [
   { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
 ];
 
+const SETTINGS_SLUG_MAP: Record<string, string> = {
+  general: 'General',
+  agents: 'Agents',
+  'ai-models': 'AI Models',
+  tools: 'Tools & MCP',
+  rules: 'Rules & Skills',
+  workspace: 'Workspace',
+  hooks: 'Hooks',
+  github: 'GitHub',
+  cicd: 'CI/CD',
+  network: 'Network',
+  themes: 'Themes',
+  storage: 'Storage',
+  security: 'Security',
+  billing: 'Plan & Usage',
+  notifications: 'Notifications',
+  docs: 'Docs',
+  integrations: 'Integrations',
+};
+
 const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
   const navigate = useNavigate();
-  const settingsIntegrationsActive =
-    location.pathname === '/dashboard/settings' &&
-    new URLSearchParams(location.search.startsWith('?') ? location.search.slice(1) : location.search).get(
-      'section',
-    ) === 'Integrations';
+  const integrationsSlug =
+    (Object.entries(SETTINGS_SLUG_MAP) as [string, string][]).find(([, lab]) => lab === 'Integrations')?.[0] ??
+    'integrations';
+  const settingsIntegrationsActive = location.pathname === `/dashboard/settings/${integrationsSlug}`;
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    fetch('/api/themes/active', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload: { data?: Record<string, string> } | null) => {
+        if (!payload?.data) return;
+        const root = document.documentElement;
+        Object.entries(payload.data).forEach(([k, v]) => {
+          root.style.setProperty(k, v);
+        });
+      })
+      .catch(() => {});
+  }, []);
 
   // Monaco deep-link handler (Settings → MCP tool config).
   // Opens a new editor tab with payload content, then clears query params.
@@ -1645,8 +1677,8 @@ const App: React.FC = () => {
               <button
                   type="button"
                   title="Settings"
-                  className={`p-1.5 rounded transition-colors ${location.pathname === '/dashboard/settings' ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => navigate('/dashboard/settings')}
+                  className={`p-1.5 rounded transition-colors ${location.pathname.startsWith('/dashboard/settings') ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
+                  onClick={() => navigate('/dashboard/settings/general')}
               >
                   <Settings size={15} strokeWidth={1.75} />
               </button>
@@ -1730,7 +1762,7 @@ const App: React.FC = () => {
                   label="Integrations"
                   expanded={sidebarRailExpanded}
                   active={settingsIntegrationsActive}
-                  onClick={() => navigate('/dashboard/settings?section=Integrations')}
+                  onClick={() => navigate('/dashboard/settings/integrations')}
               />
               <ActivityRailItem icon={Layers} label="MCP & AI" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
               <ActivityRailItem
@@ -1762,7 +1794,7 @@ const App: React.FC = () => {
                 active={location.pathname === '/dashboard/mail'}
                 onClick={() => navigate('/dashboard/mail')}
               />
-              <ActivityRailItem icon={Settings} label="Settings" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/settings'} onClick={() => navigate('/dashboard/settings')} />
+              <ActivityRailItem icon={Settings} label="Settings" expanded={sidebarRailExpanded} active={location.pathname.startsWith('/dashboard/settings')} onClick={() => navigate('/dashboard/settings/general')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1973,7 +2005,7 @@ const App: React.FC = () => {
                     <Route
                       path="/dashboard/integrations"
                       element={
-                        <Navigate to="/dashboard/settings?section=Integrations" replace />
+                        <Navigate to="/dashboard/settings/integrations" replace />
                       }
                     />
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
@@ -1990,6 +2022,10 @@ const App: React.FC = () => {
                     />
                     <Route
                       path="/dashboard/settings"
+                      element={<Navigate to="/dashboard/settings/general" replace />}
+                    />
+                    <Route
+                      path="/dashboard/settings/:sectionSlug"
                       element={
                         <SettingsPanel
                           onClose={() => navigate(-1)}
@@ -2320,8 +2356,8 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${location.pathname === '/dashboard/settings' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => navigate('/dashboard/settings')}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${location.pathname.startsWith('/dashboard/settings') ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => navigate('/dashboard/settings/general')}
         >
           <Settings size={24} strokeWidth={1.5} aria-hidden />
           <span>Settings</span>

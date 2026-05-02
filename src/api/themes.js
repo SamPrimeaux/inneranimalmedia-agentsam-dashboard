@@ -56,7 +56,7 @@ export async function handleThemesApi(request, url, env, ctx) {
         // ── GET /api/themes (Gallery) ──
         if (pathLower === '/api/themes' && method === 'GET') {
             const { results } = await env.DB.prepare(
-                `SELECT id, name, slug, config, theme_family, sort_order, css_url, tenant_id, workspace_id, wcag_scores, contrast_flags, is_system
+                `SELECT id, name, slug, config, theme_family, sort_order, css_url, tenant_id, workspace_id, wcag_scores, contrast_flags, is_system, monaco_bg
                  FROM cms_themes ORDER BY is_system DESC, theme_family ASC, sort_order ASC, name ASC`
             ).all();
             return jsonResponse({ themes: results || [] });

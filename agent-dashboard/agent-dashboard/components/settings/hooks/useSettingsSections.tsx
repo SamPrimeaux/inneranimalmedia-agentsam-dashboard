@@ -22,8 +22,7 @@ import type { NavSectionItem } from '../types';
 export type RulesSkillsTabId = 'skills' | 'subagents' | 'commands' | 'rules';
 export type ModelsTabId = 'models' | 'routing';
 
-export function useSettingsSections() {
-  const [activeSection, setActiveSection] = useState('General');
+export function useSettingsSections(activeSection: string) {
   const [search, setSearch] = useState('');
   const navRef = useRef<HTMLDivElement>(null);
   const [navWidth, setNavWidth] = useState(() => {
@@ -92,7 +91,6 @@ export function useSettingsSections() {
 
   return {
     activeSection,
-    setActiveSection,
     search,
     setSearch,
     navRef,

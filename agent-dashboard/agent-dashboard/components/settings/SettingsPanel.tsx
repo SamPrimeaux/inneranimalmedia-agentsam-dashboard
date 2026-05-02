@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { SLUG_TO_LABEL, LABEL_TO_SLUG, DEFAULT_SLUG, DEFAULT_LABEL } from './settingsConstants';
 import { Package } from 'lucide-react';
 import { useSettingsData } from './hooks/useSettingsData';
 import { useSettingsSections } from './hooks/useSettingsSections';
@@ -36,8 +37,24 @@ export default function SettingsPanel({
   onOpenInMonaco,
   workspaceId,
 }: SettingsPanelProps) {
+  const { sectionSlug } = useParams<{ sectionSlug: string }>();
+  const navigateTo = useNavigate();
   const [searchParams] = useSearchParams();
-  const nav = useSettingsSections();
+
+  const resolvedLabel: string =
+    sectionSlug && SLUG_TO_LABEL[sectionSlug] ? SLUG_TO_LABEL[sectionSlug] : DEFAULT_LABEL;
+
+  const legacySection = searchParams.get('section');
+  useEffect(() => {
+    if (!legacySection) return;
+    navigateTo(`/dashboard/settings/${LABEL_TO_SLUG[legacySection] ?? DEFAULT_SLUG}`, { replace: true });
+  }, [legacySection, navigateTo]);
+
+  const handleSectionSelect = (label: string) => {
+    navigateTo(`/dashboard/settings/${LABEL_TO_SLUG[label] ?? DEFAULT_SLUG}`);
+  };
+
+  const nav = useSettingsSections(resolvedLabel);
   const data = useSettingsData({
     workspaceId,
     activeSection: nav.activeSection,
@@ -45,16 +62,8 @@ export default function SettingsPanel({
     modelsTab: nav.modelsTab,
   });
 
-  useEffect(() => {
-    const s = searchParams.get('section');
-    if (!s) return;
-    if (nav.menu.some((m) => m.id === s)) {
-      nav.setActiveSection(s);
-    }
-  }, [searchParams, nav.menu, nav.setActiveSection]);
-
   const sectionBody = () => {
-    switch (nav.activeSection) {
+    switch (resolvedLabel) {
       case 'General':
         return <GeneralSection />;
       case 'Agents':
@@ -118,7 +127,7 @@ export default function SettingsPanel({
         return (
           <div className="flex flex-col items-center justify-center h-40 gap-3 text-[var(--text-muted)]">
             <Package size={28} className="opacity-30" />
-            <p className="text-[12px]">{nav.activeSection} settings coming soon.</p>
+            <p className="text-[12px]">{resolvedLabel} settings coming soon.</p>
           </div>
         );
     }
@@ -162,8 +171,8 @@ export default function SettingsPanel({
 
             <SectionNav
               sections={nav.filteredMenu}
-              activeSection={nav.activeSection}
-              onSelect={nav.setActiveSection}
+              activeSection={resolvedLabel}
+              onSelect={handleSectionSelect}
               filter={nav.search}
               onFilterChange={nav.setSearch}
             />
@@ -182,8 +191,8 @@ export default function SettingsPanel({
                 Section
               </div>
               <select
-                value={nav.activeSection}
-                onChange={(e) => nav.setActiveSection(e.target.value)}
+                value={resolvedLabel}
+                onChange={(e) => handleSectionSelect(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-subtle)] text-[12px] text-[var(--text-main)]"
               >
                 {nav.filteredMenu.map((m) => (

@@ -321,6 +321,8 @@ R2_BYTE_EST=0
 if [ "$WORKER_ONLY" -eq 0 ]; then
   if [ ! -f "${DIST_DIR}/index.html" ]; then
     echo "ERROR: ${DIST_DIR}/index.html missing. Run without --skip-build."
+    _DEPLOY_FAIL_ID=$(cat /tmp/iam_deploy_id 2>/dev/null)
+    [ -n "${_DEPLOY_FAIL_ID}" ] && cicd_d1_nf "UPDATE deployments SET status='failed' WHERE id='${_DEPLOY_FAIL_ID}'"
     exit 1
   fi
 
@@ -413,6 +415,11 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
   "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
     --remote -c "$PROD_CFG" --command="$D1_SQL" \
     2>/dev/null || echo "  WARN: dashboard_versions write failed (non-fatal)"
+
+  _DEP_ID="dep_sb_${DEPLOY_TS}"
+  _SB_GH_ESC=$(cicd_sql_escape "${SANDBOX_GIT_HASH}")
+  cicd_d1_nf "INSERT OR IGNORE INTO deployments (id, timestamp, version, git_hash, status, deployed_by, environment, worker_name, created_at) VALUES ('${_DEP_ID}', datetime('now'), 'v${NEXT_V}', '${_SB_GH_ESC}', 'pending', 'cursor', 'sandbox', 'inneranimal-dashboard', unixepoch())"
+  echo "${_DEP_ID}" > /tmp/iam_deploy_id
 fi
 
 # ── Step 3: Deploy worker ──────────────────────────────────────────────────────
@@ -534,6 +541,9 @@ if echo "$SYNC_RESP" | grep -q '"keys_written"'; then
 else
   echo "  WARN: Knowledge sync skipped or failed (non-fatal)"
 fi
+
+_DEP_ID=$(cat /tmp/iam_deploy_id 2>/dev/null)
+[ -n "${_DEP_ID}" ] && cicd_d1_nf "UPDATE deployments SET status='success' WHERE id='${_DEP_ID}'"
 
 echo ""
 echo "=== SANDBOX DEPLOY COMPLETE ==="

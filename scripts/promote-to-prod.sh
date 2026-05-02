@@ -291,6 +291,10 @@ EOF
   "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
     --remote -c "$PROD_CFG" \
     --command="$D1_SQL"   2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
+
+  _PROD_DEP_ID="dep_prod_${DEPLOY_TS}"
+  _PROMOTE_GH_ESC=$(cicd_sql_escape "${PROMOTE_GIT_HASH}")
+  cicd_d1_nf "INSERT OR IGNORE INTO deployments (id, timestamp, version, git_hash, status, deployed_by, environment, worker_name, created_at) VALUES ('${_PROD_DEP_ID}', datetime('now'), 'v${CURRENT_V:-0}', '${_PROMOTE_GH_ESC}', 'pending', 'cursor', 'production', 'inneranimalmedia', unixepoch())"
 fi
 
 # Worker-only: full R2 pull is skipped — still fetch agent shell from source bucket so Resend/CICD see current v.
@@ -392,6 +396,15 @@ if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
   elif [[ "$PROD_HC" =~ ^[23][0-9][0-9]$ ]]; then export CICD_CF_HEALTH_STATUS=degraded
   else export CICD_CF_HEALTH_STATUS=down
   fi
+fi
+
+if [ -n "${_PROD_DEP_ID:-}" ]; then
+  _SEC=$((CICD_MS_WORKER / 1000))
+  [ "${_SEC:-0}" -lt 0 ] && _SEC=0
+  cicd_d1_nf "UPDATE deployments SET status='success', deploy_time_seconds=${_SEC} WHERE id='${_PROD_DEP_ID}'"
+  _URL_ESC=$(cicd_sql_escape "${PROD_HEALTH_URL}")
+  if [[ "${PROD_HC}" =~ ^2[0-9][0-9]$ ]]; then _HCL=healthy; else _HCL=degraded; fi
+  cicd_d1_nf "INSERT INTO deployment_health_checks (deployment_id, check_type, check_url, status_code, status, response_time_ms, checked_at) VALUES ('${_PROD_DEP_ID}', 'http', '${_URL_ESC}', ${PROD_HC:-0}, '${_HCL}', ${CICD_CF_HEALTH_RESPONSE_MS:-0}, datetime('now'))"
 fi
 
 # ── ai_workflow_* (non-fatal; before cicd_log_prod_promote) ───────────────────

@@ -7,6 +7,7 @@ import {
   getAuthUser,
   jsonResponse,
   fetchAuthUserTenantId,
+  fallbackSystemTenantId,
 } from '../core/auth.js';
 import { handleSettingsIntegrationsApi } from './settings-integrations.js';
 
@@ -1135,7 +1136,39 @@ export async function handleSettingsRequest(request, env, ctx) {
         ...t,
         stats: statsMap[String(t.tool_name)] || null,
       }));
-      return jsonResponse({ servers: servers.results || [], tools: toolsWithStats });
+
+      let commandPerformance = [];
+      try {
+        const tenantIdForPerf =
+          (await resolveAuthTenantId(env, authUser)) || fallbackSystemTenantId(env);
+        const perfResult = await env.DB.prepare(
+          `SELECT
+             epm.command_id,
+             COALESCE(MAX(ac.display_name), CAST(epm.command_id AS TEXT)) AS display_name,
+             SUM(epm.execution_count) AS total_executions,
+             ROUND(AVG(epm.success_rate_percent), 1) AS avg_success_rate,
+             ROUND(AVG(epm.avg_duration_ms), 0) AS avg_duration_ms,
+             ROUND(SUM(COALESCE(epm.total_cost_cents, 0)) / 100.0, 4) AS total_cost_usd,
+             MAX(epm.metric_date) AS last_active_date
+           FROM execution_performance_metrics epm
+           LEFT JOIN agentsam_commands ac ON ac.id = epm.command_id
+           WHERE epm.tenant_id = ?
+             AND epm.metric_date >= date('now', '-7 days')
+           GROUP BY epm.command_id
+           ORDER BY SUM(epm.execution_count) DESC`,
+        )
+          .bind(tenantIdForPerf)
+          .all();
+        commandPerformance = perfResult?.results || [];
+      } catch {
+        commandPerformance = [];
+      }
+
+      return jsonResponse({
+        servers: servers.results || [],
+        tools: toolsWithStats,
+        commandPerformance,
+      });
     } catch (e) {
       return jsonResponse({ error: e?.message ?? String(e) }, 500);
     }

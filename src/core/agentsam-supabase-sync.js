@@ -153,6 +153,85 @@ export async function markWorkflowRunSupabaseSynced(env, d1RunId, supabaseRunId)
  * @param {string} d1RunId
  * @param {string} error
  */
+const SUPABASE_RPC_FALLBACK_ORIGIN = 'https://dpmuvynqixblxsilnlut.supabase.co';
+
+function restOriginForRpc(env) {
+  try {
+    return supabaseRestBase(env);
+  } catch {
+    return SUPABASE_RPC_FALLBACK_ORIGIN.replace(/\/$/, '');
+  }
+}
+
+/**
+ * Fire-and-forget analytics sync to Supabase Postgres RPC (non-fatal; D1 remains source of truth).
+ * @param {any} env
+ * @param {Record<string, unknown>} run — D1 agentsam_workflow_runs row or compatible object
+ */
+export async function syncWorkflowRunToSupabase(env, run) {
+  const key = env?.SUPABASE_SERVICE_ROLE_KEY;
+  const db = env?.DB;
+  if (!key || !run?.id || !db) return;
+  const base = restOriginForRpc(env);
+  const secToIso = (t) => {
+    if (t == null || t === '') return null;
+    const n = Number(t);
+    if (!Number.isFinite(n)) return null;
+    return new Date(n < 1e12 ? n * 1000 : n).toISOString();
+  };
+  let toolCallsCount = run.tool_calls_count != null ? Number(run.tool_calls_count) : null;
+  if (toolCallsCount == null || !Number.isFinite(toolCallsCount)) {
+    try {
+      const raw = run.step_results_json;
+      const arr = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+      if (Array.isArray(arr)) toolCallsCount = arr.length;
+    } catch {
+      toolCallsCount = 0;
+    }
+  }
+  if (!Number.isFinite(toolCallsCount)) toolCallsCount = 0;
+
+  let status = run.status != null ? String(run.status) : '';
+  if (status === 'success') status = 'completed';
+
+  try {
+    const res = await fetch(`${base}/rest/v1/rpc/sync_workflow_run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        apikey: key,
+      },
+      body: JSON.stringify({
+        p_d1_workflow_id: run.id,
+        p_workflow_key: run.workflow_key ?? '',
+        p_display_name: run.display_name ?? '',
+        p_tenant_id: run.tenant_id ?? '',
+        p_workspace_id: run.workspace_id || 'ws_inneranimalmedia',
+        p_status: status || 'unknown',
+        p_started_at: secToIso(run.started_at),
+        p_completed_at: secToIso(run.completed_at),
+        p_duration_ms: run.duration_ms != null ? Number(run.duration_ms) : null,
+        p_cost_usd: run.cost_usd != null ? Number(run.cost_usd) : 0,
+        p_input_tokens: run.input_tokens != null ? Number(run.input_tokens) : 0,
+        p_output_tokens: run.output_tokens != null ? Number(run.output_tokens) : 0,
+        p_tool_calls_count: toolCallsCount,
+        p_error_message: run.error_message ?? null,
+        p_model_id: run.model_used ?? run.model_id ?? null,
+      }),
+    });
+    if (!res.ok) return;
+    await db
+      .prepare(
+        `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET supabase_sync_status=?, supabase_synced_at=? WHERE id=?`,
+      )
+      .bind('synced', new Date().toISOString(), run.id)
+      .run();
+  } catch {
+    // Non-fatal — D1 is source of truth, Supabase is analytics layer
+  }
+}
+
 export async function markWorkflowRunSupabaseFailed(env, d1RunId, error) {
   const db = env?.DB;
   if (!db) throw new Error('markWorkflowRunSupabaseFailed: DB not configured');

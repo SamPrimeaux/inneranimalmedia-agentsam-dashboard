@@ -22,7 +22,7 @@ import { getAESKey } from "./src/core/crypto-vault.js";
 import { handleVaultApi } from "./src/api/vault.js";
 import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
 import { runMasterDailyRetention } from './src/core/retention.js';
-import { loadAgentMemory } from "./src/core/memory.js";
+import { loadAgentMemoryForPrompt } from "./src/core/memory.js";
 import { fetchCicdPipelineRunsForOverview } from './src/api/overview.js';
 import {
   AGENTSAM_MCP_WORKFLOWS,
@@ -36,6 +36,7 @@ import {
   createSupabaseWorkflowRun,
   markWorkflowRunSupabaseFailed,
   markWorkflowRunSupabaseSynced,
+  syncWorkflowRunToSupabase,
   updateSupabaseWorkflowRun,
 } from './src/core/agentsam-supabase-sync.js';
 
@@ -13746,7 +13747,12 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
       let memoryBlock = '';
       if (!opts.skipMemory && tenantIdChatSse && env.DB) {
         try {
-          memoryBlock = await loadAgentMemory(env, tenantIdChatSse);
+          memoryBlock = await loadAgentMemoryForPrompt(env, tenantIdChatSse, {
+            userMessage: message,
+            sessionId: conversationId || null,
+            agentId: agentAiIdSse || null,
+            workspaceId: skillWorkspaceKey || null,
+          });
         } catch (_) { /* non-fatal */ }
       }
       const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -13877,7 +13883,12 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         let basePrompt = cached.compiled_context;
         if (tenantIdChatSse && env.DB) {
           try {
-            const mem = await loadAgentMemory(env, tenantIdChatSse);
+            const mem = await loadAgentMemoryForPrompt(env, tenantIdChatSse, {
+              userMessage: message,
+              sessionId: conversationId || null,
+              agentId: agentAiIdSse || null,
+              workspaceId: skillWorkspaceKey || null,
+            });
             if (mem && String(mem).trim()) basePrompt = `${basePrompt}\n\n${String(mem).trim()}`;
           } catch (_) { /* keep cached prompt */ }
         }
@@ -24323,6 +24334,23 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseR
          completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
     ).bind('Unauthorized', run_id).run();
     assertD1Write(r, 'agentsam_workflow_runs unauthorized tenant');
+    void syncWorkflowRunToSupabase(env, {
+      id: run_id,
+      workflow_key: workflow?.workflow_key ?? '',
+      display_name: workflow?.display_name ?? workflow?.name ?? '',
+      tenant_id: MCP_WF_TENANT ?? '',
+      workspace_id: 'ws_inneranimalmedia',
+      status: 'failed',
+      started_at: null,
+      completed_at: Math.floor(Date.now() / 1000),
+      duration_ms: 0,
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      tool_calls_count: 0,
+      error_message: 'Unauthorized',
+      model_used: null,
+    }).catch(() => {});
     await updateSupabaseWorkflowRun(env, supabaseRunId, {
       status: 'failed',
       success: false,
@@ -24349,6 +24377,23 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseR
          cost_usd = 0, duration_ms = 0, completed_at = unixepoch() WHERE id = ?`
       ).bind(lastError, run_id).run();
       assertD1Write(pr, 'agentsam_workflow_runs parse error');
+      void syncWorkflowRunToSupabase(env, {
+        id: run_id,
+        workflow_key: workflow?.workflow_key ?? '',
+        display_name: workflow?.display_name ?? workflow?.name ?? '',
+        tenant_id: MCP_WF_TENANT ?? '',
+        workspace_id: 'ws_inneranimalmedia',
+        status: 'failed',
+        started_at: null,
+        completed_at: Math.floor(Date.now() / 1000),
+        duration_ms: 0,
+        cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        tool_calls_count: 0,
+        error_message: lastError,
+        model_used: null,
+      }).catch(() => {});
       await updateSupabaseWorkflowRun(env, supabaseRunId, {
         status: 'failed',
         success: false,
@@ -24518,6 +24563,11 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseR
     ).run();
     assertD1Write(d1Final, 'agentsam_workflow_runs finalize');
 
+    try {
+      const runRow = await env.DB.prepare(`SELECT * FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE id = ?`).bind(run_id).first();
+      if (runRow) void syncWorkflowRunToSupabase(env, runRow).catch(() => {});
+    } catch (_) { /* non-fatal RPC sync */ }
+
     if (!failed) {
       const defUp = await env.DB.prepare(
         `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET success_count = success_count + 1,
@@ -24575,6 +24625,10 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseR
          completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
     ).bind(msg, run_id).run();
     assertD1Write(r, 'agentsam_workflow_runs outer-catch');
+    try {
+      const runRowCatch = await env.DB.prepare(`SELECT * FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE id = ?`).bind(run_id).first();
+      if (runRowCatch) void syncWorkflowRunToSupabase(env, runRowCatch).catch(() => {});
+    } catch (_) { /* non-fatal RPC sync */ }
     try {
       await updateSupabaseWorkflowRun(env, supabaseRunId, {
         status: 'failed',

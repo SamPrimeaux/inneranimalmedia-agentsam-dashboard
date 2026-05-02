@@ -5,6 +5,105 @@
  * (identity + policy strings). Do not prepend ahead of core system instructions.
  */
 
+const IAM_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
+/** Default REST origin when env.SUPABASE_URL is unset (matches project Postgres RPC). */
+const SUPABASE_REST_FALLBACK = 'https://dpmuvynqixblxsilnlut.supabase.co';
+
+function supabaseRestOrigin(env) {
+  const raw = env?.SUPABASE_URL && String(env.SUPABASE_URL).trim();
+  if (raw) return raw.replace(/\/$/, '');
+  return SUPABASE_REST_FALLBACK;
+}
+
+/**
+ * @param {any} env
+ * @param {number[]} embedding
+ * @param {string|null} sessionId
+ * @param {string|null} agentId
+ * @param {string|null} workspaceId
+ * @returns {Promise<any[]>}
+ */
+export async function recallSemanticMemory(env, embedding, sessionId, agentId, workspaceId) {
+  const supabaseKey = env?.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseKey || !Array.isArray(embedding) || !embedding.length) return [];
+  const supabaseUrl = supabaseRestOrigin(env);
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/rpc/recall_agent_memory`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
+      },
+      body: JSON.stringify({
+        query_embedding: embedding,
+        p_session_id: sessionId || null,
+        p_agent_id: agentId || null,
+        p_workspace_id: workspaceId || null,
+        p_limit: 10,
+        p_threshold: 0.75,
+      }),
+    });
+    if (!res.ok) return [];
+    const json = await res.json().catch(() => []);
+    return Array.isArray(json) ? json : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatSemanticRecallBlock(rows) {
+  const lines = (rows || []).map((r) => {
+    if (r == null) return '';
+    if (typeof r === 'string') return `- ${r}`;
+    const sim = r.similarity != null ? `[${Number(r.similarity).toFixed(3)}] ` : '';
+    const text =
+      r.content ?? r.text ?? r.value ?? r.memory ?? (typeof r === 'object' ? JSON.stringify(r) : String(r));
+    return `- ${sim}${text}`;
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return `\n## Agent Memory (semantic, ${lines.length} items)\n${lines.join('\n')}\n`;
+}
+
+/**
+ * Semantic recall via Supabase RPC + Workers AI embedding; falls back to D1 agentsam_memory.
+ * @param {any} env
+ * @param {string} tenantId
+ * @param {{ userMessage?: string, sessionId?: string|null, agentId?: string|null, workspaceId?: string|null }} [ctx]
+ */
+export async function loadAgentMemoryForPrompt(env, tenantId, ctx = {}) {
+  const userMessage = ctx?.userMessage != null ? String(ctx.userMessage) : '';
+  const fallback = () => loadAgentMemory(env, tenantId);
+  if (!tenantId || !env?.SUPABASE_SERVICE_ROLE_KEY || !env?.AI || !userMessage.trim()) {
+    return fallback();
+  }
+  try {
+    const resp = await env.AI.run(IAM_EMBED_MODEL, {
+      text: [userMessage.slice(0, 8000)],
+    });
+    const vecs = resp?.data || resp?.result || [];
+    const rawEmb = vecs?.[0];
+    const queryEmbedding = Array.isArray(rawEmb)
+      ? rawEmb
+      : rawEmb != null && typeof rawEmb.length === 'number'
+        ? Array.from(rawEmb)
+        : null;
+    if (!queryEmbedding?.length) return fallback();
+    const recalled = await recallSemanticMemory(
+      env,
+      queryEmbedding,
+      ctx.sessionId ?? null,
+      ctx.agentId ?? null,
+      ctx.workspaceId ?? null,
+    );
+    if (!Array.isArray(recalled) || !recalled.length) return fallback();
+    const block = formatSemanticRecallBlock(recalled);
+    return block || fallback();
+  } catch {
+    return fallback();
+  }
+}
+
 export async function loadAgentMemory(env, tenantId) {
   if (!env?.DB || !tenantId) return '';
   try {

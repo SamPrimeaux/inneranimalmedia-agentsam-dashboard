@@ -14,7 +14,7 @@
 import { chatWithAnthropic }                            from '../integrations/anthropic.js';
 import { dispatchStream, OLLAMA_SKIP_MESSAGE }         from '../core/provider.js';
 import { unifiedRagSearch, handleAgentMemorySync }      from './rag.js';
-import { loadAgentMemory }                              from '../core/memory.js';
+import { loadAgentMemoryForPrompt }                     from '../core/memory.js';
 import { writeTelemetry }                               from './telemetry.js';
 import { jsonResponse }                                 from '../core/responses.js';
 import { getAuthUser, getSession,
@@ -868,7 +868,12 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     }
   }
   try {
-    const mem = await loadAgentMemory(env, tenantId);
+    const mem = await loadAgentMemoryForPrompt(env, tenantId, {
+      userMessage: message,
+      sessionId,
+      agentId: body.agentId || null,
+      workspaceId: workspaceId || null,
+    });
     if (mem && String(mem).trim()) {
       systemPrompt = `${systemPrompt}\n\n${String(mem).trim()}`;
     }

@@ -183,40 +183,63 @@ function measureAboveAnchor(
   };
 }
 
-/**
- * Extract assistant-visible text from one SSE JSON object (OpenAI, Anthropic-style, Workers AI / Granite, worker-wrapped).
- */
-function extractContent(chunk: unknown): string | null {
-  if (!chunk || typeof chunk !== 'object') return null;
-  const o = chunk as Record<string, unknown>;
-  if (o.type === 'text' && typeof o.text === 'string' && o.text.length > 0) return o.text;
-  const choices = o.choices as Array<{ delta?: { content?: string }; text?: string }> | undefined;
-  const fromDelta = choices?.[0]?.delta?.content;
-  if (fromDelta != null && String(fromDelta) !== '') return String(fromDelta);
-  const fromChoiceText = choices?.[0]?.text;
-  if (fromChoiceText != null && String(fromChoiceText) !== '') return String(fromChoiceText);
-  if (typeof o.response === 'string' && o.response.length > 0) return o.response;
-  if (o.response != null && typeof o.response !== 'object') {
-    const s = String(o.response).trim();
-    if (s) return s;
-  }
-  if (typeof o.text === 'string' && o.text.length > 0) return o.text;
-  return null;
+/** True if payload looks like a provider chunk with only hidden reasoning fields (never show in UI). */
+/** Block chat UI leaks that look like OpenAI streaming chunks (never append). */
+function looksLikeRawProviderLeak(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const o = data as Record<string, unknown>;
+  if (o.object === 'chat.completion.chunk') return true;
+  if (typeof o.id === 'string' && o.id.startsWith('chatcmpl')) return true;
+  return false;
 }
 
-function extractSseAssistantDelta(parsed: unknown): string {
-  const direct = extractContent(parsed);
-  if (direct != null && direct !== '') return direct;
+function ssePayloadLooksReasoningOnly(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const o = data as Record<string, unknown>;
+  const choices = o.choices as Array<{ delta?: Record<string, unknown> }> | undefined;
+  const d = choices?.[0]?.delta;
+  if (!d || typeof d !== 'object') return false;
+  const c = d.content;
+  const hasContent = typeof c === 'string' && c.length > 0;
+  if (hasContent) return false;
+  return !!(d.reasoning_content ?? d.reasoning ?? d.thinking ?? d.logprobs ?? d.token_ids ?? d.prompt_token_ids);
+}
+
+/**
+ * Visible assistant text only — never reasoning_content / thinking / logprobs / raw SSE lines.
+ */
+function normalizeAssistantSseText(parsed: unknown): string {
   if (!parsed || typeof parsed !== 'object') return '';
-  const o = parsed as Record<string, unknown>;
-  if (o.type === 'content_block_delta') {
-    const delta = o.delta as Record<string, unknown> | undefined;
+  const p = parsed as Record<string, unknown>;
+  const pt = p.type;
+  if (pt === 'done' || pt === 'error' || pt === 'tool_approval_request') return '';
+
+  const direct =
+    (typeof p.text === 'string' ? p.text : '') ||
+    (pt === 'token' && typeof p.text === 'string' ? p.text : '') ||
+    (pt === 'delta' && typeof p.text === 'string' ? p.text : '') ||
+    (pt === 'text' && typeof p.text === 'string' ? p.text : '');
+  if (direct) return direct;
+
+  const nestedDelta = p.delta as Record<string, unknown> | undefined;
+  if (nestedDelta && typeof nestedDelta.content === 'string' && nestedDelta.content.length > 0) {
+    return nestedDelta.content;
+  }
+
+  const choices = p.choices as Array<{ delta?: { content?: string } }> | undefined;
+  const oc = choices?.[0]?.delta?.content;
+  if (typeof oc === 'string' && oc.length > 0) return oc;
+
+  if (pt === 'content_block_delta') {
+    const delta = p.delta as Record<string, unknown> | undefined;
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') return delta.text;
   }
-  const candidates = o.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
+
+  const candidates = p.candidates as Array<{ content?: { parts?: Array<{ text?: string }> } }> | undefined;
   if (Array.isArray(candidates) && candidates[0]?.content?.parts) {
-    return candidates[0].content.parts.map((p) => (p.text != null ? String(p.text) : '')).join('');
+    return candidates[0].content.parts.map((x) => (x.text != null ? String(x.text) : '')).join('');
   }
+
   return '';
 }
 
@@ -658,6 +681,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [input, setInput] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const [messageQueue, setMessageQueue] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachButtonRef = useRef<HTMLButtonElement>(null);
@@ -1324,7 +1348,12 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
     };
 
     try {
-      const response = await fetch('/api/agent/chat', { method: 'POST', body: form });
+      const response = await fetch('/api/agent/chat', {
+        method: 'POST',
+        body: form,
+        signal,
+        credentials: 'same-origin',
+      });
 
       if (!response.ok) {
         const errText = await response.text();
@@ -1337,16 +1366,41 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
       }
 
       const reader = response.body.getReader();
+      streamReaderRef.current = reader;
       const decoder = new TextDecoder();
       let assistantContent = '';
       let assistantStreamBuf = '';
       let sseCarry = '';
       let fileEchoSuppress = false;
 
+      const streamStartedAt = Date.now();
+      let readCount = 0;
+      let emptyRun = 0;
+      const MAX_STREAM_MS = 60000;
+      const MAX_READS = 2000;
+      const MAX_EMPTY_RUN = 200;
+
       setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
       sseLoop: while (true) {
+        if (signal.aborted) break sseLoop;
+        if (
+          Date.now() - streamStartedAt > MAX_STREAM_MS ||
+          readCount >= MAX_READS ||
+          emptyRun >= MAX_EMPTY_RUN
+        ) {
+          assistantStreamBuf += '\n\n[Stream stopped: exceeded safety limits.]';
+          assistantContent = assistantStreamBuf;
+          setMessages((prev) => {
+            const last = [...prev];
+            last[last.length - 1] = { role: 'assistant', content: assistantContent };
+            return last;
+          });
+          break sseLoop;
+        }
+
         const { done, value } = await reader.read();
+        readCount += 1;
         if (done) break;
 
         sseCarry += decoder.decode(value, { stream: true });
@@ -1357,19 +1411,18 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
           for (const rawLine of block.split('\n')) {
             const line = rawLine.trim();
             if (!line) continue;
-            let dataStr = '';
-            if (line.startsWith('data:')) {
-              dataStr = line.slice(5).trim();
-            } else if (line.startsWith('{') || line.startsWith('[')) {
-              dataStr = line;
-            } else {
-              continue;
-            }
+            if (!line.startsWith('data:')) continue;
+            const dataStr = line.slice(5).trim();
             if (dataStr === '[DONE]') break sseLoop;
             let data: unknown;
             try {
               data = JSON.parse(dataStr);
             } catch {
+              continue;
+            }
+            if (signal.aborted) break sseLoop;
+            if (looksLikeRawProviderLeak(data)) {
+              emptyRun += 1;
               continue;
             }
             if (isStreamErrorPayload(data)) {
@@ -1429,7 +1482,22 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 void loadSessions();
               }
             }
-            const delta = extractSseAssistantDelta(data);
+            const delta = normalizeAssistantSseText(data);
+            if (!delta && ssePayloadLooksReasoningOnly(data)) {
+              emptyRun += 1;
+              if (emptyRun >= MAX_EMPTY_RUN) {
+                assistantStreamBuf += '\n\n[Stream stopped: too many non-text chunks.]';
+                assistantContent = assistantStreamBuf;
+                setMessages((prev) => {
+                  const last = [...prev];
+                  last[last.length - 1] = { role: 'assistant', content: assistantContent };
+                  return last;
+                });
+                break sseLoop;
+              }
+            } else if (delta) {
+              emptyRun = 0;
+            }
             if (delta && !fileEchoSuppress) {
               const trialBuf = assistantStreamBuf + delta;
               const extracted = extractMonacoInvokesFromBuffer(trialBuf);
@@ -1470,10 +1538,26 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
         }
       }
     } catch (error) {
-      console.error('Chat request failed:', error);
-      const msg = error instanceof Error ? error.message : String(error);
-      setMessages((prev) => [...stripEmptyAssistantTail(prev), { role: 'assistant', content: msg }]);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              content: `${last.content}${last.content.trim() ? '\n\n' : ''}Stopped.`,
+            };
+          }
+          return next;
+        });
+      } else {
+        console.error('Chat request failed:', error);
+        const msg = error instanceof Error ? error.message : String(error);
+        setMessages((prev) => [...stripEmptyAssistantTail(prev), { role: 'assistant', content: msg }]);
+      }
     } finally {
+      streamReaderRef.current?.cancel().catch(() => {});
+      streamReaderRef.current = null;
       setIsLoading(false);
       clearAttachments();
       abortControllerRef.current = null;
@@ -2282,6 +2366,7 @@ export const ChatAssistant: React.FC<ChatAssistantProps> = ({
                 onClick={() => {
                   if (isLoading) {
                     abortControllerRef.current?.abort();
+                    streamReaderRef.current?.cancel().catch(() => {});
                     setIsLoading(false);
                   } else {
                     handleSend();

@@ -122,9 +122,9 @@ async function dispatchWorkersAI(env, request, params) {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
 
-  const writeOaiToken = async (text) => {
+  const writeToken = async (text) => {
     if (text == null || text === '') return;
-    const line = `data: ${JSON.stringify({ choices: [{ delta: { content: String(text) } }] })}\n\n`;
+    const line = `data: ${JSON.stringify({ type: 'token', text: String(text) })}\n\n`;
     await writer.write(encoder.encode(line));
   };
 
@@ -148,31 +148,31 @@ async function dispatchWorkersAI(env, request, params) {
             try {
               j = JSON.parse(t);
             } catch {
-              await writeOaiToken(t);
+              await writeToken(t);
               continue;
             }
             const piece = extractWorkersAiSseToken(j);
-            if (piece) await writeOaiToken(piece);
+            if (piece) await writeToken(piece);
           }
         }
         const tail = buf.trim();
         if (tail) {
           try {
             const piece = extractWorkersAiSseToken(JSON.parse(tail));
-            if (piece) await writeOaiToken(piece);
+            if (piece) await writeToken(piece);
           } catch {
-            await writeOaiToken(tail);
+            await writeToken(tail);
           }
         }
-        await writer.write(encoder.encode('data: [DONE]\n\n'));
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`));
       } else {
         let text = '';
         if (typeof response?.response === 'string') text = response.response;
         else if (response?.response != null && typeof response.response !== 'object') {
           text = String(response.response);
         } else if (typeof response === 'string') text = response;
-        await writeOaiToken(text);
-        await writer.write(encoder.encode('data: [DONE]\n\n'));
+        await writeToken(text);
+        await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`));
       }
     } catch (e) {
       console.warn('[provider] Workers AI stream failed mid-flight', e?.message || e);

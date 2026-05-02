@@ -8040,6 +8040,115 @@ async function writeTelemetry(env, data, modelRates) {
   return telemetryId;
 }
 
+/**
+ * Non-blocking D1 rows for Agent SSE lifecycle (best-effort; never throws).
+ * metric_type = agent_sse_lifecycle, metric_name = event slug.
+ */
+function waitUntilAgentSseLifecycle(env, ctx, eventName, detail = {}) {
+  if (!env?.DB) return;
+  const run = async () => {
+    try {
+      const id = `ssel_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const meta = JSON.stringify({
+        sse_event: String(eventName || 'unknown'),
+        ...detail,
+      }).slice(0, 3500);
+      await env.DB.prepare(
+        `INSERT INTO agent_telemetry (
+          id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
+          model_used, provider, input_tokens, output_tokens,
+          cache_read_input_tokens, cache_creation_input_tokens,
+          computed_cost_usd, total_input_tokens,
+          event_type, severity, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`,
+      )
+        .bind(
+          id,
+          null,
+          detail.session_id != null ? String(detail.session_id) : null,
+          'agent_sse_lifecycle',
+          String(eventName || 'unknown'),
+          1,
+          meta,
+          detail.model_key != null ? String(detail.model_key) : null,
+          'agent_sse',
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          'lifecycle',
+          'info',
+        )
+        .run();
+    } catch (_) {}
+  };
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(run());
+  else run().catch(() => {});
+}
+
+async function isAgentChatDisabled(env) {
+  const raw = String(env?.AGENT_CHAT_DISABLED ?? '').trim();
+  if (raw === '1') return true;
+  const low = raw.toLowerCase();
+  if (low === 'true' || low === 'yes') return true;
+  if (!env?.DB) return false;
+  try {
+    const ff = await env.DB.prepare(
+      `SELECT COALESCE(enabled_globally, 0) AS e FROM agentsam_feature_flag WHERE flag_key = 'agent_chat_disabled' LIMIT 1`,
+    ).first();
+    if (ff && Number(ff.e) === 1) return true;
+  } catch (_) {}
+  try {
+    const pm = await env.DB.prepare(
+      `SELECT value FROM project_memory WHERE project_id = 'inneranimalmedia' AND key = 'AGENT_CHAT_DISABLED' LIMIT 1`,
+    ).first();
+    if (pm && String(pm.value || '').trim() === '1') return true;
+  } catch (_) {}
+  return false;
+}
+
+/** Immediate SSE when chat is globally disabled (no provider/tools/WAI). */
+function respondAgentChatKillSwitchDisabled(env, ctx) {
+  console.warn('[agent:sse] kill_switch_active');
+  waitUntilAgentSseLifecycle(env, ctx, 'request_start', { kill_switch: true });
+  waitUntilAgentSseLifecycle(env, ctx, 'stream_done', { disabled: true, kill_switch: true });
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(
+        enc.encode(
+          `data: ${JSON.stringify({
+            type: 'token',
+            text: 'Agent Sam chat is temporarily paused while stream transport is being repaired.',
+          })}\n\n`,
+        ),
+      );
+      controller.enqueue(
+        enc.encode(
+          `data: ${JSON.stringify({
+            type: 'done',
+            model_used: null,
+            disabled: true,
+          })}\n\n`,
+        ),
+      );
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: { ...sseResponseHeaders(), 'X-IAM-Agent-Chat-Kill': '1' },
+  });
+}
+
+function ssePayloadLooksLikeRawProvider(j) {
+  if (!j || typeof j !== 'object') return false;
+  if (j.object === 'chat.completion.chunk') return true;
+  if (j.id != null && String(j.id).indexOf('chatcmpl') === 0) return true;
+  return !!(j.choices && Array.isArray(j.choices) && !j.type);
+}
+
 /** Parse Workers AI stream JSON line or result object for { prompt_tokens, completion_tokens }. */
 function extractWorkersAiUsageFromJson(j) {
   if (!j || typeof j !== 'object') return null;
@@ -13570,6 +13679,273 @@ function sseResponseHeaders() {
   };
 }
 
+/**
+ * Normalize one inbound SSE JSON object into browser-safe app events (strip raw provider chunks).
+ * Zero raw provider lines forwarded (choices/id/object filtered here).
+ */
+function normalizeAgentSseEventForBrowser(j) {
+  if (!j || typeof j !== 'object') return [];
+  const t = j.type;
+  const passthroughTypes = new Set([
+    'done',
+    'error',
+    'tool_approval_request',
+    'tool_start',
+    'tool_result',
+    'tool_use',
+    'state',
+    'open_panel',
+    'code',
+    'context',
+    'browser_navigate',
+    'r2_file_updated',
+  ]);
+  if (t && passthroughTypes.has(t)) {
+    if (t === 'error') {
+      const em =
+        typeof j.error === 'string'
+          ? j.error.slice(0, 200)
+          : typeof j.message === 'string'
+            ? j.message.slice(0, 200)
+            : 'error';
+      console.warn('[agent:sse] stream_error', JSON.stringify({ message: em }));
+    }
+    if (t === 'done') {
+      console.log('[agent:sse] stream_done');
+    }
+    return [j];
+  }
+  if (t === 'text' && typeof j.text === 'string') {
+    if (!j.text) return [];
+    console.log('[agent:sse] emit_token length=' + j.text.length);
+    return [{ type: 'token', text: j.text }];
+  }
+  if ((t === 'token' || t === 'delta') && typeof j.text === 'string') {
+    if (!j.text) return [];
+    console.log('[agent:sse] emit_token length=' + j.text.length);
+    return [{ type: 'token', text: j.text }];
+  }
+  if (t === 'content_block_delta' && j.delta && j.delta.type === 'text_delta' && typeof j.delta.text === 'string') {
+    console.log('[agent:sse] emit_token length=' + j.delta.text.length);
+    return [{ type: 'token', text: j.delta.text }];
+  }
+  if (!t && typeof j.conversation_id === 'string' && j.conversation_id) return [j];
+
+  const d = j.choices && Array.isArray(j.choices) ? j.choices[0]?.delta : null;
+  if (d && typeof d === 'object') {
+    const hasReason =
+      (d.reasoning_content != null && String(d.reasoning_content).length > 0) ||
+      (d.reasoning != null && String(d.reasoning).length > 0);
+    const hasThinking = d.thinking != null && String(d.thinking).length > 0;
+    const content = typeof d.content === 'string' ? d.content : '';
+    const hasContent = content.length > 0;
+    console.log(
+      '[agent:sse] provider_chunk has_content=' + hasContent + ' has_reasoning=' + !!(hasReason || hasThinking),
+    );
+    if ((hasReason || hasThinking) && !hasContent) {
+      console.warn('[agent:sse] dropped_reasoning_chunk');
+      return [];
+    }
+    if (hasContent) {
+      console.log('[agent:sse] emit_token length=' + content.length);
+      return [{ type: 'token', text: content }];
+    }
+    return [];
+  }
+  if (ssePayloadLooksLikeRawProvider(j)) {
+    console.warn('[agent:sse] raw_provider_blocked');
+    return [];
+  }
+  if (t) return [j];
+  return [];
+}
+
+/**
+ * Final SSE envelope for /api/agent/chat: never forward raw provider JSON; honor client AbortSignal.
+ */
+function wrapAgentChatSseForBrowser(upstream, request, env, ctx) {
+  try {
+    if (upstream.headers && upstream.headers.get('X-IAM-Agent-Chat-Kill') === '1') return upstream;
+    const ct = (upstream.headers && upstream.headers.get('content-type')) || '';
+    if (!ct.includes('text/event-stream') || !upstream.body) return upstream;
+    const signal = request && request.signal;
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const MAX_MS = 60000;
+    const MAX_CHUNKS = 2000;
+    const MAX_EMPTY_REASON = 200;
+    const t0 = Date.now();
+    let inboundChunks = 0;
+    let emptyOrReasoningOnly = 0;
+    let rawProviderBlocked = 0;
+    let sseCarry = '';
+    const upstreamReader = upstream.body.getReader();
+
+    const readable = new ReadableStream({
+      async start(controller) {
+        let completedCleanly = false;
+        try {
+          while (true) {
+            if (signal && signal.aborted) {
+              console.warn('[agent:sse] client_aborted');
+              waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', {});
+              await upstreamReader.cancel().catch(() => {});
+              console.warn('[agent:sse] provider_reader_cancelled');
+              controller.close();
+              return;
+            }
+            if (
+              Date.now() - t0 > MAX_MS ||
+              inboundChunks >= MAX_CHUNKS ||
+              emptyOrReasoningOnly >= MAX_EMPTY_REASON
+            ) {
+              console.warn('[agent:sse] stream_error', JSON.stringify({ reason: 'stream_guard' }));
+              waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { reason: 'stream_guard', inboundChunks, emptyOrReasoningOnly });
+              controller.enqueue(
+                enc.encode(`data: ${JSON.stringify({ type: 'error', error: 'stream_guard' })}\n\n`),
+              );
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', model_used: null })}\n\n`));
+              await upstreamReader.cancel().catch(() => {});
+              console.warn('[agent:sse] provider_reader_cancelled');
+              controller.close();
+              return;
+            }
+            const { done, value } = await upstreamReader.read();
+            if (done) {
+              completedCleanly = true;
+              break;
+            }
+            inboundChunks += 1;
+            sseCarry += dec.decode(value, { stream: true });
+            const blocks = sseCarry.split('\n\n');
+            sseCarry = blocks.pop() || '';
+            for (const block of blocks) {
+              for (const rawLine of block.split('\n')) {
+                const line = rawLine.trim();
+                if (!line.startsWith('data:')) continue;
+                const payload = line.slice(5).trim();
+                if (payload === '[DONE]') continue;
+                let j;
+                try {
+                  j = JSON.parse(payload);
+                } catch {
+                  continue;
+                }
+                const outs = normalizeAgentSseEventForBrowser(j);
+                if (
+                  outs.length === 0 &&
+                  ssePayloadLooksLikeRawProvider(j)
+                ) {
+                  rawProviderBlocked += 1;
+                  waitUntilAgentSseLifecycle(env, ctx, 'raw_sse_leak_detected', {
+                    count: rawProviderBlocked,
+                  });
+                }
+                if (
+                  outs.length === 0 &&
+                  j &&
+                  j.choices &&
+                  j.choices[0] &&
+                  j.choices[0].delta &&
+                  ((j.choices[0].delta.reasoning_content != null &&
+                    String(j.choices[0].delta.reasoning_content).length > 0) ||
+                    (j.choices[0].delta.reasoning != null && String(j.choices[0].delta.reasoning).length > 0))
+                ) {
+                  waitUntilAgentSseLifecycle(env, ctx, 'dropped_reasoning_chunk', { summary: 'reasoning_only_delta' });
+                }
+                for (const ev of outs) {
+                  if (
+                    ev &&
+                    ev.type === 'token' &&
+                    typeof ev.text === 'string' &&
+                    ev.text.length === 0
+                  ) {
+                    emptyOrReasoningOnly += 1;
+                    continue;
+                  }
+                  controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+                }
+                if (outs.length === 0 && j && j.choices && j.choices[0] && j.choices[0].delta) {
+                  const dx = j.choices[0].delta;
+                  const onlyMeta =
+                    !dx.content &&
+                    (dx.reasoning_content ||
+                      dx.reasoning ||
+                      dx.thinking ||
+                      dx.logprobs ||
+                      dx.token_ids ||
+                      dx.prompt_token_ids);
+                  if (onlyMeta) emptyOrReasoningOnly += 1;
+                }
+              }
+            }
+          }
+          const tailBlocks = (sseCarry || '').trim()
+            ? [sseCarry.trim()]
+            : [];
+          for (const block of tailBlocks) {
+            for (const rawLine of block.split('\n')) {
+              const line = rawLine.trim();
+              if (!line.startsWith('data:')) continue;
+              const payload = line.slice(5).trim();
+              if (payload === '[DONE]') continue;
+              let j;
+              try {
+                j = JSON.parse(payload);
+              } catch {
+                continue;
+              }
+              const outs = normalizeAgentSseEventForBrowser(j);
+              if (outs.length === 0 && ssePayloadLooksLikeRawProvider(j)) {
+                rawProviderBlocked += 1;
+                waitUntilAgentSseLifecycle(env, ctx, 'raw_sse_leak_detected', { count: rawProviderBlocked });
+              }
+              for (const ev of outs) {
+                controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+              }
+            }
+          }
+          if (completedCleanly) {
+            console.log('[agent:sse] stream_done');
+            waitUntilAgentSseLifecycle(env, ctx, 'stream_done', { ok: true, raw_provider_blocked: rawProviderBlocked });
+          }
+        } catch (e) {
+          const msg = e && e.name === 'AbortError' ? 'aborted' : String(e && e.message ? e.message : e);
+          if (e && e.name === 'AbortError') {
+            console.warn('[agent:sse] client_aborted');
+            waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', {});
+          } else {
+            console.warn('[agent:sse] stream_error', JSON.stringify({ message: msg.slice(0, 200) }));
+            waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { message: msg.slice(0, 200) });
+          }
+          try {
+            controller.enqueue(
+              enc.encode(`data: ${JSON.stringify({ type: 'error', error: msg.slice(0, 200) })}\n\n`),
+            );
+          } catch (_) {}
+        } finally {
+          await upstreamReader.cancel().catch(() => {});
+          try {
+            controller.close();
+          } catch (_) {}
+        }
+      },
+      cancel() {
+        console.warn('[agent:sse] client_aborted');
+        waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', { via: 'cancel' });
+        upstreamReader.cancel().catch(() => {});
+        console.warn('[agent:sse] provider_reader_cancelled');
+      },
+    });
+
+    return new Response(readable, { headers: sseResponseHeaders() });
+  } catch (e) {
+    console.warn('[agent:sse] stream_error', JSON.stringify({ message: String(e && e.message ? e.message : e).slice(0, 200) }));
+    waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { wrap: true });
+    return upstream;
+  }
+}
+
 /** Bash-safe single-quoted string for `sh -c` / PTY run. */
 function shellSingleQuoteForPty(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -13661,6 +14037,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   } = parsed;
   if (!message) return jsonResponse({ error: 'message required' }, 400);
 
+  if (await isAgentChatDisabled(env)) {
+    return respondAgentChatKillSwitchDisabled(env, ctx);
+  }
+
   // Phase 0: Preflight Classification
   const preflight = await preflightClassify(message, env);
   const { tier, intent, needsTools } = preflight;
@@ -13674,10 +14054,13 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     return jsonResponse({ error: 'Invalid mode', allowed: ['ask', 'agent', 'plan', 'debug', 'auto'] }, 400);
   }
 
+  console.log('[agent:sse] request_start', JSON.stringify({ mode, requested_model: modelParam }));
+  waitUntilAgentSseLifecycle(env, ctx, 'request_start', { mode, requested_model: String(modelParam || '') });
+
   let modelRow;
   try {
     modelRow = await env.DB.prepare(
-      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name
+      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name, supports_tools
        FROM ai_models
        WHERE (id = ? OR model_key = ?) AND COALESCE(is_active, 0) = 1
        LIMIT 1`
@@ -13691,6 +14074,32 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
+  const msgSuggestsTools =
+    /\bd1_query\b|r2_[a-z0-9_]+|terminal_execute|github_file|workspace_search|mcp\.inneranimalmedia|agentsam_tool_call_log/i.test(
+      String(message || ''),
+    );
+  const toolHeavyModes = new Set(['agent', 'debug', 'plan']);
+  if (
+    env.DB &&
+    String(modelRow.api_platform || '').trim() === 'workers_ai' &&
+    toolHeavyModes.has(mode) &&
+    Number(modelRow.supports_tools) !== 1 &&
+    (needsTools || msgSuggestsTools)
+  ) {
+    try {
+      const fb = await env.DB.prepare(
+        `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name, supports_tools
+         FROM ai_models
+         WHERE COALESCE(is_active, 0) = 1 AND COALESCE(supports_tools, 0) = 1
+           AND api_platform IN ('gemini_api', 'openai')
+         ORDER BY CASE api_platform WHEN 'gemini_api' THEN 0 WHEN 'openai' THEN 1 ELSE 2 END
+         LIMIT 1`,
+      ).first();
+      if (fb) modelRow = fb;
+    } catch (escErr) {
+      console.warn('[agent/chat-sse] workers_ai tool-capable fallback skipped', escErr?.message ?? escErr);
+    }
+  }
 
   let modelRatesMap = {};
   try {
@@ -13710,6 +14119,26 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const modelKey = String(modelRow.model_key || modelParam);
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
   const provider = modelRow.provider || apiPlatform || 'unknown';
+
+  console.log(
+    '[agent:sse] provider_selected',
+    JSON.stringify({ provider: providerLabel, api_platform: apiPlatform, model_key: modelKey }),
+  );
+  waitUntilAgentSseLifecycle(env, ctx, 'provider_selected', {
+    provider: providerLabel,
+    api_platform: apiPlatform,
+    model_key: modelKey,
+    session_id: conversationId ? String(conversationId) : null,
+  });
+  if (apiPlatform === 'workers_ai') {
+    const reqTrim = String(modelParam || '').trim();
+    if (reqTrim && !reqTrim.startsWith('@cf/')) {
+      console.warn(
+        '[agent:sse] unexpected_workers_ai_selection',
+        JSON.stringify({ requested_model: reqTrim, resolved_model_key: modelKey }),
+      );
+    }
+  }
 
   const sseSupportedPlatforms = new Set(['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'cursor', 'workers_ai']);
   if (!sseSupportedPlatforms.has(apiPlatform)) {
@@ -18162,7 +18591,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/chat' && method === 'POST') {
-      return agentChatDirectSseHandler(env, request, ctx, secretFn);
+      const chatSseResp = await agentChatDirectSseHandler(env, request, ctx, secretFn);
+      return wrapAgentChatSseForBrowser(chatSseResp, request, env, ctx);
     }
 
     if (pathLower === '/api/agent/do-history' && method === 'GET') {
@@ -19292,8 +19722,13 @@ async function executeAgentsamSlashCommand(request, env, ctx) {
 
     const rawInput = `/${commandName}${rawArgs ? ` ${rawArgs}` : ''}`;
     const wsForRun = authUser.workspace_id != null ? String(authUser.workspace_id).trim() : '';
+    const _slashIntentOk = new Set(['deploy', 'debug', 'db', 'r2', 'git', 'worker', 'search', 'file', 'misc']);
+    const safeSlashIntentCat =
+      command.category != null && _slashIntentOk.has(String(command.category).trim())
+        ? String(command.category).trim()
+        : 'misc';
     if (!wsForRun) console.warn('[agentsam_command_run] skip: missing workspace_id');
-    else if (env.DB) void env.DB.prepare(`INSERT INTO agentsam_command_run (workspace_id, session_id, user_input, normalized_intent, intent_category, commands_json, result_json, output_text, success, exit_code, duration_ms, selected_command_id, selected_command_slug, risk_level, requires_confirmation, approval_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`).bind(wsForRun, session.id ?? null, rawInput, command.slug, command.category ?? 'misc', JSON.stringify([command.mapped_command != null ? command.mapped_command : { slug: command.slug, handler_type: handlerType, handler_ref: handlerRef }]), JSON.stringify({ success: !result?.error }), String(result?.output ?? result?.result ?? '').slice(0, 500), result?.error ? 0 : 1, result?.exit_code ?? null, Date.now() - cmdRunT0, command.id, command.slug, command.risk_level ?? 'low', Number(command.requires_confirmation ?? 0), 'not_required').run().catch((e) => console.warn('[agentsam_command_run]', e?.message ?? e));
+    else if (env.DB) void env.DB.prepare(`INSERT INTO agentsam_command_run (workspace_id, session_id, user_input, normalized_intent, intent_category, commands_json, result_json, output_text, success, exit_code, duration_ms, selected_command_id, selected_command_slug, risk_level, requires_confirmation, approval_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`).bind(wsForRun, session.id ?? null, rawInput, command.slug, safeSlashIntentCat, JSON.stringify([command.mapped_command != null ? command.mapped_command : { slug: command.slug, handler_type: handlerType, handler_ref: handlerRef }]), JSON.stringify({ success: !result?.error }), String(result?.output ?? result?.result ?? '').slice(0, 500), result?.error ? 0 : 1, result?.exit_code ?? null, Date.now() - cmdRunT0, command.id, command.slug, command.risk_level ?? 'low', Number(command.requires_confirmation ?? 0), 'not_required').run().catch((e) => console.warn('[agentsam_command_run]', e?.message ?? e));
 
     await env.DB.prepare(
       `UPDATE agentsam_slash_commands

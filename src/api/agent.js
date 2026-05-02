@@ -3,8 +3,8 @@
  * Handles all /api/agent/* routes.
  *
  * Key notes:
- *  - Customer-facing model catalog: D1 ai_models (picker_eligible, picker_group, show_in_picker).
- *  - agent_model_registry still used for some legacy/registry paths.
+ *  - Canonical production catalog: D1 ai_models only (routing, picker metadata, pricing, dispatch).
+ *  - agent_model_registry is legacy/staging/enrichment — never used for chat routing or billing math here.
  *  - No hardcoded model strings — always resolved from DB
  *  - Tool definitions loaded per-request via classifyIntent + loadToolsForRequest
  *  - Approval gate wired for high-risk tool calls
@@ -293,25 +293,100 @@ async function resolveDefaultModel(env) {
   if (!env.DB) return null;
   try {
     const row = await env.DB.prepare(
-      `SELECT model_key FROM agent_model_registry
-       WHERE role IN ('agent', 'chat')
-         AND supports_function_calling = 1
-       ORDER BY input_cost_per_1m ASC LIMIT 1`
+      `SELECT model_key FROM ai_models
+       WHERE COALESCE(is_active, 1) = 1
+         AND COALESCE(supports_tools, 0) = 1
+         AND LOWER(COALESCE(api_platform, '')) != 'workers_ai'
+       ORDER BY COALESCE(input_rate_per_mtok, 999999) ASC
+       LIMIT 1`,
     ).first();
-    return row?.model_key || null;
-  } catch (_) { return null; }
+    if (row?.model_key) return row.model_key;
+    const fb = await env.DB.prepare(
+      `SELECT model_key FROM ai_models
+       WHERE COALESCE(is_active, 1) = 1 AND COALESCE(supports_tools, 0) = 1
+       ORDER BY COALESCE(input_rate_per_mtok, 999999) ASC LIMIT 1`,
+    ).first();
+    return fb?.model_key || null;
+  } catch (_) {
+    return null;
+  }
 }
+
+const AI_MODEL_ROW_SQL = `id, provider, model_key, api_platform, secret_key_name,
+  supports_tools, metadata_json, COALESCE(is_active, 1) AS is_active`;
 
 async function resolveAiModelRowById(env, id) {
   if (!env.DB || id == null || id === '') return null;
   try {
     return await env.DB.prepare(
-      `SELECT provider, model_key, api_platform, secret_key_name
-       FROM ai_models WHERE id = ? AND is_active = 1 LIMIT 1`
+      `SELECT ${AI_MODEL_ROW_SQL}
+       FROM ai_models WHERE id = ? AND COALESCE(is_active, 0) = 1 LIMIT 1`,
     ).bind(id).first();
   } catch (_) {
     return null;
   }
+}
+
+function metadataObject(row) {
+  return parseJsonSafe(row?.metadata_json, {}) || {};
+}
+
+function rowIsGranite(row) {
+  const mk = String(row?.model_key || '').toLowerCase();
+  if (mk.includes('granite')) return true;
+  const meta = metadataObject(row);
+  if (meta.fallback_only === true) return true;
+  return false;
+}
+
+/** External paid/cloud APIs — excludes Workers AI / Cloudflare-hosted chat fallbacks. */
+function rowIsExternalProvider(row) {
+  const plat = String(row?.api_platform || '').toLowerCase();
+  const prov = String(row?.provider || '').toLowerCase();
+  if (plat === 'workers_ai' || prov === 'cloudflare') return false;
+  return true;
+}
+
+async function resolveAiModelFromRequest(env, body) {
+  const rawId =
+    body?.model_id != null && String(body.model_id).trim() !== ''
+      ? String(body.model_id).trim()
+      : body?.modelId != null && String(body.modelId).trim() !== ''
+        ? String(body.modelId).trim()
+        : '';
+  let rawKey =
+    body?.model != null && String(body.model).trim() !== ''
+      ? String(body.model).trim()
+      : body?.model_key != null && String(body.model_key).trim() !== ''
+        ? String(body.model_key).trim()
+        : body?.modelKey != null && String(body.modelKey).trim() !== ''
+          ? String(body.modelKey).trim()
+          : '';
+  if (/^auto$/i.test(rawKey)) rawKey = '';
+  if (!env.DB) return { row: null, rawRequestedKey: rawKey || null, rawRequestedId: rawId || null };
+  try {
+    if (rawId) {
+      const row = await env.DB.prepare(
+        `SELECT ${AI_MODEL_ROW_SQL} FROM ai_models WHERE id = ? LIMIT 1`,
+      )
+        .bind(rawId)
+        .first();
+      if (row && Number(row.is_active) !== 0) {
+        return { row, rawRequestedKey: rawKey || row.model_key, rawRequestedId: rawId };
+      }
+    }
+    if (rawKey) {
+      const row = await env.DB.prepare(
+        `SELECT ${AI_MODEL_ROW_SQL} FROM ai_models WHERE model_key = ? AND COALESCE(is_active, 0) = 1 LIMIT 1`,
+      )
+        .bind(rawKey)
+        .first();
+      if (row) return { row, rawRequestedKey: rawKey, rawRequestedId: rawId || null };
+    }
+  } catch (_) {
+    /* fallthrough */
+  }
+  return { row: null, rawRequestedKey: rawKey || null, rawRequestedId: rawId || null };
 }
 
 function normalizeGateParseFailure(originalMessage) {
@@ -374,18 +449,31 @@ function dedupeModelsByKey(rows) {
   return out;
 }
 
-async function loadLastResortModels(env) {
+async function loadLastResortModels(env, opts = {}) {
   if (!env.DB) return [];
+  const requireTools = !!opts.requireTools;
   try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, provider, model_key, api_platform, secret_key_name
-       FROM ai_models WHERE is_active = 1 AND supports_tools = 1
-       ORDER BY input_rate_per_mtok ASC LIMIT 3`
-    ).all();
+    let sql = `SELECT ${AI_MODEL_ROW_SQL}
+       FROM ai_models WHERE COALESCE(is_active, 1) = 1`;
+    if (requireTools) sql += ` AND COALESCE(supports_tools, 0) = 1`;
+    sql += ` ORDER BY COALESCE(input_rate_per_mtok, 999999) ASC LIMIT 8`;
+    const { results } = await env.DB.prepare(sql).all();
     return results || [];
   } catch (_) {
     return [];
   }
+}
+
+function filterChainToolPolicy(rows, requireTools) {
+  if (!requireTools || !rows?.length) return rows || [];
+  return rows.filter((r) => Number(r.supports_tools) === 1);
+}
+
+/** AUTO routing: drop Granite when any non-Granite external provider is available in the pool. */
+function filterGraniteAutoChain(rows, externalNonGraniteExists) {
+  if (!rows?.length) return [];
+  if (!externalNonGraniteExists) return rows;
+  return rows.filter((r) => !rowIsGranite(r));
 }
 
 function withTimeout(promise, ms) {
@@ -823,6 +911,27 @@ export async function agentChatSseHandler(env, request, ctx, session) {
   const threshold = Number(modeConfig?.escalation_threshold);
   const escalationThreshold = Number.isFinite(threshold) ? threshold : 0;
 
+  const requireTools = tools.length > 0;
+  const {
+    row: requestedCatalogRow,
+    rawRequestedKey,
+    rawRequestedId,
+  } = await resolveAiModelFromRequest(env, body);
+
+  let explicitRow = null;
+  let blockedToolsForRequested = false;
+  if (requestedCatalogRow?.model_key) {
+    let er = requestedCatalogRow;
+    if (requireTools && Number(er.supports_tools) !== 1) {
+      blockedToolsForRequested = true;
+      console.warn('[agent] model_override_blocked_tools', { model_key: er.model_key });
+      er = null;
+    }
+    explicitRow = er;
+  }
+
+  const isAutoModel = !explicitRow;
+
   let routingPick = null;
   try {
     routingPick = await getDefaultModelForTask(env, { taskKey: intentSlug, tenantId });
@@ -836,14 +945,44 @@ export async function agentChatSseHandler(env, request, ctx, session) {
 
   const primaryRow = await resolveAiModelRowById(env, modeConfig?.model_preference ?? null);
   const escalationRow = await resolveAiModelRowById(env, modeConfig?.escalation_model ?? null);
-  const lastResort = await loadLastResortModels(env);
-  const chainRows = dedupeModelsByKey(
+  const lastResort = await loadLastResortModels(env, { requireTools });
+  let poolRows = dedupeModelsByKey(
     [...(thompsonRow ? [thompsonRow] : []), primaryRow, escalationRow, ...(lastResort || [])].filter(Boolean),
   );
+  poolRows = filterChainToolPolicy(poolRows, requireTools);
+
+  const externalNonGraniteExists = poolRows.some(
+    (r) => rowIsExternalProvider(r) && !rowIsGranite(r),
+  );
+
+  let chainRows;
+  if (explicitRow) {
+    chainRows = dedupeModelsByKey([
+      explicitRow,
+      ...poolRows.filter((r) => r.model_key !== explicitRow.model_key),
+    ]);
+    chainRows = filterChainToolPolicy(chainRows, requireTools);
+  } else {
+    chainRows = filterGraniteAutoChain(poolRows, externalNonGraniteExists);
+  }
+
   const fallbackModelKeys = chainRows.map((r) => r.model_key).filter(Boolean);
   if (!fallbackModelKeys.length) {
     return jsonResponse({ error: 'All providers exhausted', tried: [] }, 503);
   }
+
+  console.log(
+    '[agent] routing_model',
+    JSON.stringify({
+      requested_model: rawRequestedKey || rawRequestedId || null,
+      resolved_requested: explicitRow?.model_key ?? null,
+      is_auto: isAutoModel,
+      chain: chainRows.map((r) => r.model_key),
+      tool_required: requireTools,
+      blocked_granite_auto: isAutoModel && externalNonGraniteExists,
+      blocked_tools_for_requested: blockedToolsForRequested,
+    }),
+  );
 
   const ragResult    = await unifiedRagSearch(env, message, {
     topK: modeConfig.context_strategy === 'minimal' ? 3 : 8,
@@ -887,7 +1026,15 @@ export async function agentChatSseHandler(env, request, ctx, session) {
     try { writer.write(encoder.encode(`data: ${JSON.stringify({ type, ...payload })}\n\n`)); } catch (_) {}
   };
 
-  emit('context', { intent: intentSlug, mode: requestedMode, model: fallbackModelKeys[0] || null, tool_count: tools.length });
+  emit('context', {
+    intent: intentSlug,
+    mode: requestedMode,
+    model: fallbackModelKeys[0] || null,
+    requested_model: rawRequestedKey || rawRequestedId || null,
+    resolved_requested_model: explicitRow?.model_key ?? null,
+    auto_model: isAutoModel,
+    tool_count: tools.length,
+  });
 
   ;(async () => {
     const chatT0 = Date.now();
@@ -922,6 +1069,14 @@ export async function agentChatSseHandler(env, request, ctx, session) {
           );
           if (textEmitted <= 0) throw new Error('empty_stream');
           succeeded = true;
+          console.log(
+            '[agent] routing_model',
+            JSON.stringify({
+              selected_model: modelKey,
+              requested: rawRequestedKey || rawRequestedId || null,
+              resolved_explicit: explicitRow?.model_key ?? null,
+            }),
+          );
           break;
         } catch (e) {
           if (String(e?.message || '') === OLLAMA_SKIP_MESSAGE) {
@@ -933,11 +1088,17 @@ export async function agentChatSseHandler(env, request, ctx, session) {
       }
 
       if (!succeeded) {
-        // Final fallback: always attempt the mode's preferred model_key (often OpenAI) even if tier chain was misconfigured.
-        const finalKey = String(modeConfig?.model_preference_key || modeConfig?.gate_model || '').trim();
+        let finalKey = '';
+        const prefStr = String(modeConfig?.model_preference_key || '').trim();
+        if (prefStr) finalKey = prefStr;
+        if (!finalKey && modeConfig?.gate_model) {
+          const gateRow = await resolveAiModelRowById(env, modeConfig.gate_model);
+          if (gateRow?.model_key) finalKey = gateRow.model_key;
+        }
         const alreadyTried = new Set(tried);
         if (finalKey && !alreadyTried.has(finalKey)) {
           tried.push(finalKey);
+          console.log('[agent] routing_model', JSON.stringify({ final_fallback: finalKey }));
           try {
             let textEmitted = 0;
             const emitWrapped = (type, payload) => {
@@ -1531,7 +1692,18 @@ export async function handleAgentApi(request, url, env, ctx) {
       const batch = await env.DB.batch([
         env.DB.prepare(`SELECT id, name, role_name, mode, thinking_mode, effort FROM agentsam_ai WHERE status='active' ORDER BY sort_order, name`),
         env.DB.prepare(`SELECT id, service_name, service_type, endpoint_url, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name`),
-        env.DB.prepare(`SELECT id, model_key, provider, display_name, role, cost_tier, input_cost_per_1m, output_cost_per_1m, context_window, supports_function_calling, supports_vision, supports_reasoning FROM agent_model_registry ORDER BY provider, role, input_cost_per_1m ASC`),
+        env.DB.prepare(`SELECT id, model_key, provider, display_name,
+            size_class AS role,
+            size_class AS cost_tier,
+            input_rate_per_mtok AS input_cost_per_1m,
+            output_rate_per_mtok AS output_cost_per_1m,
+            context_max_tokens AS context_window,
+            supports_tools AS supports_function_calling,
+            supports_vision,
+            0 AS supports_reasoning
+          FROM ai_models
+          WHERE COALESCE(is_active, 1) = 1
+          ORDER BY provider, COALESCE(sort_order, 999), COALESCE(input_rate_per_mtok, 999999) ASC`),
         env.DB.prepare(`SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20`),
       ]);
       return jsonResponse({ agents: batch[0]?.results||[], mcp_services: batch[1]?.results||[], models: batch[2]?.results||[], sessions: batch[3]?.results||[] });
@@ -1829,9 +2001,33 @@ export async function handleAgentApi(request, url, env, ctx) {
     const body   = await request.json().catch(() => ({}));
     const prompt = String(body.prompt || '').trim();
     if (!prompt) return jsonResponse({ error: 'prompt required' }, 400);
-    const modelRow = await env.DB.prepare(`SELECT model_key FROM agent_model_registry WHERE provider='workers_ai' AND role='image' ORDER BY input_cost_per_1m ASC LIMIT 1`).first().catch(() => null);
-    const model    = modelRow?.model_key;
-    if (!model) return jsonResponse({ error: 'No active Workers AI image model in agent_model_registry' }, 503);
+    let modelRow = await env.DB.prepare(
+      `SELECT model_key FROM ai_models
+       WHERE COALESCE(is_active, 1) = 1
+         AND LOWER(COALESCE(api_platform, '')) = 'workers_ai'
+         AND (
+           LOWER(COALESCE(display_name, '')) LIKE '%image%'
+           OR LOWER(model_key) LIKE '%flux%'
+         )
+       ORDER BY COALESCE(sort_order, 999), COALESCE(input_rate_per_mtok, 999999) ASC
+       LIMIT 1`,
+    )
+      .first()
+      .catch(() => null);
+    let model = modelRow?.model_key;
+    if (!model) {
+      modelRow = await env.DB.prepare(
+        `SELECT model_key FROM ai_models
+         WHERE COALESCE(is_active, 1) = 1
+           AND LOWER(COALESCE(api_platform, '')) = 'workers_ai'
+         ORDER BY COALESCE(sort_order, 999), COALESCE(input_rate_per_mtok, 999999) ASC
+         LIMIT 1`,
+      )
+        .first()
+        .catch(() => null);
+      model = modelRow?.model_key;
+    }
+    if (!model) return jsonResponse({ error: 'No active Workers AI image model in ai_models' }, 503);
     try {
       const result = await env.AI.run(model, { prompt });
       const bytes  = result instanceof ArrayBuffer ? new Uint8Array(result) : result;

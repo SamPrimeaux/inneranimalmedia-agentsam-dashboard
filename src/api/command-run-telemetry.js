@@ -2,6 +2,25 @@
  * agentsam_command_run + agentsam_execution_context — async telemetry (waitUntil).
  */
 
+/** Must match CHECK on agentsam_command_run.intent_category (or NULL). */
+const VALID_INTENT_CATEGORIES = [
+  'deploy',
+  'debug',
+  'db',
+  'r2',
+  'git',
+  'worker',
+  'search',
+  'file',
+  'misc',
+];
+
+function sanitizeIntentCategoryForCommandRun(raw) {
+  if (raw == null || raw === '') return null;
+  const s = String(raw).trim();
+  return VALID_INTENT_CATEGORIES.includes(s) ? s : 'misc';
+}
+
 /**
  * @param {any} env
  * @param {any} ctx
@@ -65,7 +84,7 @@ export function scheduleAgentsamCommandRunInsert(env, ctx, p) {
             p.conversationId ?? null,
             p.userInput ?? '',
             p.normalizedIntent ?? null,
-            p.intentCategory ?? null,
+            sanitizeIntentCategoryForCommandRun(p.intentCategory),
             modelId,
             JSON.stringify(p.commandsExecuted ?? []),
             JSON.stringify(p.result ?? {}),

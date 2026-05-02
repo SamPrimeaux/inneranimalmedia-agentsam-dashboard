@@ -367,7 +367,7 @@ Every D1 use is via `env.DB.prepare(...).run()`, `.first()`, `.all()`, or `env.D
 - **Routes that require session:**  
   /api/dashboard/time-track/manual, /api/overview/stats, recent-activity, activity-strip, deployments; /api/agent/terminal/ws; /api/overview/checkpoints (POST); and any handler that calls getSession and returns 401 when null.
 - **OAuth state:** SESSION_CACHE: `oauth_state_${state}` and `oauth_state_github_${state}`; TTL 600s. No API key validation in code; auth is session-based or unchecked (e.g. /api/agent/boot and many /api/agent/* do not check session; /api/agent/chat can create session from body or getSession).
-- **Superadmin:** SUPERADMIN_EMAILS = ['info@inneranimals.com', 'sam@inneranimalmedia.com']. Session creation: Google/GitHub callback inserts auth_sessions, sets Set-Cookie (HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=2592000, Domain from hostname).
+- **Superadmin:** Resolved from D1 (`auth_users.is_superadmin`), not from hardcoded email lists. Session creation: Google/GitHub callback inserts auth_sessions, sets Set-Cookie (HttpOnly, Secure, SameSite=Lax, Path=/, Max-Age=2592000, Domain from hostname).
 
 ---
 

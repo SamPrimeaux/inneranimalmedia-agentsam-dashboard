@@ -190,7 +190,7 @@ To stop agent `bc-d535452c` (or similar), use Cursor dashboard or Cloud Agents A
 Send `notifySam`-equivalent incident email (Mar 24 outage, Resolution version filled); prevention item: madge in build pipeline.
 
 ### What was done
-- **Email:** Sent via Resend API (same as worker `notifySam`: `agent@inneranimalmedia.com` to `sam@inneranimalmedia.com`, subject `[Agent Sam] INCIDENT REPORT: Production Outage — Mar 24 2026`). Body included resolution worker version **`9707c1c2-6c90-431f-9f2b-6134ae5edd9c`**. Resend response id: `2df44096-02d0-4dac-9ad3-2298ac2c9f79`. (Did not go through worker, so no `email_logs` row unless you backfill manually.)
+- **Email:** Sent via Resend API (same as worker `notifySam`). Body included resolution worker version **`9707c1c2-6c90-431f-9f2b-6134ae5edd9c`**. Resend response id: `2df44096-02d0-4dac-9ad3-2298ac2c9f79`. (Did not go through worker, so no `email_logs` row unless you backfill manually.)
 - **`agent-dashboard/package.json`:** `build` now runs `npx --yes madge --extensions js,jsx --circular src/main.jsx` then `vite build`; added **`build:vite-only`** to skip the cycle check if needed.
 
 ### Files changed
@@ -2362,7 +2362,7 @@ Chat endpoint accepts `Cookie: iam_session=<uuid>`; full benchmark requires a va
 
 ### Prod deploy completed
 - v16 promoted to inneranimalmedia.com/dashboard/agent
-- Resend notification delivered -> meauxbility@gmail.com (id=d229bee5)
+- Resend notification delivered -> configured recipient (id=d229bee5)
 - WARN: cicd_notifications FK mismatch fixed (removed from cicd-d1-log.sh)
 - promote-to-prod.sh CURRENT_V parse fixed
 
@@ -2456,9 +2456,33 @@ Optimal first milestone: **document the target host(s), auth method (key per mac
 ### Result
 - Sandbox: dashboard **v=21**, worker `inneranimal-dashboard` (version id in deploy log).
 - Production: dashboard **v=21**, worker `inneranimalmedia` @ `318a8385-9414-4fe7-ba3a-fa2f928ccf5c`.
-- Resend: **HTTP 200** to `meauxbility@gmail.com` (id `94ebeca7-ac51-4e99-8659-344bcb0fab76`).
+- Resend: **HTTP 200** (id `94ebeca7-ac51-4e99-8659-344bcb0fab76`).
 
 ### Notes
 - Includes worker fix for **`/api/themes/active`** (`cms_themes` / `variablesFromCmsThemeConfig` + IDE token aliases) and dashboard CMS theme client (`applyCmsTheme.ts`).
 - Unauthenticated `curl` to `/dashboard/agent` may 302 to login shell; use logged-in browser or R2 object check for `dashboard-v` in the Vite `index.html` bundle.
+
+---
+
+## 2026-05-01 — Dynamic provisioning module + SSE billing gate (BYOK / free tier models)
+
+### What was asked
+InnerAutodidact groundwork: idempotent `provisionUserWorkspace`, `getUserPlan`, BYOK decrypt, per-user bridge key helpers, Workers AI free-tier vs paid routing with **402** when model not allowed; thin wiring in `worker.js` only.
+
+### Files changed
+- `src/api/provisioning.js`: deterministic `workspaceSlugFromTenantId`, full provisioning + onboarding fallbacks, `getUserPlan`, `getUserBYOKey`, `generateUserBridgeKey` / `hashBridgeKey`, `encryptApiKeyForStorage`, `evaluatePlanForModelRequest`, `envWithLlmKeyOverride`.
+- `worker.js`: import provisioning helpers; `agentChatDirectSseHandler` runs billing gate after session + tenant resolve; `envChat` passed into `chatWithTools*` / `streamWorkersAI`.
+
+### Deploy status (this commit)
+Built (Vite): **no** — this change does not touch `agent-dashboard/`. R2 dashboard bundle: **unchanged by this commit**. Worker (`inneranimalmedia`): **not deployed from this session** — Sam runs `./scripts/promote-to-prod.sh` when ready per project rules.
+
+### How frontend reaches production (reminder)
+- **Sandbox:** `./scripts/deploy-sandbox.sh` runs `npm run build` (Vite) under `agent-dashboard`, uploads `agent-dashboard/agent-dashboard/dist` to R2 **`agent-sam-sandbox-cicd`**, deploys worker **`inneranimal-dashboard`** (`wrangler.jsonc`).
+- **Production:** `./scripts/promote-to-prod.sh` promotes sandbox manifest → **`agent-sam`** R2 (`static/dashboard/agent/*`) → **`inneranimalmedia`** worker (`wrangler.production.toml`).
+- Pushing `production` may trigger CI that mirrors **sandbox** deploy; prod bundle still flows through **promote**, not a separate ad-hoc upload unless you run those scripts explicitly.
+
+### Known issues / next steps
+- Settings UI + `POST/DELETE /api/user/api-keys`, terminal `generate-key` / `PATCH connection` routes not in this commit.
+- BYOK usage metering to `agentsam_usage_events` not wired.
+- Verify D1 columns: `billing_plans.allows_byok`, `allows_usage_billing`, `free_tier_models_json`; `terminal_connections` bridge columns if extended inserts rely on them.
 

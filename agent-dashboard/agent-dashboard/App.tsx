@@ -6,9 +6,6 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, Routes, Route, Navigate, useNavigate } from "react-router-dom";
-import { VoxelEngine } from './services/VoxelEngine';
-import { StudioSidebar } from './components/StudioSidebar';
-import { UIOverlay } from './components/UIOverlay';
 import { ChatAssistant } from './components/ChatAssistant';
 import { WorkspaceDashboard } from './components/WorkspaceDashboard';
 import { MCPPanel } from './components/MCPPanel';
@@ -19,8 +16,7 @@ import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { MonacoEditorView, type EditorModelMeta } from './components/MonacoEditorView';
 import { LocalExplorer } from './components/LocalExplorer';
 import { BrowserView } from './components/BrowserView';
-import { SettingsPanel } from './components/SettingsPanel';
-import { ToolLauncherBar } from './components/ToolLauncherBar';
+import SettingsPanel from './components/settings';
 import { StatusBar, type AgentNotificationRow } from './components/StatusBar';
 import { ExcalidrawView } from './components/ExcalidrawView';
 import { DatabaseBrowser, type DatabaseExplorerJump } from './components/DatabaseBrowser';
@@ -28,13 +24,14 @@ import { UnifiedSearchBar, type UnifiedSearchNavigate } from './components/Unifi
 import { GitHubActionsPanel } from './components/GitHubActionsPanel';
 import { GitHubExplorer } from './components/GitHubExplorer';
 import { KnowledgeSearchPanel } from './components/KnowledgeSearchPanel';
+import { AISearchPanel } from './components/AISearchPanel';
 // import { ProblemsDebugPanel } from './components/ProblemsDebugPanel';
 import { WorkspaceExplorerPanel } from './components/WorkspaceExplorerPanel';
 import { GoogleDriveExplorer } from './components/GoogleDriveExplorer';
 import { R2Explorer } from './components/R2Explorer';
-import { PlaywrightConsole } from './components/PlaywrightConsole';
 import { SourcePanel } from './components/SourcePanel';
-import { ProjectType, AppState, GameEntity, GenerationConfig, ArtStyle, SceneConfig, CADTool, CustomAsset, CADPlane, type ActiveFile } from './types';
+import LearnPage from './components/LearnPage';
+import { ProjectType, type ActiveFile } from './types';
 import { SHELL_VERSION } from './src/shellVersion';
 import {
   fetchAndApplyActiveCmsTheme,
@@ -55,10 +52,20 @@ import { CalendarPage } from './components/CalendarPage';
 import { OverviewPage } from './components/OverviewPage';
 import { DatabasePage } from './components/DatabasePage';
 import { McpPage } from './components/McpPage';
-import { IntegrationsPage } from './components/IntegrationsPage';
 import { DesignStudioPage } from './components/DesignStudioPage';
 import { StoragePage } from './components/StoragePage';
-import { Bot, Home, Files, Search, GitBranch, Box, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, Columns2, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History } from 'lucide-react';
+import ImagesPage from './components/ImagesPage';
+import { MailPage } from './components/MailPage';
+import MeetPage from './components/MeetPage';
+import { MeetProvider, MeetCtxValue } from './src/MeetContext';
+import { MeetShellPanel } from './components/MeetShellPanel';
+import { AuthSignInPage } from './components/auth/AuthSignInPage';
+import { AuthSignUpPage } from './components/auth/AuthSignUpPage';
+import { AuthForgotPage } from './components/auth/AuthForgotPage';
+import { AuthResetPage } from './components/auth/AuthResetPage';
+import { AuthOAuthConsentPage } from './components/auth/AuthOAuthConsentPage';
+import { OnboardingPage } from './components/onboarding/OnboardingPage';
+import { Bot, Home, Files, Search, GitBranch, Settings, PanelLeft, PanelLeftClose, PanelRightClose, Terminal as TermIcon, LayoutTemplate, Network, Layers, Monitor, ChevronDown, Bug, Github, Database, FolderOpen, Globe, PenTool, Cloud, X as XIcon, PanelBottom, Eye, MessageSquare, MoreHorizontal, ChevronLeft, Link2, HardDrive, Package, Palette, History, Wrench, Camera, Image, Mail, GraduationCap, Sparkles } from 'lucide-react';
 
 function escapeHtmlForPreview(s: string): string {
   return s
@@ -115,36 +122,128 @@ const QUICK_COMMANDS = [
   { icon: Database, label: 'Sync DB', cmd: 'npx prisma db pull', desc: 'D1 Schema Sync' },
 ];
 
+const SETTINGS_SLUG_MAP: Record<string, string> = {
+  general: 'General',
+  agents: 'Agents',
+  'ai-models': 'AI Models',
+  tools: 'Tools & MCP',
+  rules: 'Rules & Skills',
+  workspace: 'Workspace',
+  hooks: 'Hooks',
+  github: 'GitHub',
+  cicd: 'CI/CD',
+  network: 'Network',
+  themes: 'Themes',
+  storage: 'Storage',
+  security: 'Security',
+  billing: 'Plan & Usage',
+  notifications: 'Notifications',
+  docs: 'Docs',
+  integrations: 'Integrations',
+};
+
 const App: React.FC = () => {
   const { tabs, activeTabId, openFile, updateActiveContent, saveActiveFile } = useEditor();
   const location = useLocation();
   const navigate = useNavigate();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const engineRef = useRef<VoxelEngine | null>(null);
+  const integrationsSlug =
+    (Object.entries(SETTINGS_SLUG_MAP) as [string, string][]).find(([, lab]) => lab === 'Integrations')?.[0] ??
+    'integrations';
+  const settingsIntegrationsActive = location.pathname === `/dashboard/settings/${integrationsSlug}`;
   const terminalRef = useRef<XTermShellHandle>(null);
   const collabWsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    fetch('/api/themes/active', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload: { data?: Record<string, string> } | null) => {
+        if (!payload?.data) return;
+        const root = document.documentElement;
+        Object.entries(payload.data).forEach(([k, v]) => {
+          root.style.setProperty(k, v);
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  // Monaco deep-link handler (Settings → MCP tool config).
+  // Opens a new editor tab with payload content, then clears query params.
+  useEffect(() => {
+    if (location.pathname !== '/dashboard/agent') return;
+    const search = location.search || '';
+    if (!search) return;
+    const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+    const monaco = params.get('monaco');
+    if (monaco !== 'mcp_tool') return;
+
+    const id = params.get('id') || 'tool';
+    const payload = params.get('payload') || '';
+    if (!payload) return;
+
+    let decoded = payload;
+    try {
+      decoded = decodeURIComponent(payload);
+    } catch {
+      decoded = payload;
+    }
+
+    // Guard: avoid blowing up the editor with absurd payloads.
+    const content = decoded.length > 250_000 ? decoded.slice(0, 250_000) : decoded;
+    const name = `mcp_tool_${id}.json`;
+
+    openFile({
+      name,
+      workspacePath: `mcp_tool:${id}`,
+      content,
+    });
+
+    // Clear query params but stay on the Agent route.
+    try {
+      navigate('/dashboard/agent', { replace: true });
+    } catch {
+      // ignore
+    }
+  }, [location.pathname, location.search, navigate, openFile]);
+
+  if (!location.pathname.startsWith('/dashboard')) {
+    return (
+      <Routes>
+        <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/auth/login" element={<AuthSignInPage />} />
+        <Route path="/login" element={<AuthSignInPage />} />
+        <Route path="/signup" element={<AuthSignUpPage />} />
+        <Route path="/forgot-password" element={<AuthForgotPage />} />
+        <Route path="/reset-password" element={<AuthResetPage />} />
+        <Route path="/api/auth/oauth/consent" element={<AuthOAuthConsentPage />} />
+        <Route path="*" element={<Navigate to="/auth/login" replace />} />
+      </Routes>
+    );
+  }
   
-  const [activeProject, setActiveProject] = useState<ProjectType>(ProjectType.SANDBOX);
-  const [appState, setAppState] = useState<AppState>(AppState.EDITING);
-  const [voxelCount, setVoxelCount] = useState<number>(0);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [customAssets, setCustomAssets] = useState<CustomAsset[]>([]);
-  
-  // History Management
-  const [undoStack, setUndoStack] = useState<GameEntity[]>([]);
-  const [redoStack, setRedoStack] = useState<GameEntity[]>([]);
+  const [activeProject] = useState<ProjectType>(ProjectType.SANDBOX);
 
   // IDE State
-  type TabId = 'Workspace' | 'welcome' | 'engine' | 'code' | 'browser' | 'glb' | 'excalidraw';
-  const [activeActivity, setActiveActivity] = useState<'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database' | null>(() =>
+  type TabId = 'Workspace' | 'welcome' | 'code' | 'browser' | 'glb' | 'excalidraw';
+  const [activeActivity, setActiveActivity] = useState<'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'database' | 'autorag' | null>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? null : 'files',
   );
+  const LS_SIDEBAR_RAIL = 'iam_sidebar_expanded';
+  const [sidebarRailExpanded, setSidebarRailExpanded] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const v = localStorage.getItem(LS_SIDEBAR_RAIL);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch {
+      /* ignore */
+    }
+    return true;
+  });
   const [agentPosition, setAgentPosition] = useState<'right' | 'left' | 'off'>(() =>
     typeof window !== 'undefined' && window.innerWidth < 768 ? 'off' : 'right',
   );
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
-  /** Layout: optional split editor chrome (reserved for Monaco split view). */
-  const [splitLayout, setSplitLayout] = useState(false);
+  const [terminalDrawerH, setTerminalDrawerH] = useState(288);
   /** Mirrored from Lab shell for Output tab (build / r2 / help). */
   const [shellOutputLines, setShellOutputLines] = useState<string[]>([]);
 
@@ -175,10 +274,12 @@ const App: React.FC = () => {
   const [nativeFolderOpenSignal, setNativeFolderOpenSignal] = useState(0);
   /** ≤768px: secondary rail actions (sheet above bottom tab bar). */
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  /** Desktop: Draw / Search / Playwright / History (Addendum A). */
+  /** Desktop: Draw / Search / History (Addendum A). */
   const [topChromeMoreOpen, setTopChromeMoreOpen] = useState(false);
   const topChromeMoreRef = useRef<HTMLDivElement>(null);
   const [isWorkspaceLauncherOpen, setWorkspaceLauncherOpen] = useState(false);
+
+  const [meetCtxValue, setMeetCtxValue] = useState<MeetCtxValue | null>(null);
 
   const [isNarrowViewport, setIsNarrowViewport] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 768,
@@ -248,24 +349,47 @@ const App: React.FC = () => {
   }, [authWorkspaceId]);
 
   useEffect(() => {
+    const applyRecent = (list: Array<{ id: string; display_name?: string; slug?: string }>) => {
+      try {
+        const raw = localStorage.getItem('iam_recent_workspaces');
+        const recent = raw ? (JSON.parse(raw) as Array<{ id?: string }>) : [];
+        const rid = Array.isArray(recent) && recent[0]?.id ? String(recent[0].id).trim() : '';
+        if (rid && list.some((w) => w.id === rid)) {
+          setAuthWorkspaceId(rid);
+          const row = list.find((w) => w.id === rid);
+          if (row?.display_name) setWorkspaceDisplayName(row.display_name);
+          return;
+        }
+        if (list[0]?.id) {
+          setAuthWorkspaceId(list[0].id);
+          if (list[0].display_name) setWorkspaceDisplayName(list[0].display_name);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    fetch('/api/workspaces/list', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { workspaces?: Array<{ id: string; display_name?: string; slug?: string }> } | null) => {
+        const workspaces = Array.isArray(d?.workspaces) ? d.workspaces : [];
+        setWorkspaceRows(
+          workspaces
+            .filter((w) => w && typeof w.id === 'string')
+            .map((w) => ({
+              id: w.id,
+              name: typeof w.display_name === 'string' && w.display_name.trim() ? w.display_name : w.slug || w.id,
+            })),
+        );
+        applyRecent(workspaces);
+      })
+      .catch(() => {});
+
     fetch('/api/settings/workspaces', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { current?: string; data?: Array<{ id?: string; name?: string }> } | null) => {
+      .then((d: { current?: string } | null) => {
         if (d?.current && typeof d.current === 'string') {
-          setAuthWorkspaceId(d.current);
-          fetch(`/api/agent/workspace?id=${encodeURIComponent(d.current)}`, { credentials: 'same-origin' })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => {
-              if (d?.workspace?.display_name) setWorkspaceDisplayName(d.workspace.display_name);
-            })
-            .catch(() => {});
-        }
-        if (Array.isArray(d?.data)) {
-          setWorkspaceRows(
-            d.data
-              .filter((r) => r && typeof r.id === 'string')
-              .map((r) => ({ id: r.id as string, name: typeof r.name === 'string' ? r.name : r.id as string })),
-          );
+          setAuthWorkspaceId((prev) => prev || d.current || null);
         }
       })
       .catch(() => {});
@@ -435,11 +559,8 @@ const App: React.FC = () => {
   }, [topChromeMoreOpen]);
 
   const openTab = (tab: TabId) => {
-    setOpenTabs(prev => prev.includes(tab) ? prev : [...prev, tab]);
+    setOpenTabs((prev) => (prev.includes(tab) ? prev : [...prev, tab]));
     setActiveTab(tab);
-    if (tab === 'engine' && activeActivity !== 'cad') {
-      setActiveActivity('cad');
-    }
   };
 
   const closeTab = (tab: TabId, e: React.MouseEvent) => {
@@ -481,6 +602,36 @@ const App: React.FC = () => {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   };
+
+  const terminalResizeRef = useRef<{ startY: number; startH: number } | null>(null);
+  const clampTerminalH = useCallback((h: number) => {
+    const min = 160;
+    // Keep at least 160px for the content above the drawer.
+    const max = Math.max(min, window.innerHeight - 10 /* topbar */ - 32 /* tabs */ - 84 /* status/mobile */ - 160);
+    return Math.max(min, Math.min(max, Math.round(h)));
+  }, []);
+
+  const beginTerminalResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    terminalResizeRef.current = { startY: e.clientY, startH: terminalDrawerH };
+
+    const onMove = (pe: PointerEvent) => {
+      const s = terminalResizeRef.current;
+      if (!s) return;
+      const next = clampTerminalH(s.startH + (s.startY - pe.clientY));
+      setTerminalDrawerH(next);
+      // Let xterm FitAddon recompute.
+      window.dispatchEvent(new Event('resize'));
+    };
+    const onUp = () => {
+      terminalResizeRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [terminalDrawerH, clampTerminalH]);
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>(() => [
     { role: 'assistant', content: buildAgentSamGreeting(formatWorkspaceStatusLine({ source: 'none' })) },
   ]);
@@ -701,6 +852,7 @@ const App: React.FC = () => {
       if (!d?.cmd) return;
       
       setIsTerminalOpen(true);
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       // Give terminal a frame to mount if it's currently closed
       requestAnimationFrame(() => {
         if (terminalRef.current) {
@@ -713,8 +865,13 @@ const App: React.FC = () => {
       const d = (e as CustomEvent<{ open?: boolean }>).detail;
       if (d && typeof d.open === 'boolean') {
         setIsTerminalOpen(d.open);
+        if (d.open) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
       } else {
-        setIsTerminalOpen(o => !o);
+        setIsTerminalOpen((p) => {
+          const next = !p;
+          if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+          return next;
+        });
       }
     };
 
@@ -727,16 +884,30 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const toggleActivity = (activity: 'cad' | 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'settings' | 'drive' | 'playwright' | 'database') => {
+  useEffect(() => {
+    const handler = () => {
+      setIsTerminalOpen(true);
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+    };
+    window.addEventListener('iam:open-terminal', handler);
+    return () => window.removeEventListener('iam:open-terminal', handler);
+  }, []);
+
+  const toggleActivity = (
+    activity: 'files' | 'search' | 'mcps' | 'git' | 'debug' | 'remote' | 'actions' | 'projects' | 'drive' | 'database',
+  ) => {
+    if (activity === 'files' && typeof window !== 'undefined') {
+      const p = window.location.pathname;
+      if (p !== '/dashboard/agent' && p !== '/dashboard/meet') {
+        navigate('/dashboard/agent');
+      }
+    }
     setActiveActivity((prev) => {
       if (prev === activity) return null;
       if (activity === 'debug') {
         setIsTerminalOpen(true);
         setTimeout(() => terminalRef.current?.setActiveTab('problems'), 50);
         return null; // Don't open a sidebar for debug anymore
-      }
-      if (activity === 'cad') {
-        openTab('engine');
       }
       return activity;
     });
@@ -797,9 +968,7 @@ const App: React.FC = () => {
     [],
   );
 
-  const fetchLiveStatus = useCallback(async () => {
-    const cred = { credentials: 'same-origin' as const };
-
+  const fetchHealth = useCallback(async () => {
     try {
       const hr = await fetch('/api/health');
       const hj = await hr.json().catch(() => ({}));
@@ -808,6 +977,115 @@ const App: React.FC = () => {
     } catch {
       setHealthOk(false);
     }
+  }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const nr = await fetch('/api/agent/notifications', cred);
+      const nj = await nr.json().catch(() => ({}));
+      if (nr.ok && Array.isArray(nj.notifications)) {
+        setAgentNotifications(nj.notifications as AgentNotificationRow[]);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchGitAndProblems = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const gitRes = await fetch('/api/agent/git/status', cred);
+      const gitData = await gitRes.json().catch(() => ({}));
+      if (gitRes.ok && gitData.branch) setGitBranch(String(gitData.branch));
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const probRes = await fetch('/api/agent/problems', cred);
+      const probData = await probRes.json().catch(() => ({}));
+      if (probRes.ok && probData && typeof probData === 'object') {
+        setSystemProblems([]);
+        const mcp = Array.isArray(probData.mcp_tool_errors) ? probData.mcp_tool_errors.length : 0;
+        const audits = Array.isArray(probData.audit_failures) ? probData.audit_failures : [];
+        const wx = Array.isArray(probData.worker_errors) ? probData.worker_errors.length : 0;
+        const warnAudits = audits.filter((a: { event_type?: string }) =>
+          String(a?.event_type || '').toLowerCase().includes('warn'),
+        );
+        const errAudits = audits.length - warnAudits.length;
+        setErrorCount(mcp + wx + errAudits);
+        setWarningCount(warnAudits.length);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchTunnelStatusOnly = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const tr = await fetch('/api/tunnel/status', cred);
+      const tj = await tr.json().catch(() => ({}));
+      if (tr.ok && typeof tj.healthy === 'boolean') {
+        setTunnelHealthy(tj.healthy);
+        const st = tj.status != null ? String(tj.status) : '';
+        const n = typeof tj.connections === 'number' ? tj.connections : 0;
+        setTunnelLabel(st ? `${st} · ${n} conn` : `${n} conn`);
+      } else if (tr.status === 401) {
+        setTunnelHealthy(null);
+        setTunnelLabel(null);
+      } else {
+        setTunnelHealthy(false);
+        const err = tj && typeof tj === 'object' && 'error' in tj ? String((tj as { error?: string }).error || '') : '';
+        setTunnelLabel(err ? err.slice(0, 72) : `tunnel ${tr.status}`);
+      }
+    } catch {
+      setTunnelHealthy(null);
+      setTunnelLabel(null);
+    }
+  }, []);
+
+  const fetchTerminalConfigOnly = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const ter = await fetch('/api/agent/terminal/config-status', cred);
+      const tej = await ter.json().catch(() => ({}));
+      if (ter.ok) setTerminalOk(!!tej.terminal_configured);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fetchDeploymentsPoll = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+    try {
+      const dr = await fetch('/api/overview/deployments', cred);
+      const dj = await dr.json().catch(() => ({}));
+      if (dr.ok && Array.isArray(dj.deployments) && dj.deployments[0]) {
+        const d = dj.deployments[0] as {
+          worker_name?: string;
+          environment?: string;
+          status?: string;
+        };
+        const bits = [d.worker_name, d.environment, d.status].filter(Boolean).map(String);
+        setLastDeployLine(bits.join(' · ') || null);
+      } else {
+        setLastDeployLine(null);
+      }
+    } catch {
+      setLastDeployLine(null);
+    }
+  }, []);
+
+  const fetchTelemetryPoll = useCallback(async () => {
+    fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
+  }, []);
+
+  const fetchLiveStatus = useCallback(async () => {
+    const cred = { credentials: 'same-origin' as const };
+
+    void fetchHealth();
 
     try {
       const gitRes = await fetch('/api/agent/git/status', cred);
@@ -836,52 +1114,9 @@ const App: React.FC = () => {
       /* ignore */
     }
 
-    try {
-      const tr = await fetch('/api/tunnel/status', cred);
-      const tj = await tr.json().catch(() => ({}));
-      if (tr.ok && typeof tj.healthy === 'boolean') {
-        setTunnelHealthy(tj.healthy);
-        const st = tj.status != null ? String(tj.status) : '';
-        const n = typeof tj.connections === 'number' ? tj.connections : 0;
-        setTunnelLabel(st ? `${st} · ${n} conn` : `${n} conn`);
-      } else if (tr.status === 401) {
-        setTunnelHealthy(null);
-        setTunnelLabel(null);
-      } else {
-        setTunnelHealthy(false);
-        const err = tj && typeof tj === 'object' && 'error' in tj ? String((tj as { error?: string }).error || '') : '';
-        setTunnelLabel(err ? err.slice(0, 72) : `tunnel ${tr.status}`);
-      }
-    } catch {
-      setTunnelHealthy(null);
-      setTunnelLabel(null);
-    }
-
-    try {
-      const ter = await fetch('/api/agent/terminal/config-status', cred);
-      const tej = await ter.json().catch(() => ({}));
-      if (ter.ok) setTerminalOk(!!tej.terminal_configured);
-    } catch {
-      /* ignore */
-    }
-
-    try {
-      const dr = await fetch('/api/overview/deployments', cred);
-      const dj = await dr.json().catch(() => ({}));
-      if (dr.ok && Array.isArray(dj.deployments) && dj.deployments[0]) {
-        const d = dj.deployments[0] as {
-          worker_name?: string;
-          environment?: string;
-          status?: string;
-        };
-        const bits = [d.worker_name, d.environment, d.status].filter(Boolean).map(String);
-        setLastDeployLine(bits.join(' · ') || null);
-      } else {
-        setLastDeployLine(null);
-      }
-    } catch {
-      setLastDeployLine(null);
-    }
+    void fetchTunnelStatusOnly();
+    void fetchTerminalConfigOnly();
+    void fetchDeploymentsPoll();
 
     try {
       const nr = await fetch('/api/agent/notifications', cred);
@@ -893,14 +1128,60 @@ const App: React.FC = () => {
       /* ignore */
     }
 
-    fetch('/api/agent/telemetry', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
-  }, []);
+    void fetchTelemetryPoll();
+  }, [fetchHealth, fetchTunnelStatusOnly, fetchTerminalConfigOnly, fetchDeploymentsPoll, fetchTelemetryPoll]);
 
   useEffect(() => {
-    void fetchLiveStatus();
-    const interval = window.setInterval(() => void fetchLiveStatus(), 300000);
-    return () => clearInterval(interval);
-  }, [fetchLiveStatus]);
+    // Polling (ms): health 5m, notifications 2m, git+problems 3m, tunnel 5m, terminal config 10m,
+    // deployments 2m, telemetry 5m. Paused while tab hidden (visibilitychange).
+    const ids: number[] = [];
+    const clearAll = () => {
+      ids.forEach((id) => clearInterval(id));
+      ids.length = 0;
+    };
+
+    const startAll = () => {
+      clearAll();
+      if (typeof document !== 'undefined' && document.hidden) return;
+
+      void fetchHealth();
+      void fetchNotifications();
+      void fetchGitAndProblems();
+      void fetchTunnelStatusOnly();
+      void fetchTerminalConfigOnly();
+      void fetchDeploymentsPoll();
+      void fetchTelemetryPoll();
+
+      ids.push(window.setInterval(() => void fetchHealth(), 300_000));
+      ids.push(window.setInterval(() => void fetchNotifications(), 120_000));
+      ids.push(window.setInterval(() => void fetchGitAndProblems(), 180_000));
+      ids.push(window.setInterval(() => void fetchTunnelStatusOnly(), 300_000));
+      ids.push(window.setInterval(() => void fetchTerminalConfigOnly(), 600_000));
+      ids.push(window.setInterval(() => void fetchDeploymentsPoll(), 120_000));
+      ids.push(window.setInterval(() => void fetchTelemetryPoll(), 300_000));
+    };
+
+    startAll();
+
+    const onVis = () => {
+      if (document.hidden) clearAll();
+      else startAll();
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      clearAll();
+    };
+  }, [
+    fetchHealth,
+    fetchNotifications,
+    fetchGitAndProblems,
+    fetchTunnelStatusOnly,
+    fetchTerminalConfigOnly,
+    fetchDeploymentsPoll,
+    fetchTelemetryPoll,
+  ]);
 
   const markNotificationRead = useCallback(async (id: string) => {
     try {
@@ -918,6 +1199,25 @@ const App: React.FC = () => {
     if (!isNarrowViewport || activeActivity == null) return;
     setAgentPosition('off');
   }, [activeActivity, isNarrowViewport]);
+
+  useEffect(() => {
+    if (activeActivity === 'files' && location.pathname !== '/dashboard/agent') {
+      setActiveActivity(null);
+    }
+  }, [location.pathname, activeActivity]);
+
+  useEffect(() => {
+    const onSidebarToggle = (e: Event) => {
+      const act = (e as CustomEvent<{ activity?: string }>).detail?.activity;
+      if (!act) return;
+      if (act === 'files' && location.pathname !== '/dashboard/agent' && location.pathname !== '/dashboard/meet') {
+        navigate('/dashboard/agent');
+      }
+      setActiveActivity(act as typeof activeActivity);
+    };
+    window.addEventListener('iam-sidebar-toggle', onSidebarToggle as EventListener);
+    return () => window.removeEventListener('iam-sidebar-toggle', onSidebarToggle as EventListener);
+  }, [location.pathname, navigate]);
 
   const cycleAgentPosition = useCallback(() => {
     setAgentPosition((p) => (p === 'right' ? 'left' : p === 'left' ? 'off' : 'right'));
@@ -1082,6 +1382,35 @@ const App: React.FC = () => {
 
   const handleSaveFile = useCallback(async (content: string) => {
     if (!activeFile) return;
+    if (typeof activeFile.workspacePath === 'string' && activeFile.workspacePath.startsWith('mcp_tool:')) {
+      const toolId = activeFile.workspacePath.slice('mcp_tool:'.length).trim();
+      if (!toolId) return;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        setToastMsg('Invalid JSON');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/settings/mcp/tools/${encodeURIComponent(toolId)}`, {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parsed),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setToastMsg(typeof data.error === 'string' ? data.error : `Tool config save failed (${res.status})`);
+          return;
+        }
+        setActiveFile((prev) => (prev ? { ...prev, content, originalContent: content } : null));
+        setToastMsg('Tool config saved');
+      } catch (e) {
+        setToastMsg(e instanceof Error ? e.message : 'Tool config save failed');
+      }
+      return;
+    }
     if (activeFile.driveFileId) {
       try {
         const res = await fetch('/api/drive/file', {
@@ -1211,7 +1540,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
-            setIsTerminalOpen(p => !p);
+            setIsTerminalOpen((p) => {
+              const next = !p;
+              if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+              return next;
+            });
             e.preventDefault();
         }
     };
@@ -1219,233 +1552,19 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const [genConfig, setGenConfig] = useState<GenerationConfig>({
-    style: ArtStyle.CYBERPUNK,
-    density: 5,
-    usePhysics: true,
-    cadTool: CADTool.NONE,
-    cadPlane: CADPlane.XZ,
-    extrusion: 1
-  });
-
-  const [sceneConfig, setSceneConfig] = useState<SceneConfig>({
-    ambientIntensity: 1.5,
-    sunColor: '#ffffff',
-    castShadows: true,
-    showPhysicsDebug: false
-  });
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const engine = new VoxelEngine(
-      containerRef.current,
-      (s) => setAppState(s),
-      (c) => setVoxelCount(c)
-    );
-    engineRef.current = engine;
-    
-    // Wire up engine events for history
-    engine.setOnEntityCreated((entity) => {
-      setUndoStack(prev => [...prev, entity]);
-      setRedoStack([]); // Clear redo on new action
-    });
-
-    // Initial sync
-    engine.updateLighting(sceneConfig);
-    engine.setCADPlane(genConfig.cadPlane);
-    engine.setExtrusion(genConfig.extrusion);
-
-    const handleResize = () => engine.handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      engine.cleanup();
-    };
-  }, []);
-
-  useEffect(() => {
-    engineRef.current?.updateLighting(sceneConfig);
-  }, [sceneConfig]);
-
-  const handleUndo = () => {
-    if (undoStack.length === 0) return;
-    const last = undoStack[undoStack.length - 1];
-    engineRef.current?.removeEntity(last.id);
-    setUndoStack(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, last]);
-  };
-
-  const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    engineRef.current?.spawnEntity(next);
-    setRedoStack(prev => prev.slice(0, -1));
-    setUndoStack(prev => [...prev, next]);
-  };
-
-  const handleProjectSwitch = (type: ProjectType) => {
-    setActiveProject(type);
-    engineRef.current?.setProjectType(type);
-    setGenConfig(prev => ({ ...prev, cadTool: CADTool.NONE }));
-    setUndoStack([]);
-    setRedoStack([]);
-    // Auto-surface the engine canvas when a 3D project is picked
-    openTab('engine');
-    setActiveActivity('cad');
-  };
-
-  const handleUpdateGenConfig = (cfg: Partial<GenerationConfig>) => {
-    const next = { ...genConfig, ...cfg };
-    setGenConfig(next);
-    
-    if (cfg.cadTool !== undefined) engineRef.current?.setCADTool(cfg.cadTool);
-    if (cfg.cadPlane !== undefined) engineRef.current?.setCADPlane(cfg.cadPlane);
-    if (cfg.extrusion !== undefined) engineRef.current?.setExtrusion(cfg.extrusion);
-  };
-
-  const handleSpawnModel = (name: string, url: string, scale: number) => {
-    if (activeTab !== 'engine') openTab('engine');
-    engineRef.current?.spawnEntity({
-      id: `asset_${Date.now()}`,
-      name: name,
-      type: 'prop',
-      modelUrl: url,
-      scale: scale,
-      position: { x: (Math.random() - 0.5) * 10, y: 10, z: (Math.random() - 0.5) * 10 },
-      behavior: { type: 'dynamic', mass: 10, restitution: 0.2 }
-    });
-  };
-
-  const handleFileDrop = (e: React.DragEvent) => {
+  const handleMainFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files);
-    const glb = files.find(f => f.name.toLowerCase().endsWith('.glb'));
-    if (glb) {
-      const url = URL.createObjectURL(glb);
-      handleSpawnModel(glb.name, url, 1);
-    }
+    const glb = files.find((f) => f.name.toLowerCase().endsWith('.glb'));
+    if (!glb) return;
+    const url = URL.createObjectURL(glb);
+    navigate('/dashboard/designstudio', {
+      state: { pendingGlb: { url, name: glb.name.replace(/\.glb$/i, '') } },
+    });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleMainDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-  };
-
-  const handleAddCustomAsset = (name: string, url: string) => {
-    const newAsset: CustomAsset = {
-      id: `custom_${Date.now()}`,
-      name,
-      url
-    };
-    setCustomAssets(prev => [...prev, newAsset]);
-  };
-
-  const handleRemoveCustomAsset = (id: string) => {
-    setCustomAssets(prev => prev.filter(a => a.id !== id));
-  };
-
-  const handleSave = async (id: string) => {
-    try {
-      const dataToSave = { undoStack, genConfig, sceneConfig }; 
-      await fetch(`/api/cad/upload/${id}`, {
-          method: 'POST',
-          body: JSON.stringify(dataToSave)
-      });
-      alert(`Project saved as ${id} to R2!`);
-    } catch(err) {
-      console.error(err);
-      alert('Save failed');
-    }
-  };
-
-  const handleLoad = async (id: string) => {
-    try {
-      const res = await fetch(`/api/cad/get/${id}`);
-      if (!res.ok) throw new Error('Not found');
-      const data = await res.json();
-      
-      engineRef.current?.clearWorld();
-      setUndoStack([]);
-      setRedoStack([]);
-      
-      if (data.undoStack) {
-          data.undoStack.forEach((ent: GameEntity) => {
-              engineRef.current?.spawnEntity(ent);
-              setUndoStack(prev => [...prev, ent]);
-          });
-      }
-      if (data.genConfig) handleUpdateGenConfig(data.genConfig);
-      if (data.sceneConfig) setSceneConfig(data.sceneConfig);
-      
-      alert(`Project loaded from R2!`);
-    } catch(err) {
-      console.error(err);
-      alert('Load failed');
-    }
-  };
-
-  const handleCommand = async (prompt: string) => {
-    if (prompt.startsWith('save ')) {
-        const id = prompt.replace('save ', '').trim();
-        await handleSave(id);
-        return;
-    }
-    if (prompt.startsWith('load ')) {
-        const id = prompt.replace('load ', '').trim();
-        await handleLoad(id);
-        return;
-    }
-
-    setIsGenerating(true);
-    try {
-      const styleGuidelines = {
-        [ArtStyle.CYBERPUNK]: "Neon accents, high-contrast, glowing colors (emissive), sharp technological angles.",
-        [ArtStyle.BRUTALIST]: "Monolithic shapes, concrete-gray color schemes, massive proportions, minimal decoration.",
-        [ArtStyle.ORGANIC]: "Soft curves, earth tones (greens/browns), flowing bio-inspired shapes.",
-        [ArtStyle.LOW_POLY]: "Basic geometric primitives, simple color blocking, retro 90s game look."
-      };
-      const densityMultiplier = genConfig.density * 50;
-      
-      const fullPrompt = `
-          PROJECT: ${activeProject}
-          STYLE PRESET: ${genConfig.style}
-          STYLE GUIDELINES: ${styleGuidelines[genConfig.style]}
-          PHYSICS ENABLED: ${genConfig.usePhysics}
-          DETAIL LEVEL (DENSITY): ${genConfig.density}/10 (Use roughly ${densityMultiplier} voxels per entity)
-          
-          COMMAND: "${prompt}"
-          
-          Return a JSON array of NEW entities. 
-          Behaviors: 'static', 'dynamic', 'hover', 'rotate'.
-          If physics is enabled, use 'dynamic' for objects that should fall and collide.
-          Include 'mass' (0.5 to 10), 'restitution' (0 to 1), and 'friction' (0 to 1) in behavior if dynamic.
-          Colors: Use hex strings appropriate for ${genConfig.style}.
-      `;
-
-      const response = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: fullPrompt })
-      });
-      const data = await response.json();
-
-      if (data.response && engineRef.current) {
-        const entities: any[] = JSON.parse(data.response);
-        entities.forEach(ent => {
-            const formattedVoxels = ent.voxels.map((v: any) => ({
-                ...v,
-                color: typeof v.color === 'string' ? parseInt(v.color.replace('#', ''), 16) : v.color
-            }));
-            const finalEntity = { ...ent, voxels: formattedVoxels };
-            engineRef.current?.spawnEntity(finalEntity);
-            setUndoStack(prev => [...prev, finalEntity]);
-        });
-        setRedoStack([]);
-      }
-    } catch (err) {
-      console.error("Studio Operation Failed", err);
-    } finally {
-      setIsGenerating(false);
-    }
   };
 
   const narrowBlocksCenter = isNarrowViewport && (!!activeActivity || agentPosition !== 'off');
@@ -1481,11 +1600,22 @@ const App: React.FC = () => {
               />
               <button
                 type="button"
-                onClick={() => toggleActivity(activeActivity ? activeActivity : 'files')}
+                onClick={() => {
+                  setSidebarRailExpanded((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem(LS_SIDEBAR_RAIL, next ? '1' : '0');
+                    } catch {
+                      /* ignore */
+                    }
+                    return next;
+                  });
+                }}
                 className="shrink-0 p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)] transition-colors ml-1"
-                title={activeActivity ? "Close sidebar" : "Open sidebar"}
+                title={sidebarRailExpanded ? 'Collapse navigation' : 'Expand navigation'}
+                aria-expanded={sidebarRailExpanded}
               >
-                {activeActivity ? <PanelLeftClose size={18} strokeWidth={1.75} /> : <PanelLeft size={18} strokeWidth={1.75} />}
+                {sidebarRailExpanded ? <PanelLeftClose size={18} strokeWidth={1.75} /> : <PanelLeft size={18} strokeWidth={1.75} />}
               </button>
           </div>
 
@@ -1511,11 +1641,13 @@ const App: React.FC = () => {
               </button>
               <button
                   type="button"
-                  title="Toggle split editor layout"
-                  className={`p-1.5 rounded transition-colors ${splitLayout ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => setSplitLayout((v) => !v)}
+                  title="Open Browser"
+                  className="p-1.5 rounded transition-colors text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]"
+                  onClick={() => {
+                    openTab('browser');
+                  }}
               >
-                  <Columns2 size={15} strokeWidth={1.75} />
+                  <Globe size={15} strokeWidth={1.75} />
               </button>
               <button
                   type="button"
@@ -1532,15 +1664,21 @@ const App: React.FC = () => {
                   type="button"
                   title="Terminal (Cmd+J)"
                   className={`p-1.5 rounded transition-colors ${isTerminalOpen ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => setIsTerminalOpen((p) => !p)}
+                  onClick={() =>
+                    setIsTerminalOpen((p) => {
+                      const next = !p;
+                      if (next) setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+                      return next;
+                    })
+                  }
               >
                   <TermIcon size={15} strokeWidth={1.75} />
               </button>
               <button
                   type="button"
                   title="Settings"
-                  className={`p-1.5 rounded transition-colors ${activeActivity === 'settings' ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
-                  onClick={() => toggleActivity('settings')}
+                  className={`p-1.5 rounded transition-colors ${location.pathname.startsWith('/dashboard/settings') ? 'text-[var(--solar-cyan)] bg-[var(--bg-hover)]' : 'text-[var(--text-muted)] hover:text-white hover:bg-[var(--bg-hover)]'}`}
+                  onClick={() => navigate('/dashboard/settings/general')}
               >
                   <Settings size={15} strokeWidth={1.75} />
               </button>
@@ -1583,17 +1721,6 @@ const App: React.FC = () => {
                               className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
                               onClick={() => {
                                   setTopChromeMoreOpen(false);
-                                  toggleActivity('playwright');
-                              }}
-                          >
-                              <Monitor size={14} className="text-[var(--text-muted)]" />
-                              Playwright
-                          </button>
-                          <button
-                              type="button"
-                              className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text-main)] hover:bg-[var(--bg-hover)]"
-                              onClick={() => {
-                                  setTopChromeMoreOpen(false);
                                   navigate('/dashboard/overview');
                               }}
                           >
@@ -1608,31 +1735,66 @@ const App: React.FC = () => {
 
       <div className="flex flex-1 overflow-hidden max-md:pb-[52px]">
           {/* 2. ACTIVITY BAR (Extreme Left) — hidden ≤768px; use bottom tab bar + More */}
-          {/* Activity bar: exactly 8 icons (v3 rail) */}
-          <div className="hidden md:flex w-12 bg-[var(--bg-panel)] flex-col items-center py-4 gap-3 border-r border-[var(--border-subtle)] shrink-0 z-50">
-              <ActivityIcon icon={Home} title="Overview" active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
-              <ActivityIcon icon={Bot} title="Agent" active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
-              <ActivityIcon
+          {/* Activity bar: icon rail (width toggled via ☰ — localStorage iam_sidebar_expanded) */}
+          <div
+            className="hidden md:flex flex-col py-3 gap-1 px-1 bg-[var(--bg-panel)] border-r border-[var(--border-subtle)] shrink-0 z-50 overflow-x-hidden overflow-y-auto transition-[width] duration-200 ease-in-out"
+            style={{ width: sidebarRailExpanded ? 180 : 48 }}
+          >
+              <ActivityRailItem icon={Home} label="Overview" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/overview'} onClick={() => navigate('/dashboard/overview')} />
+              <ActivityRailItem icon={Bot} label="Agent" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/agent'} onClick={() => navigate('/dashboard/agent')} />
+              <ActivityRailItem icon={GraduationCap} label="Learn" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/learn'} onClick={() => navigate('/dashboard/learn')} />
+              <ActivityRailItem
                   icon={Palette}
-                  title="Design Studio"
+                  label="Design Studio"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/designstudio'}
                   onClick={() => navigate('/dashboard/designstudio')}
               />
-              <ActivityIcon
+              <ActivityRailItem
                   icon={HardDrive}
-                  title="Storage"
+                  label="Storage"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/storage'}
                   onClick={() => navigate('/dashboard/storage')}
               />
-              <ActivityIcon icon={Github} title="Integrations" active={location.pathname === '/dashboard/integrations'} onClick={() => navigate('/dashboard/integrations')} />
-              <ActivityIcon icon={Layers} title="MCP & AI" active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
-              <ActivityIcon
+              <ActivityRailItem
+                  icon={Wrench}
+                  label="Integrations"
+                  expanded={sidebarRailExpanded}
+                  active={settingsIntegrationsActive}
+                  onClick={() => navigate('/dashboard/settings/integrations')}
+              />
+              <ActivityRailItem icon={Layers} label="MCP & AI" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/mcp'} onClick={() => navigate('/dashboard/mcp')} />
+              <ActivityRailItem
                   icon={Database}
-                  title="D1 Explorer"
+                  label="D1 Explorer"
+                  expanded={sidebarRailExpanded}
                   active={location.pathname === '/dashboard/database'}
                   onClick={() => navigate('/dashboard/database')}
               />
-              <ActivityIcon icon={Settings} title="Settings" active={activeActivity === 'settings'} onClick={() => toggleActivity('settings')} />
+              <ActivityRailItem
+                  icon={Sparkles}
+                  label="AutoRAG Search"
+                  expanded={sidebarRailExpanded}
+                  active={activeActivity === 'autorag'}
+                  onClick={() => setActiveActivity(activeActivity === 'autorag' ? null : 'autorag')}
+              />
+              <ActivityRailItem icon={Camera} label="Meet" expanded={sidebarRailExpanded} active={location.pathname === '/dashboard/meet'} onClick={() => navigate('/dashboard/meet')} />
+              <ActivityRailItem
+                icon={Image}
+                label="Images"
+                expanded={sidebarRailExpanded}
+                active={location.pathname === '/dashboard/images'}
+                onClick={() => navigate('/dashboard/images')}
+              />
+              <ActivityRailItem
+                icon={Mail}
+                label="Mail"
+                expanded={sidebarRailExpanded}
+                active={location.pathname === '/dashboard/mail'}
+                onClick={() => navigate('/dashboard/mail')}
+              />
+              <ActivityRailItem icon={Settings} label="Settings" expanded={sidebarRailExpanded} active={location.pathname.startsWith('/dashboard/settings')} onClick={() => navigate('/dashboard/settings/general')} />
           </div>
 
           {/* Optional Left Agent Panel */}
@@ -1669,18 +1831,9 @@ const App: React.FC = () => {
                             return glbUrl;
                           });
                           setGlbViewerFilename(file.name);
-                          openTab('engine');
-                          if (engineRef.current) {
-                            engineRef.current.spawnEntity({
-                              id: `chat-glb-${Date.now()}`,
-                              name: file.name.replace(/\.glb$/i, ''),
-                              type: 'prop',
-                              position: { x: 0, y: 1, z: 0 },
-                              behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
-                              modelUrl: glbUrl,
-                              scale: 1,
-                            });
-                          }
+                          navigate('/dashboard/designstudio', {
+                            state: { pendingGlb: { url: glbUrl, name: file.name.replace(/\.glb$/i, '') } },
+                          });
                         }}
                         onRunInTerminal={runInTerminal}
                         onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -1705,28 +1858,19 @@ const App: React.FC = () => {
               style={{ width: activeActivity ? sidebarW : 0 }}
               {...(narrowNeedsBack && !!activeActivity ? mobileEdgeSwipeHandlers : {})}
           >
-              <div className="w-full h-full flex flex-col relative">                  
-                  {activeActivity === 'cad' ? (
-                      <StudioSidebar 
-                          activeProject={activeProject} 
-                          onSwitchProject={handleProjectSwitch}
-                          onExport={() => engineRef.current?.exportForBlender()}
-                          genConfig={genConfig}
-                          onUpdateGenConfig={handleUpdateGenConfig}
-                          sceneConfig={sceneConfig}
-                          onUpdateSceneConfig={(cfg) => setSceneConfig(prev => ({ ...prev, ...cfg }))}
-                          onSpawnModel={handleSpawnModel}
-                          customAssets={customAssets}
-                          onAddCustomAsset={handleAddCustomAsset}
-                          onRemoveCustomAsset={handleRemoveCustomAsset}
-                          isEmbedded={true}
-                      />
-                  ) : activeActivity === 'search' ? (
+              <div className="w-full h-full flex flex-col relative">
+                  {activeActivity === 'search' ? (
                       <KnowledgeSearchPanel
                         onClose={() => setActiveActivity(null)}
                         activeConversationId={agentChatConversationId}
                       />
-                  ) : activeActivity === 'files' ? (
+                  ) : activeActivity === 'autorag' ? (
+                      <AISearchPanel />
+                  ) : location.pathname === '/dashboard/meet' && meetCtxValue ? (
+                      <MeetProvider value={meetCtxValue}>
+                        <MeetShellPanel />
+                      </MeetProvider>
+                  ) : activeActivity === 'files' && location.pathname === '/dashboard/agent' ? (
                       <LocalExplorer
                           nativeFolderOpenSignal={nativeFolderOpenSignal}
                           onWorkspaceRootChange={({ folderName }) => {
@@ -1745,16 +1889,6 @@ const App: React.FC = () => {
                       />
                   ) : activeActivity === 'mcps' ? (
                       <MCPPanel />
-                  ) : activeActivity === 'settings' ? (
-                      <SettingsPanel
-                          workspaceId={authWorkspaceId}
-                          onClose={() => setActiveActivity(null)}
-                          onFileSelect={(file) => {
-                              setActiveFile({ ...file, originalContent: file.content });
-                              openTab('code');
-                              revealMainWorkspaceIfNarrow();
-                          }}
-                      />
                   ) : activeActivity === 'actions' ? (
                       <GitHubExplorer
                           expandRepoFullName={githubExpandRepo}
@@ -1781,8 +1915,6 @@ const App: React.FC = () => {
                               revealMainWorkspaceIfNarrow();
                           }}
                       />
-                  ) : activeActivity === 'playwright' ? (
-                      <PlaywrightConsole />
                   ) : activeActivity === 'debug' ? (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Redirecting to terminal problems...</div>
                   ) : activeActivity === 'git' ? (
@@ -1811,10 +1943,14 @@ const App: React.FC = () => {
                         }}
                         onOpenRecent={(e) => void openRecentEntry(e)}
                         onOpenLocalFolder={() => {
+                          if (location.pathname !== '/dashboard/agent') navigate('/dashboard/agent');
                           setActiveActivity('files');
                           setNativeFolderOpenSignal((n) => n + 1);
                         }}
-                        onOpenFilesActivity={() => setActiveActivity('files')}
+                        onOpenFilesActivity={() => {
+                          if (location.pathname !== '/dashboard/agent') navigate('/dashboard/agent');
+                          setActiveActivity('files');
+                        }}
                         onOpenGitHubActivity={() => setActiveActivity('actions')}
                         onOpenWorkspace={(name, path) => {
                           setIdeWorkspace({ source: 'pinned', name, pathHint: path });
@@ -1826,9 +1962,20 @@ const App: React.FC = () => {
                           onExplorerJumpConsumed={() => setDbExplorerJump(null)}
                           onClose={() => setActiveActivity(null)}
                       />
-                  ) : (
+                  ) : activeActivity === 'files' ? (
+                      <div className="flex flex-col items-center justify-center h-full px-6 text-center gap-3">
+                        <p className="text-[12px] text-[var(--text-muted)]">The file explorer is available on the Agent page.</p>
+                        <button
+                          type="button"
+                          className="text-[11px] px-3 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors"
+                          onClick={() => navigate('/dashboard/agent')}
+                        >
+                          Go to Agent
+                        </button>
+                      </div>
+                  ) : location.pathname !== '/dashboard/meet' ? (
                       <div className="p-4 text-xs text-[var(--text-muted)]">Panel empty.</div>
-                  )}
+                  ) : null}
               </div>
           </div>
 
@@ -1843,8 +1990,8 @@ const App: React.FC = () => {
           {/* 4. MAIN EDITOR AREA */}
           <main 
               className={`flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)] relative ${narrowBlocksCenter ? 'max-md:hidden' : ''}`}
-              onDrop={handleFileDrop}
-              onDragOver={handleDragOver}
+              onDrop={handleMainFileDrop}
+              onDragOver={handleMainDragOver}
           >
               {/* Dashboard page routes — non-agent pages render here */}
               {location.pathname !== '/dashboard/agent' ? (
@@ -1852,12 +1999,40 @@ const App: React.FC = () => {
                   <Routes>
                     <Route path="/dashboard/calendar" element={<CalendarPage />} />
                     <Route path="/dashboard/overview" element={<OverviewPage />} />
+                    <Route path="/dashboard/learn" element={<LearnPage />} />
                     <Route path="/dashboard/database" element={<DatabasePage />} />
                     <Route path="/dashboard/mcp" element={<McpPage />} />
-                    <Route path="/dashboard/integrations" element={<IntegrationsPage />} />
+                    <Route
+                      path="/dashboard/integrations"
+                      element={
+                        <Navigate to="/dashboard/settings/integrations" replace />
+                      }
+                    />
                     <Route path="/dashboard/designstudio" element={<DesignStudioPage />} />
                     <Route path="/dashboard/storage" element={<StoragePage />} />
-                    <Route path="/dashboard/settings" element={<SettingsPanel onClose={() => navigate(-1)} />} />
+                    <Route path="/dashboard/images" element={<ImagesPage />} />
+                    <Route path="/dashboard/mail" element={<MailPage />} />
+                    <Route
+                      path="/dashboard/meet"
+                      element={
+                        <MeetProvider value={meetCtxValue || ({} as MeetCtxValue)}>
+                          {React.createElement(MeetPage as any, { onContextReady: setMeetCtxValue })}
+                        </MeetProvider>
+                      }
+                    />
+                    <Route
+                      path="/dashboard/settings"
+                      element={<Navigate to="/dashboard/settings/general" replace />}
+                    />
+                    <Route
+                      path="/dashboard/settings/:sectionSlug"
+                      element={
+                        <SettingsPanel
+                          onClose={() => navigate(-1)}
+                          workspaceId={authWorkspaceId || undefined}
+                        />
+                      }
+                    />
                   </Routes>
                 </div>
               ) : (
@@ -1919,15 +2094,6 @@ const App: React.FC = () => {
                       )}
                       </>
                   )}
-                  {openTabs.includes('engine') && (
-                      <Tab
-                          title="Voxel"
-                          icon={<Box size={13} className="text-[var(--solar-magenta)]"/>}
-                          active={activeTab === 'engine'}
-                          onClick={() => setActiveTab('engine')}
-                          onClose={(e) => closeTab('engine', e)}
-                      />
-                  )}
                   {openTabs.includes('browser') && (
                       <Tab
                           title={browserTabTitle ?? 'Browser'}
@@ -1959,13 +2125,6 @@ const App: React.FC = () => {
               {/* Editor + optional aux bottom + terminal — flex column so drawer respects drag height */}
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
                   <div className="flex-1 min-h-0 relative flex flex-col">
-                  {/* 3D CANVAS MOUNT - Permanently in DOM to avoid WebGL context loss */}
-                  <div 
-                      ref={containerRef} 
-                      className={`absolute inset-0 z-0 transition-opacity duration-300 ${activeTab === 'engine' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-                      style={{ background: 'var(--scene-bg)' }}
-                  />
-                  
                   {location.pathname === '/dashboard/agent' && activeTab === 'Workspace' && (
                       <div className="absolute inset-0 z-10">
                           <WorkspaceDashboard 
@@ -1984,19 +2143,8 @@ const App: React.FC = () => {
                       </div>
                   )}
 
-                  {activeTab === 'engine' && (
-                      <div className="relative z-10 w-full h-full pointer-events-none flex flex-col justify-end pb-8">
-                          <ToolLauncherBar onNavigate={(url) => {
-                              setBrowserAddressDisplay(null);
-                              setBrowserTabTitle(null);
-                              setBrowserUrl(url);
-                              openTab('browser');
-                          }} />
-                      </div>
-                  )}
-
                   {activeTab === 'code' && (
-                      <div className="absolute inset-0 z-10" data-editor-split={splitLayout ? 'true' : undefined}>
+                      <div className="absolute inset-0 z-10">
                           <MonacoEditorView
                               fileData={activeFile}
                               isDirty={isDirty}
@@ -2017,7 +2165,11 @@ const App: React.FC = () => {
                   )}
                   {activeTab === 'browser' && (
                       <div className="absolute inset-0 z-10 overflow-hidden">
-                          <BrowserView url={browserUrl} addressDisplay={browserAddressDisplay} />
+                          <BrowserView
+                            isActive={activeTab === 'browser'}
+                            url={browserUrl}
+                            addressDisplay={browserAddressDisplay}
+                          />
                       </div>
                   )}
 
@@ -2028,16 +2180,17 @@ const App: React.FC = () => {
                   )}
                   </div>
 
+                  {/* Agent page keeps integrated terminal mount (existing behavior). */}
                   {isTerminalOpen && (
                       <XTermShell
                           ref={terminalRef}
                           onClose={() => setIsTerminalOpen(false)}
                           problems={systemProblems ?? []}
                           iamOrigin={typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'}
-                          workspaceCdCommand="cd /Users/samprimeaux/inneranimalmedia"
                           workspaceLabel={workspaceDisplayLine}
                           workspaceId={authWorkspaceId || undefined}
                           productLabel={PRODUCT_NAME}
+                          layout="page"
                           outputLines={shellOutputLines}
                           onOutputLine={(line) =>
                             setShellOutputLines((prev) => [...prev.slice(-250), line])
@@ -2047,6 +2200,55 @@ const App: React.FC = () => {
               </div>
           </>
               )}
+
+              {/* Global persistent terminal drawer — mounted once, resizable, survives navigation */}
+              {/* display:none preserves PTY WebSocket — never use conditional rendering here */}
+              <div
+                style={{
+                  display: isTerminalOpen && location.pathname !== '/dashboard/agent' ? 'flex' : 'none',
+                  flexDirection: 'column',
+                  height: `${terminalDrawerH}px`,
+                  flexShrink: 0,
+                  borderTop: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-panel)',
+                  position: 'relative',
+                  zIndex: 60,
+                  width: '100%',
+                }}
+              >
+                {/* Drag handle (vertical resize) */}
+                <div
+                  onPointerDown={beginTerminalResize}
+                  style={{
+                    height: 4,
+                    cursor: 'ns-resize',
+                    background: 'transparent',
+                    borderBottom: '1px solid var(--border-subtle)',
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.background = 'var(--solar-cyan)';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+                  }}
+                  title="Drag to resize terminal"
+                  aria-label="Resize terminal"
+                />
+                <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+                  <XTermShell
+                    ref={terminalRef}
+                    iamOrigin={window.location.origin}
+                    workspaceLabel={workspaceDisplayName || ''}
+                    workspaceId={authWorkspaceId || ''}
+                    productLabel="IAM"
+                    layout="drawer"
+                    outputLines={shellOutputLines}
+                    onOutputLine={(line) => setShellOutputLines((prev) => [...prev.slice(-250), line])}
+                    problems={systemProblems ?? []}
+                    onClose={() => setIsTerminalOpen(false)}
+                  />
+                </div>
+              </div>
           </main>
 
           {/* 6. Optional Right Agent Panel */}
@@ -2088,18 +2290,9 @@ const App: React.FC = () => {
                                 return glbUrl;
                               });
                               setGlbViewerFilename(file.name);
-                              openTab('engine');
-                              if (engineRef.current) {
-                                engineRef.current.spawnEntity({
-                                  id: `chat-glb-${Date.now()}`,
-                                  name: file.name.replace(/\.glb$/i, ''),
-                                  type: 'prop',
-                                  position: { x: 0, y: 1, z: 0 },
-                                  behavior: { type: 'dynamic', mass: 10, restitution: 0.2 },
-                                  modelUrl: glbUrl,
-                                  scale: 1,
-                                });
-                              }
+                              navigate('/dashboard/designstudio', {
+                                state: { pendingGlb: { url: glbUrl, name: file.name.replace(/\.glb$/i, '') } },
+                              });
                             }}
                             onRunInTerminal={runInTerminal}
                             onR2FileUpdated={handleR2FileUpdatedFromAgent}
@@ -2113,7 +2306,6 @@ const App: React.FC = () => {
               </>
           )}
       </div>
-      
       {/* 8. STATUS BAR (FOOTER) */}
       {toastMsg && (
         <div
@@ -2164,8 +2356,8 @@ const App: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${activeActivity === 'settings' ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
-          onClick={() => toggleActivity('settings')}
+          className={`flex flex-1 flex-col items-center justify-center min-h-[44px] gap-0.5 px-0.5 text-[10px] font-medium leading-tight ${location.pathname.startsWith('/dashboard/settings') ? 'text-[var(--solar-cyan)]' : 'text-[var(--text-muted)]'}`}
+          onClick={() => navigate('/dashboard/settings/general')}
         >
           <Settings size={24} strokeWidth={1.5} aria-hidden />
           <span>Settings</span>
@@ -2202,8 +2394,7 @@ const App: React.FC = () => {
               <MobileMoreRow icon={Network} label="Remote Explorers" onClick={() => { setMobileMoreOpen(false); toggleActivity('remote'); }} />
               <MobileMoreRow icon={Layers} label="Tools & MCP" onClick={() => { setMobileMoreOpen(false); toggleActivity('mcps'); }} />
               <MobileMoreRow icon={Cloud} label="Cloud Sync" onClick={() => { setMobileMoreOpen(false); toggleActivity('drive'); }} />
-              <MobileMoreRow icon={Monitor} label="Playwright Jobs" onClick={() => { setMobileMoreOpen(false); toggleActivity('playwright'); }} />
-              <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); toggleActivity('cad'); }} />
+              <MobileMoreRow icon={Monitor} label="Engine View" onClick={() => { setMobileMoreOpen(false); navigate('/dashboard/designstudio'); }} />
             </div>
           </div>
         </>
@@ -2250,10 +2441,14 @@ const App: React.FC = () => {
       {isWorkspaceLauncherOpen && (
         <WorkspaceLauncher
           onClose={() => setWorkspaceLauncherOpen(false)}
+          authWorkspaceId={authWorkspaceId}
+          setAuthWorkspaceId={setAuthWorkspaceId}
+          setWorkspaceDisplayName={setWorkspaceDisplayName}
+          setToastMsg={setToastMsg}
           onOpenLocalFolder={() => {
             setWorkspaceLauncherOpen(false);
             setActiveActivity('files');
-            setNativeFolderOpenSignal(n => n + 1);
+            setNativeFolderOpenSignal((n) => n + 1);
           }}
           onConnectWorkspace={() => setWorkspaceLauncherOpen(false)}
         />
@@ -2276,15 +2471,27 @@ const MobileMoreRow: React.FC<{ icon: LucideLike; label: string; onClick: () => 
   </button>
 );
 
-const ActivityIcon: React.FC<{ icon: any, active: boolean, onClick: () => void, title?: string }> = ({ icon: Icon, active, onClick, title }) => (
-    <div 
-        onClick={onClick}
-        title={title}
-        className={`p-3 cursor-pointer transition-colors relative ${active ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'}`}
-    >
-        {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-9 bg-[var(--solar-cyan)] rounded-r-md"></div>}
-        <Icon size={25} strokeWidth={1} />
-    </div>
+const ActivityRailItem: React.FC<{
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  label: string;
+  expanded: boolean;
+  active: boolean;
+  onClick: () => void;
+}> = ({ icon: Icon, label, expanded, active, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    title={label}
+    className={`relative flex w-full min-h-[40px] shrink-0 items-center rounded-lg transition-colors ${
+      expanded ? 'gap-2.5 px-2 justify-start' : 'justify-center px-0'
+    } ${active ? 'text-[var(--text-main)]' : 'text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--bg-hover)]/60'}`}
+  >
+    {active ? (
+      <div className="absolute left-0 top-1/2 h-8 w-[3px] -translate-y-1/2 rounded-r-md bg-[var(--solar-cyan)]" aria-hidden />
+    ) : null}
+    <Icon size={expanded ? 20 : 18} strokeWidth={1} className="shrink-0" />
+    {expanded ? <span className="min-w-0 truncate text-left text-[12px] font-medium leading-tight">{label}</span> : null}
+  </button>
 );
 
 const Tab: React.FC<{ title: React.ReactNode, icon: React.ReactNode, active: boolean, onClick: () => void, onClose?: (e: React.MouseEvent) => void }> = ({ title, icon, active, onClick, onClose }) => (
@@ -2317,7 +2524,7 @@ const Tab: React.FC<{ title: React.ReactNode, icon: React.ReactNode, active: boo
 const QuickOpen: React.FC<{ label: string, onClick: () => void }> = ({ label, onClick }) => (
     <button
         onClick={onClick}
-        className="text-[10px] px-2 py-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors border border-transparent hover:border-[var(--border-subtle)] font-mono"
+        className="text-[10px] px-2 py-0.5 rounded text-[var(--text-muted)] hover:text-[var(--solar-cyan)] hover:bg-[var(--bg-hover)] transition-colors border border-transparent hover:border-[var(--border-subtle)] font-sans"
         title={`Open ${label}`}
     >
         + {label}

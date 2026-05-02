@@ -61,6 +61,12 @@ interface XTermShellProps {
   workspaceLabel?: string;
   workspaceId?: string;
   productLabel?: string;
+  /**
+   * Layout mode:
+   * - page: component owns its height (resizable + collapsible)
+   * - drawer: parent container owns height (global terminal drawer)
+   */
+  layout?: 'page' | 'drawer';
 }
 
 const MIN_HEIGHT = 140;
@@ -246,9 +252,11 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
       workspaceLabel = '',
       workspaceId,
       productLabel = DEFAULT_PRODUCT,
+      layout = 'page',
     },
     ref,
   ) => {
+    const isDrawer = layout === 'drawer';
     const [resolvedOrigin, setResolvedOrigin] = useState(
       iamOrigin ?? (typeof window !== 'undefined' ? window.location.origin : 'https://inneranimalmedia.com'),
     );
@@ -293,8 +301,15 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
     const intentionalCloseRef             = useRef(false);
     const activeConnectRef                = useRef<() => void>(() => {});
     const connectInFlightRef              = useRef(false);
+    const bootstrapInFlightRef            = useRef<Promise<void> | null>(null);
 
-    const refreshBootstrap = useCallback(async () => {
+    // In global drawer mode, the parent owns the height; keep the shell expanded
+    // and disable internal collapse/resize to avoid nested sizing conflicts.
+    useEffect(() => {
+      if (isDrawer) setIsCollapsed(false);
+    }, [isDrawer]);
+
+    const _doBootstrap = useCallback(async () => {
       cachedBootstrapRef.current = null;
       try {
         const [resumePack, cfgPack] = await Promise.all([
@@ -334,6 +349,19 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         };
       }
     }, []);
+
+    const refreshBootstrap = useCallback(async () => {
+      if (bootstrapInFlightRef.current) {
+        return bootstrapInFlightRef.current;
+      }
+      const run = _doBootstrap();
+      bootstrapInFlightRef.current = run;
+      try {
+        await run;
+      } finally {
+        bootstrapInFlightRef.current = null;
+      }
+    }, [_doBootstrap]);
 
     // ── Config fetch ──────────────────────────────────────────────────────────
     useEffect(() => {
@@ -539,12 +567,12 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
 
             const resumeJson = boot.resumeJson ?? { resumable: false };
 
-            const wsParams = new URLSearchParams();
-            if (workspaceId) wsParams.set('workspace_id', workspaceId);
-            wsParams.set('execution_mode', 'pty');
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsOrigin = `${wsProtocol}//${window.location.host}`;
-            const wsUrl = `${wsOrigin}/api/agent/terminal/ws?${wsParams.toString()}`;
+            // Anchor path to window.location.origin so the route is always /api/agent/terminal/ws
+            // (never a bare /terminal/ws or path-relative mistake under /dashboard/...).
+            const wsHttpUrl = new URL('/api/agent/terminal/ws', window.location.origin);
+            if (workspaceId) wsHttpUrl.searchParams.set('workspace_id', workspaceId);
+            wsHttpUrl.searchParams.set('execution_mode', 'pty');
+            const wsUrl = wsHttpUrl.href.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
 
             const ws = new WebSocket(wsUrl);
             socketRef.current = ws;
@@ -845,16 +873,17 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
         <div
           className="iam-scanlines relative flex flex-col border-t shadow-[0_-4px_20px_rgba(0,0,0,0.3)] shrink-0"
           style={{
-            height: isCollapsed ? '36px' : `${height}px`,
+            height: isDrawer ? '100%' : (isCollapsed ? '36px' : `${height}px`),
             background: 'var(--terminal-chrome)',
             borderColor: 'var(--solar-cyan, #2aa198)',
             borderTopWidth: '1px',
-            transition: 'height 0.2s ease-out',
+            transition: isDrawer ? 'none' : 'height 0.2s ease-out',
             zIndex: 40,
+            ...(isDrawer ? { flex: '1 1 0%', minHeight: 0 } : null),
           }}
         >
           {/* Resize handle */}
-          {!isCollapsed && (
+          {!isDrawer && !isCollapsed && (
             <div
               className="h-1 w-full shrink-0 cursor-ns-resize group flex items-center justify-center"
               onMouseDown={handleDragStart}
@@ -993,14 +1022,16 @@ export const XTermShell = forwardRef<XTermShellHandle, XTermShellProps>(
                   <TerminalIcon size={12} />
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
-                title={isCollapsed ? 'Expand' : 'Minimize'}
-              >
-                {isCollapsed ? <ChevronUp size={15} strokeWidth={2} /> : <ChevronDown size={15} strokeWidth={2} />}
-              </button>
+              {!isDrawer && (
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed(!isCollapsed)}
+                  className="p-1.5 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
+                  title={isCollapsed ? 'Expand' : 'Minimize'}
+                >
+                  {isCollapsed ? <ChevronUp size={15} strokeWidth={2} /> : <ChevronDown size={15} strokeWidth={2} />}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}

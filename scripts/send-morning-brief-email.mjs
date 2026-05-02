@@ -12,15 +12,15 @@
  *   MORNING_BRIEF_SCHEDULED_AT  natural language or ISO 8601 (see Resend schedule docs)
  *   default: "today at 8:30am America/Chicago"
  *
- *   MORNING_BRIEF_FROM   default sam@inneranimalmedia.com
- *   MORNING_BRIEF_TO     default meauxbility@gmail.com (comma-separated for multiple)
+ *   MORNING_BRIEF_FROM   default support@inneranimalmedia.com
+ *   MORNING_BRIEF_TO     default support@inneranimalmedia.com (comma-separated for multiple)
  */
 
 import process from 'node:process';
 
 const DEFAULT_SCHEDULE = process.env.MORNING_BRIEF_SCHEDULED_AT || 'today at 8:30am America/Chicago';
-const FROM = process.env.MORNING_BRIEF_FROM || 'sam@inneranimalmedia.com';
-const TO = (process.env.MORNING_BRIEF_TO || 'meauxbility@gmail.com').split(',').map((s) => s.trim()).filter(Boolean);
+const FROM = process.env.MORNING_BRIEF_FROM || 'support@inneranimalmedia.com';
+const TO = (process.env.MORNING_BRIEF_TO || 'support@inneranimalmedia.com').split(',').map((s) => s.trim()).filter(Boolean);
 
 function buildMorningBriefHtml() {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Morning brief</title></head>

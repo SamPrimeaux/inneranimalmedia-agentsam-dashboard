@@ -1,12 +1,11 @@
-// Workers Builds config aligned to production worker bindings.
-// Production deploy strategy remains unchanged and uses wrangler.production.toml.
-
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "inneranimalmedia",
   "main": "src/index.js",
   "compatibility_date": "2026-01-20",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "preview_urls": true,
   "no_bundle": false,
@@ -43,11 +42,11 @@
   "r2_buckets": [
     {
       "binding": "ASSETS",
-      "bucket_name": "inneranimalmedia-assets"
+      "bucket_name": "inneranimalmedia"
     },
     {
       "binding": "DASHBOARD",
-      "bucket_name": "agent-sam"
+      "bucket_name": "inneranimalmedia"
     },
     {
       "binding": "AUTORAG_BUCKET",
@@ -64,12 +63,23 @@
     {
       "binding": "TOOLS",
       "bucket_name": "tools"
+    },
+    {
+      "binding": "EMAIL",
+      "bucket_name": "inneranimalmedia-email-archive"
     }
   ],
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
       "id": "08183bb9d2914e87ac8395d7e4ecff60"
+    }
+  ],
+  "vpc_services": [
+    {
+      "binding": "PTY_SERVICE",
+      "service_id": "019db639-7c70-7071-8ef3-32ec0392a9ff",
+      "remote": true
     }
   ],
   "vectorize": [
@@ -88,32 +98,21 @@
       "id": "dc87920b0a9247979a213c09df9a0234"
     }
   ],
+  "migrations": [
+    { "tag": "v1", "new_classes": ["IAMCollaborationSession"] },
+    { "tag": "v2", "new_classes": ["ChessRoom"] },
+    { "tag": "v4" },
+    { "tag": "v5", "new_sqlite_classes": ["AgentChatSqlV1"] },
+    { "tag": "v6", "deleted_classes": ["MeauxSession", "IAMAgentSession", "IAMSession"] }
+  ],
+  // Match wrangler.production.toml so CF Builds (`wrangler deploy -c wrangler.jsonc`) exposes DO stubs.
   "durable_objects": {
     "bindings": [
-      {
-        "name": "IAM_COLLAB",
-        "class_name": "IAMCollaborationSession"
-      },
-      {
-        "name": "CHESS_SESSION",
-        "class_name": "ChessRoom"
-      },
-      {
-        "name": "AGENT_SESSION",
-        "class_name": "AgentChatSqlV1"
-      }
+      { "name": "IAM_COLLAB", "class_name": "IAMCollaborationSession" },
+      { "name": "CHESS_SESSION", "class_name": "ChessRoom" },
+      { "name": "AGENT_SESSION", "class_name": "AgentChatSqlV1" }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v5",
-      "new_sqlite_classes": ["AgentChatSqlV1"]
-    },
-    {
-      "tag": "v6",
-      "deleted_classes": ["MeauxSession", "IAMAgentSession", "IAMSession"]
-    }
-  ],
   "queues": {
     "producers": [
       {
@@ -133,16 +132,6 @@
       "dataset": "inneranimalmedia"
     }
   ],
-  "triggers": {
-    "crons": [
-      "0 6 * * *",
-      "30 13 * * *",
-      "0 9 * * *",
-      "*/30 * * * *",
-      "0 12 * * *",
-      "0 0 * * *"
-    ]
-  },
   "vars": {
     "CLOUDFLARE_ACCOUNT_ID": "ede6590ac0d2fb7daf155b35653457b2",
     "CLOUDFLARE_IMAGES_ACCOUNT_HASH": "g7wf09fCONpnidkRnR_5vw",
@@ -155,21 +144,7 @@
   "observability": {
     "logs": {
       "enabled": true,
-      "invocation_logs": true,
-      "destinations": [
-        "meauxbility-central-analytics"
-      ]
-    },
-    "traces": {
-      "enabled": true,
-      "destinations": [
-        "inneranimalmedia-selfhosted"
-      ]
+      "invocation_logs": true
     }
-  },
-  "tail_consumers": [
-    {
-      "service": "inneranimalmedia-tail"
-    }
-  ]
+  }
 }

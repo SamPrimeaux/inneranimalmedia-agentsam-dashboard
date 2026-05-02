@@ -9,7 +9,7 @@ COOKIE="${OVERNIGHT_SESSION_COOKIE:-}"
 
 if [[ -z "$COOKIE" ]]; then
   echo "Remote validation requires a session cookie (superadmin)."
-  echo "  1. Log in at $BASE/dashboard (e.g. ai@inneranimalmedia.com or sam@inneranimalmedia.com)"
+  echo "  1. Log in at $BASE/dashboard (with your account email)"
   echo "  2. Copy the 'session' cookie value from DevTools → Application → Cookies"
   echo "  3. export OVERNIGHT_SESSION_COOKIE=<paste-value>"
   echo "  4. ./scripts/run-validate-overnight.sh"
@@ -24,7 +24,7 @@ BODY=$(echo "$RESP" | sed '$d')
 echo "$BODY" | head -20
 if [[ "$HTTP" == "202" ]]; then
   echo ""
-  echo "Validation started on worker. Check meauxbility@gmail.com for the proof email; screenshots → R2 reports/screenshots/before-<date>/"
+  echo "Validation started on worker. Check your configured RESEND_TO for the proof email; screenshots → R2 reports/screenshots/before-<date>/"
 else
   echo "HTTP $HTTP"
   exit 1

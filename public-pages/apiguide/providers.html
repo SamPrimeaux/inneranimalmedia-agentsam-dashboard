@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>API Provider Guide | InnerAnimal Media</title>
+    <meta
+      name="description"
+      content="Provider-by-provider guide for configuring Anthropic, OpenAI, and Gemini API keys and common integration patterns in the InnerAnimal Media stack."
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #071821;
+        --panel: rgba(255, 255, 255, 0.06);
+        --panel2: rgba(255, 255, 255, 0.03);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.66);
+        --cyan: #34d3ff;
+        --blue: #63a5ff;
+        --violet: #b592ff;
+        --green: #4df3a5;
+        --yellow: #ffd66b;
+        --red: #ff6b7d;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          "Courier New", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+          "Apple Color Emoji", "Segoe UI Emoji";
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        background:
+          radial-gradient(1200px 800px at 10% 0%, rgba(52, 211, 255, 0.18), transparent 60%),
+          radial-gradient(1000px 700px at 95% 10%, rgba(181, 146, 255, 0.16), transparent 55%),
+          radial-gradient(900px 650px at 50% 110%, rgba(77, 243, 165, 0.10), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+      a { color: var(--cyan); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+      .topbar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 16px; border: 1px solid var(--border);
+        border-radius: 14px; background: rgba(0, 0, 0, 0.20); backdrop-filter: blur(10px);
+      }
+      .brand { display: flex; gap: 10px; align-items: center; }
+      .logo {
+        width: 32px; height: 32px; border-radius: 10px;
+        background: linear-gradient(135deg, rgba(52,211,255,.35), rgba(181,146,255,.30));
+        border: 1px solid var(--border);
+      }
+      .brand h1 { font-size: 13px; letter-spacing: .18em; margin: 0; text-transform: uppercase; }
+      .nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .pill {
+        display: inline-flex; gap: 8px; align-items: center;
+        padding: 8px 10px; border-radius: 999px;
+        border: 1px solid var(--border); background: var(--panel2);
+        font-size: 12px; color: var(--muted);
+      }
+      .cta {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(52, 211, 255, 0.35);
+        background: rgba(52, 211, 255, 0.12);
+        color: var(--cyan);
+        font-weight: 700;
+        font-size: 12px;
+      }
+      .cta:hover { background: rgba(52, 211, 255, 0.18); text-decoration: none; }
+
+      header.hero { padding: 28px 6px 16px; }
+      .kicker { color: var(--cyan); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; }
+      .title { margin: 10px 0 8px; font-size: 34px; line-height: 1.12; letter-spacing: -0.02em; }
+      .sub { margin: 0; max-width: 850px; color: var(--muted); font-size: 14px; }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        margin-top: 18px;
+      }
+      @media (min-width: 900px) {
+        .grid { grid-template-columns: 1.1fr 0.9fr; }
+      }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(0, 0, 0, 0.18);
+        backdrop-filter: blur(10px);
+        padding: 16px;
+      }
+      .card h2 { margin: 0 0 8px; font-size: 14px; letter-spacing: .12em; text-transform: uppercase; }
+      .card p { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; }
+      .tag { font-size: 12px; padding: 7px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--muted); }
+      .tag b { color: var(--text); }
+      code, pre { font-family: var(--mono); }
+      pre {
+        margin: 10px 0 0;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(0,0,0,0.24);
+        overflow: auto;
+        color: rgba(255,255,255,0.88);
+        font-size: 12px;
+      }
+      .split { display: grid; gap: 14px; grid-template-columns: 1fr; margin-top: 14px; }
+      @media (min-width: 900px) { .split { grid-template-columns: 1fr 1fr; } }
+      .provider {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(255,255,255,0.04);
+        padding: 14px;
+      }
+      .provider h3 { margin: 0 0 8px; font-size: 14px; }
+      .provider .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+      .meta .chip { border: 1px solid var(--border); border-radius: 999px; padding: 6px 8px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.22); }
+      .mono { font-family: var(--mono); }
+      ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+      li { margin: 6px 0; }
+      footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+      .warn { color: rgba(255, 214, 107, 0.95); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topbar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true"></div>
+          <div>
+            <h1>InnerAnimal Media</h1>
+            <div class="pill">API Provider Guide</div>
+          </div>
+        </div>
+        <div class="nav">
+          <a class="pill" href="/">Home</a>
+          <a class="pill" href="/pricing">Pricing</a>
+          <a class="pill" href="/about">About</a>
+          <a class="pill" href="/contact">Contact</a>
+          <a class="cta" href="/dashboard/overview">Open Dashboard</a>
+        </div>
+      </div>
+
+      <header class="hero">
+        <div class="kicker">InnerAnimal Media · Production</div>
+        <h2 class="title">Provider keys + integration patterns</h2>
+        <p class="sub">
+          This page summarizes how API keys and provider settings are expected to work in the InnerAnimal Media stack
+          (Agent Sam dashboard + Worker APIs). It’s written to be safe-by-default: store secrets in the vault, never
+          paste them into code, and rotate fast when in doubt.
+        </p>
+      </header>
+
+      <div class="grid">
+        <section class="card">
+          <h2>Where keys live</h2>
+          <p>
+            In production, user-scoped LLM keys are stored encrypted in the vault and used via the Worker session.
+            In the dashboard, manage keys at <span class="mono">Settings → Security</span>.
+          </p>
+          <div class="row">
+            <span class="tag"><b>Vault</b>: <span class="mono">/api/vault/store</span>, <span class="mono">/api/vault/llm-keys</span></span>
+            <span class="tag"><b>Scope</b>: session user</span>
+            <span class="tag"><b>Encryption</b>: AES-GCM</span>
+          </div>
+          <pre><code># Dashboard (recommended)
+Open: /dashboard/settings → Security
+
+# API (advanced)
+GET    /api/vault/llm-keys
+POST   /api/vault/store                 { key_name, value }
+DELETE /api/vault/llm-keys/:id</code></pre>
+        </section>
+
+        <aside class="card">
+          <h2>Quick safety checklist</h2>
+          <ul>
+            <li><span class="warn">Never commit keys</span> (no `.env` / plaintext in repo).</li>
+            <li>Prefer vault storage (encrypted) over env vars for user keys.</li>
+            <li>Rotate keys immediately if exposed; revoke old keys.</li>
+            <li>Use least privilege scopes where providers support it.</li>
+            <li>If a request fails: check key validity, rate limits, and provider outages first.</li>
+          </ul>
+        </aside>
+      </div>
+
+      <section class="card" style="margin-top: 14px;">
+        <h2>Providers</h2>
+        <p>Expected key formats and typical usage notes.</p>
+        <div class="split">
+          <div class="provider">
+            <h3 style="color: var(--violet);">Anthropic</h3>
+            <div class="meta">
+              <span class="chip"><b>Vault slot</b>: <span class="mono">ANTHROPIC_API_KEY</span></span>
+              <span class="chip"><b>Prefix</b>: <span class="mono">sk-ant-…</span></span>
+            </div>
+            <ul>
+              <li>Use for Claude chat + reasoning tasks.</li>
+              <li>Store in vault via the Security tab; the UI masks the value.</li>
+              <li>Rotate if leaked; treat keys as prod credentials.</li>
+            </ul>
+          </div>
+
+          <div class="provider">
+            <h3 style="color: var(--cyan);">OpenAI</h3>
+            <div class="meta">
+              <span class="chip"><b>Vault slot</b>: <span class="mono">OPENAI_API_KEY</span></span>
+              <span class="chip"><b>Prefix</b>: <span class="mono">sk-…</span></span>
+            </div>
+            <ul>
+              <li>Use for embeddings, tools, and general-purpose chat when configured.</li>
+              <li>Mind rate limits; use batching where possible.</li>
+            </ul>
+          </div>
+
+          <div class="provider">
+            <h3 style="color: var(--blue);">Gemini</h3>
+            <div class="meta">
+              <span class="chip"><b>Vault slot</b>: <span class="mono">GEMINI_API_KEY</span></span>
+              <span class="chip"><b>Prefix</b>: <span class="mono">AIza…</span></span>
+            </div>
+            <ul>
+              <li>Use for Google GenAI models and multimodal workflows.</li>
+              <li>Keep project restrictions tight; rotate on leaks.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 14px;">
+        <h2>Common endpoints (reference)</h2>
+        <p>These are the endpoints the dashboard expects for the settings + provider workflow.</p>
+        <pre><code># Profile + bootstrap data
+GET /api/settings/profile
+
+# Models
+GET  /api/ai/models
+GET  /api/settings/default-model
+POST /api/settings/default-model
+POST /api/settings/model-preference
+
+# Vault keys
+GET    /api/vault/llm-keys
+POST   /api/vault/store
+DELETE /api/vault/llm-keys/:id</code></pre>
+      </section>
+
+      <footer>
+        <div>InnerAnimal Media · API Guide · <span class="mono">/apiguide/providers</span></div>
+        <div style="margin-top:6px;">
+          If you need this page to match a specific TSX source, commit the canonical content to the repo and re-upload to the
+          <span class="mono">inneranimalmedia-assets</span> bucket under key <span class="mono">apiguide/providers.html</span>.
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
+

@@ -12,20 +12,20 @@ import { AppState, GameEntity, ProjectType, SceneConfig, CADTool, VoxelData, CAD
 
 const CHESS_MODELS = {
   black: {
-    bishop: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/bishop.glb',
-    king: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/king.glb',
-    knight: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/knight.glb',
-    pawn: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/pawn.glb',
-    queen: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/queen.glb',
-    rook: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/black/rook.glb',
+    bishop: '/assets/chess/v1/pieces/black/bishop.glb',
+    king: '/assets/chess/v1/pieces/black/king.glb',
+    knight: '/assets/chess/v1/pieces/black/knight.glb',
+    pawn: '/assets/chess/v1/pieces/black/pawn.glb',
+    queen: '/assets/chess/v1/pieces/black/queen.glb',
+    rook: '/assets/chess/v1/pieces/black/rook.glb',
   },
   white: {
-    bishop: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/bishop.glb',
-    king: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/king.glb',
-    knight: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/knight.glb',
-    pawn: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/pawn.glb',
-    queen: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/queen.glb',
-    rook: 'https://pub-e733f82cb31c4f34b6a719e749d0416d.r2.dev/chess/v1/pieces/white/rook.glb',
+    bishop: '/assets/chess/v1/pieces/white/bishop.glb',
+    king: '/assets/chess/v1/pieces/white/king.glb',
+    knight: '/assets/chess/v1/pieces/white/knight.glb',
+    pawn: '/assets/chess/v1/pieces/white/pawn.glb',
+    queen: '/assets/chess/v1/pieces/white/queen.glb',
+    rook: '/assets/chess/v1/pieces/white/rook.glb',
   }
 };
 

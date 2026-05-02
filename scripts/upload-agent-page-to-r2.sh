@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upload full agent page and fragment to R2 (bucket agent-sam).
+# Upload full agent page and fragment to R2 (bucket inneranimalmedia).
 # Worker serves /dashboard/agent from static/dashboard/agent.html (then dashboard/agent.html).
 # Run from repo root. Loads CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN from ~/.zshrc if present.
 # If wrangler returns 400, use Cloudflare Dashboard (see docs/AGENT_PAGE_DEBUG_SUMMARY.md).
@@ -23,16 +23,16 @@ echo ""
 FAILED=0
 
 # Full page (primary key)
-if npx wrangler r2 object put agent-sam/static/dashboard/agent.html -f ./dashboard/agent.html --content-type=text/html --remote -c "$CONFIG" 2>&1; then
-  echo "  OK static/dashboard/agent.html"
+if npx wrangler r2 object put inneranimalmedia/dashboard/app/agent.html -f ./dashboard/agent.html --content-type=text/html --remote -c "$CONFIG" 2>&1; then
+  echo "  OK dashboard/app/agent.html"
 else
-  echo "  FAIL static/dashboard/agent.html (wrangler often returns 400; use manual upload)"
+  echo "  FAIL dashboard/app/agent.html (wrangler often returns 400; use manual upload)"
   FAILED=1
 fi
 echo ""
 
 # Fragment (for shell-injected flow)
-if npx wrangler r2 object put agent-sam/static/dashboard/pages/agent.html -f ./dashboard/pages/agent.html --content-type=text/html --remote -c "$CONFIG" 2>&1; then
+if npx wrangler r2 object put inneranimalmedia/static/dashboard/pages/agent.html -f ./dashboard/pages/agent.html --content-type=text/html --remote -c "$CONFIG" 2>&1; then
   echo "  OK static/dashboard/pages/agent.html"
 else
   echo "  FAIL static/dashboard/pages/agent.html"

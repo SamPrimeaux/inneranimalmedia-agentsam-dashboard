@@ -42,23 +42,33 @@ Then all deploy/R2 commands (yours or an agent’s) can use:
 
 **Database:** `inneranimalmedia-business` (binding `DB` in wrangler.production.toml).
 
-**Apply migrations (schema):**
+### Remote production: do **not** use `wrangler d1 migrations apply` (Option A — permanent)
+
+Wrangler’s **`migrations apply`** replays the **entire** `migrations/` sequence in order against the remote ledger. On this database, **linear replay breaks early** (e.g. migration **107** touches **`cloudflare_deployments`**; that table no longer exists on remote). **That condition is effectively permanent** until someone manually repairs Wrangler’s migration ledger *and* reconciles every file in `migrations/` with live schema — high risk, rarely worth it.
+
+**Operational rule:** For **remote** `inneranimalmedia-business`, **always ship schema with one-off files**, not `migrations apply`:
 
 ```bash
-./scripts/with-cloudflare-env.sh npx wrangler d1 migrations apply inneranimalmedia-business --remote --config wrangler.production.toml
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
+  --remote -c wrangler.production.toml \
+  --file=./migrations/<migration_sql_you_intend.sql>
 ```
 
-**Run a one-off SQL file (e.g. deploy record):**
+Example:
 
 ```bash
-./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business --remote --config wrangler.production.toml --file=migrations/109_agent_footer_ai_spend.sql
+./scripts/with-cloudflare-env.sh npx wrangler d1 execute inneranimalmedia-business \
+  --remote -c wrangler.production.toml \
+  --file=./migrations/109_agent_footer_ai_spend.sql
 ```
 
-**List migrations:**
+**Inspect what Wrangler thinks is pending (informational only — do not rely on `apply` on remote):**
 
 ```bash
-npx wrangler d1 migrations list inneranimalmedia-business --config wrangler.production.toml
+npx wrangler d1 migrations list inneranimalmedia-business -c wrangler.production.toml
 ```
+
+More context: `docs/CICD_TABLES_AND_MIGRATIONS.md` (apply section), `docs/LIVE_DASHBOARD_API_SURFACE.md` (D1 notes).
 
 Migrations live in `migrations/*.sql`. The DB has 500+ tables; many exist, some not yet populated (UI/backend to be fixed). D1 docs: [Cloudflare D1](https://developers.cloudflare.com/d1/).
 

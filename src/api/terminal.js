@@ -8,7 +8,6 @@
 import { jsonResponse }      from '../core/responses.js';
 import { dispatchComplete,
          dispatchStream }    from '../core/provider.js';
-import { tenantIdFromEnv }   from '../core/auth.js';
 
 // ── Token validation ───────────────────────────────────────────────────────────
 export async function handleTerminalApi(request, url, env, ctx) {
@@ -43,7 +42,7 @@ export async function handleTerminalApi(request, url, env, ctx) {
       return jsonResponse({
         valid:    true,
         userId:   'sam',
-        tenantId: tenantIdFromEnv(env),
+        tenantId: null,
         role:     'owner',
       });
     }
@@ -55,7 +54,10 @@ export async function handleTerminalApi(request, url, env, ctx) {
   if (path === '/api/terminal/session/register' && method === 'POST') {
     const auth  = request.headers.get('Authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : auth.trim();
-    if (!token || token !== (env.PTY_AUTH_TOKEN || '')) {
+    const bridgeKey = request.headers.get('X-Bridge-Key') || '';
+    const validBridge = env.AGENTSAM_BRIDGE_KEY && bridgeKey === env.AGENTSAM_BRIDGE_KEY;
+    const validToken  = token && token === (env.PTY_AUTH_TOKEN || '');
+    if (!validToken && !validBridge) {
       return jsonResponse({ error: 'unauthorized' }, 401);
     }
 
@@ -66,7 +68,7 @@ export async function handleTerminalApi(request, url, env, ctx) {
     if (!session_id) return jsonResponse({ error: 'session_id required' }, 400);
 
     const now = Math.floor(Date.now() / 1000);
-    const tenantId = tenantIdFromEnv(env);
+    const tenantId = 'system';
 
     await env.DB?.prepare(
       `INSERT INTO terminal_sessions

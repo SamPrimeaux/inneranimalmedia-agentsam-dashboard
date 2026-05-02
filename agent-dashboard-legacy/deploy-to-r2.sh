@@ -20,9 +20,6 @@ npm run build
 if cd "$REPO_ROOT/overview-dashboard" && command -v vite &>/dev/null; then
   npm run build 2>/dev/null || true
 fi
-if cd "$REPO_ROOT/time-tracking-dashboard" && command -v vite &>/dev/null; then
-  npm run build 2>/dev/null || true
-fi
 cd "$REPO_ROOT"
 
 echo "Uploading to R2 (agent-sam) --remote..."
@@ -63,14 +60,6 @@ if [ -f "$REPO_ROOT/overview-dashboard/dist/overview-dashboard.js" ]; then
     --config "$CONFIG" \
     --remote
 fi
-if [ -f "$REPO_ROOT/time-tracking-dashboard/dist/time-tracking-dashboard.js" ]; then
-  wrangler r2 object put agent-sam/static/dashboard/time-tracking/time-tracking-dashboard.js \
-    --file "$REPO_ROOT/time-tracking-dashboard/dist/time-tracking-dashboard.js" \
-    --content-type "application/javascript" \
-    --config "$CONFIG" \
-    --remote
-fi
-
 echo "Upload dashboard pages (agent.html, chats.html)"
 if [ -f "$REPO_ROOT/static/dashboard/shell.css" ]; then
   wrangler r2 object put agent-sam/static/dashboard/shell.css \

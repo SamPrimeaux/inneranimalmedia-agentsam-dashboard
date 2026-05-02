@@ -1,0 +1,30 @@
+
+────────────────────────────────────────────────────────────
+ROUTE INVENTORY SUMMARY
+────────────────────────────────────────────────────────────
+Monolith routes found:  338
+Router routes found:    60
+Worker-only (to move):  319
+Duplicates (conflict):  19
+Router-only (safe):     41
+────────────────────────────────────────────────────────────
+
+Backlog by domain:
+  Auth / Session                 9 routes  [H:0 M:0 L:9]
+  Settings / Profile            19 routes  [H:0 M:19 L:0]
+  Themes                         3 routes  [H:0 M:1 L:2]
+  MCP                           17 routes  [H:0 M:0 L:17]
+  Storage / R2                  13 routes  [H:1 M:1 L:11]
+  Mail                           1 routes  [H:0 M:0 L:1]
+  Workspaces                     4 routes  [H:0 M:1 L:3]
+  Integrations                  12 routes  [H:0 M:0 L:12]
+  Collab / Canvas / DO           2 routes  [H:0 M:1 L:1]
+  Agent / Chat                  89 routes  [H:0 M:4 L:85]
+  Telemetry / Health             4 routes  [H:0 M:0 L:4]
+  Admin / Internal              23 routes  [H:14 M:1 L:8]
+  Webhooks                      19 routes  [H:9 M:0 L:10]
+  Images / Media                 4 routes  [H:0 M:1 L:3]
+  Finance / Billing              5 routes  [H:2 M:0 L:3]
+  Learn / Overview               5 routes  [H:0 M:1 L:4]
+  Misc / Unknown                90 routes  [H:1 M:10 L:79]
+────────────────────────────────────────────────────────────

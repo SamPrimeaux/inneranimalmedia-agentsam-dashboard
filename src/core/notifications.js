@@ -14,14 +14,18 @@ export async function notifySam(env, opts, executionCtx) {
     .trim();
   const bodyRaw = String(opts.body || '').trim();
   const category = String(opts.category || 'notice').trim();
-  const toAddr = opts.to || 'sam@inneranimalmedia.com';
-  const fromAddr = 'agent@inneranimalmedia.com';
+  const toAddr = opts.to || env.RESEND_TO || '';
+  const fromAddr = env.RESEND_FROM || 'support@inneranimalmedia.com';
   const prefix = subjectRaw.startsWith('[Agent Sam]') ? '' : '[Agent Sam] ';
   const subject = `${prefix}${subjectRaw}`.slice(0, 400);
 
   const run = async () => {
     if (!env.RESEND_API_KEY) {
       console.warn('[notifySam] RESEND_API_KEY not set', category);
+      return;
+    }
+    if (!toAddr) {
+      console.warn('[notifySam] RESEND_TO not set', category);
       return;
     }
     try {

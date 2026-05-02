@@ -9,9 +9,9 @@ const RESEND_KEY = process.env.RESEND_API_KEY;
 const CF_TOKEN   = process.env.CLOUDFLARE_API_TOKEN;
 const ACCOUNT    = 'ede6590ac0d2fb7daf155b35653457b2';
 const DB_ID      = 'cf87b717-d4e2-4cf8-bab0-a81268e32d49';
-const BUCKET     = 'agent-sam';
-const FROM       = 'sam@inneranimalmedia.com';
-const TO         = 'meauxbility@gmail.com';
+const BUCKET     = 'inneranimalmedia';
+const FROM       = process.env.RESEND_FROM || 'support@inneranimalmedia.com';
+const TO         = process.env.RESEND_TO || 'support@inneranimalmedia.com';
 const BASE       = 'https://inneranimalmedia.com';
 
 const EVERY_PAGE = ['overview','finance','chats','mcp','cloud','time-tracking','agent','billing','clients','tools','calendar','images','draw','meet','kanban','cms','mail','pipelines','onboarding','user-settings','settings'];
@@ -115,7 +115,7 @@ async function run() {
 
   if (!RESEND_KEY) {
     console.log('RESEND_API_KEY not set — skipping email. Screenshots and D1 check still ran.');
-    console.log('R2 path: agent-sam/reports/screenshots/' + beforeDir + '/');
+    console.log('R2 path: inneranimalmedia/reports/screenshots/' + beforeDir + '/');
     process.exit(0);
     return;
   }
@@ -128,7 +128,7 @@ async function run() {
       ${card(`
         <p style="margin:0;color:#94a3b8;font-size:12px;text-transform:uppercase">Proof</p>
         <p style="margin:8px 0 0;font-size:18px;color:${d1Ok ? '#22c55e' : '#ef4444'}">D1: ${d1Ok ? 'OK' : 'FAIL'}</p>
-        <p style="margin:4px 0 0;font-size:18px;color:${ok === EVERY_PAGE.length ? '#22c55e' : '#f59e0b'}">Before screenshots: ${ok}/${EVERY_PAGE.length} → R2 agent-sam/reports/screenshots/${beforeDir}/</p>
+        <p style="margin:4px 0 0;font-size:18px;color:${ok === EVERY_PAGE.length ? '#22c55e' : '#f59e0b'}">Before screenshots: ${ok}/${EVERY_PAGE.length} → R2 inneranimalmedia/reports/screenshots/${beforeDir}/</p>
       `)}
       <h2 style="color:#e2e8f0;font-size:13px;margin:16px 0 6px">Screenshot results</h2>
       ${table(shotRows)}
@@ -147,7 +147,7 @@ async function run() {
     console.log('Email failed:', res.message || JSON.stringify(res));
   }
 
-  console.log('DONE. R2 path: agent-sam/reports/screenshots/' + beforeDir + '/');
+  console.log('DONE. R2 path: inneranimalmedia/reports/screenshots/' + beforeDir + '/');
 }
 
 run().catch(e => {

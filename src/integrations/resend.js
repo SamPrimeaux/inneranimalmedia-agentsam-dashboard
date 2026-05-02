@@ -12,7 +12,7 @@ export async function sendEmail(env, { to, subject, html, text }) {
     }
 
     try {
-        const from = env.EMAIL_FROM || 'Agent Sam <sam@inneranimalmedia.com>';
+        const from = env.EMAIL_FROM || 'Inner Animal Media <support@inneranimalmedia.com>';
         const response = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {

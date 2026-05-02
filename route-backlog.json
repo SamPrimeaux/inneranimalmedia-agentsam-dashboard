@@ -1,0 +1,1404 @@
+{
+  "summary": {
+    "monolith_routes": 338,
+    "router_routes": 60,
+    "worker_only": 319,
+    "duplicates": 19,
+    "router_only": 41
+  },
+  "backlog_by_domain": {
+    "Auth / Session": [
+      {
+        "route": "/api/auth/backup-code",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/auth/login",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/auth/logout",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/auth/signup",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/auth/verify-email",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/oauth/github/callback",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/oauth/github/start",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/oauth/google/callback",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/oauth/google/start",
+        "risk": "LOW"
+      }
+    ],
+    "Settings / Profile": [
+      {
+        "route": "/api/settings",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings [regex]",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/agent-config",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/appearance",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/avatar*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/deploy-context",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/docs-providers",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/emails",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/marketplace-catalog",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/preferences",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/profile",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/profile/avatar",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/security/backup-codes/generate",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/security/change-password",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/sessions",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/theme",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/workspace/default",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/workspaces",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/settings/workspaces/active",
+        "risk": "MEDIUM"
+      }
+    ],
+    "Themes": [
+      {
+        "route": "/api/themes",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/themes/active",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/themes/apply",
+        "risk": "MEDIUM"
+      }
+    ],
+    "MCP": [
+      {
+        "route": "/api/mcp [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/a11y",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/agents",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/audit",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/commands",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/credentials",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/dispatch",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/imgx",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/invoke",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/server-allowlist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/services",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/services/health",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/stats",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/stream",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/tools",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/mcp/workflows",
+        "risk": "LOW"
+      }
+    ],
+    "Storage / R2": [
+      {
+        "route": "/api/r2 [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/buckets",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/buckets/bulk-action",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/delete",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/r2/file",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/get",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/move",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/stats",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/sync",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/r2/upload",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/r2/url",
+        "risk": "LOW"
+      }
+    ],
+    "Mail": [
+      {
+        "route": "/api/email/inbound",
+        "risk": "LOW"
+      }
+    ],
+    "Workspaces": [
+      {
+        "route": "/api/workspace [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/workspace/create",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/workspaces",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/workspaces/current/shell",
+        "risk": "LOW"
+      }
+    ],
+    "Integrations": [
+      {
+        "route": "/api/github [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/github/repos",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/drive/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/gdrive/file",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/gdrive/files",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/gdrive/raw",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/github/file",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/github/files",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/github/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/github/raw",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/github/repos",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/integrations/status",
+        "risk": "LOW"
+      }
+    ],
+    "Collab / Canvas / DO": [
+      {
+        "route": "/api/collab [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/meet*",
+        "risk": "MEDIUM"
+      }
+    ],
+    "Agent / Chat": [
+      {
+        "route": "/api/agent [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent-sam*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/agent-sam/agent-runs",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent-sam/deployments",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/agent/boot",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/bootstrap",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/browse",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/chat",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/chat/execute-approved-tool",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/cicd",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/commands",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/commands/execute",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/context-picker/catalog",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/context/bootstrap",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/conversations/search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/db/query-history",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/db/snippets",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/db/tables",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/do-history",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/git/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/git/sync",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/keyboard-shortcuts",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/mcp",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/memory/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/memory/sync",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/models",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/modes",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/notifications",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/plan/approve",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/plan/reject",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/playwright",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/playwright/jobs",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/playwright/jobs*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/agent/problems",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/proposals/pending",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/propose",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/queue",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/queue/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/r2-save",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/rag/compact-chats",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/rag/index-memory",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/rag/query",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/rag/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/reindex-codebase",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/rules",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/session/mode",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/session/ws",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/sessions",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/subagent-profiles",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/telemetry",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/complete",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/config-status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/run",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/socket-url",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/terminal/ws",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/today-todo",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/vertex-test",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/workers-ai/image",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/workers-ai/stt",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/workers-ai/tts",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agent/workflows/trigger",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/ai",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/autorag/files",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/autorag/search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/autorag/stats",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/autorag/sync",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/autorag/upload",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/agentsam/cmd-allowlist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/command-allowlist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/config",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/feature-flags",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/fetch-allowlist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/fetch-domains",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/hooks",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/ignore-patterns",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/ignore-patterns/reorder",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/index-status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/indexing-summary",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/mcp-allowlist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/rules",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/runs",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/skills",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/subagents",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/tools-registry",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/trusted-origins",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/agentsam/user-policy",
+        "risk": "LOW"
+      }
+    ],
+    "Telemetry / Health": [
+      {
+        "route": "/api/health",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/telemetry/summary",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/telemetry/tools",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/telemetry/v1/traces",
+        "risk": "LOW"
+      }
+    ],
+    "Admin / Internal": [
+      {
+        "route": "/api/admin/archive-conversations",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/cleanup/stuck-runs",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/db-health",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/overnight/start",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/overnight/validate",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/reindex-codebase",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/retention",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/trigger-workflow",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/admin/vectorize-kb",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/ai [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/ai/guardrails",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/ai/integrations",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/ai/models",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/ai/routing-rules",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/d1/query",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/internal/deploy-complete",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/internal/post-deploy",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/internal/record-deploy",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/vault [regex]",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/vault/audit",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/vault/projects",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/vault/registry",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/vault/secrets",
+        "risk": "HIGH"
+      }
+    ],
+    "Webhooks": [
+      {
+        "route": "/api/hooks [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/cursor",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/executions",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/github",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/health",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/internal",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/stripe",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/subscriptions",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/subscriptions/reorder",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hooks/supabase",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/webhooks/cloudflare",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/cursor",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/github",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/health",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/internal",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/openai",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/resend",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/stripe",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/webhooks/supabase",
+        "risk": "HIGH"
+      }
+    ],
+    "Images / Media": [
+      {
+        "route": "/api/image [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/images",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/images [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/images*",
+        "risk": "MEDIUM"
+      }
+    ],
+    "Finance / Billing": [
+      {
+        "route": "/api/billing",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/billing/summary",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/spend",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/spend/summary",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/spend/unified",
+        "risk": "LOW"
+      }
+    ],
+    "Learn / Overview": [
+      {
+        "route": "/api/overview/activity-strip",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/overview/checkpoints",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/overview/deployments",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/overview/recent-activity",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/overview/stats",
+        "risk": "LOW"
+      }
+    ],
+    "Misc / Unknown": [
+      {
+        "route": "/api/app-icons",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/artifacts [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/browser/health",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/browser/metrics",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/browser/screenshot",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/chat",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/cicd/current",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/cicd/run",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/cicd/runs",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/clients",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/cloudflare [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/cloudflare/workers/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/colors/all",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/commands",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/commands/custom",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/dashboard/d1*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/dashboard/d1/query",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/dashboard/d1/schema*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/dashboard/d1/tables",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/dashboard/time-track*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/dashboard/time-track/manual",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/database/execute",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/database/query-history",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/database/snippets",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/deploy/rollback",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/deployments/log",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/deployments/recent",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/draw [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/draw/libraries",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/draw/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/draw/load",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/draw/save",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/delete",
+        "risk": "HIGH"
+      },
+      {
+        "route": "/api/drive/file",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/folder",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/get",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/list",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/sync",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/drive/upload",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/env [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/env*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/env/audit",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/env/secrets",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/env/secrets/reveal",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/env/spend",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/generate",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/git/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hub [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hyperdrive/query",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hyperdrive/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/hyperdrive/tables",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/knowledge",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/knowledge/crawl",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/loading-states",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/meshy/latest",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/models",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/monaco/complete",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/playwright [regex]",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/playwright/screenshot",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/projects",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/rag/feedback",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/rag/ingest",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/rag/ingest-batch",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/rag/query",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/rag/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/screenshots",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/screenshots*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/screenshots/asset",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search/debug",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search/docs",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search/docs/index",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search/docs/status",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/search/federated",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/system/health",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/agents",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/assist",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/commands",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/session/register",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/session/resume",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/terminal/ws",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/tools-proxy*",
+        "risk": "MEDIUM"
+      },
+      {
+        "route": "/api/tools/image/generate",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/tunnel/restart",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/unified-search",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/unified-search/track",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/version",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/workers",
+        "risk": "LOW"
+      },
+      {
+        "route": "/api/workflow/run",
+        "risk": "LOW"
+      }
+    ]
+  },
+  "duplicates": [
+    "/api/agent*",
+    "/api/agentsam*",
+    "/api/browser*",
+    "/api/cicd*",
+    "/api/draw*",
+    "/api/finance*",
+    "/api/hub*",
+    "/api/integrations*",
+    "/api/mcp*",
+    "/api/playwright*",
+    "/api/r2*",
+    "/api/storage*",
+    "/api/telemetry*",
+    "/api/terminal*",
+    "/api/tunnel/status",
+    "/api/unified-search/recent",
+    "/api/vault*",
+    "/api/workspace*",
+    "/api/workspaces*"
+  ],
+  "router_only_routes": [
+    "/api/admin*",
+    "/api/ai*",
+    "/api/auth*",
+    "/api/billing*",
+    "/api/branding*",
+    "/api/canvas*",
+    "/api/chat*",
+    "/api/cicd/event*",
+    "/api/collab/room*",
+    "/api/deploy*",
+    "/api/deploy/post",
+    "/api/deployments*",
+    "/api/drive*",
+    "/api/github*",
+    "/api/gorilla*",
+    "/api/health*",
+    "/api/hyperdrive*",
+    "/api/integrations/gdrive*",
+    "/api/integrations/github*",
+    "/api/integrity*",
+    "/api/internal/cicd*",
+    "/api/internal/git-status*",
+    "/api/learn*",
+    "/api/login",
+    "/api/logout",
+    "/api/mail*",
+    "/api/notify/deploy-complete",
+    "/api/onboarding*",
+    "/api/overview*",
+    "/api/pipeline*",
+    "/api/post-deploy*",
+    "/api/rag*",
+    "/api/search*",
+    "/api/secrets*",
+    "/api/settings*",
+    "/api/stripe*",
+    "/api/theme*",
+    "/api/themes*",
+    "/api/usage*",
+    "/api/user*",
+    "/api/webhooks*"
+  ],
+  "recommended_batch_order": [
+    "Telemetry / Health",
+    "Themes",
+    "Settings / Profile",
+    "MCP",
+    "Storage / R2",
+    "Workspaces",
+    "Mail",
+    "Integrations",
+    "Images / Media",
+    "Learn / Overview",
+    "Finance / Billing",
+    "Collab / Canvas / DO",
+    "Agent / Chat",
+    "Auth / Session",
+    "Webhooks",
+    "Admin / Internal",
+    "Misc / Unknown"
+  ]
+}

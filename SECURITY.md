@@ -22,7 +22,7 @@ production build is supported. There are no versioned releases.
 
 Report privately via email:
 
-**sam@inneranimalmedia.com**
+**support@inneranimalmedia.com**
 
 Include in your report:
 - Description of the vulnerability

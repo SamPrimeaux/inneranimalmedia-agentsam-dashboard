@@ -42,10 +42,11 @@ function stripEmojiFromNotificationText(s: string | null | undefined): string {
 
 export type AgentNotificationRow = {
   id: string;
+  title?: string | null;
   subject?: string | null;
   message?: string | null;
   status?: string | null;
-  created_at?: string | null;
+  created_at?: string | number | null;
 };
 
 interface StatusBarProps {
@@ -210,7 +211,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                       onClick={() => void onMarkNotificationRead?.(n.id)}
                     >
                       <div className="text-[12px] font-medium text-[var(--text-main)] line-clamp-2">
-                        {stripEmojiFromNotificationText(n.subject?.trim()) || 'Notice'}
+                        {stripEmojiFromNotificationText(
+                          (n.title ?? n.subject)?.trim(),
+                        ) || 'Notice'}
                       </div>
                       {n.message && (
                         <div className="text-[11px] text-[var(--text-muted)] mt-0.5 line-clamp-3 whitespace-pre-wrap">

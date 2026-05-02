@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type AgentStatus = 'idle' | 'running' | 'waiting' | 'error' | 'success';
+type AgentStatus = 'idle' | 'running' | 'active' | 'waiting' | 'error' | 'success';
 
 interface AgentConfig {
   id: string;
@@ -41,6 +41,12 @@ interface AgentState {
   cost_usd: number;
   logs: string[];
   session_id: string | null;
+  /** D1 mcp_agent_sessions.id for reset */
+  session_row_id: string | null;
+  updated_at: number | null;
+  last_activity: string | null;
+  stage: string | null;
+  is_stale: boolean;
 }
 
 interface McpService {
@@ -154,7 +160,8 @@ function lucideForIconName(name: string | null): React.ReactNode {
 
 function mapProfilesToAgents(profiles: AgentProfile[]): AgentConfig[] {
   return profiles.map((p, idx) => {
-    const id = String(p.slug || '').trim();
+    let id = String(p.slug || '').trim();
+    if (id === 'mcp_agent_tester') id = 'mcp_agent_inspector';
     const name = String(p.display_name || id || 'Agent').trim();
     const desc = String(p.description || '').trim();
     return {
@@ -171,12 +178,20 @@ function mapProfilesToAgents(profiles: AgentProfile[]): AgentConfig[] {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function statusIcon(status: AgentStatus, accent: string) {
-  switch (status) {
-    case 'running':  return <Loader2 size={13} className="animate-spin" style={{ color: accent }} />;
-    case 'success':  return <CheckCircle2 size={13} style={{ color: 'var(--solar-green)' }} />;
-    case 'error':    return <AlertCircle size={13} style={{ color: 'var(--solar-red)' }} />;
-    case 'waiting':  return <Clock size={13} style={{ color: 'var(--solar-yellow)' }} />;
-    default:         return <Circle size={13} className="opacity-30" style={{ color: accent }} />;
+  const s = String(status || '').toLowerCase();
+  switch (s) {
+    case 'running':
+      return <Loader2 size={13} className="animate-spin" style={{ color: 'var(--solar-cyan)' }} />;
+    case 'active':
+      return <Circle size={13} fill="currentColor" className="opacity-95" style={{ color: 'var(--solar-green)' }} />;
+    case 'success':
+      return <CheckCircle2 size={13} style={{ color: 'var(--solar-green)' }} />;
+    case 'error':
+      return <AlertCircle size={13} style={{ color: 'var(--solar-red)' }} />;
+    case 'waiting':
+      return <Clock size={13} style={{ color: 'var(--solar-yellow)' }} />;
+    default:
+      return <Circle size={13} className="opacity-35" style={{ color: 'var(--text-muted)' }} />;
   }
 }
 
@@ -185,11 +200,13 @@ interface AgentCardProps {
   config: AgentConfig;
   state: AgentState;
   onOpen: (id: string) => void;
+  onResetStale: (sessionRowId: string) => void;
 }
 
-const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen }) => {
+const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen, onResetStale }) => {
   const accent = config.accentVar;
-  const isActive = state.status === 'running' || state.status === 'waiting';
+  const st = String(state.status || '').toLowerCase();
+  const isActive = st === 'running' || st === 'active' || st === 'waiting';
 
   return (
     <div
@@ -214,7 +231,18 @@ const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen }) => {
             <p className="text-[0.5625rem] font-mono uppercase tracking-widest text-[var(--text-muted)] mt-0.5">{config.role}</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5">
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap justify-end">
+          {state.is_stale && state.session_row_id && (
+            <button
+              type="button"
+              title="Session looks stuck — reset this agent"
+              onClick={(e) => { e.stopPropagation(); onResetStale(state.session_row_id!); }}
+              className="px-1.5 py-0.5 rounded text-[0.5rem] font-bold uppercase tracking-wide cursor-pointer"
+              style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.45)', color: '#fbbf24' }}
+            >
+              Stale — click to reset
+            </button>
+          )}
           {statusIcon(state.status, accent)}
           <span className="text-[0.5625rem] font-bold uppercase tracking-wider text-[var(--text-muted)] capitalize">
             {state.status}
@@ -231,23 +259,21 @@ const AgentCard: React.FC<AgentCardProps> = ({ config, state, onOpen }) => {
         )}
       </div>
 
-      {/* progress bar */}
-      {state.progress_pct > 0 && (
-        <div className="mx-4 mb-3 h-0.5 rounded-full bg-[var(--border-subtle)] overflow-hidden">
-          <div
-            className="h-full rounded-full transition-all duration-500"
-            style={{ width: `${state.progress_pct}%`, background: accent }}
-          />
-        </div>
-      )}
+      {/* progress bar (D1 progress_pct) */}
+      <div className="mx-4 mb-3 h-1 rounded-full bg-[var(--border-subtle)] overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${Math.min(100, Math.max(0, state.progress_pct))}%`, background: accent }}
+        />
+      </div>
 
-      {/* log lines */}
+      {/* log lines — newest first, max 5 */}
       <div
         className="mx-4 mb-3 rounded-lg px-3 py-2 font-mono text-[0.5625rem] leading-relaxed space-y-0.5 overflow-hidden"
-        style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', minHeight: '3.5rem', maxHeight: '3.5rem' }}
+        style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', minHeight: '4.5rem', maxHeight: '4.5rem' }}
       >
-        {state.logs.slice(-3).length > 0
-          ? state.logs.slice(-3).map((l, i) => (
+        {[...state.logs].reverse().slice(0, 5).length > 0
+          ? [...state.logs].reverse().slice(0, 5).map((l, i) => (
             <div key={i} className="truncate text-[var(--text-muted)]">{l}</div>
           ))
           : <div className="text-[var(--text-muted)] opacity-40">No activity yet</div>
@@ -432,6 +458,7 @@ export const McpPage: React.FC = () => {
     Object.fromEntries(FALLBACK_AGENTS.map(a => [a.id, {
       id: a.id, status: 'idle', current_task: null,
       progress_pct: 0, cost_usd: 0, logs: [], session_id: null,
+      session_row_id: null, updated_at: null, last_activity: null, stage: null, is_stale: false,
     }]))
   );
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
@@ -444,7 +471,6 @@ export const McpPage: React.FC = () => {
   const [commandInput, setCommandInput] = useState('');
   const [commandFocus, setCommandFocus] = useState(false);
   const [dispatching, setDispatching] = useState(false);
-  const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null);
   const commandRef = useRef<HTMLInputElement>(null);
 
   const formatRelativeTime = useCallback((raw: unknown): string => {
@@ -546,53 +572,99 @@ export const McpPage: React.FC = () => {
           cost_usd: 0,
           logs: [],
           session_id: null,
+          session_row_id: null,
+          updated_at: null,
+          last_activity: null,
+          stage: null,
+          is_stale: false,
         };
       }
       return next;
     });
   }, [agents]);
 
-  // ── Load agents ─────────────────────────────────────────────────────────────
-  const loadAgents = useCallback(async () => {
+  // ── D1-backed agent status (/api/mcp/agents/status) ─────────────────────────
+  const loadAgentStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/mcp/agents', { credentials: 'same-origin' });
-      const data = await res.json();
-      const list: AgentState[] = data.agents || data || [];
-      if (Array.isArray(list)) {
-        setAgentStates(prev => {
-          const next = { ...prev };
-          list.forEach((a: AgentState) => {
-            if (next[a.id]) {
-              next[a.id] = {
-                ...next[a.id],
-                status: a.status ?? 'idle',
-                current_task: a.current_task ?? null,
-                progress_pct: a.progress_pct ?? 0,
-                cost_usd: a.cost_usd ?? 0,
-                logs: a.logs ?? [],
-              };
-            }
-          });
-          return next;
-        });
-      }
+      const res = await fetch('/api/mcp/agents/status', { credentials: 'same-origin' });
+      const data = await res.json().catch(() => ({}));
+      const list = Array.isArray(data?.agents) ? data.agents : [];
+      setAgentStates(prev => {
+        const next = { ...prev };
+        for (const row of list) {
+          const id = String(row?.agent_id || '').trim();
+          if (!id || !next[id]) continue;
+          const logsRaw = row.logs_json;
+          const logsArr = Array.isArray(logsRaw)
+            ? logsRaw.map((x: unknown) => (typeof x === 'string' ? x : JSON.stringify(x)))
+            : [];
+          next[id] = {
+            ...next[id],
+            id,
+            status: (String(row.status || 'idle').toLowerCase() as AgentStatus) || 'idle',
+            current_task: row.current_task ?? null,
+            progress_pct: Number(row.progress_pct) || 0,
+            cost_usd: Number(row.cost_usd) || 0,
+            logs: logsArr,
+            session_id: row.session_id ?? null,
+            session_row_id: row.session_id ?? null,
+            updated_at: row.updated_at != null ? Number(row.updated_at) : null,
+            last_activity: row.last_activity ?? null,
+            stage: row.stage ?? null,
+            is_stale: !!row.is_stale,
+          };
+        }
+        return next;
+      });
     } catch { /* silent */ }
   }, []);
 
-  useEffect(() => { void loadAgents(); }, [loadAgents]);
-
-  // polling when any agent running
   useEffect(() => {
-    const anyRunning = Object.values(agentStates).some(a => a.status === 'running' || a.status === 'waiting');
-    if (anyRunning && !pollTimer) {
-      const t = setInterval(() => void loadAgents(), 4000);
-      setPollTimer(t);
-    } else if (!anyRunning && pollTimer) {
-      clearInterval(pollTimer);
-      setPollTimer(null);
-    }
-    return () => { if (pollTimer) clearInterval(pollTimer); };
-  }, [agentStates, pollTimer, loadAgents]);
+    let t: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (t) clearInterval(t);
+      t = null;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void loadAgentStatus();
+      t = setInterval(() => void loadAgentStatus(), 30_000);
+    };
+    start();
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (t) clearInterval(t);
+        t = null;
+      } else start();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      if (t) clearInterval(t);
+    };
+  }, [loadAgentStatus]);
+
+  const resetStaleSession = useCallback(async (sessionRowId: string) => {
+    try {
+      await fetch('/api/mcp/agents/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ id: sessionRowId }),
+      });
+      await loadAgentStatus();
+    } catch { /* silent */ }
+  }, [loadAgentStatus]);
+
+  const resetAllAgents = useCallback(async () => {
+    try {
+      await fetch('/api/mcp/agents/reset-all', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      await loadAgentStatus();
+    } catch { /* silent */ }
+  }, [loadAgentStatus]);
 
   // ── Load services ────────────────────────────────────────────────────────────
   const loadServices = useCallback(async () => {
@@ -621,12 +693,12 @@ export const McpPage: React.FC = () => {
       const data = await res.json();
       if (data.agent_id) {
         setCommandInput('');
-        await loadAgents();
+        await loadAgentStatus();
         setTimeout(() => setActiveAgent(data.agent_id), 400);
       }
     } catch { /* silent */ }
     finally { setDispatching(false); }
-  }, [commandInput, dispatching, loadAgents]);
+  }, [commandInput, dispatching, loadAgentStatus]);
 
   const healthColor = (status?: string) => {
     const s = (status ?? '').toLowerCase();
@@ -658,12 +730,17 @@ export const McpPage: React.FC = () => {
         <div className="flex items-center gap-3 ml-4">
           {(agents.length ? agents : FALLBACK_AGENTS).map(a => {
             const s = agentStates[a.id];
-            const running = s?.status === 'running';
+            const st = String(s?.status || 'idle').toLowerCase();
+            const dotActive = st === 'running' || st === 'active';
+            const dotColor =
+              st === 'running' ? 'var(--solar-cyan)'
+              : st === 'active' ? 'var(--solar-green)'
+              : 'var(--text-muted)';
             return (
               <div key={a.id} className="flex items-center gap-1.5">
                 <div
-                  className={`w-1.5 h-1.5 rounded-full ${running ? 'animate-pulse' : ''}`}
-                  style={{ background: running ? a.accentVar : 'var(--text-muted)', opacity: running ? 1 : 0.3 }}
+                  className={`w-1.5 h-1.5 rounded-full ${st === 'running' ? 'animate-pulse' : ''}`}
+                  style={{ background: dotColor, opacity: dotActive ? 1 : 0.35 }}
                 />
                 <span className="text-[0.5rem] font-mono text-[var(--text-muted)] hidden sm:block">{a.name}</span>
               </div>
@@ -673,7 +750,16 @@ export const McpPage: React.FC = () => {
 
         <button
           type="button"
-          onClick={() => void loadAgents()}
+          onClick={() => void resetAllAgents()}
+          className="px-2.5 py-1 rounded-lg text-[0.5625rem] font-bold uppercase tracking-widest shrink-0"
+          style={{ border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}
+        >
+          Reset All
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void loadAgentStatus()}
           className="ml-auto p-1.5 rounded-lg hover:bg-[var(--bg-hover)] text-[var(--text-muted)]"
         >
           <RefreshCw size={13} />
@@ -748,6 +834,7 @@ export const McpPage: React.FC = () => {
               config={config}
               state={agentStates[config.id]}
               onOpen={setActiveAgent}
+              onResetStale={resetStaleSession}
             />
           ))}
         </div>

@@ -3,10 +3,29 @@
  * Handles PTY workshops, WebSocket runs, and workspace path resolution.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, tenantIdFromEnv } from './auth';
+import { getAuthUser, fetchAuthUserTenantId } from './auth';
 import { notifySam } from './notifications';
 
 export const HEADLESS_TERMINAL_SESSION_ID = 'term_headless_sam';
+
+/**
+ * Default PTY bridge from D1 (terminal_connections). Falls back to env.TERMINAL_WS_URL when absent.
+ */
+export async function getDefaultTerminalConnection(db) {
+  if (!db) return null;
+  try {
+    const conn = await db.prepare(
+      `SELECT ws_url, auth_token_secret_name, connection_type, ollama_url
+       FROM terminal_connections
+       WHERE is_default = 1 AND is_active = 1
+       LIMIT 1`,
+    ).first();
+    return conn ?? null;
+  } catch (e) {
+    console.warn('[getDefaultTerminalConnection]', e?.message ?? e);
+    return null;
+  }
+}
 
 /**
  * Merge WS frames from iam-pty run: JSON session_id/error/output, or raw PTY UTF-8.
@@ -74,32 +93,27 @@ export async function runTerminalCommandViaHttpExec(env, cmd) {
   pushTok(env.TERMINAL_SECRET);
   if (!tokens.length) return { ok: false };
 
-  // Prefer private VPC connector when present.
+  // Prefer private VPC connector when present (tunnel handles auth; no worker-side PTY headers).
   if (env?.PTY_SERVICE) {
     try {
-      for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        const res = await env.PTY_SERVICE.fetch(new Request('http://localhost:3099/exec', {
+      const res = await env.PTY_SERVICE.fetch(
+        new Request('http://localhost:3099/exec', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer ' + token,
-            'X-PTY-Token': token,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: cmd }),
-        }));
-        if (res.status === 401 && i < tokens.length - 1) continue;
-        if (!res.ok) return { ok: false };
+        }),
+      );
+      if (res.ok) {
         const data = await res.json().catch(() => null);
-        if (!data || typeof data !== 'object') return { ok: false };
-        const stdout = typeof data.stdout === 'string' ? data.stdout : '';
-        const stderr = typeof data.stderr === 'string' ? data.stderr : '';
-        const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
-        return { ok: true, text, exitCode: data.exit_code ?? 0 };
+        if (data && typeof data === 'object') {
+          const stdout = typeof data.stdout === 'string' ? data.stdout : '';
+          const stderr = typeof data.stderr === 'string' ? data.stderr : '';
+          const text = ((stdout || '') + (stderr ? '\nSTDERR: ' + stderr : '')).trim();
+          return { ok: true, text, exitCode: data.exit_code ?? 0 };
+        }
       }
-      return { ok: false };
     } catch (_) {
-      // Fall through to TERMINAL_WS_URL-based HTTP /exec fallback.
+      /* fall through to TERMINAL_WS_URL-based HTTP /exec fallback */
     }
   }
 
@@ -141,7 +155,7 @@ export async function runTerminalCommandViaControlPlane(env, request, command, e
   try {
     const authUser = await getAuthUser(request, env);
     const userId = String(authUser?.id || 'anonymous');
-    const workspaceId = String(extra.workspace_id || authUser?.tenant_id || tenantIdFromEnv(env) || 'default').trim();
+    const workspaceId = String(extra.workspace_id || authUser?.tenant_id || 'default').trim();
     const mode = ['pty', 'ssh', 'mcp'].includes(String(executionMode || '').toLowerCase())
       ? String(executionMode).toLowerCase()
       : 'pty';
@@ -182,7 +196,11 @@ export async function runTerminalCommandViaControlPlane(env, request, command, e
 async function writeTerminalHistory(env, request, sessionId, commandText, outputText, exitCode) {
   if (!env.DB) return;
   const terminalSessionId = await resolveTerminalSessionIdForHistory(env, request);
-  const tenantId = tenantIdFromEnv(env);
+  const authUser = await getAuthUser(request, env).catch(() => null);
+  let tenantId = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== '' ? String(authUser.tenant_id).trim() : null;
+  if (!tenantId && authUser?.id) {
+    tenantId = await fetchAuthUserTenantId(env, authUser.id).catch(() => null);
+  }
   if (!terminalSessionId || !tenantId) return;
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare(
@@ -242,20 +260,6 @@ export async function resolveIamWorkspaceRoot(env) {
     } catch (_) {}
   }
 
-  const workspaceRow = await env.DB
-    .prepare('SELECT settings_json FROM agentsam_workspace WHERE id = ?')
-    .bind('ws_inneranimalmedia')
-    .first()
-    .catch(() => null);
-
-  if (workspaceRow?.settings_json) {
-    try {
-      const parsed = JSON.parse(workspaceRow.settings_json);
-      const root = typeof parsed?.workspace_root === 'string' ? parsed.workspace_root.trim() : '';
-      if (root) return root;
-    } catch (_) {}
-  }
-
   throw new Error('workspace_root_missing_in_d1');
 }
 
@@ -273,8 +277,7 @@ export async function resolveTerminalSessionIdForHistory(env, request) {
 
 export async function ensureHeadlessTerminalSessionForHistory(env) {
   if (!env.DB) return;
-  const tid = tenantIdFromEnv(env);
-  if (!tid) return;
+  const tid = 'system';
   await env.DB.prepare(
     `INSERT OR IGNORE INTO terminal_sessions (id, tenant_id, user_id, status, shell, created_at, updated_at) VALUES (?, ?, 'headless_session', 'active', '/bin/zsh', unixepoch(), unixepoch())`
   ).bind(HEADLESS_TERMINAL_SESSION_ID, tid).run();

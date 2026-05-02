@@ -1,4 +1,5 @@
 // Handles all CICD lifecycle events and fans out to correct D1 tables.
+import { fallbackSystemTenantId } from '../core/auth.js';
 // Tables written per event:
 //   post_promote  → deployments, deployment_health_checks, deployment_changes,
 //                   tracking_metrics, ai_workflow_executions, project_storage
@@ -165,11 +166,12 @@ async function handlePostSandbox(p, env) {
     VALUES (
       ?, ?, 'Sandbox CICD Bucket', 'r2',
       'https://dash.cloudflare.com/r2/agent-sam-sandbox-cicd',
-      'tenant_sam_primeaux', 'active', ?, unixepoch(), unixepoch()
+      ?, 'active', ?, unixepoch(), unixepoch()
     )
-  `).bind(
+  `  ).bind(
     `ps-cicd-event-${deployId}`,
     'agent-sam-sandbox-cicd',
+    fallbackSystemTenantId(env),
     JSON.stringify({
       r2_files: p.r2_files || 0,
       r2_bytes: p.r2_bytes || 0,
@@ -190,11 +192,15 @@ async function handlePostSandbox(p, env) {
 
 async function handleSessionStart(p, env) {
   const entryId = `pte-${p.user_id}-${Math.floor(Date.now()/1000)}`;
+  const tenantRow =
+    p.tenant_id != null && String(p.tenant_id).trim() !== ''
+      ? String(p.tenant_id).trim()
+      : fallbackSystemTenantId(env);
   await env.DB.prepare(`
     INSERT INTO project_time_entries
       (id, project_id, tenant_id, user_id, date, hours, description, created_at)
-    VALUES (?, 'inneranimalmedia', 'tenant_sam_primeaux', ?, date('now'), 0, ?, unixepoch())
-  `).bind(entryId, p.user_id || 'sam_primeaux',
+    VALUES (?, 'inneranimalmedia', ?, ?, date('now'), 0, ?, unixepoch())
+  `).bind(entryId, tenantRow, p.user_id || 'sam_primeaux',
           `Session started — ${p.context || 'agent session'}`).run();
 
   await env.KV.put(`session_time_entry:${p.session_id}`, entryId, { expirationTtl: 86400 });
@@ -248,8 +254,8 @@ async function fireHooks(trigger, payload, env, isExplicitId = false) {
       if (cmd === 'notify:imessage' || cmd === 'notify:email') {
         // Deliver via Resend → your email (which forwards to iMessage via email-to-SMS bridge)
         const resendKey = env.RESEND_API_KEY;
-        const to = env.RESEND_TO || 'meauxbility@gmail.com';
-        const from = env.RESEND_FROM || 'sam@inneranimalmedia.com';
+        const to = env.RESEND_TO || 'support@inneranimalmedia.com';
+        const from = env.RESEND_FROM || 'support@inneranimalmedia.com';
         if (resendKey) {
           const subject = `[IAM] ${env_label} ${ver} — ${health}`;
           const html = `<pre style="font-family:monospace;background:#0f1117;color:#e2e8f0;padding:16px;border-radius:6px;white-space:pre-wrap">${summaryText}</pre>`;

@@ -21,6 +21,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.14.1",
+    "recharts": "^2.15.0",
     "source-map": "^0.7.6"
   },
   "devDependencies": {
@@ -36,6 +37,6 @@
     "tailwindcss": "^4.2.4",
     "three": "^0.182.0",
     "typescript": "~5.8.2",
-    "vite": "^6.4.1"
+    "vite": "^6.4.2"
   }
 }

@@ -3,25 +3,41 @@
  * Handles theme gallery, active theme resolution, and applying new themes.
  * Deconstructed from legacy worker.js.
  */
-import { getAuthUser, jsonResponse, tenantIdFromEnv } from '../core/auth.js';
+import { getAuthUser, jsonResponse, fetchAuthUserTenantId } from '../core/auth.js';
 
 /**
  * Builds `/api/themes/active` payload from a cms_themes row.
  */
 function activeThemeJsonFromCmsRow(row) {
     if (!row) return null;
-    let data = {};
+    let configObj = {};
     try {
-        if (typeof row.config === 'string') data = JSON.parse(row.config);
-        else if (row.config && typeof row.config === 'object') data = row.config;
-    } catch (_) { }
+        if (typeof row.config === 'string') configObj = JSON.parse(row.config);
+        else if (row.config && typeof row.config === 'object') configObj = row.config;
+    } catch (_) {
+        configObj = {};
+    }
+    const rawVars = configObj.variables ?? configObj.data ?? configObj ?? {};
+    const themeVars = {};
+    if (rawVars && typeof rawVars === 'object' && !Array.isArray(rawVars)) {
+        for (const [k, v] of Object.entries(rawVars)) {
+            if (v == null || k == null) continue;
+            if (k === 'mode' || k === 'is_dark' || k === 'slug' || k === 'name') continue;
+            const key = String(k).startsWith('--') ? String(k) : `--${String(k).replace(/_/g, '-')}`;
+            themeVars[key] = String(v);
+        }
+    }
+    const is_dark =
+        configObj.mode === 'dark' ||
+        configObj.is_dark === true ||
+        String(row.slug || '').includes('dark');
     return {
         id: row.id,
         name: row.name || 'Custom Theme',
         slug: row.slug || 'custom',
-        is_dark: data.mode === 'dark' || data.is_dark === true || String(row.slug).includes('dark'),
+        is_dark,
         css_url: row.css_url || null,
-        data: data,
+        data: themeVars,
         theme_family: row.theme_family || 'custom',
         wcag_scores: row.wcag_scores || null,
     };
@@ -40,7 +56,7 @@ export async function handleThemesApi(request, url, env, ctx) {
         // ── GET /api/themes (Gallery) ──
         if (pathLower === '/api/themes' && method === 'GET') {
             const { results } = await env.DB.prepare(
-                `SELECT id, name, slug, config, theme_family, sort_order, css_url, tenant_id, workspace_id, wcag_scores, contrast_flags, is_system
+                `SELECT id, name, slug, config, theme_family, sort_order, css_url, tenant_id, workspace_id, wcag_scores, contrast_flags, is_system, monaco_bg
                  FROM cms_themes ORDER BY is_system DESC, theme_family ASC, sort_order ASC, name ASC`
             ).all();
             return jsonResponse({ themes: results || [] });
@@ -49,7 +65,13 @@ export async function handleThemesApi(request, url, env, ctx) {
         // ── GET /api/themes/active ──
         if (pathLower === '/api/themes/active' && method === 'GET') {
             const workspaceId = url.searchParams.get('workspace_id') || url.searchParams.get('workspace');
-            const tid = tenantIdFromEnv(env); // Simplified for modularity
+            const authUser = await getAuthUser(request, env).catch(() => null);
+            let tid = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+              ? String(authUser.tenant_id).trim()
+              : null;
+            if (!tid && authUser?.id) {
+              tid = await fetchAuthUserTenantId(env, authUser.id).catch(() => null);
+            }
             
             // Try loading from settings
             let themeRow = null;
@@ -85,14 +107,17 @@ export async function handleThemesApi(request, url, env, ctx) {
             const theme = await env.DB.prepare('SELECT slug FROM cms_themes WHERE id = ?').bind(themeId).first();
             if (!theme) return jsonResponse({ error: 'Theme not found' }, 404);
 
-            const tid = tenantIdFromEnv(env);
-            if (tid) {
-                await env.DB.prepare(
+            let tid = authUser.tenant_id != null && String(authUser.tenant_id).trim() !== ''
+              ? String(authUser.tenant_id).trim()
+              : null;
+            if (!tid) tid = await fetchAuthUserTenantId(env, authUser.id);
+            if (!tid) return jsonResponse({ error: 'Tenant could not be resolved' }, 403);
+
+            await env.DB.prepare(
                     `INSERT INTO settings (tenant_id, setting_key, setting_value, updated_at)
                      VALUES (?, 'appearance.theme', ?, unixepoch())
                      ON CONFLICT(tenant_id, setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = unixepoch()`
                 ).bind(tid, theme.slug).run();
-            }
 
             return jsonResponse({ ok: true, theme: theme.slug });
         }

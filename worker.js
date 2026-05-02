@@ -7,11 +7,63 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import {
+  provisionUserWorkspace,
+  evaluatePlanForModelRequest,
+  envWithLlmKeyOverride,
+} from "./src/api/provisioning.js";
+import { handleDesignStudioApi } from "./src/api/designstudio/index.js";
+import { handleStorageApi } from "./src/api/storage.js";
+import { handleWorkspaceApi } from "./src/api/workspace.js";
+import { handleMeetApi } from "./src/api/meet.js";
+import { handleBillingApi } from "./src/api/billing.js";
+import { authUserIsSuperadmin } from "./src/core/auth.js";
+import { getAESKey } from "./src/core/crypto-vault.js";
+import { handleVaultApi } from "./src/api/vault.js";
+import { generateDailySummaryEmail } from './src/api/workflow/summary.js';
+import { runMasterDailyRetention } from './src/core/retention.js';
+import { loadAgentMemoryForPrompt } from "./src/core/memory.js";
+import { fetchCicdPipelineRunsForOverview } from './src/api/overview.js';
+import {
+  AGENTSAM_MCP_WORKFLOWS,
+  buildAgentSamWorkflowListSelect,
+  getAgentSamWorkflow,
+  normalizeAgentSamWorkflowRow,
+} from './src/core/agentsam-workflows.js';
+import {
+  AGENTSAM_WORKFLOW_RUNS_TABLE,
+  assertD1Write,
+  createSupabaseWorkflowRun,
+  markWorkflowRunSupabaseFailed,
+  markWorkflowRunSupabaseSynced,
+  syncWorkflowRunToSupabase,
+  updateSupabaseWorkflowRun,
+} from './src/core/agentsam-supabase-sync.js';
+
+const IAM_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
+const IAM_EMBED_DIMS = 1024;
 // @cloudflare/playwright loaded dynamically at runtime
 let playwrightLaunch = null;
 
 const DOCS_SCREENSHOTS_PUBLIC_BASE = 'https://docs.inneranimalmedia.com';
 const DASHBOARD_SCREENSHOTS_PUBLIC_BASE = 'https://pub-b845a8f899834f0faf95dc83eda3c505.r2.dev';
+
+function resolveWorkspaceId(env, params = {}) {
+  return params?.workspace_id
+    || params?.workspaceId
+    || env?.WORKSPACE_ID
+    || IAM_DEFAULT_WORKSPACE_ID;
+}
+
+async function generateEmbedding(env, text) {
+  if (!env?.AI) throw new Error('Workers AI binding not configured');
+  const resp = await env.AI.run(IAM_EMBED_MODEL, {
+    text: Array.isArray(text) ? text : [text]
+  });
+  const vecs = resp?.data || resp?.result || [];
+  if (!vecs.length) throw new Error('No embeddings returned');
+  return Array.isArray(text) ? vecs : vecs[0];
+}
 
 /**
  * Store agent/browser tool screenshots. Prefer env.DOCS_BUCKET (public: docs.inneranimalmedia.com).
@@ -34,8 +86,9 @@ async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
     return { screenshot_url, job_id: id };
   }
   if (env.DASHBOARD) {
+    const ts = Date.now();
     const id = crypto.randomUUID();
-    const key = `screenshots/${id}.png`;
+    const key = `screenshots/agent/${ts}-${id}.png`;
     await env.DASHBOARD.put(key, buf, { httpMetadata: { contentType: ct } });
     const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
     void insertAiGenerationLog(env, {
@@ -46,8 +99,9 @@ async function putAgentBrowserScreenshotToR2(env, buf, contentType) {
     return { screenshot_url, job_id: id };
   }
   if (env.R2) {
+    const ts = Date.now();
     const id = crypto.randomUUID();
-    const key = `screenshots/${id}.png`;
+    const key = `screenshots/agent/${ts}-${id}.png`;
     await env.R2.put(key, buf, { httpMetadata: { contentType: ct } });
     const screenshot_url = `${DASHBOARD_SCREENSHOTS_PUBLIC_BASE}/${key}`;
     void insertAiGenerationLog(env, {
@@ -187,19 +241,17 @@ function variablesFromCmsThemeConfig(cfg) {
   return variables;
 }
 
-/** Plaintext wrangler `TENANT_ID` — never substitute a literal tenant string. */
-function tenantIdFromEnv(env) {
-  if (!env || env.TENANT_ID == null) return null;
-  const s = String(env.TENANT_ID).trim();
-  return s || null;
+/** Legacy wrangler `TENANT_ID` removed — always null (tenant from session / D1). */
+function tenantIdFromEnv(_env) {
+  return null;
 }
 
-/** Prefer session/routing tenant, then env `TENANT_ID` (may be null). */
-function resolveTelemetryTenantId(env, explicitTenantId) {
+/** Telemetry tenant: explicit routing value only. */
+function resolveTelemetryTenantId(_env, explicitTenantId) {
   if (explicitTenantId != null && String(explicitTenantId).trim() !== '') {
     return String(explicitTenantId).trim();
   }
-  return tenantIdFromEnv(env) || null;
+  return null;
 }
 
 /** Default D1 workspace_id for prod telemetry rows (resolve per-user later). */
@@ -347,10 +399,9 @@ async function getSuperadminAuthIds(env) {
   }
   try {
     const result = await env.DB.prepare(
-      `SELECT au.id AS auth_id, au.email, u.id AS user_id
-       FROM auth_users au
-       LEFT JOIN users u ON u.auth_id = au.id
-       WHERE COALESCE(au.is_superadmin, 0) = 1`
+      `SELECT superadmin_uuid AS auth_id, superadmin_uuid AS user_id, email
+       FROM superadmin_identity
+       WHERE COALESCE(is_enabled, 0) = 1`
     ).all();
     const cache = { authIds: new Set(), userIds: new Set(), emails: new Set() };
     for (const row of result.results || []) {
@@ -372,7 +423,7 @@ async function isSuperadminEmail(env, email) {
   if (!em || !env?.DB) return false;
   try {
     const row = await env.DB.prepare(
-      `SELECT 1 FROM auth_users WHERE LOWER(email) = ? AND COALESCE(is_superadmin, 0) = 1 LIMIT 1`
+      `SELECT 1 FROM superadmin_identity WHERE LOWER(email) = ? AND COALESCE(is_enabled, 0) = 1 LIMIT 1`
     ).bind(em).first();
     return !!row;
   } catch (e) {
@@ -402,6 +453,42 @@ async function isSuperadminSessionUserKey(env, userKey) {
 async function buildSuperadminContext(env, sessionId, sessionUserKey) {
   const key = String(sessionUserKey || '').trim();
   if (!key) throw new Error('empty session user key');
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, superadmin_uuid, email, name, tenant_id, permissions_json
+       FROM superadmin_identity
+       WHERE (LOWER(email) = LOWER(?) OR superadmin_uuid = ?)
+         AND COALESCE(is_enabled, 0) = 1
+       LIMIT 1`
+    ).bind(key, key).first();
+    if (row?.superadmin_uuid) {
+      await env.DB.prepare(
+        `UPDATE superadmin_identity SET last_login_at = unixepoch() WHERE id = ?`
+      ).bind(row.id).run();
+      let permissions = {};
+      try {
+        permissions = JSON.parse(row.permissions_json || '{}');
+      } catch (_) {
+        permissions = {};
+      }
+      return {
+        id: sessionId,
+        email: String(row.email || key).toLowerCase(),
+        user_id: row.superadmin_uuid,
+        _session_user_id: String(row.email || key).toLowerCase(),
+        name: row.name || 'User',
+        role: 'superadmin',
+        permissions,
+        tenant_id: row.tenant_id || null,
+        workspace_id: IAM_DEFAULT_WORKSPACE_ID,
+        is_active: 1,
+        is_superadmin: 1,
+        superadmin_uuid: row.superadmin_uuid,
+      };
+    }
+  } catch (e) {
+    console.warn('[buildSuperadminContext] superadmin_identity', e?.message ?? e);
+  }
   let authRow = null;
   if (key.includes('@')) {
     authRow = await env.DB.prepare(
@@ -440,7 +527,7 @@ async function buildSuperadminContext(env, sessionId, sessionUserKey) {
     (userProfile && userProfile.display_name) || authRow.name || 'User';
   const role = (userProfile && userProfile.role) || 'superadmin';
   const workspaceId =
-    (userProfile && userProfile.default_workspace_id) || 'ws_inneranimalmedia';
+    (userProfile && userProfile.default_workspace_id) || IAM_DEFAULT_WORKSPACE_ID;
   return {
     id: sessionId,
     email: loginEmail,
@@ -644,14 +731,18 @@ async function notifySam(env, opts, executionCtx) {
     .trim();
   const bodyRaw = String(opts.body || '').trim();
   const category = String(opts.category || 'notice').trim();
-  const toAddr = opts.to || 'sam@inneranimalmedia.com';
-  const fromAddr = 'agent@inneranimalmedia.com';
+  const toAddr = opts.to || env.RESEND_TO || '';
+  const fromAddr = env.RESEND_FROM || 'support@inneranimalmedia.com';
   const prefix = subjectRaw.startsWith('[Agent Sam]') ? '' : '[Agent Sam] ';
   const subject = `${prefix}${subjectRaw}`.slice(0, 400);
 
   const run = async () => {
     if (!env.RESEND_API_KEY) {
       console.warn('[notifySam] RESEND_API_KEY not set', category);
+      return;
+    }
+    if (!toAddr) {
+      console.warn('[notifySam] RESEND_TO not set', category);
       return;
     }
     try {
@@ -899,20 +990,57 @@ async function handleDeploymentLog(request, env, ctx, secretFn) {
   const durationSeconds = typeof body.duration_seconds === 'number' ? body.duration_seconds : null;
   const deployDurationMs = durationSeconds != null ? durationSeconds * 1000 : null;
   const changes = Array.isArray(body.changes) ? body.changes : [];
+  const changedFiles = (() => {
+    try {
+      const paths = changes
+        .map((ch) => (ch?.file_path || ch?.path || '').toString().trim())
+        .filter(Boolean)
+        .slice(0, 500);
+      return paths.length ? JSON.stringify(paths) : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  const workerName = (body.worker_name || body.workerName || 'inneranimalmedia').toString().trim() || 'inneranimalmedia';
+  const triggeredBy = (body.triggered_by || body.triggeredBy || deployedBy || 'deploy_log').toString().trim() || 'deploy_log';
+  const notes = (body.notes || '').toString().slice(0, 4000) || null;
   if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
   if (ctx && typeof ctx.waitUntil === 'function') {
     ctx.waitUntil(
       (async () => {
         try {
           await env.DB.prepare(
-            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-          ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+            `INSERT INTO deployments (
+              id, timestamp, version, git_hash, changed_files, description,
+              status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+              worker_name, triggered_by, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+          ).bind(
+            id,
+            timestamp,
+            version,
+            gitHash || null,
+            changedFiles,
+            description || null,
+            status,
+            deployedBy,
+            environment,
+            deployDurationMs,
+            durationSeconds,
+            workerName,
+            triggeredBy,
+            notes
+          ).run();
           appendCidiPipelineRunFromDeploy(env, {
             deploymentId: id,
             environment,
             gitHash: gitHash || 'unknown',
+            branch: body.branch || body.git_branch || 'production',
             versionId: version || id,
             description: description || 'deploy via script',
+            workerName,
+            actor: body.actor || deployedBy,
+            notes: notes || description || null,
           });
           for (let i = 0; i < changes.length; i++) {
             const ch = changes[i];
@@ -942,14 +1070,37 @@ async function handleDeploymentLog(request, env, ctx, secretFn) {
   } else {
     try {
       await env.DB.prepare(
-        `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-      ).bind(id, timestamp, version, gitHash || null, description || null, status, deployedBy, environment, deployDurationMs).run();
+        `INSERT INTO deployments (
+          id, timestamp, version, git_hash, changed_files, description,
+          status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+          worker_name, triggered_by, notes, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      ).bind(
+        id,
+        timestamp,
+        version,
+        gitHash || null,
+        changedFiles,
+        description || null,
+        status,
+        deployedBy,
+        environment,
+        deployDurationMs,
+        durationSeconds,
+        workerName,
+        triggeredBy,
+        notes
+      ).run();
       appendCidiPipelineRunFromDeploy(env, {
         deploymentId: id,
         environment,
         gitHash: gitHash || 'unknown',
+        branch: body.branch || body.git_branch || 'production',
         versionId: version || id,
         description: description || 'deploy via script',
+        workerName,
+        actor: body.actor || deployedBy,
+        notes: notes || description || null,
       });
       for (let i = 0; i < changes.length; i++) {
         const ch = changes[i];
@@ -1228,12 +1379,8 @@ async function fetchUnifiedSpendGrouped(env, periodDays, groupKey) {
 async function getVaultSecrets(env) {
   try {
     if (!env.VAULT_KEY || !env.DB) return {};
-    async function importKey(b64) {
-      const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
-    }
     async function decryptRow(encB64, ivB64, vaultKeyB64) {
-      const key = await importKey(vaultKeyB64);
+      const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['decrypt']);
       const plain = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
         key,
@@ -1711,20 +1858,33 @@ async function recordGithubCicdFollowups(env, row, rawBody, hookCtx = null) {
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO deployments (
-        id, timestamp, version, git_hash, description, status, deployed_by,
-        environment, deploy_time_seconds, worker_name, triggered_by, notes
-      ) VALUES (?, datetime('now'), ?, ?, ?, 'success', ?, 'production', 0, ?, 'github_push', ?)`
+        id, timestamp, version, git_hash, changed_files, description, status, deployed_by,
+        environment, deploy_duration_ms, deploy_time_seconds, worker_name, triggered_by, notes, created_at
+      ) VALUES (?, datetime('now'), ?, ?, NULL, ?, 'success', ?, 'production', 0, 0, ?, 'github_push', ?, datetime('now'))`
     ).bind(deployId, versionShort, commitSha || null, desc, actor, workerName, notes || null).run();
     appendCidiPipelineRunFromDeploy(env, {
       deploymentId: deployId,
       environment: 'production',
       gitHash: commitSha || 'unknown',
+      branch: branch || 'production',
       versionId: versionShort || deployId,
       description: desc || 'deploy via script',
+      workerName,
+      actor,
+      notes: notes || null,
     });
   } catch (e) {
     console.warn('[cicd] deployments INSERT', e?.message ?? e);
   }
+
+  // Push email template substitution (repo/branch/notes/etc.)
+  try {
+    notifySam(env, {
+      subject: `[Agent Sam] Push: ${repoFull || 'unknown'} on ${branch || 'main'}`,
+      body: `Repo: ${repoFull || 'unknown'}\nBranch: ${branch || 'main'}\nActor: ${actor || 'github'}\nVersion: ${versionShort || 'unknown'}\nCommit: ${commitSha || 'unknown'}\n\nNotes:\n${notes || '(no commit message)'}`,
+      category: 'deploy',
+    }, hookCtx?.waitUntil ? hookCtx : null);
+  } catch (_) { }
 
   const repoKey = repoFull.toLowerCase().replace(/\s+/g, '');
   const mappedWf = GITHUB_REPO_CIDI_WORKFLOW[repoKey];
@@ -2004,7 +2164,7 @@ async function executeHookSubscriptionAction(env, actionType, actionConfigJson, 
   if (actionType === 'send_notification') {
     const deploymentId = cfg.deployment_id != null ? String(cfg.deployment_id) : ctx.webhookEventId;
     const notifType = cfg.notification_type != null ? String(cfg.notification_type) : 'webhook';
-    const recipient = cfg.recipient != null ? String(cfg.recipient) : 'sam@inneranimalmedia.com';
+    const recipient = cfg.recipient != null ? String(cfg.recipient) : (env.RESEND_TO || 'support@inneranimalmedia.com');
     const subject = cfg.subject != null ? String(cfg.subject) : `Webhook: ${ctx.eventType}`;
     const message =
       cfg.message != null
@@ -2277,7 +2437,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
     (pathLower === '/api/spend' && method === 'GET') ||
     (pathLower === '/api/spend/summary' && method === 'GET') ||
     (pathLower === '/api/spend/unified' && method === 'GET') ||
-    (pathLower === '/api/billing' && method === 'GET') ||
     (pathLower === '/api/deploy/rollback' && method === 'POST');
   if (!isPhase1) return null;
   if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
@@ -2751,17 +2910,6 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
       const grouped = await fetchUnifiedSpendGrouped(env, periodDays, group);
       return jsonResponse(grouped);
     }
-    if (pathLower === '/api/billing' && method === 'GET') {
-      const { results } = await env.DB.prepare(
-        `SELECT bs.*, bp.name AS plan_display_name, bp.monthly_token_limit, bp.features_json,
-          ba.account_email, ba.billing_name, ba.account_status
-         FROM billing_subscriptions bs
-         LEFT JOIN billing_plans bp ON bp.id = bs.plan_id
-         LEFT JOIN billing_accounts ba ON ba.tenant_id = bs.tenant_id
-         ORDER BY bs.updated_at DESC LIMIT 100`
-      ).all();
-      return jsonResponse({ subscriptions: results || [] });
-    }
     if (pathLower === '/api/deploy/rollback' && method === 'POST') {
       const body = await request.json().catch(() => ({}));
       const fromId = body.from_deployment_id != null ? String(body.from_deployment_id).trim() : '';
@@ -2789,14 +2937,171 @@ async function handlePhase1PlatformD1Routes(request, url, env, pathLower) {
   return null;
 }
 
+async function autoStartWorkSession(env, userId, tenantId, pageContext) {
+  if (!env?.DB) return null;
+  const sessionId = 'ws_' + String(userId || '').slice(-8) + '_' + Date.now();
+  const now = Math.floor(Date.now() / 1000);
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO work_sessions
+      (session_id, tenant_id, started_at, last_activity_at,
+       total_active_seconds, project_context, page_context, auto_paused)
+    VALUES (?, ?, datetime('now'), datetime('now'), 0, 'inneranimalmedia', ?, 0)
+  `).bind(sessionId, tenantId, pageContext || '/dashboard/agent').run().catch(() => { });
+  return sessionId;
+}
+
+async function bumpWorkSession(env, userId, tenantId) {
+  if (!env?.DB) return;
+  // Find open session for this user (no ended_at, not auto_paused, started in last 8h)
+  const sess = await env.DB.prepare(`
+    SELECT session_id, total_active_seconds
+    FROM work_sessions
+    WHERE tenant_id=? AND ended_at IS NULL AND auto_paused=0
+      AND started_at >= datetime('now','-8 hours')
+    ORDER BY started_at DESC LIMIT 1
+  `).bind(tenantId).first().catch(() => null);
+  if (!sess) return;
+  await env.DB.prepare(`
+    UPDATE work_sessions
+    SET last_activity_at=datetime('now'),
+        total_active_seconds=total_active_seconds+30
+    WHERE session_id=?
+  `).bind(sess.session_id).run().catch(() => { });
+}
+
+async function closeWorkSessionAndLog(env, sessionId, tenantId) {
+  if (!env?.DB || !sessionId) return;
+  const sess = await env.DB.prepare(`
+    SELECT * FROM work_sessions WHERE session_id=? AND ended_at IS NULL
+  `).bind(sessionId).first().catch(() => null);
+  if (!sess) return;
+  const hours = Math.round((sess.total_active_seconds || 0) / 36) / 100;
+  if (hours < 0.05) {
+    await env.DB.prepare(`UPDATE work_sessions SET ended_at=datetime('now') WHERE session_id=?`).bind(sessionId).run().catch(() => { });
+    return;
+  }
+  const signals = (() => { try { return JSON.parse(sess.work_signals || '{}'); } catch { return {}; } })();
+  const desc = signals.features?.length
+    ? `Work session: ${signals.features.slice(0, 4).join(', ')}`
+    : `Work session — ${sess.project_context || 'inneranimalmedia'} (${sess.page_context || '/dashboard'})`;
+  await env.DB.prepare(`UPDATE work_sessions SET ended_at=datetime('now') WHERE session_id=?`).bind(sessionId).run().catch(() => { });
+  await env.DB.prepare(`
+    INSERT INTO time_entries
+      (id, user_id, tenant_id, project_id, description, hours,
+       rate_cents, started_at, ended_at, source, work_session_id, billable)
+    VALUES (?,?,?,?,?,?,0,?,datetime('now'),'auto',?,0)
+  `).bind(
+    'te_' + sessionId,
+    'au_871d920d1233cbd1', tenantId,
+    sess.project_context || 'inneranimalmedia',
+    desc, hours,
+    sess.started_at, sessionId
+  ).run().catch(() => { });
+}
+
+async function runDeploymentsWeeklyRollup(env) {
+  if (!env?.DB) return;
+  try {
+    const now = new Date();
+    // This function is gated to Mondays (UTC) by the scheduler.
+    const thisMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const day = thisMonday.getUTCDay();
+    thisMonday.setUTCDate(thisMonday.getUTCDate() - ((day + 6) % 7)); // move to Monday of current week
+    const lastMonday = new Date(thisMonday);
+    lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+    const weekStart = lastMonday.toISOString().slice(0, 10);
+    const weekEnd = thisMonday.toISOString().slice(0, 10);
+    const stats = await env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS success,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+        SUM(COALESCE(deploy_duration_ms,0)) AS total_duration_ms
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
+    `).bind(weekStart, weekEnd).first().catch(() => null);
+    const workers = await env.DB.prepare(`
+      SELECT worker_name, COUNT(*) AS c
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
+      GROUP BY worker_name
+      ORDER BY c DESC
+      LIMIT 25
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
+    const workersJson = JSON.stringify(Object.fromEntries((workers.results || []).map(r => [r.worker_name || 'unknown', Number(r.c) || 0])));
+    const topTrig = await env.DB.prepare(`
+      SELECT triggered_by, COUNT(*) AS c
+      FROM deployments
+      WHERE datetime(timestamp) >= datetime(?)
+        AND datetime(timestamp) < datetime(?)
+      GROUP BY triggered_by
+      ORDER BY c DESC
+      LIMIT 1
+    `).bind(weekStart, weekEnd).first().catch(() => null);
+    const totalDeploys = Number(stats?.total) || 0;
+    const totalDurationMs = Number(stats?.total_duration_ms) || 0;
+    const avgDurationMs = totalDeploys > 0 ? (totalDurationMs / totalDeploys) : 0;
+
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO deployments_weekly_rollup
+        (tenant_id, week_start, week_end, total_deploys, success_count, failed_count,
+         total_duration_ms, avg_duration_ms, per_worker_json, top_triggered_by, notes, rolled_up_at)
+       VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+    ).bind(
+      weekStart,
+      weekEnd,
+      totalDeploys,
+      Number(stats?.success) || 0,
+      Number(stats?.failed) || 0,
+      totalDurationMs,
+      avgDurationMs,
+      workersJson,
+      topTrig?.triggered_by != null ? String(topTrig.triggered_by) : null,
+      `auto rollup ${weekStart}..${weekEnd}`
+    ).run().catch(() => { });
+
+    // Always log for analysis, even if rollup table doesn't exist
+    await env.DB.prepare(
+      `INSERT INTO agentsam_tool_call_log
+        (tenant_id, tool_name, status, duration_ms, input_summary, output_summary, tool_category, user_id)
+       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','success',0,?,?,'rollup','au_871d920d1233cbd1')`
+    ).bind(
+      `week_start=${weekStart} week_end=${weekEnd}`,
+      `total=${totalDeploys} success=${Number(stats?.success) || 0} failed=${Number(stats?.failed) || 0} workers=${workers.results?.length || 0} top_triggered_by=${topTrig?.triggered_by || 'n/a'}`
+    ).run().catch(() => { });
+  } catch (e) {
+    await env.DB.prepare(
+      `INSERT INTO agentsam_tool_call_log
+        (tenant_id, tool_name, status, error_message, tool_category, user_id)
+       VALUES ('tenant_sam_primeaux','deployments_weekly_rollup','error',?,'rollup','au_871d920d1233cbd1')`
+    ).bind(e?.message ?? String(e)).run().catch(() => { });
+  }
+}
+
 const worker = {
   async scheduled(event, env, ctx) {
+    const isMonday = new Date().getUTCDay() === 1;
     ctx.waitUntil(Promise.allSettled([
       generateDailySummaryEmail(env),
       sweepStaleTerminalSessions(env),
       runAgentMemoryDecay(env),
       runFinancialCommandCron(env, ctx),
       updateRoutingPerformanceScores(env),
+      isMonday ? runDeploymentsWeeklyRollup(env) : Promise.resolve(),
+      (async () => {
+        if (!env?.DB) return;
+        const stale = await env.DB.prepare(`
+          SELECT session_id, tenant_id FROM work_sessions
+          WHERE ended_at IS NULL
+            AND last_activity_at < datetime('now','-30 minutes')
+            AND total_active_seconds > 0
+        `).all().catch(() => ({ results: [] }));
+        for (const s of stale.results || []) {
+          await closeWorkSessionAndLog(env, s.session_id, s.tenant_id);
+        }
+      })(),
     ]));
   },
   async fetch(request, env, ctx) {
@@ -2900,6 +3205,21 @@ const worker = {
         });
       }
 
+      // Provider Colors (D1 palette registry)
+      if (pathLower === '/api/provider-colors' && methodUpper === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const { results } = await env.DB.prepare(
+            `SELECT slug, primary_color, secondary_color, text_on_color, display_name, category
+             FROM provider_colors
+             ORDER BY category, slug`
+          ).all();
+          return jsonResponse(results || []);
+        } catch (e) {
+          return jsonResponse({ error: e?.message ?? String(e) }, 500);
+        }
+      }
+
       if (pathLower === '/api/system/health' && methodUpper === 'GET') {
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         const refresh = url.searchParams.get('refresh') === 'true';
@@ -2920,6 +3240,10 @@ const worker = {
         } catch (e) {
           return jsonResponse({ error: e?.message ?? String(e) }, 500);
         }
+      }
+
+      if (pathLower.startsWith('/api/billing') || pathLower === '/api/webhooks/stripe') {
+        return handleBillingApi(request, url, env, ctx);
       }
 
       if (path === '/health' || pathLower === '/health') {
@@ -2983,15 +3307,22 @@ const worker = {
             const now = new Date().toISOString();
             // Audit: deployments table has id, timestamp, version, git_hash, status, deployed_by, notes, worker_name
             await env.DB.prepare(
-              `INSERT INTO deployments (id, worker_name, version, git_hash, description, status, deployed_by, environment, created_at, timestamp)
-               VALUES (?, 'agentsam', ?, ?, ?, 'success', 'agentsam_bot', 'production', ?, ?)`
-            ).bind(id, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', now, now).run();
+              `INSERT INTO deployments (
+                id, timestamp, version, git_hash, changed_files, description,
+                status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+                worker_name, triggered_by, notes, created_at
+              ) VALUES (?, ?, ?, ?, NULL, ?, 'success', 'agentsam_bot', 'production', NULL, NULL, 'agentsam', 'internal_api', ?, datetime('now'))`
+            ).bind(id, now, body.version_id ?? '', body.git_hash ?? '', body.note ?? '', (body.note ?? '').toString().slice(0, 4000) || null).run();
             appendCidiPipelineRunFromDeploy(env, {
               deploymentId: id,
               environment: 'production',
               gitHash: body.git_hash ?? 'unknown',
+              branch: body.branch || body.git_branch || 'production',
               versionId: body.version_id ?? id,
               description: body.note ?? 'deploy via script',
+              workerName: 'agentsam',
+              actor: 'agentsam_bot',
+              notes: (body.note ?? '').toString().slice(0, 4000) || null,
             });
             return new Response(JSON.stringify({ success: true, data: { id } }), { headers: { 'Content-Type': 'application/json' } });
           } catch (e) {
@@ -3050,6 +3381,13 @@ const worker = {
           return handleInboundWebhook(env, request, secret, { verifyKind: 'supabase', source: 'supabase', endpointPath: '/api/hooks/supabase' }, ctx);
         }
       }
+
+      // ----- API: DesignStudio (internal sync + future routes) -----
+      if (pathLower.startsWith('/api/internal/designstudio/') || pathLower.startsWith('/api/designstudio/')) {
+        return handleDesignStudioApi(request, url, env, ctx);
+      }
+
+      if (pathLower.startsWith('/api/cad/') || pathLower === '/api/cad') return (await import('./src/api/cad.js')).handleCadApi(request, url, env, ctx);
 
       // ----- API: Internal post-deploy (knowledge sync to R2) -----
       if ((request.method || 'GET').toUpperCase() === 'POST' && pathLower === '/api/internal/post-deploy') {
@@ -3111,15 +3449,51 @@ const worker = {
         try {
           const deployTimeSeconds = Math.round((Date.now() - deployStart) / 1000);
           await env.DB.prepare(
-            `INSERT INTO deployments (id, timestamp, version, git_hash, description, status, deployed_by, environment, deploy_time_seconds, worker_name, triggered_by, notes) VALUES (?, datetime('now'), ?, ?, 'Internal record-deploy (API)', 'success', ?, 'production', ?, 'inneranimalmedia', ?, ?)`
-          ).bind(deployId, versionId || deployId, gitHash || null, triggeredBy, deployTimeSeconds, triggeredBy, notes).run();
+            `INSERT INTO deployments (
+              id, timestamp, version, git_hash, changed_files, description,
+              status, deployed_by, environment, deploy_duration_ms, deploy_time_seconds,
+              rollback_from, worker_name, triggered_by, notes, created_at
+            ) VALUES (
+              ?, datetime('now'), ?, ?, NULL, 'Internal record-deploy (API)',
+              'success', ?, 'production', NULL, ?,
+              NULL, ?, ?, ?, datetime('now')
+            )`
+          ).bind(
+            deployId,
+            versionId || deployId,
+            gitHash || null,
+            triggeredBy,
+            deployTimeSeconds,
+            body.worker_name || body.workerName || 'inneranimalmedia',
+            triggeredBy,
+            notes || null
+          ).run();
           appendCidiPipelineRunFromDeploy(env, {
             deploymentId: deployId,
             environment: 'production',
             gitHash: gitHash || 'unknown',
+            branch: body.branch || 'production',
             versionId: versionId || deployId,
             description: notes || 'deploy via script',
+            workerName: body.worker_name || body.workerName || 'inneranimalmedia',
+            actor: body.actor || 'sam_primeaux',
+            notes,
           });
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO cicd_events
+              (tenant_id, source, event_type, git_branch, git_commit_sha,
+               git_commit_message, git_actor, worker_name, triggered_run_id)
+             VALUES
+              ('tenant_sam_primeaux', 'github_webhook', 'workflow_run_completed',
+               ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            (body.branch || 'production'),
+            (body.commit_sha || body.commitSha || gitHash || null),
+            (body.notes || body.deployment_notes || notes || null),
+            (body.actor || 'sam_primeaux'),
+            (body.worker_name || body.workerName || 'inneranimalmedia'),
+            (body.run_id || body.runId || null)
+          ).run().catch(() => { });
           if (ctx && typeof ctx.waitUntil === 'function') {
             ctx.waitUntil(runPostDeployQualityChecks(env, deployId).catch(() => { }));
           } else {
@@ -3150,6 +3524,7 @@ const worker = {
         } catch (_) { }
         const deployId = (body.deploy_id != null ? String(body.deploy_id) : '').trim();
         if (!deployId) return jsonResponse({ error: 'deploy_id required' }, 400);
+        const commitSha = (body.commit_sha != null ? String(body.commit_sha) : (body.commitSha != null ? String(body.commitSha) : '')).trim();
         const statusVal = (body.status != null ? String(body.status) : 'success').trim();
         const workerName = body.worker_name != null ? String(body.worker_name).trim() : null;
         const versionId = body.version_id != null ? String(body.version_id).trim() : '';
@@ -3158,6 +3533,23 @@ const worker = {
         const notesPatch = body.notes != null ? String(body.notes).slice(0, 4000) : null;
         if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
         try {
+          await env.DB.prepare(
+            `UPDATE cicd_runs SET
+              phase_promote_status='success',
+              phase_promote_completed_at=unixepoch(),
+              cf_deployment_id=?,
+              status='success',
+              conclusion='success',
+              completed_at=unixepoch(),
+              updated_at=unixepoch()
+             WHERE id=? OR git_commit_sha=?
+             ORDER BY queued_at DESC
+             LIMIT 1`
+          ).bind(
+            versionId,
+            deployId,
+            commitSha
+          ).run().catch(() => { });
           const run = await env.DB.prepare(
             `UPDATE deployments SET
               status = ?,
@@ -3271,7 +3663,7 @@ const worker = {
               r.http_method, r.http_status, r.http_url,
               r.d1_query, r.d1_rows_read, r.d1_rows_written,
               r.r2_operation, r.r2_bucket, r.r2_key,
-              r.do_class, r.do_method, r.batch_id, 'ws_inneranimalmedia'
+              r.do_class, r.do_method, r.batch_id, IAM_DEFAULT_WORKSPACE_ID
             )
           );
           await env.DB.batch(stmts);
@@ -3304,8 +3696,29 @@ const worker = {
       if (pathLower === '/api/overview/activity-strip') {
         return handleOverviewActivityStrip(request, url, env);
       }
+      if (pathLower === '/api/overview/kpi-strip') {
+        return handleOverviewKpiStrip(request, env);
+      }
+      if (pathLower === '/api/overview/finance-charts') {
+        return handleOverviewFinanceCharts(request, env);
+      }
+      if (pathLower === '/api/overview/agent-activity') {
+        return handleOverviewAgentActivity(request, env);
+      }
       if (pathLower === '/api/overview/deployments') {
         return handleOverviewDeployments(request, url, env);
+      }
+      if (pathLower === '/api/overview/goals-launch') {
+        return handleOverviewGoalsLaunch(request, env);
+      }
+      if (pathLower === '/api/overview/time-founder') {
+        return handleOverviewTimeFounder(request, env);
+      }
+      if (pathLower === '/api/overview/mcp-health') {
+        return handleOverviewMcpHealth(request, env);
+      }
+      if (pathLower === '/api/overview/commands-workflows') {
+        return handleOverviewCommandsWorkflows(request, env);
       }
 
       // ----- API: Time tracking (start/heartbeat/end session) -----
@@ -3317,6 +3730,12 @@ const worker = {
       }
       if (pathLower.startsWith('/api/dashboard/time-track')) {
         return handleTimeTrack(request, url, env);
+      }
+      if (pathLower === '/api/timers/start' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleOverviewStartTimer(request, env);
+      }
+      if (pathLower === '/api/founder/log' && (request.method || 'GET').toUpperCase() === 'POST') {
+        return handleOverviewFounderLog(request, env);
       }
 
       // ----- API: Colors (finance UI) -----
@@ -3357,6 +3776,25 @@ const worker = {
       // ----- API: Billing -----
       if (pathLower === '/api/billing/summary') {
         return handleBillingSummary(request, url, env);
+      }
+
+      const ASSET_ROUTES = {
+        '/work': 'work.html',
+        '/about': 'about.html',
+        '/services': 'services.html',
+        '/contact': 'contact.html',
+        '/terms': 'terms-of-service.html',
+        '/privacy': 'privacy-policy.html',
+        '/pricing': 'pricing.html',
+        '/start': 'start-project.html',
+      };
+      const _assetHtmlKey = ASSET_ROUTES[path] || ASSET_ROUTES[pathLower];
+      if (_assetHtmlKey && env.ASSETS) {
+        const _assetObj = await env.ASSETS.get(_assetHtmlKey);
+        if (!_assetObj) return new Response('Not found', { status: 404 });
+        return new Response(_assetObj.body, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
       }
 
       // ----- OAuth: Google -----
@@ -3564,7 +4002,7 @@ const worker = {
           ).all();
           const docs = rows.results || [];
           let totalChunks = 0;
-          const KB_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+          const KB_EMBED_MODEL = IAM_EMBED_MODEL;
           const KB_CHUNK_CHARS = 2048;
           const KB_CHUNK_OVERLAP = 200;
           for (const doc of docs) {
@@ -3577,9 +4015,7 @@ const worker = {
             const vectors = [];
             for (let i = 0; i < chunks.length; i += RAG_EMBED_BATCH_SIZE) {
               const batch = chunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
-              const modelResp = await env.AI.run(KB_EMBED_MODEL, { text: batch });
-              const data = modelResp?.data || modelResp;
-              const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
+              const values = await generateEmbedding(env, batch);
               batch.forEach((c, j) => {
                 const vec = values[j];
                 if (vec && Array.isArray(vec)) {
@@ -3614,6 +4050,134 @@ const worker = {
         return handleReindexCodebase(request, env, ctx);
       }
 
+      // POST /api/admin/rag-backfill — re-embed D1 + Supabase agent_memory, sync to Vectorize
+      if (pathLower === '/api/admin/rag-backfill' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const expected = secret('INTERNAL_API_SECRET') ?? env.INTERNAL_API_SECRET;
+        const token = (request.headers.get('X-Internal-Secret') || request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        if (!expected || token !== expected) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const mode = String(body.mode || '').trim().toLowerCase();
+        const wsIdDefault = resolveWorkspaceId(env, body || {});
+        const limit = Math.min(200, Math.max(1, Number(body.limit) || 20));
+        const maxBatches = Math.min(500, Math.max(1, Number(body.max_batches) || 1));
+        const processAll = body.process_all === true || body.processAll === true;
+        let processed = 0;
+        let errors = 0;
+
+        if (mode === 'd1') {
+          for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+            const rows = await env.DB.prepare(
+              `SELECT id, content, knowledge_id, chunk_index, workspace_id
+               FROM ai_knowledge_chunks
+               WHERE embedding_vector IS NULL
+                  OR embedding_model != ?
+               LIMIT ?`
+            ).bind(IAM_EMBED_MODEL, limit).all().catch(() => ({ results: [] }));
+            const batchRows = rows.results || [];
+            if (batchRows.length === 0) break;
+            for (const r of batchRows) {
+              try {
+                const content = String(r.content || '');
+                if (!content) continue;
+                const wsId = r.workspace_id || wsIdDefault;
+                const vec = await generateEmbedding(env, content);
+                await env.DB.prepare(
+                  `UPDATE ai_knowledge_chunks SET
+                    embedding_vector=?,
+                    embedding_model=?,
+                    is_indexed=1,
+                    workspace_id=COALESCE(NULLIF(workspace_id,''), ?)
+                   WHERE id=?`
+                ).bind(JSON.stringify(vec), IAM_EMBED_MODEL, wsId, r.id).run().catch(() => { });
+                if (env.VECTORIZE_INDEX) {
+                  await env.VECTORIZE_INDEX.upsert([{
+                    id: r.id,
+                    values: vec,
+                    namespace: wsId,
+                    metadata: {
+                      knowledge_id: r.knowledge_id,
+                      chunk_index: r.chunk_index,
+                      workspace_id: wsId,
+                    }
+                  }]).catch(() => { });
+                }
+                processed++;
+              } catch (_) { errors++; }
+            }
+          }
+          return jsonResponse({ processed, errors, mode: 'd1' });
+        }
+
+        if (mode === 'supabase') {
+          if (env.HYPERDRIVE?.connectionString) {
+            try {
+              const { neon } = await import('@neondatabase/serverless');
+              const sql = neon(env.HYPERDRIVE.connectionString);
+              for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+                const rows = await sql`
+                  SELECT id, content, workspace_id
+                  FROM agent_memory
+                  WHERE embedding IS NULL
+                    AND length(content) <= 4000
+                  LIMIT ${limit}
+                `;
+                if (!rows || rows.length === 0) break;
+                for (const r of rows || []) {
+                  try {
+                    const wsId = r.workspace_id || wsIdDefault;
+                    const vec = await generateEmbedding(env, String(r.content || ''));
+                    await sql`
+                      UPDATE agent_memory
+                      SET embedding = ${JSON.stringify(vec)}::vector,
+                          workspace_id = COALESCE(workspace_id, ${wsId})
+                      WHERE id = ${r.id}
+                    `;
+                    processed++;
+                  } catch (_) { errors++; }
+                }
+              }
+              return jsonResponse({ processed, errors, mode: 'supabase', source: 'hyperdrive' });
+            } catch (e) {
+              console.warn('[rag-backfill] hyperdrive failed', e?.message ?? e);
+            }
+          }
+
+          if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+            for (let b = 0; b < (processAll ? maxBatches : 1); b++) {
+              const sel = await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?select=id,content,workspace_id&embedding=is.null&limit=${limit}`, {
+              headers: {
+                'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
+              }
+              }).then(r => r.json()).catch(() => []);
+              if (!sel || sel.length === 0) break;
+              for (const row of sel || []) {
+                try {
+                  const wsId = row.workspace_id || wsIdDefault;
+                  const vec = await generateEmbedding(env, String(row.content || ''));
+                  await fetch(`${env.SUPABASE_URL}/rest/v1/agent_memory?id=eq.${encodeURIComponent(row.id)}`, {
+                    method: 'PATCH',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+                      'apikey': env.SUPABASE_SERVICE_ROLE_KEY,
+                      'Prefer': 'return=minimal',
+                    },
+                    body: JSON.stringify({ embedding: vec, workspace_id: wsId, project_id: wsId }),
+                  }).catch(() => { });
+                  processed++;
+                } catch (_) { errors++; }
+              }
+            }
+            return jsonResponse({ processed, errors, mode: 'supabase', source: 'rest' });
+          }
+          return jsonResponse({ processed: 0, errors: 0, mode: 'supabase', source: 'none' }, 503);
+        }
+
+        return jsonResponse({ error: 'mode must be d1 or supabase' }, 400);
+      }
+
       // POST /api/admin/trigger-workflow — trigger ai_workflow_pipelines, log to ai_workflow_executions
       if (pathLower === '/api/admin/trigger-workflow' && (request.method || 'GET').toUpperCase() === 'POST') {
         const internalSecret = request.headers.get('X-Internal-Secret') || request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
@@ -3635,8 +4199,11 @@ const worker = {
             pipelines = r.results || [];
           }
           const executed = [];
+          const usedInternalSecret = !!(expectedInternal && internalSecret === expectedInternal);
           for (const p of pipelines) {
-            const tenantId = p.tenant_id || 'system';
+            // system-only, no user session
+            const tenantId = p.tenant_id || (usedInternalSecret ? 'tenant_platform' : null);
+            if (!tenantId) return jsonResponse({ error: 'pipeline tenant_id required' }, 400);
             const nextNum = await env.DB.prepare('SELECT COALESCE(MAX(execution_number),0)+1 as n FROM ai_workflow_executions WHERE pipeline_id = ?').bind(p.id).first().then((r) => r?.n ?? 1);
             const execId = crypto.randomUUID();
             await env.DB.prepare(
@@ -3653,6 +4220,8 @@ const worker = {
 
       if (pathLower === '/api/workflow/run' && methodUpper === 'POST') {
         if (!env.DB) return jsonResponse({ error: 'DB not available' }, 503);
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         try {
           const body = await request.json().catch(() => ({}));
           const pipeline_id = body.pipeline_id;
@@ -3661,7 +4230,8 @@ const worker = {
           const pipeline = await env.DB.prepare('SELECT * FROM ai_workflow_pipelines WHERE id = ? LIMIT 1').bind(pipeline_id).first();
           if (!pipeline) return jsonResponse({ error: 'pipeline not found' }, 404);
           const execId = 'wfexec_' + Date.now();
-          const tenantId = pipeline.tenant_id || 'tenant_default';
+          const tenantId = pipeline.tenant_id != null && String(pipeline.tenant_id).trim() ? String(pipeline.tenant_id).trim() : null;
+          if (!tenantId) return jsonResponse({ error: 'pipeline tenant_id required' }, 400);
           let stages = [];
           try {
             stages = JSON.parse(pipeline.stages_json || '[]');
@@ -3887,88 +4457,11 @@ const worker = {
         }
       }
 
-      // ----- API: Execute slash command (agent_commands) -----
+      // ----- API: Execute slash command (agentsam_slash_commands) -----
       // NOTE: Must be above the /api/agent/* catch-all or handleAgentApi swallows it
       if (pathLower === '/api/agent/commands/execute' && request.method === 'POST') {
         if (!env.DB) return jsonResponse({ success: false, error: 'DB not configured' }, 503);
-        try {
-          const body = await request.json().catch(() => ({}));
-          const commandName = (body.command_name || body.name || '').trim();
-          const parameters = body.parameters || {};
-          const tenantId = tenantIdFromEnv(env);
-          if (!tenantId) return jsonResponse({ success: false, error: 'TENANT_ID not configured on worker' }, 503);
-          if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
-          const command = await env.DB.prepare(
-            `SELECT * FROM agent_commands WHERE tenant_id = ? AND status = 'active' AND (name = ? OR slug = ?) LIMIT 1`
-          ).bind(tenantId, commandName, commandName).first();
-          if (!command) {
-            return jsonResponse({ success: false, error: 'Command not found' }, 404);
-          }
-          let result = { output: command.command_text || `Command /${commandName} registered.` };
-          if (command.implementation_type === 'builtin' && command.implementation_ref) {
-            const builtins = {
-              clear_context: async () => ({ output: 'Context cleared' }),
-              runfullaitest: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox',
-              }),
-              runtests: async () => ({
-                output: 'cd /Users/samprimeaux/Downloads/inneranimalmedia/inneranimalmedia-agentsam-dashboard && ./scripts/benchmark-full.sh sandbox --quick',
-              }),
-              list_tools: async () => {
-                const r = await env.DB.prepare('SELECT tool_name, description FROM mcp_registered_tools WHERE enabled = 1').all();
-                return { output: JSON.stringify((r.results || []).map(t => ({ name: t.tool_name, description: t.description })), null, 2) };
-              },
-              terminal_execute: async () => {
-                const cmdToRun = (parameters.raw || parameters.command || '').trim();
-                if (!cmdToRun) return { output: 'Usage: /run <command>' };
-                try {
-                  const { output } = await runTerminalCommand(env, request, cmdToRun, body.session_id ?? null, ctx);
-                  return { output: output || '(no output)' };
-                } catch (e) {
-                  return { output: `Error: ${e?.message ?? String(e)}` };
-                }
-              },
-              workflow_execute: async () => {
-                const raw = (parameters.raw || '').trim();
-                const parts = raw.split(/\s+/);
-                const workflow_id = parts[0];
-                const dryRun = !parts.includes('--execute');
-                if (!workflow_id) {
-                  return {
-                    output:
-                      'Usage: /workflow <id> [--execute]\nAvailable: wf_worker_health_check, wf_d1_schema_audit, wf_cost_telemetry_report, wf_dashboard_deploy, wf_knowledge_reindex\nCode review: type /review in chat (wf_code_review; not an mcp_workflows id).',
-                  };
-                }
-                try {
-                  const data = await triggerWorkflowRun(
-                    env,
-                    ctx,
-                    workflow_id,
-                    body.session_id != null ? String(body.session_id) : null,
-                    'slash_command',
-                    dryRun
-                  );
-                  if (data.error) return { output: `Error: ${data.error}` };
-                  if (dryRun) {
-                    return {
-                      output: `DRY RUN — ${data.name}\n${JSON.stringify(data, null, 2)}\n\nTo execute: /workflow ${workflow_id} --execute`,
-                    };
-                  }
-                  return {
-                    output: `Workflow started: ${data.run_id}\nStatus: ${data.status}\nCheck: use d1_query on mcp_workflow_runs`,
-                  };
-                } catch (e) {
-                  return { output: `Error: ${e?.message ?? String(e)}` };
-                }
-              },
-            };
-            const fn = builtins[command.implementation_ref];
-            if (fn) result = await fn();
-          }
-          return jsonResponse({ success: true, result });
-        } catch (e) {
-          return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
-        }
+        return executeAgentsamSlashCommand(request, env, ctx);
       }
 
       // ----- API: Agent Sam settings plane (/api/agentsam/*) — MUST be before /api/agent (agentsam starts with "agent") -----
@@ -3988,6 +4481,30 @@ const worker = {
         // Alias /api/models -> /api/agent/models
         if (pathLower === '/api/models') url.pathname = '/api/agent/models';
         return handleAgentApi(request, url, env, ctx, secret);
+      }
+
+      if (url.pathname.startsWith('/api/meet')) return handleMeetApi(request, env, ctx);
+
+      if (pathLower === '/api/ai/smoke-test' && request.method === 'POST') {
+        return handleAiSmokeTest(request, url, env);
+      }
+
+      if (pathLower === '/api/ai/test-runs' && request.method === 'GET') {
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const providerFilter = url.searchParams.get('provider');
+        const modelFilter = url.searchParams.get('model');
+        const rows = await env.DB.prepare(
+          `SELECT * FROM ai_api_test_runs
+           WHERE (? IS NULL OR provider = ?)
+             AND (? IS NULL OR model = ?)
+           ORDER BY created_at DESC
+           LIMIT 100`
+        ).bind(providerFilter, providerFilter, modelFilter, modelFilter).all();
+        return jsonResponse({ runs: rows.results || [] });
+      }
+
+      if (pathLower.startsWith('/api/cms/pages/')) {
+        return handleCmsPageRequest(request, url, env);
       }
 
       // ----- API: Core Generation / Drive Sync -----
@@ -4020,6 +4537,11 @@ const worker = {
       // ── IAM EXPLORER ROUTES (added session_1) ──────────────────────────
       const iamExplorerRes = await handleIamExplorerApi(request, url, env, ctx);
       if (iamExplorerRes) return iamExplorerRes;
+
+      // ----- API: Storage dashboard (/api/storage/*) — tenant-scoped; see src/api/storage.js -----
+      if (pathLower.startsWith('/api/storage')) {
+        return handleStorageApi(request, url, env);
+      }
 
       // ----- API: R2 DevOps (buckets, objects, sync, upload, stats, bulk-action) -----
       if (pathLower.startsWith('/api/r2/')) {
@@ -4341,7 +4863,7 @@ const worker = {
       if (pathLower.startsWith('/api/vault')) {
         const vaultUser = await getAuthUser(request, env);
         if (!vaultUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        return handleVaultRequest(request, env);
+        return handleVaultApi(request, url, env, ctx);
       }
 
       if (pathLower.startsWith('/api/env/')) {
@@ -4360,12 +4882,8 @@ const worker = {
         }
 
         // ── Crypto helpers (Web Crypto API — works in Workers runtime) ──
-        async function _vaultImportKey(b64) {
-          const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-          return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
-        }
         async function _vaultEncrypt(plaintext, vaultKeyB64) {
-          const key = await _vaultImportKey(vaultKeyB64);
+          const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['encrypt']);
           const iv = crypto.getRandomValues(new Uint8Array(12));
           const cipher = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv },
@@ -4378,7 +4896,7 @@ const worker = {
           };
         }
         async function _vaultDecrypt(encB64, ivB64, vaultKeyB64) {
-          const key = await _vaultImportKey(vaultKeyB64);
+          const key = await getAESKey({ VAULT_MASTER_KEY: vaultKeyB64 }, ['decrypt']);
           const plain = await crypto.subtle.decrypt(
             { name: 'AES-GCM', iv: Uint8Array.from(atob(ivB64), c => c.charCodeAt(0)) },
             key,
@@ -4548,16 +5066,269 @@ const worker = {
       }
       // ── END /api/env/* ──────────────────────────────────────────
 
+      // /api/workspace/settings — active workspace theme payload for dashboard pages.
+      if (pathLower === '/api/workspace/settings' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const workspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
+        let settings = null;
+        let theme = null;
+        try {
+          settings = await env.DB.prepare('SELECT * FROM workspace_settings WHERE workspace_id = ? LIMIT 1').bind(workspaceId).first();
+        } catch (_) { }
+        const themeId = settings?.theme_id || settings?.theme || null;
+        try {
+          if (themeId) {
+            theme = await env.DB.prepare(
+              `SELECT id, name, slug, monaco_theme, monaco_bg, config
+               FROM cms_themes
+               WHERE id = ? OR slug = ?
+               ORDER BY CASE WHEN workspace_id = ? THEN 0 ELSE 1 END
+               LIMIT 1`
+            ).bind(themeId, themeId, workspaceId).first();
+          }
+          if (!theme) {
+            theme = await env.DB.prepare(
+              `SELECT id, name, slug, monaco_theme, monaco_bg, config
+               FROM cms_themes
+               WHERE COALESCE(is_system, 0) = 1
+               ORDER BY sort_order ASC, name ASC
+               LIMIT 1`
+            ).first();
+          }
+        } catch (e) {
+          console.warn('[api/workspace/settings theme]', e?.message ?? e);
+        }
+        const cfg = parseCmsThemeConfig(theme?.config);
+        return jsonResponse({
+          workspace_id: workspaceId,
+          settings,
+          theme: theme ? { ...theme, config: cfg } : null,
+          variables: mergeAgentDashboardIdeTokens(themeConfigToVariables(cfg), cfg),
+        });
+      }
+
+      // GET /api/d1/tables — table names, row counts, and CREATE sql cached briefly in KV.
+      if (pathLower === '/api/d1/tables' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ tables: [] }, 200);
+        const cacheKey = 'database:d1:tables:v1';
+        try {
+          const cached = await env.KV?.get(cacheKey, 'json');
+          if (cached?.tables) return jsonResponse(cached);
+        } catch (_) { }
+        try {
+          const tq = await env.DB.prepare(
+            `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+          ).all();
+          const tables = [];
+          for (const row of tq.results || []) {
+            const name = String(row.name || '').trim();
+            if (!name) continue;
+            let row_count = null;
+            try {
+              const countRow = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${iamD1QuoteIdent(name)}`).first();
+              row_count = Number(countRow?.count ?? 0);
+            } catch (_) { }
+            tables.push({ name, row_count, sql: row.sql || null });
+          }
+          const payload = { tables };
+          try { await env.KV?.put(cacheKey, JSON.stringify(payload), { expirationTtl: 30 }); } catch (_) { }
+          return jsonResponse(payload);
+        } catch (e) {
+          return jsonResponse({ tables: [], error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1TableRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/(schema|data|indexes)$/);
+      if (d1TableRoute && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1TableRoute[1]);
+        const action = d1TableRoute[2];
+        const qtable = iamD1QuoteIdent(table);
+        try {
+          if (action === 'schema') {
+            const [columns, indexList, foreignKeys] = await Promise.all([
+              env.DB.prepare(`PRAGMA table_info(${qtable})`).all(),
+              env.DB.prepare(`PRAGMA index_list(${qtable})`).all(),
+              env.DB.prepare(`PRAGMA foreign_key_list(${qtable})`).all(),
+            ]);
+            const indexNames = (indexList.results || []).map((r) => String(r.name || '')).filter(Boolean);
+            const indexes = [];
+            for (const name of indexNames) {
+              const row = await env.DB.prepare(
+                `SELECT name, sql FROM sqlite_master WHERE type='index' AND name = ? LIMIT 1`
+              ).bind(name).first();
+              indexes.push({ name, sql: row?.sql || null });
+            }
+            return jsonResponse({ columns: columns.results || [], indexes, foreign_keys: foreignKeys.results || [] });
+          }
+          if (action === 'indexes') {
+            const indexes = await env.DB.prepare(
+              `SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name = ? ORDER BY name`
+            ).bind(table).all();
+            return jsonResponse({ indexes: indexes.results || [] });
+          }
+          const pageNum = Math.max(1, Number(url.searchParams.get('page') || '1'));
+          const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || '50')));
+          const sort = String(url.searchParams.get('sort') || '').trim();
+          const dir = String(url.searchParams.get('dir') || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+          const filters = iamParseDatabaseFilters(url.searchParams.get('filter'));
+          const built = iamBuildD1FilterWhere(filters);
+          const order = sort ? ` ORDER BY ${iamD1QuoteIdent(sort)} ${dir}` : '';
+          const offset = (pageNum - 1) * limit;
+          const countRow = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${qtable}${built.where}`).bind(...built.values).first();
+          const rows = await env.DB.prepare(`SELECT * FROM ${qtable}${built.where}${order} LIMIT ? OFFSET ?`).bind(...built.values, limit, offset).all();
+          const total = Number(countRow?.count ?? 0);
+          return jsonResponse({
+            rows: rows.results || [],
+            total_count: total,
+            columns: rows.results?.[0] ? Object.keys(rows.results[0]) : [],
+            page: pageNum,
+            total_pages: Math.max(1, Math.ceil(total / limit)),
+          });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1RowRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/row$/);
+      if (d1RowRoute && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1RowRoute[1]);
+        const body = await request.json().catch(() => ({}));
+        const columns = body?.columns && typeof body.columns === 'object' ? body.columns : {};
+        const names = Object.keys(columns);
+        try {
+          const sql = names.length
+            ? `INSERT INTO ${iamD1QuoteIdent(table)} (${names.map(iamD1QuoteIdent).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`
+            : `INSERT INTO ${iamD1QuoteIdent(table)} DEFAULT VALUES`;
+          const run = await env.DB.prepare(sql).bind(...names.map((n) => columns[n])).run();
+          return jsonResponse({ success: true, id: run.meta?.last_row_id ?? null, row: columns });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+      if (d1RowRoute && (request.method || 'GET').toUpperCase() === 'PATCH') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const table = decodeURIComponent(d1RowRoute[1]);
+        const body = await request.json().catch(() => ({}));
+        const updates = body?.updates && typeof body.updates === 'object' ? body.updates : {};
+        const names = Object.keys(updates);
+        if (!body.pk_col || !names.length) return jsonResponse({ error: 'pk_col and updates required' }, 400);
+        try {
+          await env.DB.prepare(
+            `UPDATE ${iamD1QuoteIdent(table)} SET ${names.map((n) => `${iamD1QuoteIdent(n)} = ?`).join(', ')} WHERE ${iamD1QuoteIdent(body.pk_col)} = ?`
+          ).bind(...names.map((n) => updates[n]), body.pk_val).run();
+          const row = await env.DB.prepare(`SELECT * FROM ${iamD1QuoteIdent(table)} WHERE ${iamD1QuoteIdent(body.pk_col)} = ? LIMIT 1`).bind(body.pk_val).first();
+          return jsonResponse({ success: true, row });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      const d1RowsRoute = url.pathname.match(/^\/api\/d1\/table\/([^/]+)\/rows$/);
+      if (d1RowsRoute && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const body = await request.json().catch(() => ({}));
+        if (body.confirm !== true) return jsonResponse({ error: 'confirm=true required' }, 400);
+        const table = decodeURIComponent(d1RowsRoute[1]);
+        const vals = Array.isArray(body.pk_vals) ? body.pk_vals : [];
+        if (!body.pk_col || !vals.length) return jsonResponse({ error: 'pk_col and pk_vals required' }, 400);
+        try {
+          const sql = `DELETE FROM ${iamD1QuoteIdent(table)} WHERE ${iamD1QuoteIdent(body.pk_col)} IN (${vals.map(() => '?').join(', ')})`;
+          const run = await env.DB.prepare(sql).bind(...vals).run();
+          return jsonResponse({ deleted: run.meta?.changes ?? vals.length });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      // Platform health panels for the database page.
+      if (pathLower === '/api/platform/kv-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const bindings = ['KV', 'SESSION_CACHE'].filter((b) => !!env[b]);
+        const namespaces = [];
+        for (const binding of bindings) {
+          let estimated_keys = null;
+          try {
+            const listed = await env[binding].list({ limit: 1 });
+            estimated_keys = listed?.keys?.length ?? null;
+          } catch (_) { }
+          namespaces.push({ binding, name: binding, estimated_keys, status: 'ok' });
+        }
+        return jsonResponse({ namespaces });
+      }
+      if (pathLower === '/api/platform/kv/flush' && (request.method || 'GET').toUpperCase() === 'DELETE') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser?.is_superadmin) return jsonResponse({ error: 'superadmin required' }, 403);
+        const body = await request.json().catch(() => ({}));
+        if (body.namespace !== 'SESSION_CACHE') return jsonResponse({ error: 'only SESSION_CACHE flush is supported' }, 400);
+        let deleted = 0;
+        try {
+          let cursor;
+          do {
+            const list = await env.SESSION_CACHE.list({ limit: 1000, cursor });
+            cursor = list.cursor;
+            for (const key of list.keys || []) {
+              await env.SESSION_CACHE.delete(key.name);
+              deleted++;
+            }
+          } while (cursor);
+          return jsonResponse({ ok: true, deleted });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e), deleted }, 500);
+        }
+      }
+      if (pathLower === '/api/platform/d1-health' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        try {
+          const tq = await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all();
+          let totalRows = 0;
+          for (const r of tq.results || []) {
+            try {
+              const c = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${iamD1QuoteIdent(r.name)}`).first();
+              totalRows += Number(c?.count || 0);
+            } catch (_) { }
+          }
+          return jsonResponse({
+            tables_count: tq.results?.length || 0,
+            total_rows: totalRows,
+            last_migration: null,
+            storage_used: null,
+            studio_url: 'https://dash.cloudflare.com/ede6590ac0d2fb7daf155b35653457b2/workers/d1/databases/cf87b717-d4e2-4cf8-bab0-a81268e32d49',
+          });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
       // /api/d1/query — D1 SQL runner (auth required). Dashboard CRUD: allow DML/DDL; block only cluster-level DROP DATABASE patterns.
       if (pathLower === '/api/d1/query' && (request.method || 'GET').toUpperCase() === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
         if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
         try {
-          const { sql } = await request.json();
+          const { sql, params } = await request.json();
           if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
           if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
             return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
+          }
+          if (iamSqlStatementKind(sql) === 'ddl' && !authUser.is_superadmin) {
+            return jsonResponse({ error: 'superadmin required for DDL statements' }, 403);
           }
           const trimmed = sql.trim();
           const upper = trimmed.toUpperCase();
@@ -4566,36 +5337,38 @@ const worker = {
             upper.startsWith('PRAGMA') ||
             upper.startsWith('WITH') ||
             upper.startsWith('EXPLAIN');
+          const bindings = Array.isArray(params) ? params : [];
           if (isRead) {
             const _t0 = Date.now();
-            const { results, success, meta } = await env.DB.prepare(sql).all();
+            const { results, success, meta } = await env.DB.prepare(sql).bind(...bindings).all();
             const executionMs = Date.now() - _t0;
-            return jsonResponse({ results: results || [], success, meta, executionMs });
+            return jsonResponse({ rows: results || [], results: results || [], success, meta: { ...(meta || {}), duration_ms: executionMs }, executionMs });
           }
           const _t1 = Date.now();
-          const run = await env.DB.prepare(sql).run();
+          const run = await env.DB.prepare(sql).bind(...bindings).run();
           const executionMs = Date.now() - _t1;
-          return jsonResponse({ results: [], success: true, meta: run.meta, executionMs });
+          return jsonResponse({ rows: [], results: [], success: true, meta: { ...(run.meta || {}), duration_ms: executionMs }, executionMs });
         } catch (e) {
           return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
         }
       }
 
-      // /api/hyperdrive/status — Hyperdrive binding + Postgres connectivity (no auth; same-origin only useful with session)
-      if (pathLower === '/api/hyperdrive/status' && (request.method || 'GET').toUpperCase() === 'GET') {
+      // /api/hyperdrive/status|health — Hyperdrive binding + Postgres connectivity.
+      if ((pathLower === '/api/hyperdrive/status' || pathLower === '/api/hyperdrive/health') && (request.method || 'GET').toUpperCase() === 'GET') {
         if (!env.HYPERDRIVE?.connectionString) {
           return jsonResponse({ ok: false, error: 'hyperdrive not configured' }, 503);
         }
         try {
           const { Client } = await import('pg');
           const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+          const _t0 = Date.now();
           await client.connect();
           try {
             await client.query('SELECT 1 AS ok');
           } finally {
             await client.end().catch(() => { });
           }
-          return jsonResponse({ ok: true });
+          return jsonResponse({ ok: true, latency_ms: Date.now() - _t0, active_connections: null });
         } catch (e) {
           return jsonResponse({ ok: false, error: e?.message || String(e) }, 503);
         }
@@ -4612,11 +5385,23 @@ const worker = {
           await client.connect();
           try {
             const res = await client.query(
-              `SELECT table_name AS tablename FROM information_schema.tables
-             WHERE table_schema = 'public' AND table_type IN ('BASE TABLE', 'VIEW')
-             ORDER BY table_name`
+              `SELECT t.table_name, t.table_schema,
+                      COALESCE(s.n_live_tup, 0)::bigint AS row_count
+                 FROM information_schema.tables t
+                 LEFT JOIN pg_stat_user_tables s
+                   ON s.schemaname = t.table_schema AND s.relname = t.table_name
+                WHERE t.table_schema = 'public'
+                  AND t.table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY t.table_name`
             );
-            const tables = (res.rows || []).map((r) => String(r.tablename || '').trim()).filter(Boolean);
+            const tables = (res.rows || [])
+              .map((r) => ({
+                name: String(r.table_name || '').trim(),
+                table_name: String(r.table_name || '').trim(),
+                table_schema: r.table_schema || 'public',
+                row_count: Number(r.row_count || 0),
+              }))
+              .filter((r) => r.name);
             return jsonResponse({ tables });
           } finally {
             await client.end().catch(() => { });
@@ -4627,28 +5412,124 @@ const worker = {
         }
       }
 
+      const hyperdriveTableRoute = url.pathname.match(/^\/api\/hyperdrive\/table\/([^/]+)\/(schema|data)$/);
+      if (hyperdriveTableRoute && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ error: 'hyperdrive not configured' }, 503);
+        const table = decodeURIComponent(hyperdriveTableRoute[1]);
+        const action = hyperdriveTableRoute[2];
+        try {
+          const { Client } = await import('pg');
+          const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+          await client.connect();
+          try {
+            if (action === 'schema') {
+              const cols = await client.query(
+                `SELECT c.ordinal_position - 1 AS cid,
+                        c.column_name AS name,
+                        c.data_type AS type,
+                        CASE WHEN c.is_nullable = 'NO' THEN 1 ELSE 0 END AS notnull,
+                        c.column_default AS dflt_value,
+                        CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END AS pk
+                   FROM information_schema.columns c
+                   LEFT JOIN (
+                     SELECT kcu.column_name
+                       FROM information_schema.table_constraints tc
+                       JOIN information_schema.key_column_usage kcu
+                         ON kcu.constraint_name = tc.constraint_name
+                        AND kcu.table_schema = tc.table_schema
+                      WHERE tc.table_schema = 'public'
+                        AND tc.table_name = $1
+                        AND tc.constraint_type = 'PRIMARY KEY'
+                   ) pk ON pk.column_name = c.column_name
+                  WHERE c.table_schema = 'public'
+                    AND c.table_name = $1
+                  ORDER BY c.ordinal_position`,
+                [table],
+              );
+              const idx = await client.query(
+                `SELECT indexname AS name, indexdef AS sql
+                   FROM pg_indexes
+                  WHERE schemaname = 'public' AND tablename = $1
+                  ORDER BY indexname`,
+                [table],
+              );
+              const fk = await client.query(
+                `SELECT kcu.column_name AS source_column,
+                        ccu.table_name AS target_table,
+                        ccu.column_name AS target_column,
+                        'outbound' AS direction
+                   FROM information_schema.table_constraints tc
+                   JOIN information_schema.key_column_usage kcu
+                     ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                   JOIN information_schema.constraint_column_usage ccu
+                     ON ccu.constraint_name = tc.constraint_name
+                    AND ccu.table_schema = tc.table_schema
+                  WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = 'public'
+                    AND tc.table_name = $1`,
+                [table],
+              );
+              return jsonResponse({ columns: cols.rows || [], indexes: idx.rows || [], foreign_keys: fk.rows || [] });
+            }
+            const pageNum = Math.max(1, Number(url.searchParams.get('page') || '1'));
+            const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || '50')));
+            const sort = String(url.searchParams.get('sort') || '').trim();
+            const dir = String(url.searchParams.get('dir') || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+            const filters = iamParseDatabaseFilters(url.searchParams.get('filter'));
+            const built = iamBuildPgFilterWhere(filters, 1);
+            const offsetParam = built.nextIndex;
+            const limitParam = built.nextIndex + 1;
+            const order = sort ? ` ORDER BY ${iamPgQuoteIdent(sort)} ${dir}` : '';
+            const count = await client.query(`SELECT COUNT(*)::int AS count FROM public.${iamPgQuoteIdent(table)}${built.where}`, built.values);
+            const rows = await client.query(
+              `SELECT * FROM public.${iamPgQuoteIdent(table)}${built.where}${order} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+              [...built.values, (pageNum - 1) * limit, limit],
+            );
+            const total = Number(count.rows?.[0]?.count || 0);
+            return jsonResponse({
+              rows: rows.rows || [],
+              total_count: total,
+              columns: rows.fields?.map((f) => f.name) || [],
+              page: pageNum,
+              total_pages: Math.max(1, Math.ceil(total / limit)),
+            });
+          } finally {
+            await client.end().catch(() => { });
+          }
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
       // POST /api/hyperdrive/query — Postgres via Hyperdrive (same response shape as POST /api/d1/query)
       if (pathLower === '/api/hyperdrive/query' && (request.method || 'GET').toUpperCase() === 'POST') {
         const authUser = await getAuthUser(request, env);
         if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
         if (!env.HYPERDRIVE?.connectionString) return jsonResponse({ error: 'hyperdrive not configured' }, 503);
         try {
-          const { sql } = await request.json();
+          const { sql, params } = await request.json();
           if (!sql || typeof sql !== 'string') return jsonResponse({ error: 'sql required' }, 400);
           if (/^\s*DROP\s+DATABASE\b/i.test(sql.trim())) {
             return jsonResponse({ error: 'DROP DATABASE is not permitted via this API' }, 403);
+          }
+          if (iamSqlStatementKind(sql) === 'ddl' && !authUser.is_superadmin) {
+            return jsonResponse({ error: 'superadmin required for DDL statements' }, 403);
           }
           const { Client } = await import('pg');
           const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
           await client.connect();
           try {
             const _t0 = Date.now();
-            const res = await client.query(sql);
+            const res = await client.query(sql, Array.isArray(params) ? params : []);
             const executionMs = Date.now() - _t0;
             return jsonResponse({
+              rows: res.rows || [],
               results: res.rows || [],
               success: true,
-              meta: { rows_read: res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
+              meta: { duration_ms: executionMs, rows_read: res.rowCount, rows_written: res.command === 'SELECT' ? 0 : res.rowCount, command: res.command, fields: (res.fields || []).map((f) => f.name) },
               executionMs,
             });
           } finally {
@@ -4656,6 +5537,127 @@ const worker = {
           }
         } catch (e) {
           return jsonResponse({ error: e?.message || 'Query failed', results: [] }, 200);
+        }
+      }
+
+      async function ensureUserConnectionsTable() {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS user_connections (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            connection_type TEXT NOT NULL CHECK(connection_type IN (
+              'supabase','postgres','mysql','sqlite','d1','planetscale','neon','turso'
+            )),
+            display_name TEXT NOT NULL,
+            host TEXT,
+            port INTEGER,
+            database_name TEXT,
+            username TEXT,
+            password_secret_ref TEXT,
+            ssl_mode TEXT DEFAULT 'require',
+            is_active INTEGER DEFAULT 1,
+            last_tested_at TEXT,
+            last_test_status TEXT CHECK(last_test_status IN ('ok','error','timeout',NULL)),
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(tenant_id, user_id, display_name)
+          )`
+        ).run();
+      }
+
+      if (pathLower === '/api/db/connections' && (request.method || 'GET').toUpperCase() === 'GET') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        if (!env.DB) return jsonResponse({ connections: [] }, 200);
+        try {
+          await ensureUserConnectionsTable();
+          const tenant = authUser.tenant_id || env.TENANT_ID || 'tenant_inneranimalmedia';
+          const uid = String(authUser.id || authUser.email || '');
+          const rows = await env.DB.prepare(
+            `SELECT id, connection_type, display_name, host, port, database_name, username,
+                    ssl_mode, last_tested_at, last_test_status, metadata_json, created_at
+               FROM user_connections
+              WHERE tenant_id = ? AND user_id = ? AND is_active = 1
+              ORDER BY display_name`
+          ).bind(tenant, uid).all();
+          const permissions = authUser.permissions || {};
+          return jsonResponse({
+            connections: rows.results || [],
+            can_manage_mcp: Boolean(authUser.is_superadmin || permissions.can_manage_mcp || permissions.manage_mcp),
+          });
+        } catch (e) {
+          return jsonResponse({ connections: [], error: e?.message || String(e) }, 500);
+        }
+      }
+
+      if (pathLower === '/api/db/connections' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const permissions = authUser.permissions || {};
+        if (!(authUser.is_superadmin || permissions.can_manage_mcp || permissions.manage_mcp)) {
+          return jsonResponse({ error: 'can_manage_mcp required' }, 403);
+        }
+        if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+        const body = await request.json().catch(() => ({}));
+        const id = `uc_${[...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+        const secretRef = `conn_${id}_secret`;
+        try {
+          await ensureUserConnectionsTable();
+          if (body.password && env.KV) {
+            await env.KV.put(secretRef, String(body.password));
+          }
+          const tenant = authUser.tenant_id || env.TENANT_ID || 'tenant_inneranimalmedia';
+          const uid = String(authUser.id || authUser.email || '');
+          await env.DB.prepare(
+            `INSERT INTO user_connections
+              (id, tenant_id, user_id, connection_type, display_name, host, port, database_name,
+               username, password_secret_ref, ssl_mode, last_test_status, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            id,
+            tenant,
+            uid,
+            String(body.connection_type || 'postgres'),
+            String(body.display_name || body.host || 'Connected database'),
+            body.host || null,
+            body.port != null && body.port !== '' ? Number(body.port) : null,
+            body.database_name || null,
+            body.username || null,
+            body.password ? secretRef : null,
+            body.ssl_mode || 'require',
+            'ok',
+            JSON.stringify(body.metadata_json || {}),
+          ).run();
+          return jsonResponse({ ok: true, id, password_secret_ref: body.password ? secretRef : null });
+        } catch (e) {
+          return jsonResponse({ error: e?.message || String(e) }, 500);
+        }
+      }
+
+      if (pathLower === '/api/db/connections/test' && (request.method || 'GET').toUpperCase() === 'POST') {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'unauthorized' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const started = Date.now();
+        try {
+          const { Client } = await import('pg');
+          const connectionString = body.connectionString || (
+            body.host
+              ? `postgres://${encodeURIComponent(body.username || '')}:${encodeURIComponent(body.password || '')}@${body.host}:${body.port || 5432}/${body.database_name || 'postgres'}?sslmode=${body.ssl_mode || 'require'}`
+              : env.HYPERDRIVE?.connectionString
+          );
+          if (!connectionString) return jsonResponse({ ok: false, latency_ms: Date.now() - started, error: 'connection details required' }, 400);
+          const client = new Client({ connectionString });
+          await client.connect();
+          try {
+            await client.query('SELECT 1');
+          } finally {
+            await client.end().catch(() => { });
+          }
+          return jsonResponse({ ok: true, latency_ms: Date.now() - started });
+        } catch (e) {
+          return jsonResponse({ ok: false, latency_ms: Date.now() - started, error: e?.message || String(e) }, 200);
         }
       }
 
@@ -4707,7 +5709,7 @@ const worker = {
               ok: true,
               rows: res.rows || [],
               count: (res.rows || []).length,
-              pgvector_default_project_id: PGVECTOR_DEFAULT_PROJECT_ID,
+              workspace_id: IAM_DEFAULT_WORKSPACE_ID,
             });
           } finally {
             await client.end().catch(() => { });
@@ -4731,9 +5733,7 @@ const worker = {
         if (!q) return jsonResponse({ error: 'query required' }, 400);
         const limit = Math.min(20, Math.max(1, Number(body?.limit) || 5));
         try {
-          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [q] });
-          const data = modelResp?.data ?? modelResp;
-          const vector = (Array.isArray(data) ? data : data?.data)?.[0];
+          const vector = await generateEmbedding(env, q);
           if (!vector || !Array.isArray(vector)) return jsonResponse({ error: 'embedding failed' }, 502);
           const vectorMatches = await env.VECTORIZE_DOCS.query(vector, { topK: limit, returnMetadata: 'all' });
           const matches = vectorMatches?.matches ?? vectorMatches ?? [];
@@ -4812,10 +5812,10 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { object_key, force: _ingForce = false, workspace_id: _ingWs = 'ws_inneranimalmedia' } = _ingBody || {};
+          const { object_key, force: _ingForce = false, workspace_id: _ingWs = IAM_DEFAULT_WORKSPACE_ID } = _ingBody || {};
           _ingObjKey = object_key != null ? String(object_key) : null;
           if (!_ingObjKey) return jsonResponse({ error: 'object_key required' }, 400);
-          const _ingWid = String(_ingWs || 'ws_inneranimalmedia').slice(0, 200);
+          const _ingWid = String(_ingWs || IAM_DEFAULT_WORKSPACE_ID).slice(0, 200);
 
           const _out = await runRagIngestSingle(env, {
             object_key: _ingObjKey,
@@ -4844,8 +5844,8 @@ const worker = {
             ? String(_ingSess.email || _ingSess.user_id || '').toLowerCase().slice(0, 200)
             : 'mcp_ingest';
           const _ingBody = await request.json().catch(() => ({}));
-          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = 'ws_inneranimalmedia' } = _ingBody || {};
-          const _ingWid = String(_ingWsBatch || 'ws_inneranimalmedia').slice(0, 200);
+          const { keys: _rawKeys, force: _forceBatch = false, workspace_id: _ingWsBatch = IAM_DEFAULT_WORKSPACE_ID } = _ingBody || {};
+          const _ingWid = String(_ingWsBatch || IAM_DEFAULT_WORKSPACE_ID).slice(0, 200);
           const keyList = Array.isArray(_rawKeys) ? _rawKeys.map((k) => String(k || '').trim()).filter(Boolean) : [];
           if (keyList.length === 0) return jsonResponse({ error: 'keys array required' }, 400);
           const results = [];
@@ -4891,19 +5891,23 @@ const worker = {
           const { query: _qText, top_k: _qTopK = 5, conversation_id: _qConv, mode: _qMode, intent: _qIntent } = _qBody || {};
           if (!_qText) return jsonResponse({ error: 'query required' }, { status: 400 });
           const _t0q = Date.now();
-          const _EMBED_MODEL_Q = '@cf/baai/bge-base-en-v1.5';
           const _CPT_Q = 4;
           const _qTokens = Math.ceil(String(_qText).length / _CPT_Q);
 
-          const _qEmb = await env.AI.run(_EMBED_MODEL_Q, { text: _qText });
-          const _qVec = _qEmb?.data?.[0] ?? _qEmb?.result?.data?.[0];
+          const _qVec = await generateEmbedding(env, _qText);
           if (!_qVec) throw new Error('Embedding failed');
 
+          // NOTE: this endpoint is legacy; it runs without an explicit workspace param.
+          // Default to env/workspace binding + IAM_DEFAULT_WORKSPACE_ID.
+          const _wsId = resolveWorkspaceId(env, _qBody || {});
           const _chunkRows = await env.DB.prepare(
             `SELECT id, content, token_count, embedding_vector
              FROM ai_knowledge_chunks
-             WHERE is_indexed = 1 AND embedding_vector IS NOT NULL LIMIT 500`
-          ).all();
+             WHERE workspace_id = ?
+               AND embedding_vector IS NOT NULL
+               AND is_indexed = 1
+             LIMIT 500`
+          ).bind(_wsId).all();
           const _allCh = _chunkRows.results ?? [];
           const _cosQ = (a, b) => {
             let dot = 0, na = 0, nb = 0;
@@ -4928,7 +5932,7 @@ const worker = {
                chunks_injected,inject_tokens,inject_chars,embed_model,mode,intent,source,duration_ms,was_capped,retry_count,rerank_used)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           `).bind(_qConv ?? null, String(_qText).slice(0, 500), _qTokens, _allCh.length, _qTop,
-            _qScored.length, _qInjectTokens, _qInjectText.length, _EMBED_MODEL_Q, _qMode ?? null, _qIntent ?? null,
+            _qScored.length, _qInjectTokens, _qInjectText.length, IAM_EMBED_MODEL, _qMode ?? null, _qIntent ?? null,
             'd1_cosine', _qDur, 0, 0, 0).run();
 
           const _ragTid = tenantIdFromEnv(env);
@@ -4968,7 +5972,7 @@ const worker = {
           if (_fbUse === 0) {
             await env.DB.prepare(
               `UPDATE agentsam_code_index_job SET status = 'queued' WHERE workspace_id = ? AND status != 'running'`
-            ).bind('ws_inneranimalmedia').run().catch(() => { });
+            ).bind(IAM_DEFAULT_WORKSPACE_ID).run().catch(() => { });
           }
           return jsonResponse({ ok: true });
         } catch (e) {
@@ -4999,46 +6003,19 @@ const worker = {
         }
         const query = body.query ?? url.searchParams.get('q');
         if (!query) return Response.json({ error: 'query required' }, { status: 400 });
-        const threshold = typeof body.match_threshold === 'number' ? body.match_threshold : 0.25;
+        const threshold = typeof body.match_threshold === 'number' ? body.match_threshold : 0.5;
         const matchCount = typeof body.match_count === 'number' ? body.match_count : 10;
-        const projectId = typeof body.project_id === 'string' && body.project_id.trim() ? body.project_id.trim() : undefined;
+        const wsId = resolveWorkspaceId(env, body || {});
 
-        if (env.HYPERDRIVE?.connectionString) {
-          const pgRes = await pgMatchDocuments(env, query, {
-            match_threshold: threshold,
-            match_count: matchCount,
-            project_id: projectId,
-          });
-          const contextUsed = JSON.stringify({
-            source: 'pgvector',
-            row_count: pgRes.rows?.length ?? 0,
-            error: pgRes.error,
-            embedding_dims: pgRes.embedding?.length ?? null,
-          }).slice(0, 8000);
-          if (env.DB) {
-            const _st = tenantIdFromEnv(env);
-            if (_st) {
-              await env.DB.prepare("INSERT INTO ai_rag_search_history (id,tenant_id,query_text,context_used,created_at) VALUES (?,?,?,?,unixepoch())")
-                .bind(crypto.randomUUID(), _st, query, contextUsed || '[]').run().catch(() => { });
-            }
-          }
-          return Response.json({
-            query,
-            results: pgRes.rows ?? [],
-            error: pgRes.error,
-            embedding_dims: pgRes.embedding?.length ?? null,
-          });
-        }
-
-        const search = await vectorizeRagSearch(env, query, { topK: 5 });
-        const data = search?.results ?? search?.data ?? [];
-        const answer = data.map(r => r.content ?? r.text ?? '').filter(Boolean).join('\n\n').slice(0, 8000);
+        const out = await knowledgeSearch(env, String(query), { topK: matchCount, workspace_id: wsId, threshold });
+        const data = (out?.results || []).map(r => r.chunk ?? r.chunk?.content ? r.chunk : r.chunk);
+        const answer = (out?.results || []).map(r => r.chunk?.content || r.chunk?.content_preview || r.chunk?.content || r.chunk?.text || '').filter(Boolean).join('\n\n').slice(0, 8000);
         const _vt = tenantIdFromEnv(env);
         if (_vt) {
           await env.DB.prepare("INSERT INTO ai_rag_search_history (id,tenant_id,query_text,context_used,created_at) VALUES (?,?,?,?,unixepoch())")
-            .bind(crypto.randomUUID(), _vt, query, answer || '[]').run();
+            .bind(crypto.randomUUID(), _vt, String(query), answer || '[]').run();
         }
-        return Response.json({ answer, sources: data });
+        return Response.json({ answer, sources: out?.results || [], workspace_id: wsId, source: out?.source || 'none' });
       }
 
       // ----- API: Settings (profile, preferences, sessions, change-password) -----
@@ -5260,7 +6237,7 @@ const worker = {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'Inner Animal Media <sam@inneranimalmedia.com>',
+              from: env.RESEND_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
               to: [toEmail],
               subject: 'Your backup codes - Inner Animal Media',
               html,
@@ -5415,9 +6392,9 @@ const worker = {
         return jsonResponse({ error: 'Method not allowed' }, 405);
       }
 
-      const CORE_WORKSPACE_IDS = ['ws_inneranimalmedia', 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
+      const CORE_WORKSPACE_IDS = [IAM_DEFAULT_WORKSPACE_ID, 'ws_inneranimal', 'ws_meauxbility', 'ws_innerautodidact'];
       const CORE_WORKSPACES_DATA = [
-        { id: 'ws_inneranimalmedia', name: 'Inner Animal Media', category: 'entity' },
+        { id: IAM_DEFAULT_WORKSPACE_ID, name: 'Inner Animal Media', category: 'entity' },
         { id: 'ws_inneranimal', name: 'InnerAnimal', category: 'entity' },
         { id: 'ws_meauxbility', name: 'Meauxbility', category: 'entity' },
         { id: 'ws_innerautodidact', name: 'InnerAutodidact', category: 'entity' },
@@ -5449,7 +6426,7 @@ const worker = {
         }
         if (method === 'GET') {
           if (!env.DB) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {} });
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: IAM_DEFAULT_WORKSPACE_ID, workspaceThemes: {}, workspaces: {} });
           }
           try {
             const [wsRows, rows, us] = await Promise.all([
@@ -5501,10 +6478,10 @@ const worker = {
               };
               if (r.theme != null && r.theme.trim()) workspaceThemes[r.workspace_id] = r.theme.trim();
             }
-            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : 'ws_inneranimalmedia';
+            const current = (usRow?.default_workspace_id) ? usRow.default_workspace_id : IAM_DEFAULT_WORKSPACE_ID;
             return jsonResponse({ data: wsRows.results || CORE_WORKSPACES_DATA, current, workspaceThemes, workspaces });
           } catch (e) {
-            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: 'ws_inneranimalmedia', workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
+            return jsonResponse({ data: CORE_WORKSPACES_DATA, current: IAM_DEFAULT_WORKSPACE_ID, workspaceThemes: {}, workspaces: {}, error: e?.message }, 500);
           }
         }
         if (method === 'PATCH' || method === 'PUT') {
@@ -5658,7 +6635,13 @@ const worker = {
       {
         const canvasMatch = pathLower.match(/^\/api\/collab\/canvas(\/.*)?$/);
         if (canvasMatch && env.IAM_COLLAB) {
-          const workspaceId = url.searchParams.get('workspace_id') || 'global';
+          const authUser = await getAuthUser(request, env);
+          if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+          const workspaceId =
+            authUser.workspace_id != null && String(authUser.workspace_id).trim()
+              ? String(authUser.workspace_id).trim()
+              : null;
+          if (!workspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
           const id = env.IAM_COLLAB.idFromName(`canvas:${workspaceId}`);
           const stub = env.IAM_COLLAB.get(id);
           return stub.fetch(new Request(`https://internal${canvasMatch[0]}`, { method: request.method, body: request.body, headers: request.headers }));
@@ -5686,44 +6669,71 @@ const worker = {
         }
       }
 
-      // ----- Public (ASSETS) -----
+      // ----- Public site pages (ASSETS bucket: inneranimalmedia) -----
+      // New R2 contract:
+      //   /                     -> pages/home/index.html
+      //   /about                -> pages/about/index.html
+      //   /services             -> pages/services/index.html
+      //   /work                 -> pages/work/index.html
+      //   /contact              -> pages/contact/index.html
+      //   /pricing              -> pages/pricing/index.html
+      //   /games                -> pages/games/index.html
+      //   /privacy              -> pages/privacy/index.html
+      //   /terms                -> pages/terms/index.html
+      //   /sitemap              -> pages/sitemap/index.html
+      //   /login                -> pages/auth/login.html
+      //   /auth/login           -> pages/auth/login.html
+      //   /signup               -> pages/auth/signup.html
+      //   /auth/signup          -> pages/auth/signup.html
+      //   /reset                -> pages/auth/reset.html
+      //   /auth/reset           -> pages/auth/reset.html
+
+      async function servePublicAssetPage(key, contentType = 'text/html') {
+        if (!env.ASSETS) return null;
+        const obj = await env.ASSETS.get(key);
+        if (!obj) return null;
+        return respondWithR2Object(obj, contentType, { noCache: key.endsWith('.html') });
+      }
+
       if (path === '/' || path === '/index.html') {
-        const obj = await env.ASSETS.get('index-v3.html') ?? await env.ASSETS.get('index-v2.html') ?? await env.ASSETS.get('index.html');
-        if (obj) return respondWithR2Object(obj, 'text/html');
-        if (env.DASHBOARD) {
-          const signin =
-            (await env.DASHBOARD.get('static/auth-signin.html')) ??
-            (await env.DASHBOARD.get('static/static_auth-signin.html'));
-          if (signin) return respondWithR2Object(signin, 'text/html', { noCache: true });
-        }
+        const res = await servePublicAssetPage('pages/home/index.html');
+        if (res) return res;
         return notFound(path);
       }
 
-      // Public page routing - map clean URLs to actual R2 files
-      const PUBLIC_ROUTES = {
-        '/work': 'process.html',
-        '/about': 'about.html',
-        '/services': 'pricing.html',
-        '/contact': 'contact.html',
-        '/terms': 'terms-of-service.html',
-        '/privacy': 'privacy-policy.html',
-        '/learn': 'learn.html',
-        '/games': 'games.html'
+      if (pathLower === '/login' || pathLower === '/auth/login' || pathLower === '/auth/signin') {
+        const res = await servePublicAssetPage('pages/auth/login.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      if (pathLower === '/signup' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
+        const res = await servePublicAssetPage('pages/auth/signup.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      if (pathLower === '/reset' || pathLower === '/auth/reset') {
+        const res = await servePublicAssetPage('pages/auth/reset.html');
+        if (res) return res;
+        return notFound(path);
+      }
+
+      const publicPageMap = {
+        '/about': 'pages/about/index.html',
+        '/services': 'pages/services/index.html',
+        '/work': 'pages/work/index.html',
+        '/contact': 'pages/contact/index.html',
+        '/pricing': 'pages/pricing/index.html',
+        '/games': 'pages/games/index.html',
+        '/privacy': 'pages/privacy/index.html',
+        '/terms': 'pages/terms/index.html',
+        '/sitemap': 'pages/sitemap/index.html'
       };
 
-      if (PUBLIC_ROUTES[path]) {
-        const obj = await env.ASSETS.get(PUBLIC_ROUTES[path]);
-        if (obj) return respondWithR2Object(obj, 'text/html');
-        return notFound(path);
-      }
-
-      // Auth sign-in / login / signup (DASHBOARD) -- same page for all
-      if (pathLower === '/auth/login' || pathLower === '/auth/signin' || pathLower === '/auth/signup' || pathLower === '/auth/register') {
-        const isSignup = pathLower === '/auth/signup' || pathLower === '/auth/register';
-        const obj = isSignup
-          ? ((await env.DASHBOARD.get('static/auth-signup.html')) ?? (await env.DASHBOARD.get('static/auth-signin.html')))
-          : ((await env.DASHBOARD.get('static/auth-signin.html')) ?? (await env.DASHBOARD.get('static/static_auth-signin.html')));
-        if (obj) return respondWithR2Object(obj, 'text/html');
+      if (publicPageMap[pathLower]) {
+        const res = await servePublicAssetPage(publicPageMap[pathLower]);
+        if (res) return res;
         return notFound(path);
       }
 
@@ -5756,12 +6766,23 @@ const worker = {
       // Dashboard pages (DASHBOARD bucket) -- serve HTML from R2 only; no in-worker HTML rewrite
       if (pathLower.startsWith('/dashboard/')) {
         const segment = pathLower.slice('/dashboard/'.length).split('/')[0] || 'overview';
-        const SPA_ROUTES = new Set(["calendar", "mcp", "overview", "database", "settings", "integrations", "designstudio", "storage"]);
-        const key = SPA_ROUTES.has(segment) ? "static/dashboard/agent.html" : `static/dashboard/${segment}.html`;
+        const SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "calendar", "chat", "clients", "cms", "database", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "overview", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace", "integrations", "designstudio", "storage"]);
+        const wildcardSpa = segment === 'settings' || segment === 'chat' || segment === 'workspace' || segment === 'cms';
+        const key = (SPA_ROUTES.has(segment) || wildcardSpa) ? "dashboard/app/agent.html" : `static/dashboard/${segment}.html`;
         const altKey = `dashboard/${segment}.html`;
         const obj = await env.DASHBOARD.get(key) ?? await env.DASHBOARD.get(altKey);
         if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
         return notFound(path);
+      }
+
+      if (env.DASHBOARD && !pathLower.startsWith('/api/')) {
+        const topLevelSegment = pathLower.replace(/^\/+/, '').split('/')[0];
+        const TOP_LEVEL_SPA_ROUTES = new Set(["3d", "agents", "analytics", "assets", "billing", "chat", "clients", "cms", "deploy", "gorilla", "images", "mail", "mcp", "meet", "models", "search", "settings", "slash-commands", "subagents", "terminal", "test-runs", "themes", "workflows", "workspace"]);
+        const wildcardTopLevel = pathLower.startsWith('/settings/') || pathLower.startsWith('/chat/') || pathLower.startsWith('/workspace/') || pathLower.startsWith('/cms/');
+        if (TOP_LEVEL_SPA_ROUTES.has(topLevelSegment) || wildcardTopLevel) {
+          const obj = await env.DASHBOARD.get("dashboard/app/agent.html") ?? await env.DASHBOARD.get("static/dashboard/agent.html");
+          if (obj) return respondWithDashboardHtml(obj, url, { noCache: true }, env);
+        }
       }
 
       // Static assets: try ASSETS then DASHBOARD by path (key = path without leading slash)
@@ -5772,7 +6793,10 @@ const worker = {
       // while bundled files are stored at keys assets/chunk.js relative to dist.
       if (!obj && assetKey.startsWith('static/dashboard/agent/')) {
         const relAgent = assetKey.slice('static/dashboard/agent/'.length);
-        if (relAgent) obj = await env.ASSETS.get(relAgent);
+        if (relAgent) {
+          if (env.DASHBOARD) obj = await env.DASHBOARD.get(`dashboard/app/${relAgent}`);
+          if (!obj) obj = await env.ASSETS.get(relAgent);
+        }
       }
       if (!obj && env.DASHBOARD) obj = await env.DASHBOARD.get(assetKey);
       if (!obj && env.DASHBOARD && assetKey.startsWith('static/dashboard/agent/')) {
@@ -6003,14 +7027,22 @@ async function handleBrowserRequest(request, url, env) {
     const targetUrl = url.searchParams.get('url');
     const forceRefresh = url.searchParams.get('refresh') === 'true';
     if (!targetUrl) return new Response('url required', { status: 400 });
-    const cacheKey = 'screenshots/' + btoa(targetUrl).replace(/[^a-z0-9]/gi, '').slice(0, 64);
-    const kv = env.KV || env['agent-sam'];
-    if (!forceRefresh && kv) {
+
+    // MCP_TOKENS KV is reserved for MCP auth tokens only.
+    // Screenshot caching uses R2 screenshots/ prefix exclusively.
+    const bucket = env.DOCS_BUCKET || env.DASHBOARD || env.R2;
+    if (!bucket) return new Response(JSON.stringify({ error: 'No R2 bucket for screenshots' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+
+    const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(targetUrl));
+    const sha = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const objectKey = `screenshots/browser/${sha}.jpg`;
+
+    if (!forceRefresh) {
       try {
-        const cached = await kv.get(cacheKey, { type: 'arrayBuffer' });
-        if (cached) {
-          return new Response(cached, {
-            headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'HIT', 'Cache-Control': 'public, max-age=86400' },
+        const cached = await bucket.get(objectKey);
+        if (cached?.body) {
+          return new Response(cached.body, {
+            headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'HIT', 'X-Storage': 'r2', 'Cache-Control': 'public, max-age=86400' },
           });
         }
       } catch (_) { }
@@ -6030,11 +7062,11 @@ async function handleBrowserRequest(request, url, env) {
       }
       const img = await page.screenshot({ type: 'jpeg', quality: 80 });
       await browser.close();
-      if (kv && img) {
-        kv.put(cacheKey, img, { httpMetadata: { contentType: 'image/jpeg' } }).catch(() => { });
+      if (img) {
+        bucket.put(objectKey, img, { httpMetadata: { contentType: 'image/jpeg' } }).catch(() => { });
       }
       return new Response(img, {
-        headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'MISS', 'Cache-Control': 'public, max-age=86400' },
+        headers: { 'Content-Type': 'image/jpeg', 'X-Cache': 'MISS', 'X-Storage': 'r2', 'Cache-Control': 'public, max-age=86400' },
       });
     } catch (err) {
       return new Response(JSON.stringify({ error: String(err?.message || err) }), {
@@ -6208,9 +7240,17 @@ function appendMcpAuditLogAndStats(env, {
   error,
   durationMs = 0,
   costUsd = 0,
+  tenantId = null,
 }) {
   if (!env?.DB || !toolName) return;
-  const tid = tenantIdFromEnv(env) || 'global';
+  const tid =
+    (tenantId != null && String(tenantId).trim()) ||
+    tenantIdFromEnv(env) ||
+    null;
+  if (!tid) {
+    console.warn('[mcp_audit_log] missing tenant_id; skip');
+    return;
+  }
   const errStr = error ? String(error).slice(0, 200) : null;
   const ok = !error;
   const status = ok ? 'success' : 'error';
@@ -6439,22 +7479,62 @@ function appendCidiPipelineRunFromDeploy(env, {
   deploymentId,
   environment = 'production',
   gitHash = 'unknown',
+  branch = 'production',
   versionId = null,
   description = 'deploy via script',
+  workerName = 'inneranimalmedia',
+  actor = null,
+  notes = null,
 }) {
   if (!env?.DB || !deploymentId) return;
+  const envName = String(environment || 'production');
+  const commitSha = String(gitHash || 'unknown');
+  const br = String(branch || 'production');
+  const wName = String(workerName || 'inneranimalmedia');
+  const gitActor = actor != null ? String(actor) : null;
+  const commitMsg = notes != null ? String(notes) : String(description || '').slice(0, 4000);
   env.DB.prepare(
-    `INSERT OR IGNORE INTO cicd_pipeline_runs
-      (run_id, branch, env, status, commit_hash,
-       worker_version_id, notes, created_at)
-    VALUES (?, 'main', ?, 'passed', ?, ?, ?, datetime('now'))`
+    `INSERT OR IGNORE INTO cicd_runs (
+      id, tenant_id, environment, git_commit_sha, git_branch, worker_name,
+      status, conclusion,
+      phase_promote_status, phase_promote_completed_at,
+      triggered_by, trigger_source,
+      git_actor, git_commit_message,
+      cf_deployment_id,
+      queued_at, completed_at, updated_at
+    )
+    SELECT
+      ('run_' || lower(hex(randomblob(8)))) AS id,
+      'tenant_sam_primeaux' AS tenant_id,
+      ? AS environment,
+      ? AS git_commit_sha,
+      ? AS git_branch,
+      ? AS worker_name,
+      'success' AS status,
+      'success' AS conclusion,
+      'success' AS phase_promote_status,
+      unixepoch() AS phase_promote_completed_at,
+      'github_push' AS triggered_by,
+      'webhook' AS trigger_source,
+      ? AS git_actor,
+      ? AS git_commit_message,
+      ? AS cf_deployment_id,
+      unixepoch() AS queued_at,
+      unixepoch() AS completed_at,
+      unixepoch() AS updated_at
+    WHERE NOT EXISTS (
+      SELECT 1 FROM cicd_runs WHERE git_commit_sha = ? LIMIT 1
+    )`
   ).bind(
-    'cidi_' + String(deploymentId),
-    String(environment || 'production'),
-    String(gitHash || 'unknown'),
+    envName,
+    commitSha,
+    br,
+    wName,
+    gitActor,
+    commitMsg,
     String(versionId || deploymentId),
-    String(description || 'deploy via script')
-  ).run().catch((e) => console.warn('[cicd_pipeline_runs]', e?.message ?? e));
+    commitSha
+  ).run().catch((e) => console.warn('[cicd_runs]', e?.message ?? e));
 }
 
 async function runPostDeployQualityChecks(env, deploymentId) {
@@ -6523,36 +7603,81 @@ async function runPostDeployQualityChecks(env, deploymentId) {
 async function writeDailySnapshot(env, reason = 'cron') {
   if (!env?.DB) return;
   const safe = (p) => (p ? p.catch(() => null) : Promise.resolve(null));
-  const [tt, dt] = await Promise.all([
+  const [tt, dt, providerBreakdown, modelBreakdown, planRow] = await Promise.all([
     safe(env.DB.prepare(
-      `SELECT COALESCE(SUM(input_tokens), 0) AS tokens_in,
-        COALESCE(SUM(output_tokens), 0) AS tokens_out,
-        ROUND(COALESCE(SUM(computed_cost_usd), 0), 4) AS cost_usd
-       FROM agent_telemetry
-       WHERE created_at >= unixepoch('now', 'start of day')`
+      `SELECT COALESCE(SUM(tokens_input),0) AS tokens_in,
+        COALESCE(SUM(tokens_output),0) AS tokens_out,
+        ROUND(COALESCE(SUM(cost_estimate),0),4) AS cost_usd
+       FROM ai_usage_log WHERE date=date('now')`
     ).first()),
     safe(env.DB.prepare(
       `SELECT COUNT(*) AS total
-       FROM deployments
-       WHERE created_at >= unixepoch('now', 'start of day')`
+       FROM deployment_tracking
+       WHERE created_at >= date('now')`
     ).first()),
+    env.DB.prepare("SELECT provider, COUNT(*) as c, SUM(cost_estimate) as cost FROM ai_usage_log WHERE date=date('now') GROUP BY provider").all().catch(() => ({ results: [] })),
+    env.DB.prepare("SELECT model, COUNT(*) as c FROM ai_usage_log WHERE date=date('now') GROUP BY model ORDER BY c DESC LIMIT 5").all().catch(() => ({ results: [] })),
+    env.DB.prepare(`
+      SELECT id, tasks_done, tasks_total FROM agentsam_plans
+      WHERE status='active' AND plan_type='daily'
+      ORDER BY plan_date DESC LIMIT 1
+    `).first().catch(() => null),
   ]);
+  const providerJson = JSON.stringify(Object.fromEntries((providerBreakdown?.results || []).map(r => [r.provider, { calls: r.c, cost: r.cost }])));
+  const modelJson = JSON.stringify(Object.fromEntries((modelBreakdown?.results || []).map(r => [r.model, r.c])));
   const digestSummary = `snapshot:${String(reason)} spend $${tt?.cost_usd ?? 0} | deploys ${dt?.total ?? 0}`;
   await env.DB.prepare(
     `INSERT OR REPLACE INTO daily_snapshots (
       snapshot_date, deploy_count, tokens_in, tokens_out, cost_usd,
-      active_workflows, digest_text, created_at, updated_at
+      provider_breakdown, model_breakdown,
+      active_workflows,
+      completed_steps, total_steps, active_plan_id,
+      digest_text, created_at, updated_at
     ) VALUES (
       date('now'), ?, ?, ?, ?,
-      15, ?, unixepoch(), unixepoch()
+      ?, ?,
+      15,
+      ?, ?, ?,
+      ?, unixepoch(), unixepoch()
     )`
   ).bind(
     dt?.total ?? 0,
     tt?.tokens_in ?? 0,
     tt?.tokens_out ?? 0,
     tt?.cost_usd ?? 0,
+    providerJson,
+    modelJson,
+    planRow?.tasks_done ?? 0,
+    planRow?.tasks_total ?? 0,
+    planRow?.id ?? null,
     digestSummary
   ).run().catch(() => { });
+
+  // workspace_usage_metrics
+  const _wsId = IAM_DEFAULT_WORKSPACE_ID;
+  const _tid = 'tenant_sam_primeaux';
+  const [_wai, _wtc, _wmc, _wdc] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) as c,COALESCE(SUM(tokens_input+tokens_output),0) as t,COALESCE(SUM(cost_estimate),0) as cost FROM ai_usage_log WHERE date=date('now')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM agentsam_tool_call_log WHERE created_at>=unixepoch('now','start of day')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM mcp_tool_calls WHERE created_at>=datetime('now','-1 day')").first().catch(() => null),
+    env.DB.prepare("SELECT COUNT(*) as c FROM deployment_tracking WHERE created_at>=date('now')").first().catch(() => null),
+  ]);
+  await env.DB.prepare("INSERT OR REPLACE INTO workspace_usage_metrics (workspace_id,metric_date,ai_calls,tokens_used,cost_estimate_cents,tool_calls,mcp_calls,deployments_count,rollup_source,updated_at) VALUES (?,date('now'),?,?,?,?,?,?,'daily_cron',unixepoch())").bind(_wsId, _wai?.c || 0, _wai?.t || 0, (_wai?.cost || 0) * 100, _wtc?.c || 0, _wmc?.c || 0, _wdc?.c || 0).run().catch(() => { });
+
+  // agentsam_tool_stats_compacted (backfill job wrapper)
+  const _bjToolsId = 'bj_' + Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by) VALUES (?,?,?,'cron','running',unixepoch(),?)")
+    .bind(_bjToolsId, 'agentsam_tool_stats_compacted_rollup', 'agentsam_tool_stats_compacted', 'system')
+    .run().catch(() => { });
+  const _toolsRes = await env.DB.prepare("INSERT OR REPLACE INTO agentsam_tool_stats_compacted (tenant_id,tool_name,total_calls,success_count,failure_count,success_rate,total_cost_usd,avg_duration_ms,first_seen_at,last_seen_at,compacted_at) SELECT tenant_id,tool_name,COUNT(*),SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),ROUND(1.0*SUM(CASE WHEN status='success' THEN 1 ELSE 0 END)/COUNT(*),4),COALESCE(SUM(cost_usd),0),ROUND(AVG(duration_ms),2),MIN(created_at),MAX(created_at),unixepoch() FROM agentsam_tool_call_log GROUP BY tenant_id,tool_name").run().catch(() => null);
+  const _toolsInserted = Number(_toolsRes?.meta?.changes ?? _toolsRes?.changes ?? 0) || 0;
+  await env.DB.prepare("UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?")
+    .bind(_toolsInserted, _toolsInserted, _bjToolsId)
+    .run().catch(() => { });
+
+  // agentsam_health_daily
+  const _hs = await env.DB.prepare("SELECT COUNT(*) as total,SUM(CASE WHEN health_status='green' THEN 1 ELSE 0 END) as g,SUM(CASE WHEN health_status='yellow' THEN 1 ELSE 0 END) as y,SUM(CASE WHEN health_status='red' THEN 1 ELSE 0 END) as r,ROUND(AVG(tools_degraded),2) as ad,ROUND(AVG(tel_cost_24h),6) as ac FROM system_health_snapshots WHERE snapshot_at>=unixepoch('now','start of day')").first().catch(() => null);
+  if (_hs?.total > 0) await env.DB.prepare("INSERT OR REPLACE INTO agentsam_health_daily (tenant_id,day,snapshot_count,green_count,yellow_count,red_count,avg_tools_degraded,avg_tel_cost_24h,health_status) VALUES (?,date('now'),?,?,?,?,?,?,CASE WHEN ?>0 THEN 'red' WHEN ?>0 THEN 'yellow' ELSE 'green' END)").bind(_tid, _hs.total || 0, _hs.g || 0, _hs.y || 0, _hs.r || 0, _hs.ad || 0, _hs.ac || 0, _hs.r || 0, _hs.y || 0).run().catch(() => { });
 }
 
 /** Set for the lifetime of one `worker.fetch` invocation so `jsonResponse` can log 5xx without per-call plumbing. */
@@ -6614,6 +7739,7 @@ async function generateConversationName(env, conversationId, firstUserMessage) {
 /** Persist user + assistant turns to Supabase agent_memory (Hyperdrive pg + Workers AI embed). Never throws. */
 async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistantText, modelKey, provider }) {
   if (!env.HYPERDRIVE?.connectionString) return;
+  const wsId = resolveWorkspaceId(env, {});
   const sid = String(sessionId || '').trim();
   const u = String(userText || '').slice(0, 50000);
   const a = String(assistantText || '').slice(0, 50000);
@@ -6629,29 +7755,27 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
     let userVecLiteral = null;
     if (env.AI && u) {
       try {
-        const _uResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [u] });
-        const _uRaw = _uResp?.data ?? _uResp;
-        const _uVec = (Array.isArray(_uRaw) ? _uRaw : _uRaw?.data)?.[0];
+        const _uVec = await generateEmbedding(env, u);
         if (_uVec && Array.isArray(_uVec)) userVecLiteral = '[' + _uVec.join(',') + ']';
       } catch (e) { console.warn('[agent_memory] user embed failed', e?.message ?? e); }
     }
     if (userVecLiteral) {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata, embedding) VALUES ($1, $2, 'user', $3, $4::jsonb, $5::vector)`,
-        [sid, 'agent-sam', u, metaUser, userVecLiteral]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata, embedding)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6::jsonb, $7::vector)`,
+        [wsId, wsId, sid, 'agent-sam', u, metaUser, userVecLiteral]
       );
     } else {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'user', $3, $4::jsonb)`,
-        [sid, 'agent-sam', u, metaUser]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6::jsonb)`,
+        [wsId, wsId, sid, 'agent-sam', u, metaUser]
       );
     }
     let vecLiteral = null;
     if (env.AI && a) {
       try {
-        const modelResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [a] });
-        const raw = modelResp?.data ?? modelResp;
-        const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+        const vector = await generateEmbedding(env, a);
         if (vector && Array.isArray(vector)) vecLiteral = '[' + vector.join(',') + ']';
       } catch (e) {
         console.warn('[agent_memory] embed failed', e?.message ?? e);
@@ -6659,13 +7783,15 @@ async function persistAgentMemoryHyperdrive(env, { sessionId, userText, assistan
     }
     if (vecLiteral) {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata, embedding) VALUES ($1, $2, 'assistant', $3, $4::jsonb, $5::vector)`,
-        [sid, 'agent-sam', a, metaAsst, vecLiteral]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata, embedding)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, $6::jsonb, $7::vector)`,
+        [wsId, wsId, sid, 'agent-sam', a, metaAsst, vecLiteral]
       );
     } else {
       await client.query(
-        `INSERT INTO agent_memory (session_id, agent_id, role, content, metadata) VALUES ($1, $2, 'assistant', $3, $4::jsonb)`,
-        [sid, 'agent-sam', a, metaAsst]
+        `INSERT INTO agent_memory (workspace_id, project_id, session_id, agent_id, role, content, metadata)
+         VALUES ($1, $2, $3, $4, 'assistant', $5, $6::jsonb)`,
+        [wsId, wsId, sid, 'agent-sam', a, metaAsst]
       );
     }
   } catch (e) {
@@ -6912,6 +8038,115 @@ async function writeTelemetry(env, data, modelRates) {
   }
 
   return telemetryId;
+}
+
+/**
+ * Non-blocking D1 rows for Agent SSE lifecycle (best-effort; never throws).
+ * metric_type = agent_sse_lifecycle, metric_name = event slug.
+ */
+function waitUntilAgentSseLifecycle(env, ctx, eventName, detail = {}) {
+  if (!env?.DB) return;
+  const run = async () => {
+    try {
+      const id = `ssel_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const meta = JSON.stringify({
+        sse_event: String(eventName || 'unknown'),
+        ...detail,
+      }).slice(0, 3500);
+      await env.DB.prepare(
+        `INSERT INTO agent_telemetry (
+          id, tenant_id, session_id, metric_type, metric_name, metric_value, timestamp, metadata_json,
+          model_used, provider, input_tokens, output_tokens,
+          cache_read_input_tokens, cache_creation_input_tokens,
+          computed_cost_usd, total_input_tokens,
+          event_type, severity, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,unixepoch(),?,?,?,?,?,?,?,?,?,?,unixepoch(),unixepoch())`,
+      )
+        .bind(
+          id,
+          null,
+          detail.session_id != null ? String(detail.session_id) : null,
+          'agent_sse_lifecycle',
+          String(eventName || 'unknown'),
+          1,
+          meta,
+          detail.model_key != null ? String(detail.model_key) : null,
+          'agent_sse',
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          'lifecycle',
+          'info',
+        )
+        .run();
+    } catch (_) {}
+  };
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(run());
+  else run().catch(() => {});
+}
+
+async function isAgentChatDisabled(env) {
+  const raw = String(env?.AGENT_CHAT_DISABLED ?? '').trim();
+  if (raw === '1') return true;
+  const low = raw.toLowerCase();
+  if (low === 'true' || low === 'yes') return true;
+  if (!env?.DB) return false;
+  try {
+    const ff = await env.DB.prepare(
+      `SELECT COALESCE(enabled_globally, 0) AS e FROM agentsam_feature_flag WHERE flag_key = 'agent_chat_disabled' LIMIT 1`,
+    ).first();
+    if (ff && Number(ff.e) === 1) return true;
+  } catch (_) {}
+  try {
+    const pm = await env.DB.prepare(
+      `SELECT value FROM project_memory WHERE project_id = 'inneranimalmedia' AND key = 'AGENT_CHAT_DISABLED' LIMIT 1`,
+    ).first();
+    if (pm && String(pm.value || '').trim() === '1') return true;
+  } catch (_) {}
+  return false;
+}
+
+/** Immediate SSE when chat is globally disabled (no provider/tools/WAI). */
+function respondAgentChatKillSwitchDisabled(env, ctx) {
+  console.warn('[agent:sse] kill_switch_active');
+  waitUntilAgentSseLifecycle(env, ctx, 'request_start', { kill_switch: true });
+  waitUntilAgentSseLifecycle(env, ctx, 'stream_done', { disabled: true, kill_switch: true });
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(
+        enc.encode(
+          `data: ${JSON.stringify({
+            type: 'token',
+            text: 'Agent Sam chat is temporarily paused while stream transport is being repaired.',
+          })}\n\n`,
+        ),
+      );
+      controller.enqueue(
+        enc.encode(
+          `data: ${JSON.stringify({
+            type: 'done',
+            model_used: null,
+            disabled: true,
+          })}\n\n`,
+        ),
+      );
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: { ...sseResponseHeaders(), 'X-IAM-Agent-Chat-Kill': '1' },
+  });
+}
+
+function ssePayloadLooksLikeRawProvider(j) {
+  if (!j || typeof j !== 'object') return false;
+  if (j.object === 'chat.completion.chunk') return true;
+  if (j.id != null && String(j.id).indexOf('chatcmpl') === 0) return true;
+  return !!(j.choices && Array.isArray(j.choices) && !j.type);
 }
 
 /** Parse Workers AI stream JSON line or result object for { prompt_tokens, completion_tokens }. */
@@ -7247,14 +8482,14 @@ async function runIntegritySnapshot(env, triggeredBy = 'cron') {
     FROM routing_decisions`;
   const sqlQ2 = `
     SELECT
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN 1 ELSE 0 END), 0) AS tel_total_24h,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN 1 ELSE 0 END), 0) AS tel_total_7d,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 86400) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_24h,
-      COALESCE(SUM(CASE WHEN created_at >= (unixepoch() - 604800) THEN computed_cost_usd ELSE 0 END), 0) AS tel_cost_7d
-    FROM agent_telemetry`;
+      COALESCE(SUM(CASE WHEN date=date('now') THEN calls ELSE 0 END),0) AS tel_total_24h,
+      COALESCE(SUM(CASE WHEN date>=date('now','-7 days') THEN calls ELSE 0 END),0) AS tel_total_7d,
+      COALESCE(SUM(CASE WHEN date=date('now') THEN cost_estimate ELSE 0 END),0) AS tel_cost_24h,
+      COALESCE(SUM(CASE WHEN date>=date('now','-7 days') THEN cost_estimate ELSE 0 END),0) AS tel_cost_7d
+    FROM ai_usage_log`;
   const sqlQ3 = `
-    SELECT provider, COUNT(*) AS n, SUM(computed_cost_usd) AS cost
-    FROM agent_telemetry WHERE created_at >= (unixepoch() - 604800)
+    SELECT provider, COUNT(*) AS n, SUM(cost_estimate) AS cost
+    FROM ai_usage_log WHERE date >= date('now','-7 days')
     GROUP BY provider ORDER BY n DESC`;
   const sqlQ4 = `
     SELECT
@@ -7396,7 +8631,7 @@ async function insertAiGenerationLog(env, opts) {
   } = opts;
   const tenantId =
     (rawTenantId != null && String(rawTenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   if (!tenantId) {
     console.warn('[insertAiGenerationLog] missing tenant_id; skip');
@@ -7629,15 +8864,19 @@ async function logAssistantCodeArtifactIfPresent(env, {
 }
 
 /** INSERT OR IGNORE so FK on agent_messages.conversation_id -> agent_conversations(id) succeeds. Same id used for agent_sessions row (workspace/chat session key). */
-async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId, workspaceId = null, modelKey = null) {
+async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId, workspaceId = null, modelKey = null, tenantId = null) {
   if (!env?.DB || conversationId == null || String(conversationId).trim() === '') return;
   const cid = String(conversationId).trim();
+  const tenant = tenantId != null && String(tenantId).trim() ? String(tenantId).trim() : null;
+  if (!tenant) {
+    console.warn('[ensureAgentChatPersistenceParents] missing tenant_id; skip');
+    return;
+  }
   const uid =
     chatUserId != null && String(chatUserId).trim() !== ''
       ? String(chatUserId).trim()
       : 'sam_primeaux';
   const now = Math.floor(Date.now() / 1000);
-  const tenant = (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'system';
   try {
     await env.DB.prepare(
       `INSERT OR IGNORE INTO agent_sessions (id, tenant_id, session_type, status, state_json, started_at, updated_at)
@@ -7660,10 +8899,251 @@ async function ensureAgentChatPersistenceParents(env, conversationId, chatUserId
   }
 }
 
+async function writeTestRun(env, data) {
+  if (!env?.DB) return null;
+  const {
+    provider,
+    model,
+    status = 'succeeded',
+    success = 1,
+    inputTokens = 0,
+    outputTokens = 0,
+    cachedTokens = 0,
+    inputCostUsd = 0,
+    outputCostUsd = 0,
+    totalCostUsd = 0,
+    latencyMs = 0,
+    responseText = '',
+    errorMessage = '',
+    workspaceId = null,
+    tenantId = null,
+    testSuite = 'production',
+    testName = '',
+    runGroupId = '',
+    assertionPassed = -1,
+    promptId = '',
+    experimentId = '',
+  } = data || {};
+  if (!tenantId || !workspaceId) {
+    console.warn('[ai_api_test_runs] missing tenant_id/workspace_id; skip');
+    return null;
+  }
+  const id = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const now = new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO ai_api_test_runs (
+      id, run_group_id, provider, model, status, success,
+      input_tokens, output_tokens, cached_tokens, total_tokens,
+      input_cost_usd, output_cost_usd, total_cost_usd,
+      latency_ms, response_text, error_message,
+      started_at, completed_at, workspace_id, tenant_id,
+      test_suite, test_name, assertion_passed,
+      prompt_id, experiment_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    id, runGroupId, provider, model, status, success,
+    Number(inputTokens) || 0,
+    Number(outputTokens) || 0,
+    Number(cachedTokens) || 0,
+    (Number(inputTokens) || 0) + (Number(outputTokens) || 0),
+    Number(inputCostUsd) || 0,
+    Number(outputCostUsd) || 0,
+    Number(totalCostUsd) || 0,
+    Number(latencyMs) || 0,
+    String(responseText || '').slice(0, 500),
+    String(errorMessage || '').slice(0, 1000),
+    now,
+    now,
+    workspaceId,
+    tenantId,
+    testSuite,
+    testName,
+    Number(assertionPassed),
+    promptId,
+    experimentId,
+  ).run();
+  return id;
+}
+
+function aiSmokeProvidersFromUrl(url) {
+  const requested = String(url.searchParams.get('providers') || 'openai')
+    .split(',')
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+  return requested.length ? requested : ['openai'];
+}
+
+async function callAiSmokeProvider(env, provider, model, prompt) {
+  const start = Date.now();
+  if (provider === 'openai') {
+    if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
+    const res = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, input: prompt, max_output_tokens: 24 }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`OpenAI ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usage || {};
+    const responseText = json.output_text || (json.output || []).map((o) => (o.content || []).map((c) => c.text || '').join('')).join('');
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      responseText,
+    };
+  }
+  if (provider === 'anthropic') {
+    if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 24, messages: [{ role: 'user', content: prompt }] }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usage || {};
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      responseText: (json.content || []).map((c) => c.text || '').join(''),
+    };
+  }
+  if (provider === 'gemini') {
+    if (!env.GOOGLE_AI_API_KEY) throw new Error('GOOGLE_AI_API_KEY not configured');
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${env.GOOGLE_AI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Gemini ${res.status}: ${text.slice(0, 200)}`);
+    const json = JSON.parse(text);
+    const usage = json.usageMetadata || {};
+    return {
+      latencyMs: Date.now() - start,
+      inputTokens: usage.promptTokenCount || 0,
+      outputTokens: usage.candidatesTokenCount || 0,
+      responseText: json.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '',
+    };
+  }
+  throw new Error(`Unsupported smoke provider: ${provider}`);
+}
+
+async function handleAiSmokeTest(request, url, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const smokeTenantId = authUser.tenant_id != null && String(authUser.tenant_id).trim() ? String(authUser.tenant_id).trim() : null;
+  const smokeWorkspaceId = authUser.workspace_id != null && String(authUser.workspace_id).trim() ? String(authUser.workspace_id).trim() : null;
+  if (!smokeTenantId || !smokeWorkspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const body = await request.json().catch(() => ({}));
+  const prompt = String(body.prompt || 'Reply with the word ok.').slice(0, 500);
+  const providers = aiSmokeProvidersFromUrl(url);
+  const runGroupId = `smoke-gpt54-${Math.floor(Date.now() / 1000)}`;
+  const providerModels = {
+    openai: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
+    anthropic: body.anthropic_models || ['claude-4-5-haiku-latest'],
+    gemini: body.gemini_models || ['gemini-2.5-flash'],
+  };
+  const rows = [];
+  for (const provider of providers) {
+    const models = providerModels[provider] || [];
+    for (const model of models) {
+      const start = Date.now();
+      try {
+        const result = await callAiSmokeProvider(env, provider, model, prompt);
+        await writeTestRun(env, {
+          provider,
+          model,
+          status: 'succeeded',
+          success: 1,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          latencyMs: result.latencyMs,
+          responseText: result.responseText,
+          workspaceId: smokeWorkspaceId,
+          tenantId: smokeTenantId,
+          testSuite: 'production',
+          testName: 'ai_smoke_test',
+          runGroupId,
+          assertionPassed: 1,
+        });
+        rows.push({ model, provider, latencyMs: result.latencyMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, totalCostUsd: 0 });
+      } catch (err) {
+        await writeTestRun(env, {
+          provider,
+          model,
+          status: 'failed',
+          success: 0,
+          latencyMs: Date.now() - start,
+          errorMessage: err?.message || String(err),
+          workspaceId: smokeWorkspaceId,
+          tenantId: smokeTenantId,
+          testSuite: 'production',
+          testName: 'ai_smoke_test',
+          runGroupId,
+          assertionPassed: 0,
+        });
+        rows.push({ model, provider, error: err?.message || String(err), latencyMs: Date.now() - start, inputTokens: 0, outputTokens: 0, totalCostUsd: 0 });
+      }
+    }
+  }
+  return jsonResponse({ run_group_id: runGroupId, results: rows });
+}
+
+async function handleCmsPageRequest(request, url, env) {
+  if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const authUser = await getAuthUser(request, env);
+  if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const match = url.pathname.match(/^\/api\/cms\/pages\/([^/]+)\/?(.*)$/);
+  if (!match) return jsonResponse({ error: 'projectSlug and path required' }, 400);
+  const projectSlug = decodeURIComponent(match[1] || '').trim();
+  const pagePathRaw = decodeURIComponent(match[2] || '').trim();
+  const pagePath = '/' + pagePathRaw.replace(/^\/+/, '');
+  const page = await env.DB.prepare(
+    `SELECT * FROM cms_site_pages
+     WHERE project_slug = ? AND path = ? AND is_active = 1
+     LIMIT 1`
+  ).bind(projectSlug, pagePath === '/' ? '/' : pagePath).first();
+  if (!page) return jsonResponse({ error: 'Page not found' }, 404);
+  let sections = [];
+  try {
+    const sectionRows = await env.DB.prepare(
+      `SELECT * FROM cms_page_sections
+       WHERE page_id = ?
+       ORDER BY sort_order ASC, id ASC`
+    ).bind(page.id).all();
+    sections = sectionRows.results || [];
+  } catch (e) {
+    console.warn('[cms pages] cms_page_sections', e?.message ?? e);
+    sections = [];
+  }
+  const outSections = [];
+  for (const section of sections) {
+    let components = [];
+    try {
+      const componentRows = await env.DB.prepare(
+        `SELECT * FROM cms_section_components
+         WHERE section_id = ?
+         ORDER BY sort_order ASC, id ASC`
+      ).bind(section.id).all();
+      components = componentRows.results || [];
+    } catch (e) {
+      console.warn('[cms pages] cms_section_components', e?.message ?? e);
+    }
+    outSections.push({ ...section, components });
+  }
+  return jsonResponse({ page, sections: outSections });
+}
+
 /** Shared: insert agent_messages (assistant), agent_telemetry, spend_ledger and return payload for done event. ctx optional for non-blocking spend_ledger. */
 async function streamDoneDbWrites(env, conversationId, modelRow, fullText, inputTokens, outputTokens, _costUsd, agent_id, ctx, lastUserTextForMemory, agentsamAgentRunId = null, routingOpts = null, cacheCreationInputTokens = 0, cacheReadInputTokens = 0, omitTelemetryWrite = false, chatPersistenceUserId = null) {
   if (env.DB && conversationId != null && String(conversationId).trim() !== '') {
-    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId, routingOpts?.workspaceId || "ws_inneranimalmedia", modelRow?.model_key || null);
+    await ensureAgentChatPersistenceParents(env, conversationId, chatPersistenceUserId, routingOpts?.workspaceId || null, modelRow?.model_key || null, routingOpts?.tenantId || null);
   }
   const safeText = (fullText != null && typeof fullText === 'string') ? fullText : '';
   const safeInput = inputTokens ?? 0;
@@ -7683,6 +9163,27 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
     // Fallback if DB row missing rates
     const { rateIn, rateOut } = getSpendRates(safeProvider, safeModelKey);
     amountUsd = (safeInput * rateIn / 1_000_000) + (safeOutput * rateOut / 1_000_000);
+  }
+  try {
+    await writeTestRun(env, {
+      provider: safeProvider,
+      model: safeModelKey,
+      status: 'succeeded',
+      success: 1,
+      inputTokens: safeInput,
+      outputTokens: safeOutput,
+      cachedTokens: safeCacheRead,
+      totalCostUsd: amountUsd,
+      latencyMs: routingOpts && typeof routingOpts.chatStartMs === 'number' ? Date.now() - routingOpts.chatStartMs : 0,
+      responseText: safeText.slice(0, 500),
+      workspaceId: routingOpts?.workspaceId || null,
+      tenantId: routingOpts?.tenantId || null,
+      testSuite: 'production',
+      testName: routingOpts?.testName || 'agent_chat_provider_call',
+      runGroupId: routingOpts?.runGroupId || '',
+    });
+  } catch (e) {
+    console.warn('[ai_api_test_runs] chat write failed', e?.message ?? e);
   }
   const msgId = crypto.randomUUID();
   const role = 'assistant';
@@ -7705,7 +9206,7 @@ async function streamDoneDbWrites(env, conversationId, modelRow, fullText, input
   try {
     await env.DB.prepare(
       "INSERT INTO agent_messages (id, conversation_id, role, content, provider, model, input_tokens, output_tokens, token_count, cost_usd, tenant_id, user_id, r2_key, r2_bucket, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())"
-    ).bind(msgId, conversationId, role, fullContent.slice(0, 500), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? env.TENANT_ID ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
+    ).bind(msgId, conversationId, role, fullContent.slice(0, 500), safeProvider, safeModelKey, safeInput, safeOutput, tokenCount, amountUsd, routingOpts?.tenantId ?? null, chatPersistenceUserId ?? null, msgR2Key, 'iam-platform').run();
   } catch (e) {
     console.error('[agent/chat] agent_messages INSERT failed:', e?.message ?? e);
   }
@@ -8495,10 +9996,11 @@ async function insertQualityCheckRagIngest(env, chunkCount) {
   if (!env?.DB) return;
   const met = chunkCount >= 3;
   try {
+    const wsId = resolveWorkspaceId(env, {});
     await env.DB.prepare(
       `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
        VALUES (?,?,?,?,?,?,?,?)`
-    ).bind('inneranimalmedia', 'rag_ingest', 'chunk_count_minimum', met ? 'passed' : 'failed', String(chunkCount), '3', met ? 1 : 0, 'high').run();
+    ).bind(wsId, 'rag_ingest', 'chunk_count_minimum', met ? 'passed' : 'failed', String(chunkCount), '3', met ? 1 : 0, 'high').run();
   } catch (e) {
     console.warn('[quality_checks rag_ingest]', e?.message ?? e);
   }
@@ -8508,10 +10010,11 @@ async function insertQualityCheckRagQuery(env, topScore) {
   if (!env?.DB) return;
   const met = topScore >= 0.75;
   try {
+    const wsId = resolveWorkspaceId(env, {});
     await env.DB.prepare(
       `INSERT INTO quality_checks (project_id, check_type, check_name, status, actual_value, expected_value, threshold_met, severity)
        VALUES (?,?,?,?,?,?,?,?)`
-    ).bind('inneranimalmedia', 'rag_query', 'top_score_threshold', met ? 'passed' : 'failed', String(topScore), '0.75', met ? 1 : 0, 'high').run();
+    ).bind(wsId, 'rag_query', 'top_score_threshold', met ? 'passed' : 'failed', String(topScore), '0.75', met ? 1 : 0, 'high').run();
   } catch (e) {
     console.warn('[quality_checks rag_query]', e?.message ?? e);
   }
@@ -8528,6 +10031,7 @@ async function runRagIngestSingle(env, p) {
   const _ingUserId = p._ingUserId;
   const _ingWid = p._ingWid;
   const triggeredBy = p.triggeredBy || 'api';
+  const wsId = resolveWorkspaceId(env, { workspace_id: _ingWid });
   try {
     const _existing = await env.DB.prepare(
       `SELECT id, index_status FROM autorag WHERE object_key = ?`
@@ -8545,7 +10049,7 @@ async function runRagIngestSingle(env, p) {
     ).bind(_ingUserId, _ingWid).run().catch(() => { });
 
     const _t0i = Date.now();
-    const _EMBED_MODEL_I = '@cf/baai/bge-base-en-v1.5';
+    const _EMBED_MODEL_I = IAM_EMBED_MODEL;
     const _CHUNK_CHARS = 1600;
     const _CPT = 4;
 
@@ -8595,15 +10099,40 @@ async function runRagIngestSingle(env, p) {
       const _ct = _chunks[_idx];
       const _ctTokens = Math.ceil(_ct.length / _CPT);
       const _chunkId = `${_kbId}_c${_idx}`;
-      const _emb = await env.AI.run(_EMBED_MODEL_I, { text: _ct });
-      const _vec = _emb?.data?.[0] ?? _emb?.result?.data?.[0];
+      const _vec = await generateEmbedding(env, _ct);
       _embedCalls++;
       const _vecJson = _vec ? JSON.stringify(_vec) : null;
+
+      // Upsert to Vectorize with workspace namespace
+      if (env.VECTORIZE_INDEX) {
+        await env.VECTORIZE_INDEX.upsert([{
+          id: _chunkId,
+          values: _vec,
+          namespace: wsId,
+          metadata: {
+            knowledge_id: _kbId,
+            object_key: _ingObjKey,
+            chunk_index: _idx,
+            workspace_id: wsId,
+            token_count: _ctTokens,
+          }
+        }]).catch((e) => console.warn('[rag] vectorize upsert:', e?.message));
+      }
       await env.DB.prepare(`
-              INSERT INTO ai_knowledge_chunks (id, knowledge_id, tenant_id, chunk_index, content, content_preview, token_count, embedding_model, is_indexed, embedding_vector, created_at)
-              VALUES (?,?,?,?,?,?,?,?,1,?,unixepoch())
-              ON CONFLICT(id) DO UPDATE SET content=excluded.content, token_count=excluded.token_count, embedding_vector=excluded.embedding_vector, is_indexed=1
-            `).bind(_chunkId, _kbId, 'system', _idx, _ct, _ct.slice(0, 200), _ctTokens, _EMBED_MODEL_I, _vecJson).run();
+        INSERT OR REPLACE INTO ai_knowledge_chunks
+          (id, knowledge_id, tenant_id, workspace_id, chunk_index, content,
+           embedding_model, embedding_vector, is_indexed, created_at)
+        VALUES (?,?,?,?,?, ?,?,?,1,unixepoch())
+      `).bind(
+        _chunkId,
+        _kbId,
+        _ingTid,
+        wsId,
+        _idx,
+        _ct,
+        IAM_EMBED_MODEL,
+        _vecJson
+      ).run();
     }
 
     const _durI = Date.now() - _t0i;
@@ -8613,9 +10142,16 @@ async function runRagIngestSingle(env, p) {
     ).bind(_chunks.length, _tokenCount, _kbId).run();
     invalidateCompiledContextCache(env);
     await env.DB.prepare(`
-            INSERT INTO rag_ingest_log (object_key, status, char_count, token_count, chunk_count, embed_calls, embed_model, duration_ms, triggered_by)
-            VALUES (?,?,?,?,?,?,?,?,?)
-          `).bind(_ingObjKey, 'ok', _charCount, _tokenCount, _chunks.length, _embedCalls, _EMBED_MODEL_I, _durI, triggeredBy).run();
+      INSERT INTO rag_ingest_log
+        (object_key, triggered_by, status, chunk_count,
+         embed_model, duration_ms, workspace_id, autorag_id)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).bind(
+      _ingObjKey, triggeredBy, 'ok', _chunks.length,
+      IAM_EMBED_MODEL, _durI,
+      wsId,
+      _kbId
+    ).run().catch(() => { });
     await insertQualityCheckRagIngest(env, _chunks.length);
 
     await env.DB.prepare(
@@ -9633,7 +11169,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = `Terminal error: ${e.message}`;
         }
         const runLoopUserId = request?.user?.id || request?.user_id || null;
-        const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+        const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
         console.log('[cmd_audit] runToolLoop terminal_execute identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
         insertAgentCommandAuditLog(env, {
           userId: runLoopUserId ?? 'unknown',
@@ -9669,7 +11205,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         if (blocked.test(sql)) {
           resultText = 'Blocked: DROP TABLE and TRUNCATE require manual approval';
           const runLoopUserId = request?.user?.id || request?.user_id || null;
-          const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+          const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
           console.log('[cmd_audit] runToolLoop d1_write blocked identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
           insertAgentCommandAuditLog(env, {
             userId: runLoopUserId ?? 'unknown',
@@ -9689,7 +11225,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
             resultText = JSON.stringify({ changes, success: true });
             void writeAuditLog(env, { event_type: 'd1_write', message: 'D1 write executed', metadata: { changes } }).catch(() => { });
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+            const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
             console.log('[cmd_audit] runToolLoop d1_write success identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -9715,7 +11251,7 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           } catch (e) {
             resultText = `D1 error: ${e.message}`;
             const runLoopUserId = request?.user?.id || request?.user_id || null;
-            const runLoopWorkspaceId = request?.workspace_id || 'ws_inneranimalmedia';
+            const runLoopWorkspaceId = resolveWorkspaceId(env, request || {});
             console.log('[cmd_audit] runToolLoop d1_write error identity', { userId: runLoopUserId, workspaceId: runLoopWorkspaceId });
             insertAgentCommandAuditLog(env, {
               userId: runLoopUserId ?? 'unknown',
@@ -9761,17 +11297,12 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
           resultText = JSON.stringify({ error: 'query required' });
         } else {
           try {
-            const { merged, answer, query: q } = await runKnowledgeSearchMerged(env, query, max_results);
-            resultText = JSON.stringify({
-              query: q,
-              answer,
-              results: merged.map(item => ({
-                content: item.content,
-                source: item.sourceTag ?? item.source ?? 'unknown',
-                score: item.score,
-                title: item.title,
-              })),
+            const out = await knowledgeSearch(env, query, {
+              topK: max_results,
+              workspace_id: params.workspace_id ?? params.workspaceId ?? null,
+              threshold: params.threshold != null ? Number(params.threshold) : undefined,
             });
+            resultText = JSON.stringify(out);
           } catch (e) {
             resultText = JSON.stringify({ error: e?.message ?? String(e) });
           }
@@ -9806,12 +11337,16 @@ async function runToolLoop(env, request, provider, modelKey, systemWithBlurb, ap
         const steps = Array.isArray(params.steps) ? params.steps : [];
         try {
           const planId = crypto.randomUUID();
-          const tenantId = tenantIdFromEnv(env) ?? 'system';
+          const tenantId = params.tenant_id != null && String(params.tenant_id).trim() ? String(params.tenant_id).trim() : null;
+          if (!tenantId) {
+            resultText = JSON.stringify({ error: 'tenant_id required' });
+          } else {
           const planJson = JSON.stringify({ summary, steps });
           await env.DB.prepare(
             `INSERT INTO agent_execution_plans (id, tenant_id, session_id, plan_json, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', unixepoch(), unixepoch())`
           ).bind(planId, tenantId, conversationId ?? '', planJson, summary.slice(0, 2000)).run();
           resultText = JSON.stringify({ plan_id: planId, status: 'pending', message: 'Plan created; user can approve or reject in the UI.' });
+          }
         } catch (e) {
           resultText = JSON.stringify({ error: e?.message ?? String(e) });
         }
@@ -10445,7 +11980,7 @@ async function resolveIamWorkspaceRoot(env) {
       if (env?.DB) {
         try {
           const row = await env.DB.prepare('SELECT settings_json FROM workspace_settings WHERE workspace_id = ?')
-            .bind('ws_inneranimalmedia')
+            .bind(IAM_DEFAULT_WORKSPACE_ID)
             .first();
           if (row?.settings_json) {
             const j = JSON.parse(String(row.settings_json));
@@ -11141,7 +12676,7 @@ async function chatWithToolsGoogle(env, systemWithBlurb, apiMessages, modelRow, 
     const modeFiltered = filterToolsByMode(mode, filtered.map(t => ({ name: t.tool_name, ...t })));
     const tenantForIntent =
       (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-      (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+      null ||
       null;
     const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
     const intentForFilter = opts._intent || 'auto';
@@ -11741,12 +13276,14 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           new Promise((_, rej) => setTimeout(() => rej(new Error('Workers AI timeout after 25s')), WAI_TIMEOUT_MS))
         ]);
       } catch (e) {
-        await emit({ type: 'error', error: e?.message ?? String(e) });
+        console.warn('[streamWorkersAI]', e?.message ?? e);
+        await emit({ type: 'error', error: 'model_error' });
         return;
       }
 
       if (!result) {
-        await emit({ type: 'error', error: 'Workers AI returned null' });
+        console.warn('[streamWorkersAI] null result');
+        await emit({ type: 'error', error: 'model_error' });
         return;
       }
 
@@ -11756,7 +13293,10 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
           await emit({ type: 'tool_use', name: tc.name, input: tc.arguments || {} });
           const toolResult = await invokeMcpToolFromChat(env, tc.name, tc.arguments || {}, {
             agent_id, conversationId, skipApprovalCheck: false, suppressTelemetry: false
-          }).catch(e => ({ error: e?.message || String(e) }));
+          }).catch((e) => {
+            console.warn('[streamWorkersAI] tool', tc.name, e?.message ?? e);
+            return { error: 'tool_error' };
+          });
           await emit({ type: 'tool_result', name: tc.name, result: toolResult?.result || toolResult?.error || '' });
         }
       }
@@ -11794,7 +13334,8 @@ async function streamWorkersAI(env, systemWithBlurb, apiMessages, modelRow, conv
       emitCodeBlocksFromText(fullText, (obj) => emit(obj));
       await emit({ type: 'done', input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd, conversation_id: conversationId, model_used: safeRow.model_key, model_display_name: safeRow.display_name });
     } catch (e) {
-      await emit({ type: 'error', error: e?.message ?? String(e) }).catch(() => { });
+      console.warn('[streamWorkersAI] fatal', e?.message ?? e);
+      await emit({ type: 'error', error: 'model_error' }).catch(() => { });
     } finally {
       await writer.close().catch(() => { });
     }
@@ -12138,6 +13679,273 @@ function sseResponseHeaders() {
   };
 }
 
+/**
+ * Normalize one inbound SSE JSON object into browser-safe app events (strip raw provider chunks).
+ * Zero raw provider lines forwarded (choices/id/object filtered here).
+ */
+function normalizeAgentSseEventForBrowser(j) {
+  if (!j || typeof j !== 'object') return [];
+  const t = j.type;
+  const passthroughTypes = new Set([
+    'done',
+    'error',
+    'tool_approval_request',
+    'tool_start',
+    'tool_result',
+    'tool_use',
+    'state',
+    'open_panel',
+    'code',
+    'context',
+    'browser_navigate',
+    'r2_file_updated',
+  ]);
+  if (t && passthroughTypes.has(t)) {
+    if (t === 'error') {
+      const em =
+        typeof j.error === 'string'
+          ? j.error.slice(0, 200)
+          : typeof j.message === 'string'
+            ? j.message.slice(0, 200)
+            : 'error';
+      console.warn('[agent:sse] stream_error', JSON.stringify({ message: em }));
+    }
+    if (t === 'done') {
+      console.log('[agent:sse] stream_done');
+    }
+    return [j];
+  }
+  if (t === 'text' && typeof j.text === 'string') {
+    if (!j.text) return [];
+    console.log('[agent:sse] emit_token length=' + j.text.length);
+    return [{ type: 'token', text: j.text }];
+  }
+  if ((t === 'token' || t === 'delta') && typeof j.text === 'string') {
+    if (!j.text) return [];
+    console.log('[agent:sse] emit_token length=' + j.text.length);
+    return [{ type: 'token', text: j.text }];
+  }
+  if (t === 'content_block_delta' && j.delta && j.delta.type === 'text_delta' && typeof j.delta.text === 'string') {
+    console.log('[agent:sse] emit_token length=' + j.delta.text.length);
+    return [{ type: 'token', text: j.delta.text }];
+  }
+  if (!t && typeof j.conversation_id === 'string' && j.conversation_id) return [j];
+
+  const d = j.choices && Array.isArray(j.choices) ? j.choices[0]?.delta : null;
+  if (d && typeof d === 'object') {
+    const hasReason =
+      (d.reasoning_content != null && String(d.reasoning_content).length > 0) ||
+      (d.reasoning != null && String(d.reasoning).length > 0);
+    const hasThinking = d.thinking != null && String(d.thinking).length > 0;
+    const content = typeof d.content === 'string' ? d.content : '';
+    const hasContent = content.length > 0;
+    console.log(
+      '[agent:sse] provider_chunk has_content=' + hasContent + ' has_reasoning=' + !!(hasReason || hasThinking),
+    );
+    if ((hasReason || hasThinking) && !hasContent) {
+      console.warn('[agent:sse] dropped_reasoning_chunk');
+      return [];
+    }
+    if (hasContent) {
+      console.log('[agent:sse] emit_token length=' + content.length);
+      return [{ type: 'token', text: content }];
+    }
+    return [];
+  }
+  if (ssePayloadLooksLikeRawProvider(j)) {
+    console.warn('[agent:sse] raw_provider_blocked');
+    return [];
+  }
+  if (t) return [j];
+  return [];
+}
+
+/**
+ * Final SSE envelope for /api/agent/chat: never forward raw provider JSON; honor client AbortSignal.
+ */
+function wrapAgentChatSseForBrowser(upstream, request, env, ctx) {
+  try {
+    if (upstream.headers && upstream.headers.get('X-IAM-Agent-Chat-Kill') === '1') return upstream;
+    const ct = (upstream.headers && upstream.headers.get('content-type')) || '';
+    if (!ct.includes('text/event-stream') || !upstream.body) return upstream;
+    const signal = request && request.signal;
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const MAX_MS = 60000;
+    const MAX_CHUNKS = 2000;
+    const MAX_EMPTY_REASON = 200;
+    const t0 = Date.now();
+    let inboundChunks = 0;
+    let emptyOrReasoningOnly = 0;
+    let rawProviderBlocked = 0;
+    let sseCarry = '';
+    const upstreamReader = upstream.body.getReader();
+
+    const readable = new ReadableStream({
+      async start(controller) {
+        let completedCleanly = false;
+        try {
+          while (true) {
+            if (signal && signal.aborted) {
+              console.warn('[agent:sse] client_aborted');
+              waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', {});
+              await upstreamReader.cancel().catch(() => {});
+              console.warn('[agent:sse] provider_reader_cancelled');
+              controller.close();
+              return;
+            }
+            if (
+              Date.now() - t0 > MAX_MS ||
+              inboundChunks >= MAX_CHUNKS ||
+              emptyOrReasoningOnly >= MAX_EMPTY_REASON
+            ) {
+              console.warn('[agent:sse] stream_error', JSON.stringify({ reason: 'stream_guard' }));
+              waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { reason: 'stream_guard', inboundChunks, emptyOrReasoningOnly });
+              controller.enqueue(
+                enc.encode(`data: ${JSON.stringify({ type: 'error', error: 'stream_guard' })}\n\n`),
+              );
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: 'done', model_used: null })}\n\n`));
+              await upstreamReader.cancel().catch(() => {});
+              console.warn('[agent:sse] provider_reader_cancelled');
+              controller.close();
+              return;
+            }
+            const { done, value } = await upstreamReader.read();
+            if (done) {
+              completedCleanly = true;
+              break;
+            }
+            inboundChunks += 1;
+            sseCarry += dec.decode(value, { stream: true });
+            const blocks = sseCarry.split('\n\n');
+            sseCarry = blocks.pop() || '';
+            for (const block of blocks) {
+              for (const rawLine of block.split('\n')) {
+                const line = rawLine.trim();
+                if (!line.startsWith('data:')) continue;
+                const payload = line.slice(5).trim();
+                if (payload === '[DONE]') continue;
+                let j;
+                try {
+                  j = JSON.parse(payload);
+                } catch {
+                  continue;
+                }
+                const outs = normalizeAgentSseEventForBrowser(j);
+                if (
+                  outs.length === 0 &&
+                  ssePayloadLooksLikeRawProvider(j)
+                ) {
+                  rawProviderBlocked += 1;
+                  waitUntilAgentSseLifecycle(env, ctx, 'raw_sse_leak_detected', {
+                    count: rawProviderBlocked,
+                  });
+                }
+                if (
+                  outs.length === 0 &&
+                  j &&
+                  j.choices &&
+                  j.choices[0] &&
+                  j.choices[0].delta &&
+                  ((j.choices[0].delta.reasoning_content != null &&
+                    String(j.choices[0].delta.reasoning_content).length > 0) ||
+                    (j.choices[0].delta.reasoning != null && String(j.choices[0].delta.reasoning).length > 0))
+                ) {
+                  waitUntilAgentSseLifecycle(env, ctx, 'dropped_reasoning_chunk', { summary: 'reasoning_only_delta' });
+                }
+                for (const ev of outs) {
+                  if (
+                    ev &&
+                    ev.type === 'token' &&
+                    typeof ev.text === 'string' &&
+                    ev.text.length === 0
+                  ) {
+                    emptyOrReasoningOnly += 1;
+                    continue;
+                  }
+                  controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+                }
+                if (outs.length === 0 && j && j.choices && j.choices[0] && j.choices[0].delta) {
+                  const dx = j.choices[0].delta;
+                  const onlyMeta =
+                    !dx.content &&
+                    (dx.reasoning_content ||
+                      dx.reasoning ||
+                      dx.thinking ||
+                      dx.logprobs ||
+                      dx.token_ids ||
+                      dx.prompt_token_ids);
+                  if (onlyMeta) emptyOrReasoningOnly += 1;
+                }
+              }
+            }
+          }
+          const tailBlocks = (sseCarry || '').trim()
+            ? [sseCarry.trim()]
+            : [];
+          for (const block of tailBlocks) {
+            for (const rawLine of block.split('\n')) {
+              const line = rawLine.trim();
+              if (!line.startsWith('data:')) continue;
+              const payload = line.slice(5).trim();
+              if (payload === '[DONE]') continue;
+              let j;
+              try {
+                j = JSON.parse(payload);
+              } catch {
+                continue;
+              }
+              const outs = normalizeAgentSseEventForBrowser(j);
+              if (outs.length === 0 && ssePayloadLooksLikeRawProvider(j)) {
+                rawProviderBlocked += 1;
+                waitUntilAgentSseLifecycle(env, ctx, 'raw_sse_leak_detected', { count: rawProviderBlocked });
+              }
+              for (const ev of outs) {
+                controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+              }
+            }
+          }
+          if (completedCleanly) {
+            console.log('[agent:sse] stream_done');
+            waitUntilAgentSseLifecycle(env, ctx, 'stream_done', { ok: true, raw_provider_blocked: rawProviderBlocked });
+          }
+        } catch (e) {
+          const msg = e && e.name === 'AbortError' ? 'aborted' : String(e && e.message ? e.message : e);
+          if (e && e.name === 'AbortError') {
+            console.warn('[agent:sse] client_aborted');
+            waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', {});
+          } else {
+            console.warn('[agent:sse] stream_error', JSON.stringify({ message: msg.slice(0, 200) }));
+            waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { message: msg.slice(0, 200) });
+          }
+          try {
+            controller.enqueue(
+              enc.encode(`data: ${JSON.stringify({ type: 'error', error: msg.slice(0, 200) })}\n\n`),
+            );
+          } catch (_) {}
+        } finally {
+          await upstreamReader.cancel().catch(() => {});
+          try {
+            controller.close();
+          } catch (_) {}
+        }
+      },
+      cancel() {
+        console.warn('[agent:sse] client_aborted');
+        waitUntilAgentSseLifecycle(env, ctx, 'client_aborted', { via: 'cancel' });
+        upstreamReader.cancel().catch(() => {});
+        console.warn('[agent:sse] provider_reader_cancelled');
+      },
+    });
+
+    return new Response(readable, { headers: sseResponseHeaders() });
+  } catch (e) {
+    console.warn('[agent:sse] stream_error', JSON.stringify({ message: String(e && e.message ? e.message : e).slice(0, 200) }));
+    waitUntilAgentSseLifecycle(env, ctx, 'stream_error', { wrap: true });
+    return upstream;
+  }
+}
+
 /** Bash-safe single-quoted string for `sh -c` / PTY run. */
 function shellSingleQuoteForPty(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -12229,6 +14037,10 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   } = parsed;
   if (!message) return jsonResponse({ error: 'message required' }, 400);
 
+  if (await isAgentChatDisabled(env)) {
+    return respondAgentChatKillSwitchDisabled(env, ctx);
+  }
+
   // Phase 0: Preflight Classification
   const preflight = await preflightClassify(message, env);
   const { tier, intent, needsTools } = preflight;
@@ -12242,10 +14054,13 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
     return jsonResponse({ error: 'Invalid mode', allowed: ['ask', 'agent', 'plan', 'debug', 'auto'] }, 400);
   }
 
+  console.log('[agent:sse] request_start', JSON.stringify({ mode, requested_model: modelParam }));
+  waitUntilAgentSseLifecycle(env, ctx, 'request_start', { mode, requested_model: String(modelParam || '') });
+
   let modelRow;
   try {
     modelRow = await env.DB.prepare(
-      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name
+      `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name, supports_tools
        FROM ai_models
        WHERE (id = ? OR model_key = ?) AND COALESCE(is_active, 0) = 1
        LIMIT 1`
@@ -12259,6 +14074,32 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
 
   if (!modelRow) return jsonResponse({ error: 'Unknown model' }, 400);
 
+  const msgSuggestsTools =
+    /\bd1_query\b|r2_[a-z0-9_]+|terminal_execute|github_file|workspace_search|mcp\.inneranimalmedia|agentsam_tool_call_log/i.test(
+      String(message || ''),
+    );
+  const toolHeavyModes = new Set(['agent', 'debug', 'plan']);
+  if (
+    env.DB &&
+    String(modelRow.api_platform || '').trim() === 'workers_ai' &&
+    toolHeavyModes.has(mode) &&
+    Number(modelRow.supports_tools) !== 1 &&
+    (needsTools || msgSuggestsTools)
+  ) {
+    try {
+      const fb = await env.DB.prepare(
+        `SELECT id, model_key, api_platform, provider, input_rate_per_mtok, output_rate_per_mtok, display_name, secret_key_name, supports_tools
+         FROM ai_models
+         WHERE COALESCE(is_active, 0) = 1 AND COALESCE(supports_tools, 0) = 1
+           AND api_platform IN ('gemini_api', 'openai')
+         ORDER BY CASE api_platform WHEN 'gemini_api' THEN 0 WHEN 'openai' THEN 1 ELSE 2 END
+         LIMIT 1`,
+      ).first();
+      if (fb) modelRow = fb;
+    } catch (escErr) {
+      console.warn('[agent/chat-sse] workers_ai tool-capable fallback skipped', escErr?.message ?? escErr);
+    }
+  }
 
   let modelRatesMap = {};
   try {
@@ -12279,6 +14120,26 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const providerLabel = String(modelRow.provider || apiPlatform || 'unknown');
   const provider = modelRow.provider || apiPlatform || 'unknown';
 
+  console.log(
+    '[agent:sse] provider_selected',
+    JSON.stringify({ provider: providerLabel, api_platform: apiPlatform, model_key: modelKey }),
+  );
+  waitUntilAgentSseLifecycle(env, ctx, 'provider_selected', {
+    provider: providerLabel,
+    api_platform: apiPlatform,
+    model_key: modelKey,
+    session_id: conversationId ? String(conversationId) : null,
+  });
+  if (apiPlatform === 'workers_ai') {
+    const reqTrim = String(modelParam || '').trim();
+    if (reqTrim && !reqTrim.startsWith('@cf/')) {
+      console.warn(
+        '[agent:sse] unexpected_workers_ai_selection',
+        JSON.stringify({ requested_model: reqTrim, resolved_model_key: modelKey }),
+      );
+    }
+  }
+
   const sseSupportedPlatforms = new Set(['anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'cursor', 'workers_ai']);
   if (!sseSupportedPlatforms.has(apiPlatform)) {
     return jsonResponse({ error: 'Unsupported api_platform', api_platform: apiPlatform, model: modelKey }, 400);
@@ -12287,17 +14148,42 @@ async function agentChatDirectSseHandler(env, request, ctx, secretFn) {
   const chatSseRunId = crypto.randomUUID();
 
   const tenantIdChatSse = ingestBypass
-    ? (env.TENANT_ID ? String(env.TENANT_ID).trim() : null)
+    ? null
     : resolveTenantIdForWorker(chatSseSession, env);
+  let billingGate = { allowed: true, billingSource: 'default', byokApiKey: null };
+  if (!ingestBypass && tenantIdChatSse && chatSseSession?.user_id && env.DB) {
+    const gate = await evaluatePlanForModelRequest(env, {
+      tenantId: tenantIdChatSse,
+      userId: chatSseSession.user_id,
+      modelKey,
+      apiPlatform,
+    });
+    if (!gate.allowed) {
+      return jsonResponse(gate.body, gate.status ?? 402);
+    }
+    billingGate = gate;
+  }
+  const envChat = envWithLlmKeyOverride(env, billingGate, apiPlatform);
   const skillWorkspaceKey = chatSseSession?.workspace_id ?? tenantIdChatSse ?? null;
   const IAM_SSE_BRAND_OUTPUT_POLICY = `## Brand and output policy (Inner Animal Media)
 - Do not use emojis in assistant replies, in files you create or edit (HTML, CSS, JavaScript, markdown, copy, etc.), or in user-visible UI text. Use plain words instead (for example "Hello" or "Looks good"). Only use emojis if the user explicitly asks for them.`;
 
   const messageHasSlashForSkillBody = String(message || '').includes('/');
 
-  const buildChatSseSystemPromptResolved = async () => {
+  const buildChatSseSystemPromptResolved = async (opts = {}) => {
     let promptOut = agentBaseSystem;
     try {
+      let memoryBlock = '';
+      if (!opts.skipMemory && tenantIdChatSse && env.DB) {
+        try {
+          memoryBlock = await loadAgentMemoryForPrompt(env, tenantIdChatSse, {
+            userMessage: message,
+            sessionId: conversationId || null,
+            agentId: agentAiIdSse || null,
+            workspaceId: skillWorkspaceKey || null,
+          });
+        } catch (_) { /* non-fatal */ }
+      }
       const promptLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
       const skillSql = message.includes('/')
         ? `SELECT name, description, content_markdown, slash_trigger
@@ -12388,6 +14274,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
       const partsSys = [];
       if (personaPrefixSse && String(personaPrefixSse).trim()) partsSys.push(String(personaPrefixSse).trim());
       if (agentBaseSystem) partsSys.push(agentBaseSystem);
+      if (memoryBlock && String(memoryBlock).trim()) partsSys.push(String(memoryBlock).trim());
       partsSys.push(toolsBlock);
       promptOut = partsSys.join('\n\n');
     } catch (e) {
@@ -12422,8 +14309,20 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         .bind(cacheHash)
         .first();
       if (cached?.compiled_context) {
-        chatSseSystemPrompt = cached.compiled_context;
-        const { tools: cachedPathTools } = await buildChatSseSystemPromptResolved();
+        let basePrompt = cached.compiled_context;
+        if (tenantIdChatSse && env.DB) {
+          try {
+            const mem = await loadAgentMemoryForPrompt(env, tenantIdChatSse, {
+              userMessage: message,
+              sessionId: conversationId || null,
+              agentId: agentAiIdSse || null,
+              workspaceId: skillWorkspaceKey || null,
+            });
+            if (mem && String(mem).trim()) basePrompt = `${basePrompt}\n\n${String(mem).trim()}`;
+          } catch (_) { /* keep cached prompt */ }
+        }
+        chatSseSystemPrompt = basePrompt;
+        const { tools: cachedPathTools } = await buildChatSseSystemPromptResolved({ skipMemory: true });
         lastLoadedToolsSse = cachedPathTools;
         try {
           const savedTok = Number(cached.token_count) || estimateCompiledContextTokens(cached.compiled_context);
@@ -12521,10 +14420,10 @@ You can delegate tasks directly to Claude Code running on the host machine by st
     let toolResp = null;
     try {
       if (apiPlatform === 'anthropic_api') {
-        const ak = secretFn('ANTHROPIC_API_KEY') ?? env.ANTHROPIC_API_KEY;
+        const ak = secretFn('ANTHROPIC_API_KEY') ?? envChat.ANTHROPIC_API_KEY;
         if (ak) {
           toolResp = await chatWithToolsAnthropic(
-            env,
+            envChat,
             request,
             apiPlatform,
             modelKey,
@@ -12539,10 +14438,10 @@ You can delegate tasks directly to Claude Code running on the host machine by st
           );
         }
       } else if (apiPlatform === 'openai') {
-        const ok = secretFn('OPENAI_API_KEY') ?? env.OPENAI_API_KEY;
+        const ok = secretFn('OPENAI_API_KEY') ?? envChat.OPENAI_API_KEY;
         if (ok) {
           toolResp = await chatWithToolsOpenAI(
-            env,
+            envChat,
             chatSseSystemPrompt,
             apiMessagesForTools,
             modelRow,
@@ -12554,7 +14453,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
         }
       } else if (apiPlatform === 'gemini_api' || apiPlatform === 'vertex_ai') {
         toolResp = await chatWithToolsGoogle(
-          env,
+          envChat,
           chatSseSystemPrompt,
           apiMessagesForTools,
           modelRow,
@@ -12581,7 +14480,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'anthropic_api') {
     return chatWithToolsAnthropic(
-      env,
+      envChat,
       request,
       apiPlatform,
       modelKey,
@@ -12598,7 +14497,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'gemini_api' || provider === 'gemini' || apiPlatform === 'vertex_ai') {
     return chatWithToolsGoogle(
-      env,
+      envChat,
       chatSseSystemPrompt,
       parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
       modelRow,
@@ -12617,7 +14516,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'openai' || apiPlatform === 'cursor') {
     return chatWithToolsOpenAI(
-      env,
+      envChat,
       chatSseSystemPrompt,
       parsed.message ? [{ role: 'user', content: parsed.message }] : messages,
       modelRow,
@@ -12636,7 +14535,7 @@ You can delegate tasks directly to Claude Code running on the host machine by st
 
   if (apiPlatform === 'workers_ai') {
     const messages = [{ role: 'user', content: hasMedia ? flattenUserContentForWorkersAi(message, jsonImages, chatAttachments) : message }];
-  return streamWorkersAI(env, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
+    return streamWorkersAI(envChat, chatSseSystemPrompt, messages, modelRow, conversationId, agentAiIdSse, ctx, chatSseRunId, { tenantId: tenantIdChatSse }, lastLoadedToolsSse);
   }
 }
 
@@ -13409,74 +15308,10 @@ async function handleIamExplorerApi(request, url, env, _ctx) {
     }
   }
 
-  if (pathLower === '/api/workspaces/list' && method === 'GET') {
+  if (pathLower.startsWith('/api/workspaces') || pathLower.startsWith('/api/workspace')) {
     const authUser = await getAuthUser(request, env);
-    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    try {
-      const { results } = await env.DB.prepare(
-        `SELECT w.id, w.name, w.domain, w.status, w.theme_id, w.handle,
-          (SELECT p.id FROM workspace_projects p WHERE p.workspace_id = w.id LIMIT 1) AS project_id
-         FROM workspaces w WHERE COALESCE(w.is_archived, 0) = 0 ORDER BY w.created_at DESC`
-      ).all();
-      const rows = (results || []).map((r) => ({ ...r, worker_id: null }));
-      return jsonResponse({ workspaces: rows });
-    } catch (e) {
-      return jsonResponse({ error: String(e?.message || e) }, 500);
-    }
-  }
-
-  const wsIdMatch = path.match(/^\/api\/workspaces\/([^/]+)$/i);
-  if (wsIdMatch && (method === 'GET' || method === 'PATCH')) {
-    const wsId = decodeURIComponent(wsIdMatch[1] || '').trim();
-    if (!wsId || wsId === 'current') {
-      return jsonResponse({ error: 'Not found' }, 404);
-    }
-    const authUser = await getAuthUser(request, env);
-    if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-    if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
-    if (method === 'GET') {
-      try {
-        const row = await env.DB.prepare(
-          `SELECT w.*, ws.settings_json AS workspace_settings_json, ws.theme_id AS settings_theme_id
-           FROM workspaces w
-           LEFT JOIN workspace_settings ws ON ws.workspace_id = w.id
-           WHERE w.id = ?`
-        ).bind(wsId).first();
-        if (!row) return jsonResponse({ error: 'Not found' }, 404);
-        return jsonResponse({ workspace: row });
-      } catch (e) {
-        return jsonResponse({ error: String(e?.message || e) }, 500);
-      }
-    }
-    if (method === 'PATCH') {
-      try {
-        const body = await request.json().catch(() => ({}));
-        const name = body.name != null ? String(body.name) : undefined;
-        const theme_id = body.theme_id != null ? body.theme_id : undefined;
-        const status = body.status != null ? String(body.status) : undefined;
-        const sets = [];
-        const binds = [];
-        if (name !== undefined) {
-          sets.push('name = ?');
-          binds.push(name);
-        }
-        if (theme_id !== undefined) {
-          sets.push('theme_id = ?');
-          binds.push(theme_id);
-        }
-        if (status !== undefined) {
-          sets.push('status = ?');
-          binds.push(status);
-        }
-        if (sets.length === 0) return jsonResponse({ error: 'No patchable fields (name, theme_id, status)' }, 400);
-        binds.push(wsId);
-        await env.DB.prepare(`UPDATE workspaces SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...binds).run();
-        return jsonResponse({ ok: true, id: wsId });
-      } catch (e) {
-        return jsonResponse({ error: String(e?.message || e) }, 500);
-      }
-    }
+    const modularWs = await handleWorkspaceApi(request, url, env, ctx, authUser);
+    if (modularWs) return modularWs;
   }
 
   if (pathLower === '/api/r2/list' && method === 'GET') {
@@ -14883,7 +16718,7 @@ function riskLevelFromCommandProposalText(cmd) {
 
 const CODEBASE_REINDEX_CHUNK_SIZE = 500;
 const CODEBASE_REINDEX_OVERLAP = 50;
-const CODEBASE_REINDEX_PROJECT_ID = 'inneranimalmedia';
+const CODEBASE_REINDEX_PROJECT_ID = IAM_DEFAULT_WORKSPACE_ID;
 const CODEBASE_REINDEX_MAX_FILES = 500;
 const CODEBASE_REINDEX_MAX_CHUNKS = 4000;
 const CODEBASE_SKIP_EXT = /\.(png|jpe?g|gif|webp|ico|woff2?|ttf|eot|pdf|zip|mp4|mp3|bin)$/i;
@@ -14941,15 +16776,13 @@ async function reindexCodebaseFromDocsBucket(env) {
       for (const chunk of parts) {
         if (chunksInserted >= CODEBASE_REINDEX_MAX_CHUNKS) break;
         ci += 1;
-        const modelResp = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [chunk] });
-        const raw = modelResp?.data ?? modelResp;
-        const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
+        const vector = await generateEmbedding(env, chunk);
         if (!vector || !Array.isArray(vector)) continue;
         const vecLiteral = '[' + vector.join(',') + ']';
         const title = `${key} [chunk ${ci}]`;
         await client.query(
-          `INSERT INTO documents (source, title, content, embedding, project_id) VALUES ($1, $2, $3, $4::vector, $5)`,
-          [source, title, chunk, vecLiteral, CODEBASE_REINDEX_PROJECT_ID]
+          `INSERT INTO documents (source, title, content, embedding, project_id, workspace_id) VALUES ($1, $2, $3, $4::vector, $5, $6)`,
+          [source, title, chunk, vecLiteral, CODEBASE_REINDEX_PROJECT_ID, CODEBASE_REINDEX_PROJECT_ID]
         );
         chunksInserted += 1;
       }
@@ -14970,7 +16803,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!session?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (!env.DB) return jsonResponse({ error: 'DB not configured' }, 503);
       const userId = session.user_id;
-      const workspaceId = session.workspace_id || tenantIdFromEnv(env) || 'ws_inneranimalmedia';
+      const workspaceId = session.workspace_id != null && String(session.workspace_id).trim() ? String(session.workspace_id).trim() : null;
+      if (!workspaceId) return jsonResponse({ error: 'Unauthorized' }, 401);
       const { results } = await env.DB.prepare(
         `SELECT
            slug,
@@ -15199,6 +17033,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       let mcp_tool_errors = [];
       let audit_failures = [];
       let worker_errors = [];
+      let terminal_failures = [];
       try {
         const mcpQ = await env.DB.prepare(
           `SELECT id, tool_name, status, error_message, session_id, created_at, invoked_at
@@ -15238,11 +17073,29 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       } catch (e) {
         console.warn('[api/agent/problems] worker_analytics_errors', e?.message ?? e);
       }
+      try {
+        const tenantIdProblems = authUser.tenant_id || tenantIdFromEnv(env);
+        if (tenantIdProblems) {
+          const tfQ = await env.DB.prepare(
+            `SELECT th.content, th.exit_code, th.triggered_by,
+              th.recorded_at, ts.id AS session_id
+             FROM terminal_history th
+             JOIN terminal_sessions ts ON ts.id = th.terminal_session_id
+             WHERE th.exit_code != 0 AND th.exit_code IS NOT NULL
+               AND ts.tenant_id = ?
+             ORDER BY th.recorded_at DESC LIMIT 20`
+          ).bind(tenantIdProblems).all();
+          terminal_failures = tfQ.results || [];
+        }
+      } catch (e) {
+        console.warn('[api/agent/problems] terminal_history', e?.message ?? e);
+      }
       return jsonResponse({
         checked_at: checkedAt,
         mcp_tool_errors,
         audit_failures,
         worker_errors,
+        terminal_failures,
       });
     }
 
@@ -15596,7 +17449,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const batch = await env.DB.batch([
           env.DB.prepare("SELECT id, name, role_name, mode FROM agentsam_ai WHERE status='active' ORDER BY CASE id WHEN 'ai_sam_v1' THEN 0 ELSE 1 END, name"),
           env.DB.prepare("SELECT id, service_name, service_type, endpoint_url, authentication_type, token_secret_name, is_active, health_status FROM mcp_services WHERE is_active=1 ORDER BY service_name"),
-          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens FROM ai_models WHERE is_active=1 AND show_in_picker=1 ORDER BY sort_order ASC, input_rate_per_mtok ASC"),
+          env.DB.prepare("SELECT id, provider, model_key, display_name, input_rate_per_mtok, output_rate_per_mtok, context_max_tokens, picker_group FROM ai_models WHERE COALESCE(is_active,0)=1 AND COALESCE(show_in_picker,0)=1 AND COALESCE(picker_eligible,1)=1 ORDER BY sort_order ASC, display_name ASC"),
           env.DB.prepare("SELECT id, session_type, status, started_at FROM agent_sessions WHERE status='active' ORDER BY updated_at DESC LIMIT 20"),
           env.DB.prepare("SELECT id, role, content, variant, ab_weight, agent_id FROM iam_agent_sam_prompts WHERE is_active=1"),
         ]);
@@ -15721,19 +17574,64 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       if (!session_id || !tunnel_url) {
         return new Response(JSON.stringify({ error: 'session_id and tunnel_url required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
-      const regTid = tenantIdFromEnv(env);
-      const regUid = body?.user_id != null && String(body.user_id).trim() !== ''
-        ? String(body.user_id).trim()
-        : 'system_terminal';
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      const regTid = authUser.tenant_id || tenantIdFromEnv(env);
+      const regUid = String(authUser.id || '').trim();
+      const regWorkspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
       if (!regTid) {
-        return new Response(JSON.stringify({ error: 'TENANT_ID not configured on worker' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ error: 'Tenant not resolved for terminal session' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!regUid) {
+        return new Response(JSON.stringify({ error: 'User not resolved for terminal session' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       }
       try {
+        const bootstrap = await env.DB.prepare(
+          `SELECT user_id, capabilities_json, allowed_execution_modes_json
+           FROM agentsam_bootstrap
+           WHERE user_id = ? AND COALESCE(is_active, 1) = 1
+           LIMIT 1`
+        ).bind(regUid).first();
+        if (!bootstrap) {
+          return new Response(JSON.stringify({ error: 'Terminal not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        let capabilities = {};
+        let executionModes = [];
+        try { capabilities = JSON.parse(bootstrap.capabilities_json || '{}'); } catch (_) { capabilities = {}; }
+        try { executionModes = JSON.parse(bootstrap.allowed_execution_modes_json || '[]'); } catch (_) { executionModes = []; }
+        if (capabilities.can_run_pty !== true) {
+          return new Response(JSON.stringify({ error: 'Terminal not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (!Array.isArray(executionModes) || !executionModes.includes('pty')) {
+          return new Response(JSON.stringify({ error: 'Terminal execution mode not permitted' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+        }
         await env.DB.prepare(
-          `INSERT INTO terminal_sessions (id, tenant_id, workspace_id, user_id, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, '', unixepoch(), unixepoch())
-           ON CONFLICT(id) DO UPDATE SET tunnel_url=excluded.tunnel_url, status='active', workspace_id=excluded.workspace_id, updated_at=unixepoch()`
-        ).bind(session_id, regTid, IAM_DEFAULT_WORKSPACE_ID, regUid, tunnel_url, shell, cwd, cols, rows).run();
+          `UPDATE terminal_sessions
+           SET status = 'closed', closed_at = unixepoch(), updated_at = unixepoch()
+           WHERE user_id = 'system_terminal'
+             AND workspace_id = ?
+             AND created_at < (unixepoch() - 3600)`
+        ).bind(regWorkspaceId).run();
+        await env.DB.prepare(
+          `UPDATE agentsam_mcp_allowlist
+           SET workspace_id = ?
+           WHERE workspace_id = '' AND user_id = 'au_871d920d1233cbd1'`
+        ).bind(regWorkspaceId).run();
+        const tokenHash = await sha256hex(crypto.randomUUID());
+        await env.DB.prepare(
+          `INSERT INTO terminal_sessions
+             (id, tenant_id, workspace_id, user_id, label, tunnel_url, status, shell, cwd, cols, rows, auth_token_hash, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'interactive', ?, 'active', ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+           ON CONFLICT(id) DO UPDATE SET
+             tenant_id=excluded.tenant_id,
+             workspace_id=excluded.workspace_id,
+             user_id=excluded.user_id,
+             label='interactive',
+             tunnel_url=excluded.tunnel_url,
+             status='active',
+             auth_token_hash=excluded.auth_token_hash,
+             updated_at=unixepoch()`
+        ).bind(session_id, regTid, regWorkspaceId, regUid, tunnel_url, shell, cwd, cols, rows, tokenHash).run();
       } catch (e) {
         console.error('[terminal/session/register]', e.message);
         return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
@@ -15746,25 +17644,18 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/terminal/session/resume' && method === 'GET') {
       const authUser = await getAuthUser(request, env);
       if (!authUser) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-      const userId = authUser.id;
+      const userId = String(authUser.id || '').trim();
+      const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+      if (!tenantId || !userId) return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       let session;
       try {
         session = await env.DB.prepare(
           `SELECT id, tunnel_url, shell, cwd, cols, rows
            FROM terminal_sessions
-           WHERE user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
-           ORDER BY updated_at DESC
+           WHERE tenant_id = ? AND user_id = ? AND status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
+           ORDER BY created_at DESC
            LIMIT 1`
-        ).bind(userId).first();
-        if (!session) {
-          session = await env.DB.prepare(
-            `SELECT id, tunnel_url, shell, cwd, cols, rows
-             FROM terminal_sessions
-             WHERE status = 'active' AND tunnel_url IS NOT NULL AND tunnel_url != ''
-             ORDER BY updated_at DESC
-             LIMIT 1`
-          ).first();
-        }
+        ).bind(tenantId, userId).first();
       } catch (e) {
         console.error('[terminal/session/resume]', e.message);
         return new Response(JSON.stringify({ resumable: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -15781,42 +17672,56 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
 
+    if (pathLower === '/api/terminal/sessions' && method === 'GET') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+      const userId = String(authUser.id || '').trim();
+      if (!tenantId || !userId) return jsonResponse({ sessions: [] });
+      const rows = await env.DB.prepare(
+        `SELECT id, tenant_id, workspace_id, user_id, label, status, shell, cwd,
+          tunnel_url, cols, rows, last_input_at, last_output_at, last_command,
+          last_exit_code, created_at, updated_at
+         FROM terminal_sessions
+         WHERE tenant_id = ? AND user_id = ? AND status = 'active'
+         ORDER BY created_at DESC
+         LIMIT 20`
+      ).bind(tenantId, userId).all();
+      return jsonResponse({ sessions: rows.results || [] });
+    }
+
     // One-hop terminal: return wss URL for logged-in dashboard only (avoids Worker fetch() WebSocket proxy).
     if (pathLower === '/api/agent/terminal/socket-url' && method === 'GET') {
       const session = await getSession(env, request);
       if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
       const authUser = await getAuthUser(request, env);
-      const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
-      const secret = (env.TERMINAL_SECRET || '').trim();
-      if (!httpsUrl || !secret) return jsonResponse({ error: 'Terminal not configured' }, 503);
-      let wssUrl = httpsUrl;
-      if (httpsUrl.startsWith('https://')) wssUrl = 'wss://' + httpsUrl.slice(8);
-      else if (httpsUrl.startsWith('http://')) wssUrl = 'ws://' + httpsUrl.slice(7);
-      else if (!httpsUrl.startsWith('wss://') && !httpsUrl.startsWith('ws://')) wssUrl = 'wss://' + httpsUrl.replace(/^\/+/, '');
-      const sep = wssUrl.includes('?') ? '&' : '?';
-      let themeSlug = 'meaux-storm-gray';
-      if (authUser?.id && env.DB) {
-        try {
-          const row = await env.DB.prepare('SELECT theme FROM user_settings WHERE user_id = ? LIMIT 1').bind(authUser.id).first();
-          const t = row?.theme ? normalizeThemeSlug(row.theme) : null;
-          if (t) themeSlug = t;
-        } catch (_) { }
+      if (!authUser || !authUserIsSuperadmin(authUser)) {
+        return jsonResponse({ terminal_enabled: false });
       }
-      // Direct PTY connection — AGENT_SESSION DO proxy removed (DO has no terminal bridge)
-      const ptyToken = (env.PTY_AUTH_TOKEN || secret).trim();
-      const sep2 = wssUrl.includes('?') ? '&' : '?';
-      const finalUrl = `${wssUrl}${sep2}token=${encodeURIComponent(ptyToken)}&theme_slug=${encodeURIComponent(themeSlug)}`;
-      return jsonResponse({ url: finalUrl });
+      if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
+      const origin = new URL(request.url).origin;
+      const wsOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
+      return jsonResponse({ terminal_enabled: true, url: `${wsOrigin}/api/agent/terminal/ws` });
     }
 
     if (pathLower === '/api/agent/terminal/config-status' && method === 'GET') {
       const session = await getSession(env, request);
       if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const authUser = await getAuthUser(request, env);
+      if (!authUser || !authUserIsSuperadmin(authUser)) {
+        return jsonResponse({
+          terminal_enabled: false,
+          terminal_configured: false,
+          direct_wss_available: false,
+        });
+      }
+      if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
       const httpsUrl = (env.TERMINAL_WS_URL || '').trim();
       const secret = (env.TERMINAL_SECRET || '').trim();
       return jsonResponse({
+        terminal_enabled: true,
         terminal_configured: !!(httpsUrl && secret),
-        direct_wss_available: !!(httpsUrl && secret),
+        direct_wss_available: false,
       });
     }
 
@@ -15834,6 +17739,12 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
 
     if (pathLower === '/api/agent/terminal/run' && method === 'POST') {
       try {
+        const authUser = await getAuthUser(request, env);
+        if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        if (!authUserIsSuperadmin(authUser)) {
+          return jsonResponse({ terminal_enabled: false, error: 'Forbidden' }, 403);
+        }
+        if (ctx?.waitUntil) ctx.waitUntil(bumpWorkSession(env, authUser.id, authUser.tenant_id || tenantIdFromEnv(env)).catch(() => { }));
         const body = await request.json().catch(() => ({}));
         const command = typeof body?.command === 'string' ? body.command.trim() : '';
         const session_id = body?.session_id ?? null;
@@ -16307,12 +18218,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
       try {
         const { results } = await env.DB.prepare(
           `SELECT id, display_name AS name, provider, model_key, api_platform, show_in_picker,
-                  input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens
+                  picker_eligible, picker_group,
+                  input_rate_per_mtok, output_rate_per_mtok, sort_order, context_max_tokens,
+                  size_class, supports_tools, supports_vision
            FROM ai_models
            WHERE COALESCE(is_active, 0) = 1
-             AND (size_class IS NULL OR size_class NOT IN ('image', 'audio', 'embedding'))
-             AND api_platform IN ('anthropic_api', 'gemini_api', 'vertex_ai', 'openai', 'workers_ai', 'cursor', 'ollama')
-             ${showInPicker ? 'AND show_in_picker = 1' : ''}
+             AND COALESCE(picker_eligible, 1) = 1
+             ${showInPicker ? 'AND COALESCE(show_in_picker, 0) = 1' : ''}
            ORDER BY sort_order ASC, display_name ASC`
         ).all();
         return jsonResponse(results || []);
@@ -16341,6 +18253,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/sessions') {
+      const authUser = await getAuthUser(request, env);
+      if (!authUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+      const sessionTenantId =
+        authUser.tenant_id != null && String(authUser.tenant_id).trim()
+          ? String(authUser.tenant_id).trim()
+          : null;
+      if (!sessionTenantId) return jsonResponse({ error: 'Unauthorized' }, 401);
       if (method === 'POST') {
         const body = await request.json().catch(() => ({}));
         const id = crypto.randomUUID();
@@ -16367,11 +18286,10 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         }
         await env.DB.prepare(
           "INSERT INTO agent_sessions (id, tenant_id, name, session_type, status, state_json, r2_key, started_at, updated_at, project_id) VALUES (?,?,?,?,?,?,?,?,?,?)"
-        ).bind(id, env.TENANT_ID || 'system', sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
+        ).bind(id, sessionTenantId, sessionName, body.session_type || 'chat', 'active', '{}', sessionR2Key, now, now, PROJECT_ID).run();
         if (env.SESSION_CACHE) await env.SESSION_CACHE.put(`session:${id}`, JSON.stringify({ id, status: 'active' }), { expirationTtl: 86400 });
         return jsonResponse({ id, status: 'active' });
       }
-      const tenantId = env.TENANT_ID || 'system';
       const { results } = await env.DB.prepare(
         `SELECT s.id, s.session_type, s.status, s.state_json, s.started_at, s.r2_key,
          COALESCE(s.name, ac.name, ac.title, 'New Conversation') as name,
@@ -16382,7 +18300,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
          WHERE s.tenant_id = ?
          ORDER BY s.updated_at DESC
          LIMIT 50`
-      ).bind(tenantId).all();
+      ).bind(sessionTenantId).all();
       return new Response(JSON.stringify(results || []), {
         status: 200,
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
@@ -16673,7 +18591,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     }
 
     if (pathLower === '/api/agent/chat' && method === 'POST') {
-      return agentChatDirectSseHandler(env, request, ctx, secretFn);
+      const chatSseResp = await agentChatDirectSseHandler(env, request, ctx, secretFn);
+      return wrapAgentChatSseForBrowser(chatSseResp, request, env, ctx);
     }
 
     if (pathLower === '/api/agent/do-history' && method === 'GET') {
@@ -16869,7 +18788,7 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const payload = body.payload != null ? body.payload : {};
         const planId = body.plan_id || null;
         if (!sessionId) return jsonResponse({ error: 'session_id or conversation_id required' }, 400);
-        const tenantId = env.TENANT_ID || 'system';
+        const tenantId = 'system';
         const { results: existing } = await env.DB.prepare(
           'SELECT COALESCE(MAX(position), 0) as max_pos FROM agent_request_queue WHERE session_id = ?'
         ).bind(sessionId).all();
@@ -17076,8 +18995,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -17113,8 +19032,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -17157,8 +19076,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
         const sameOrigin = originOrReferer.startsWith('https://inneranimalmedia.com') || originOrReferer.startsWith('https://www.inneranimalmedia.com');
         if (sameOrigin) {
           const row = await env.DB.prepare(
-            `SELECT id FROM auth_users WHERE LOWER(id) IN (?, ?, ?) LIMIT 1`
-          ).bind('info@inneranimals.com', 'sam@inneranimalmedia.com', 'inneranimalclothing@gmail.com').first(); // TODO: replace with superadmin DB lookup
+            `SELECT id FROM auth_users WHERE COALESCE(is_superadmin, 0) = 1 ORDER BY updated_at DESC LIMIT 1`
+          ).first(); // Non-cookie same-origin fallback: superadmin only (D1-driven)
           if (row) authUser = { id: row.id };
         }
       }
@@ -17333,7 +19252,8 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
     if (pathLower === '/api/agent/bootstrap' && method === 'GET') {
       try {
         const session = await getSession(env, request);
-        const userId = session?.user_id || 'system';
+        if (!session?.user_id) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const userId = session.user_id;
         const cacheKey = 'bootstrap_' + userId;
         if (env.DB) {
           const cached = await env.DB.prepare(
@@ -17445,13 +19365,13 @@ async function handleAgentApi(request, url, env, ctx, secretFn) {
  * Start an MCP minion workflow run or return a dry-run preview. Shared by POST /api/mcp/workflows/:id/run
  * and the Agent Sam /workflow slash builtin (avoids Worker self-fetch, which can fail with 522).
  */
-async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run) {
-  const MCP_WF_TENANT = tenantIdFromEnv(env) || 'global';
+async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_by, dry_run, tenantId) {
+  const MCP_WF_TENANT = tenantId != null && String(tenantId).trim() ? String(tenantId).trim() : null;
+  if (!MCP_WF_TENANT) return { error: 'Unauthorized', status: 401 };
+  await ensureMcpWorkflowStepDefaults(env);
   const sid = session_id != null ? String(session_id) : null;
   const trig = triggered_by != null ? String(triggered_by) : 'manual';
-  const wf = await env.DB.prepare(
-    `SELECT * FROM mcp_workflows WHERE id = ? AND status = 'active' AND tenant_id = ?`
-  ).bind(workflow_id, MCP_WF_TENANT).first();
+  const wf = await getAgentSamWorkflow(env.DB, workflow_id, MCP_WF_TENANT);
 
   if (!wf) return { error: 'Workflow not found or not active' };
 
@@ -17482,20 +19402,344 @@ async function triggerWorkflowRun(env, ctx, workflow_id, session_id, triggered_b
     return { error: 'Async execution context not available' };
   }
 
-  const run = await env.DB.prepare(
-    `INSERT INTO mcp_workflow_runs
-       (workflow_id, session_id, tenant_id, status, triggered_by, started_at)
-     VALUES (?, ?, ?, 'running', ?, unixepoch())
-     RETURNING *`
-  ).bind(workflow_id, sid, MCP_WF_TENANT, trig).first();
+  const runId = `wfr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const workflowKey = wf.workflow_key != null ? String(wf.workflow_key) : String(workflow_id);
+  const displayName =
+    wf.display_name != null ? String(wf.display_name) : wf.name != null ? String(wf.name) : workflowKey;
 
-  await env.DB.prepare(
-    `UPDATE mcp_workflows SET run_count = run_count + 1, last_run_at = unixepoch(),
-     updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+  const ins = await env.DB.prepare(
+    `INSERT INTO ${AGENTSAM_WORKFLOW_RUNS_TABLE}
+       (id, workflow_id, session_id, tenant_id, status, triggered_by, started_at, workflow_key, display_name)
+     VALUES (?, ?, ?, ?, 'running', ?, unixepoch(), ?, ?)`
+  ).bind(runId, workflow_id, sid, MCP_WF_TENANT, trig, workflowKey, displayName).run();
+
+  try {
+    assertD1Write(ins, 'agentsam_workflow_runs insert');
+  } catch (e) {
+    return { error: String(e?.message || e), status: 500 };
+  }
+
+  let supRow;
+  try {
+    supRow = await createSupabaseWorkflowRun(env, {
+      d1_workflow_run_id: runId,
+      workflow_id: String(workflow_id),
+      workflow_key: workflowKey,
+      display_name: displayName,
+      tenant_id: MCP_WF_TENANT,
+      session_id: sid,
+      status: 'running',
+      triggered_by: trig,
+      started_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    const failRun = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?, completed_at = unixepoch() WHERE id = ?`
+    ).bind(`supabase_sync_start: ${msg}`, runId).run();
+    assertD1Write(failRun, 'agentsam_workflow_runs fail after supabase insert error');
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Supabase sync failed: ${msg}`, status: 503, sync_error: msg };
+  }
+
+  const supabaseRunId = String(supRow.id);
+
+  try {
+    await markWorkflowRunSupabaseSynced(env, runId, supabaseRunId);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: `d1_sync_meta_failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (e2) {
+      const e2m = String(e2?.message || e2);
+      await markWorkflowRunSupabaseFailed(env, runId, `${msg}; supabase_rollback: ${e2m}`);
+      return { error: `Failed to record Supabase id on D1: ${msg}`, status: 500, sync_error: `${msg} | ${e2m}` };
+    }
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Failed to record Supabase id on D1: ${msg}`, status: 500, sync_error: msg };
+  }
+
+  const bump = await env.DB.prepare(
+    `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET run_count = run_count + 1, last_run_at = datetime('now'),
+     updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
   ).bind(workflow_id, MCP_WF_TENANT).run();
 
-  ctx.waitUntil(executeWorkflowSteps(env, wf, run.id, sid));
-  return { run_id: run.id, status: 'running' };
+  try {
+    assertD1Write(bump, 'agentsam_mcp_workflows run_count');
+  } catch (e) {
+    const msg = String(e?.message || e);
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: `run_count_bump_failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (e2) {
+      const e2m = String(e2?.message || e2);
+      await markWorkflowRunSupabaseFailed(env, runId, `${msg}; supabase_note: ${e2m}`);
+      return {
+        error: `Workflow run started but definition bump failed: ${msg}`,
+        status: 500,
+        sync_error: `${msg} | ${e2m}`,
+      };
+    }
+    await markWorkflowRunSupabaseFailed(env, runId, msg);
+    return { error: `Workflow run started but definition bump failed: ${msg}`, status: 500, sync_error: msg };
+  }
+
+  ctx.waitUntil(executeWorkflowSteps(env, wf, runId, sid, supabaseRunId));
+  return { run_id: runId, status: 'running' };
+}
+
+const MCP_WORKFLOW_STEP_DEFAULTS = {
+  wf_d1_schema_audit: [
+    { tool: 'd1_query', params: { sql: "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name" } },
+  ],
+  wf_cost_telemetry_report: [
+    { tool: 'd1_query', params: { sql: 'SELECT provider, SUM(total_cost_usd) as cost, COUNT(*) as calls FROM agent_telemetry GROUP BY provider ORDER BY cost DESC' } },
+  ],
+  wf_table_health_report: [
+    { tool: 'd1_query', params: { sql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name" } },
+    { tool: 'd1_query', params: { sql: "SELECT COUNT(*) as rows, 'terminal_sessions' as tbl FROM terminal_sessions UNION ALL SELECT COUNT(*), 'mcp_tool_calls' FROM mcp_tool_calls UNION ALL SELECT COUNT(*), 'agent_telemetry' FROM agent_telemetry" } },
+  ],
+  wf_db_cleanup: [
+    { tool: 'd1_query', params: { sql: "UPDATE terminal_sessions SET status='closed' WHERE user_id='system_terminal' AND created_at < (unixepoch()-3600)" } },
+    { tool: 'd1_query', params: { sql: "DELETE FROM mcp_tool_calls WHERE created_at < datetime('now','-30 days')" } },
+  ],
+  wf_mcp_auth_token_rotate: [
+    { tool: 'terminal_execute', params: { command: 'npx wrangler secret put MCP_AUTH_TOKEN --name inneranimalmedia' }, requires_approval: true },
+  ],
+};
+
+let mcpWorkflowDefaultsEnsured = false;
+
+async function ensureMcpWorkflowStepDefaults(env) {
+  if (mcpWorkflowDefaultsEnsured || !env?.DB) return;
+  mcpWorkflowDefaultsEnsured = true;
+  for (const [id, steps] of Object.entries(MCP_WORKFLOW_STEP_DEFAULTS)) {
+    try {
+      await env.DB.prepare(
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS}
+         SET steps_json = ?
+         WHERE id = ?
+           AND (steps_json IS NULL OR TRIM(steps_json) = '' OR TRIM(steps_json) = '[]')`
+      ).bind(JSON.stringify(steps), id).run();
+    } catch (e) {
+      console.warn('[mcp workflow defaults]', id, e?.message ?? e);
+    }
+  }
+}
+
+const AGENTSAM_DB_QUERY_DEFAULTS = {
+  sc_agents: "SELECT id, slug, display_name, allowed_tool_globs FROM agentsam_subagent_profile WHERE is_active=1 ORDER BY id",
+  sc_model: "SELECT id, provider, model_key, display_name FROM ai_models WHERE is_active=1 ORDER BY provider, display_name",
+  sc_memory: "SELECT key, value_text, created_at FROM context_memory WHERE workspace_id=$workspace_id ORDER BY created_at DESC LIMIT 20",
+  sc_tools: "SELECT tool_name, tool_category, description FROM mcp_registered_tools WHERE enabled=1 ORDER BY tool_category, tool_name",
+  sc_cost: "SELECT SUM(total_cost_usd) as total, COUNT(*) as calls FROM agent_telemetry WHERE tenant_id=$tenant_id AND created_at > datetime('now','-7 days')",
+  sc_status: "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1",
+  sc_ollama: "SELECT id, model_key, display_name, is_active FROM ai_models WHERE provider='ollama'",
+  sc_assign: "SELECT * FROM course_assignments WHERE user_id=$user_id ORDER BY due_date ASC LIMIT 5",
+  sc_courses: "SELECT * FROM course_enrollments WHERE user_id=$user_id ORDER BY created_at DESC",
+  sc_submit: "SELECT * FROM course_submissions WHERE user_id=$user_id ORDER BY submitted_at DESC LIMIT 10",
+};
+
+let agentsamSlashSqlDefaultsEnsured = false;
+
+async function ensureAgentsamSlashCommandSqlDefaults(env) {
+  if (agentsamSlashSqlDefaultsEnsured || !env?.DB) return;
+  agentsamSlashSqlDefaultsEnsured = true;
+  for (const [slug, sql] of Object.entries(AGENTSAM_DB_QUERY_DEFAULTS)) {
+    try {
+      await env.DB.prepare(
+        `UPDATE agentsam_slash_commands
+         SET handler_sql = ?
+         WHERE slug = ?
+           AND handler_type = 'db_query'
+           AND (handler_sql IS NULL OR TRIM(handler_sql) = '')`
+      ).bind(sql, slug).run();
+    } catch (e) {
+      console.warn('[agentsam slash sql default]', slug, e?.message ?? e);
+    }
+  }
+}
+
+function bindAgentsamSessionSql(sql, session) {
+  const values = {
+    tenant_id: session?.tenant_id || tenantIdFromEnv({}) || null,
+    workspace_id: session?.workspace_id || IAM_DEFAULT_WORKSPACE_ID,
+    user_id: session?.id || null,
+  };
+  const binds = [];
+  const preparedSql = String(sql || '').replace(/\$(tenant_id|workspace_id|user_id)\b/g, (_, key) => {
+    binds.push(values[key]);
+    return '?';
+  });
+  return { preparedSql, binds };
+}
+
+function resolveSubagentProfileSlug(commandSlug, args, session) {
+  if (commandSlug === 'spawn' && args[0]) return String(args[0]).trim();
+  const samMap = {
+    check: 'codex-default',
+    boilerplate: 'ollama-boilerplate',
+    free: 'toolbox',
+    analyze: 'analyst',
+    cleanup: 'devops',
+    tablehealth: 'd1-audit',
+  };
+  const connorMap = { check: 'code-check' };
+  const isConnor = String(session?.email || session?.id || '').toLowerCase().includes('connor');
+  return (isConnor && connorMap[commandSlug]) || samMap[commandSlug] || '';
+}
+
+async function executeAgentsamSlashCommand(request, env, ctx) {
+  try {
+    const cmdRunT0 = Date.now();
+    await ensureAgentsamSlashCommandSqlDefaults(env);
+    const authUser = await getAuthUser(request, env);
+    if (!authUser) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
+    const body = await request.json().catch(() => ({}));
+    const commandName = String(body.command_name || body.name || body.slug || body.id || '').replace(/^\//, '').trim();
+    const parameters = body.parameters && typeof body.parameters === 'object' ? body.parameters : (body.args && typeof body.args === 'object' ? body.args : {});
+    const rawArgs = String(parameters.raw || body.raw || '').trim();
+    const args = Array.isArray(body.args) ? body.args.map((v) => String(v)) : rawArgs ? rawArgs.split(/\s+/).filter(Boolean) : [];
+    if (!commandName) return jsonResponse({ success: false, error: 'command_name required' }, 400);
+
+    const command = await env.DB.prepare(
+      `SELECT * FROM agentsam_slash_commands
+       WHERE (slug = ? OR id = ?) AND is_active = 1
+       LIMIT 1`
+    ).bind(commandName, commandName).first();
+    if (!command) return jsonResponse({ success: false, error: 'Command not found' }, 404);
+
+    let result;
+    const handlerType = String(command.handler_type || '').trim();
+    const handlerRef = String(command.handler_ref || '').trim();
+    const session = {
+      tenant_id: authUser.tenant_id || tenantIdFromEnv(env),
+      workspace_id: authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID,
+      id: authUser.id,
+      email: authUser.email,
+    };
+
+    if (handlerType === 'builtin') {
+      if (handlerRef === 'clear_context') {
+        result = { output: 'Context cleared' };
+      } else if (handlerRef === 'switch_mode') {
+        result = { output: 'Mode switch requested', mode: parameters.mode || args[0] || null };
+      } else if (handlerRef === 'workflow_execute') {
+        const workflowId = parameters.workflow_id || args[0] || command.handler_ref;
+        if (!workflowId || workflowId === 'workflow_execute') {
+          result = { error: 'workflow_id required' };
+        } else {
+          result = await triggerWorkflowRun(
+            env,
+            ctx,
+            String(workflowId),
+            body.session_id != null ? String(body.session_id) : null,
+            'slash_command',
+            parameters.dry_run !== false,
+            session.tenant_id
+          );
+        }
+      } else {
+        result = { error: 'Command not implemented', slug: command.slug };
+      }
+    } else if (handlerType === 'db_query') {
+      if (!command.handler_sql || !String(command.handler_sql).trim()) {
+        result = { error: 'Command not implemented', slug: command.slug };
+      } else {
+        const { preparedSql, binds } = bindAgentsamSessionSql(command.handler_sql, session);
+        const r = await env.DB.prepare(preparedSql).bind(...binds).all();
+        result = { rows: r.results || [], meta: r.meta || null };
+      }
+    } else if (handlerType === 'subagent_spawn') {
+      const profileSlug = handlerRef || resolveSubagentProfileSlug(command.slug, args, session);
+      if (!profileSlug) {
+        result = { error: 'Subagent profile required', slug: command.slug };
+      } else {
+        const profile = await env.DB.prepare(
+          `SELECT id, slug, display_name, instructions_markdown
+           FROM agentsam_subagent_profile
+           WHERE is_active = 1 AND (slug = ? OR id = ?)
+           LIMIT 1`
+        ).bind(profileSlug, profileSlug).first();
+        if (!profile) {
+          result = { error: 'Subagent profile not found', profile_slug: profileSlug };
+        } else {
+          result = {
+            spawned: true,
+            profile_id: profile.id,
+            profile_slug: profile.slug,
+            instructions_preview: String(profile.instructions_markdown || '').slice(0, 500),
+          };
+        }
+      }
+    } else if (handlerType === 'tool_invoke') {
+      const toolName = handlerRef;
+      const tool = await env.DB.prepare(
+        `SELECT * FROM mcp_registered_tools WHERE tool_name = ? AND enabled = 1 LIMIT 1`
+      ).bind(toolName).first();
+      if (!tool) {
+        result = { error: 'Tool not found', tool: toolName };
+      } else if (Number(tool.requires_approval || 0) === 1) {
+        result = { pending: true, approval_required: true, tool };
+      } else if (Number(tool.is_degraded || 0) === 1) {
+        result = { error: 'Tool degraded', failure_rate: tool.failure_rate };
+      } else {
+        result = await invokeMcpToolFromChat(env, tool.tool_name, parameters, body.session_id != null ? String(body.session_id) : '', { skipApprovalCheck: true });
+      }
+    } else if (handlerType === 'ollama_local') {
+      const ollamaUrl = env.OLLAMA_URL || 'https://ollama.inneranimalmedia.com/api/chat';
+      try {
+        const res = await fetch(ollamaUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'CF-Access-Client-Id': env.OLLAMA_CLIENT_ID || '',
+            'CF-Access-Client-Secret': env.OLLAMA_CLIENT_SECRET || '',
+          },
+          body: JSON.stringify({
+            model: parameters.model || handlerRef || 'llama3.1',
+            messages: [{ role: 'user', content: parameters.prompt || rawArgs || command.slug }],
+            stream: false,
+          }),
+        });
+        if (!res.ok) result = { error: 'Local AI offline', fallback: 'Use cloud model' };
+        else result = await res.json().catch(async () => ({ output: await res.text() }));
+      } catch (_) {
+        result = { error: 'Local AI offline', fallback: 'Use cloud model' };
+      }
+    } else {
+      result = { error: 'Command not implemented', slug: command.slug };
+    }
+
+    const rawInput = `/${commandName}${rawArgs ? ` ${rawArgs}` : ''}`;
+    const wsForRun = authUser.workspace_id != null ? String(authUser.workspace_id).trim() : '';
+    const _slashIntentOk = new Set(['deploy', 'debug', 'db', 'r2', 'git', 'worker', 'search', 'file', 'misc']);
+    const safeSlashIntentCat =
+      command.category != null && _slashIntentOk.has(String(command.category).trim())
+        ? String(command.category).trim()
+        : 'misc';
+    if (!wsForRun) console.warn('[agentsam_command_run] skip: missing workspace_id');
+    else if (env.DB) void env.DB.prepare(`INSERT INTO agentsam_command_run (workspace_id, session_id, user_input, normalized_intent, intent_category, commands_json, result_json, output_text, success, exit_code, duration_ms, selected_command_id, selected_command_slug, risk_level, requires_confirmation, approval_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,unixepoch())`).bind(wsForRun, session.id ?? null, rawInput, command.slug, safeSlashIntentCat, JSON.stringify([command.mapped_command != null ? command.mapped_command : { slug: command.slug, handler_type: handlerType, handler_ref: handlerRef }]), JSON.stringify({ success: !result?.error }), String(result?.output ?? result?.result ?? '').slice(0, 500), result?.error ? 0 : 1, result?.exit_code ?? null, Date.now() - cmdRunT0, command.id, command.slug, command.risk_level ?? 'low', Number(command.requires_confirmation ?? 0), 'not_required').run().catch((e) => console.warn('[agentsam_command_run]', e?.message ?? e));
+
+    await env.DB.prepare(
+      `UPDATE agentsam_slash_commands
+       SET call_count = COALESCE(call_count, 0) + 1,
+           last_called_at = datetime('now')
+       WHERE id = ?`
+    ).bind(command.id).run();
+    return jsonResponse({ success: !result?.error, command: command.slug, result });
+  } catch (e) {
+    return jsonResponse({ success: false, error: e?.message ?? String(e) }, 500);
+  }
 }
 
 async function handleAgentsamApi(request, url, env) {
@@ -17555,7 +19799,7 @@ async function handleAgentsamApi(request, url, env) {
         const row = await env.DB.prepare(
           'SELECT settings_json FROM workspace_settings WHERE workspace_id = ?'
         )
-          .bind('ws_inneranimalmedia')
+          .bind(IAM_DEFAULT_WORKSPACE_ID)
           .first();
         let workspace_cd_command = null;
         let iam_origin = null;
@@ -18577,8 +20821,14 @@ async function handleAgentsamApi(request, url, env) {
 async function handleMcpApi(req, u, e, ctx) {
   const pathLower = u.pathname.replace(/\/$/, '').toLowerCase();
   const method = (req.method || 'GET').toUpperCase();
-  const MCP_WF_TENANT = tenantIdFromEnv(e) || 'global';
   if (!e.DB) return jsonResponse({ error: 'DB not configured' }, 503);
+  const mcpAuthUser = await getAuthUser(req, e);
+  if (!mcpAuthUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const MCP_WF_TENANT =
+    mcpAuthUser.tenant_id != null && String(mcpAuthUser.tenant_id).trim()
+      ? String(mcpAuthUser.tenant_id).trim()
+      : null;
+  if (!MCP_WF_TENANT) return jsonResponse({ error: 'Unauthorized' }, 401);
   try {
     if (pathLower === '/api/mcp/server-allowlist' && method === 'GET') {
       const au = await getAuthUser(req, e);
@@ -19040,13 +21290,7 @@ async function handleMcpApi(req, u, e, ctx) {
     }
 
     if (pathLower === '/api/mcp/workflows' && method === 'GET') {
-      const { results } = await e.DB.prepare(
-        `SELECT id, name, description, category, trigger_type, status,
-                    run_count, success_count, last_run_at, estimated_cost_usd, created_at
-             FROM mcp_workflows
-             WHERE tenant_id = ?
-             ORDER BY updated_at DESC`
-      ).bind(MCP_WF_TENANT).all();
+      const { results } = await e.DB.prepare(buildAgentSamWorkflowListSelect()).bind(MCP_WF_TENANT).all();
       return jsonResponse({ workflows: results || [] }, 200);
     }
     if (pathLower === '/api/mcp/workflows' && method === 'POST') {
@@ -19060,26 +21304,66 @@ async function handleMcpApi(req, u, e, ctx) {
       let trigStr = body.trigger_config_json;
       if (trigStr != null && typeof trigStr !== 'string') trigStr = JSON.stringify(trigStr);
       else if (trigStr == null) trigStr = JSON.stringify({});
-      const statusIns = body.status != null ? String(body.status) : 'draft';
-      const row = await e.DB.prepare(
-        `INSERT INTO mcp_workflows
-               (tenant_id, name, description, category, trigger_type, trigger_config_json,
-                steps_json, timeout_seconds, requires_approval, estimated_cost_usd, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      const statusIns = body.status != null ? String(body.status) : 'ready';
+      const wfId =
+        body.id != null && String(body.id).trim()
+          ? String(body.id).trim()
+          : `wf_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const slugKey = String(name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 128);
+      const workflowKey =
+        body.workflow_key != null && String(body.workflow_key).trim()
+          ? String(body.workflow_key).trim()
+          : slugKey || wfId;
+      const workspaceIns =
+        body.workspace_id != null && String(body.workspace_id).trim()
+          ? String(body.workspace_id).trim()
+          : IAM_DEFAULT_WORKSPACE_ID;
+      const categoryIns = body.category != null ? String(body.category) : 'general';
+      const taskTypeIns = body.task_type != null ? String(body.task_type) : 'mcp_workflow';
+      const triggerTypeIns = body.trigger_type != null ? String(body.trigger_type) : 'manual';
+      const subSlug =
+        body.agent_id != null && String(body.agent_id).trim() ? String(body.agent_id).trim() : null;
+      const rowRaw = await e.DB.prepare(
+        `INSERT INTO ${AGENTSAM_MCP_WORKFLOWS}
+               (id, workflow_key, display_name, description, status, priority,
+                steps_json, tools_json, acceptance_criteria_json, input_schema_json, output_schema_json,
+                tenant_id, workspace_id, trigger_type, trigger_config_json, category, task_type,
+                requires_approval, risk_level, is_active, model_id, timeout_seconds,
+                tags_json, environment, visibility, input_defaults_json,
+                total_cost_usd, subagent_slug,
+                created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'medium',
+                ?, '[]', '[]', '{}', '{}',
+                ?, ?, ?, ?, ?, ?,
+                ?, 'low', 1, 'claude-sonnet-4-5', ?,
+                '[]', 'production', 'workspace', '{}',
+                ?, ?,
+                datetime('now'), datetime('now'))
              RETURNING *`
       ).bind(
-        MCP_WF_TENANT,
+        wfId,
+        workflowKey,
         name,
         body.description != null ? String(body.description) : null,
-        body.category != null ? String(body.category) : null,
-        body.trigger_type != null ? String(body.trigger_type) : 'manual',
-        trigStr,
+        statusIns,
         stepsStr,
-        body.timeout_seconds != null ? Number(body.timeout_seconds) || 300 : 300,
+        MCP_WF_TENANT,
+        workspaceIns,
+        triggerTypeIns,
+        trigStr,
+        categoryIns,
+        taskTypeIns,
         body.requires_approval ? 1 : 0,
+        body.timeout_seconds != null ? Number(body.timeout_seconds) || 300 : 300,
         body.estimated_cost_usd != null ? Number(body.estimated_cost_usd) || 0 : 0,
-        statusIns
+        subSlug
       ).first();
+      const row = rowRaw ? normalizeAgentSamWorkflowRow(rowRaw) : rowRaw;
       return jsonResponse(row, 201);
     }
     const wfPatchMatch = pathLower.match(/^\/api\/mcp\/workflows\/([^/]+)$/);
@@ -19089,22 +21373,37 @@ async function handleMcpApi(req, u, e, ctx) {
       try { body = await req.json(); } catch (_) { }
       const fields = [];
       const vals = [];
-      const allowed = ['name', 'description', 'category', 'trigger_type', 'trigger_config_json',
-        'steps_json', 'timeout_seconds', 'requires_approval', 'estimated_cost_usd', 'status'];
-      for (const key of allowed) {
-        if (key in body) {
-          fields.push(`${key} = ?`);
-          let v = body[key];
-          if (key === 'requires_approval') vals.push(v ? 1 : 0);
-          else if ((key === 'trigger_config_json' || key === 'steps_json') && typeof v === 'object' && v !== null) vals.push(JSON.stringify(v));
-          else vals.push(v);
-        }
+      const allowedMap = {
+        name: 'display_name',
+        description: 'description',
+        category: 'category',
+        trigger_type: 'trigger_type',
+        trigger_config_json: 'trigger_config_json',
+        steps_json: 'steps_json',
+        timeout_seconds: 'timeout_seconds',
+        requires_approval: 'requires_approval',
+        estimated_cost_usd: 'total_cost_usd',
+        total_cost_usd: 'total_cost_usd',
+        status: 'status',
+        agent_id: 'subagent_slug',
+        subagent_slug: 'subagent_slug',
+        display_name: 'display_name',
+        workflow_key: 'workflow_key',
+      };
+      for (const [bodyKey, col] of Object.entries(allowedMap)) {
+        if (!(bodyKey in body)) continue;
+        fields.push(`${col} = ?`);
+        let v = body[bodyKey];
+        if (bodyKey === 'requires_approval') vals.push(v ? 1 : 0);
+        else if ((bodyKey === 'trigger_config_json' || bodyKey === 'steps_json') && typeof v === 'object' && v !== null)
+          vals.push(JSON.stringify(v));
+        else vals.push(v);
       }
       if (!fields.length) return jsonResponse({ error: 'No valid fields to update' }, 400);
-      fields.push('updated_at = unixepoch()');
+      fields.push(`updated_at = datetime('now')`);
       vals.push(id, MCP_WF_TENANT);
       await e.DB.prepare(
-        `UPDATE mcp_workflows SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`
       ).bind(...vals).run();
       return jsonResponse({ success: true }, 200);
     }
@@ -19116,12 +21415,18 @@ async function handleMcpApi(req, u, e, ctx) {
       const session_id = body.session_id != null ? String(body.session_id) : null;
       const triggered_by = body.triggered_by != null ? String(body.triggered_by) : 'manual';
       const dry_run = body.dry_run === true;
-      const data = await triggerWorkflowRun(e, ctx, workflow_id, session_id, triggered_by, dry_run);
+      const data = await triggerWorkflowRun(e, ctx, workflow_id, session_id, triggered_by, dry_run, MCP_WF_TENANT);
       if (data.error) {
         const msg = data.error;
         const status =
-          msg === 'Workflow not found or not active' ? 404 : 500;
-        return jsonResponse({ error: msg }, status);
+          data.status != null && Number.isFinite(Number(data.status))
+            ? Number(data.status)
+            : msg === 'Workflow not found or not active'
+              ? 404
+              : 500;
+        const body = { error: msg };
+        if (data.sync_error) body.sync_error = data.sync_error;
+        return jsonResponse(body, status);
       }
       if (dry_run) return jsonResponse(data, 200);
       return jsonResponse({ run_id: data.run_id, status: data.status }, 202);
@@ -19130,13 +21435,13 @@ async function handleMcpApi(req, u, e, ctx) {
     if (wfRunsListMatch && method === 'GET') {
       const workflow_id = wfRunsListMatch[1];
       const own = await e.DB.prepare(
-        `SELECT id FROM mcp_workflows WHERE id = ? AND tenant_id = ?`
+        `SELECT id FROM ${AGENTSAM_MCP_WORKFLOWS} WHERE id = ? AND tenant_id = ?`
       ).bind(workflow_id, MCP_WF_TENANT).first();
       if (!own) return jsonResponse({ error: 'Workflow not found' }, 404);
       const { results } = await e.DB.prepare(
         `SELECT id, status, triggered_by, cost_usd, duration_ms,
                     started_at, completed_at, error_message
-             FROM mcp_workflow_runs
+             FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE}
              WHERE workflow_id = ?
              ORDER BY created_at DESC LIMIT 50`
       ).bind(workflow_id).all();
@@ -19188,7 +21493,7 @@ async function handleCidiApi(request, url, env, ctx) {
         return { r, json };
       }
       const u = new URL('https://inneranimalmedia.com/api/mcp/status');
-      const req = new Request(u.toString(), { method: 'GET' });
+      const req = new Request(u.toString(), { method: 'GET', headers: { cookie } });
       const r = await handleMcpApi(req, u, env, ctx);
       const json = await r.json().catch(() => ({}));
       return { r, json };
@@ -19401,7 +21706,7 @@ async function handleCidiApi(request, url, env, ctx) {
   return jsonResponse({ error: 'not found' }, 404);
 }
 
-/** Fire-and-forget agent_tool_chain row (D1 telemetry). */
+/** Fire-and-forget agentsam_tool_chain row (D1 telemetry). */
 function fireForgetAgentToolChainRow(env, {
   toolName,
   agentSessionId,
@@ -19415,10 +21720,10 @@ function fireForgetAgentToolChainRow(env, {
   const completedAt = Math.floor(Date.now() / 1000);
   const durSec = Math.max(0, Math.ceil((Number(durationMs) || 0) / 1000));
   const startedAt = Math.max(0, completedAt - durSec);
-  const outcome = error ? 'failed' : 'success';
-  const chainId = crypto.randomUUID();
+  const toolStatus = error ? 'failed' : 'completed';
+  const chainId = 'atc_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   void env.DB.prepare(
-    `INSERT INTO agent_tool_chain (id, workspace_id, agent_session_id, tool_name, outcome, started_at, completed_at, cost_usd, mcp_tool_call_id, terminal_session_id)
+    `INSERT INTO agentsam_tool_chain (id, workspace_id, agent_session_id, tool_name, tool_status, started_at, completed_at, cost_usd, mcp_tool_call_id, terminal_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
@@ -19426,7 +21731,7 @@ function fireForgetAgentToolChainRow(env, {
       IAM_DEFAULT_WORKSPACE_ID,
       agentSessionId != null && String(agentSessionId).trim() !== '' ? String(agentSessionId) : null,
       toolName,
-      outcome,
+      toolStatus,
       startedAt,
       completedAt,
       costUsd != null && Number.isFinite(Number(costUsd)) ? Number(costUsd) : 0,
@@ -19434,7 +21739,7 @@ function fireForgetAgentToolChainRow(env, {
       terminalSessionId != null && String(terminalSessionId).trim() !== '' ? String(terminalSessionId) : null
     )
     .run()
-    .catch((e) => console.warn('[agent_tool_chain]', e?.message ?? e));
+    .catch((e) => console.warn('[agentsam_tool_chain]', e?.message ?? e));
 }
 
 function fireForgetWorkspaceConnectivityTunnel(env, ctx, healthy, connections) {
@@ -19506,7 +21811,11 @@ async function recordMcpToolCall(env, opts) {
   const tenant =
     (optTenantId != null && String(optTenantId).trim()) ||
     tenantIdFromEnv(env) ||
-    'global';
+    null;
+  if (!tenant) {
+    console.warn('[mcp_tool_calls] missing tenant_id; skip');
+    return;
+  }
   const sessionId = conversationId ?? '';
   const status = error ? 'failed' : 'completed';
   const output = error ? JSON.stringify({ error }) : (typeof result === 'string' ? result : JSON.stringify(result ?? {}));
@@ -19569,6 +21878,7 @@ async function recordMcpToolCall(env, opts) {
       error,
       durationMs,
       costUsd: toolCostUsd,
+      tenantId: tenant,
     });
   } catch (e) { console.warn('[recordMcpToolCall] mcp_tool_calls', e?.message ?? e); }
   /* mcp_usage_log: rolled up by trg_mcp_tool_calls_usage (migration 161) after INSERT into mcp_tool_calls */
@@ -19586,7 +21896,7 @@ async function upsertMcpAgentSession(env, conversationId, panelAgentId, tenantId
   if (!env.DB || !conversationId) return;
   const tid =
     (tenantId != null && String(tenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   if (!tid) {
     console.warn('[upsertMcpAgentSession] missing tenant_id');
@@ -19845,7 +22155,11 @@ async function recordR2WriteTraceability(env, {
     let byteLen = 0;
     if (typeof body === 'string') byteLen = body.length;
     else if (body != null && typeof body.byteLength === 'number') byteLen = body.byteLength;
-    const tid = (tenantId != null && String(tenantId).trim()) || tenantIdFromEnv(env) || 'system';
+    const tid = (tenantId != null && String(tenantId).trim()) || tenantIdFromEnv(env) || null;
+    if (!tid) {
+      console.warn('[r2_objects] missing tenant_id; skip object index row');
+      return;
+    }
     const uid = (userId != null && String(userId).trim()) || 'agent_sam';
     const objId = crypto.randomUUID();
     const ct = (contentType != null && String(contentType).trim()) || 'application/octet-stream';
@@ -19876,7 +22190,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
   const suppressTelemetry = !!opts.suppressTelemetry;
   const defaultTenantForMcp =
     (opts.tenantId != null && String(opts.tenantId).trim()) ||
-    (env.TENANT_ID && String(env.TENANT_ID).trim()) ||
+    
     null;
   const rec = async (o) => {
     if (suppressTelemetry) return;
@@ -19885,7 +22199,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     await recordMcpToolCall(env, { ...o, tenantId: tid });
   };
   const cmdAuditUserId = String(opts.userId || opts.oauthUserId || params?.user_id || 'anonymous');
-  const cmdAuditWorkspaceId = String(opts.workspaceId || params?.workspace_id || 'ws_inneranimalmedia');
+  const cmdAuditWorkspaceId = String(resolveWorkspaceId(env, { workspace_id: opts.workspaceId || params?.workspace_id || params?.workspaceId }));
   const INTERNAL_PLAYWRIGHT_TOOLS = ['playwright_screenshot', 'browser_screenshot', 'browser_navigate', 'browser_content'];
   const needsScreenshotBucket = tool_name === 'playwright_screenshot' || tool_name === 'browser_screenshot';
   if (INTERNAL_PLAYWRIGHT_TOOLS.includes(tool_name) && env.MYBROWSER && (!needsScreenshotBucket || env.DOCS_BUCKET || env.DASHBOARD || env.R2)) {
@@ -20281,33 +22595,35 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const max_results = Math.min(Math.max(1, Number(params.max_results) || 5), 10);
     try {
       console.log('[knowledge_search] D1 + AI Search + Supabase pgvector (parallel)', { query, max_results });
-      const [{ merged, answer, query: q }, pgDocs] = await Promise.all([
-        runKnowledgeSearchMerged(env, query, max_results),
+      const wsId = resolveWorkspaceId(env, params || {});
+      const [kb, mem] = await Promise.all([
+        knowledgeSearch(env, query, { topK: max_results, workspace_id: wsId, threshold: 0.5 }),
         (async () => {
-          if (!env.HYPERDRIVE?.connectionString || !env.AI) return [];
           try {
-            const _emb = await env.AI.run('@cf/baai/bge-large-en-v1.5', { text: [query] });
-            const _raw = _emb?.data ?? _emb;
-            const _vec = (Array.isArray(_raw) ? _raw : _raw?.data)?.[0];
-            if (!_vec || !Array.isArray(_vec)) return [];
-            const _vecLit = '[' + _vec.join(',') + ']';
-            const { Client } = await import('pg');
-            const _pg = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-            await _pg.connect();
-            try {
-              const _r = await _pg.query(
-                `SELECT title, content, source, similarity FROM match_documents($1::vector, 0.65, $2)`,
-                [_vecLit, max_results]
-              );
-              return (_r.rows || []).map(row => ({
-                content: row.content, title: row.title, source: row.source,
-                score: row.similarity, sourceTag: 'supabase:' + (row.source || 'documents'),
-              }));
-            } finally { await _pg.end().catch(() => {}); }
-          } catch (e) { console.warn('[knowledge_search] supabase arm failed', e?.message ?? e); return []; }
+            const qVec = await generateEmbedding(env, query);
+            const out = await searchAgentMemory(env, qVec, { workspace_id: wsId, limit: max_results, threshold: 0.7 });
+            return (out.rows || []).map(r => ({
+              content: r.content,
+              title: r.agent_id || 'agent_memory',
+              source: 'agent_memory',
+              score: r.similarity ?? null,
+              sourceTag: out.source,
+            }));
+          } catch (e) { console.warn('[knowledge_search] agent_memory arm failed', e?.message ?? e); return []; }
         })(),
       ]);
-      const results = [...merged, ...pgDocs].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, max_results);
+      const results = [
+        ...(kb?.results || []).map(r => ({
+          content: r.chunk?.content,
+          title: r.chunk?.knowledge_id || r.chunk?.id || 'chunk',
+          source: 'ai_knowledge_chunks',
+          score: r.score,
+          sourceTag: kb.source,
+        })),
+        ...mem,
+      ].filter(r => r.content).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, max_results);
+      const q = query;
+      const answer = results.map(r => r.content).join('\n\n').slice(0, 10000);
       if (env.DB) {
         const _mcpKsTid = tenantIdFromEnv(env);
         try {
@@ -20659,7 +22975,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
     const steps = Array.isArray(params.steps) ? params.steps : [];
     try {
       const planId = crypto.randomUUID();
-      const tenantId = env.TENANT_ID || 'system';
+      const tenantId = 'system';
       const planJson = JSON.stringify({ summary, steps });
       await env.DB.prepare(
         `INSERT INTO agent_execution_plans (id, tenant_id, session_id, plan_json, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', unixepoch(), unixepoch())`
@@ -20686,7 +23002,7 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
         conversationId,
         tenantId:
           (opts.tenantId != null && String(opts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+          null,
       });
       if (out && out.error) {
         await rec({ conversationId, toolName: tool_name, toolCategory: 'image', toolInput: imgxParams, result: null, error: out.error, serviceName: 'builtin' });
@@ -21112,8 +23428,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
 
   if (tool_name === 'generate_daily_summary_email' && env.DB && env.RESEND_API_KEY) {
     // Model cascade: Gemini Flash → Workers AI → gpt-5.4-nano (never hard-fail on missing key)
-    const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : 'meauxbility@gmail.com';
-    const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : 'sam@inneranimalmedia.com';
+    const to = params.to != null && String(params.to).trim() ? String(params.to).trim() : (env.RESEND_TO || 'support@inneranimalmedia.com');
+    const from = params.from != null && String(params.from).trim() ? String(params.from).trim() : (env.RESEND_FROM || 'support@inneranimalmedia.com');
     const today = new Date().toISOString().slice(0, 10);
     const emptyRows = { results: [] };
     const safeAll = async (p) => {
@@ -21145,8 +23461,8 @@ async function invokeMcpToolFromChat(env, tool_name, params, conversationId, opt
       ),
       safeAll(
         env.DB.prepare(
-          `SELECT w.name, r.status, datetime(r.started_at, 'unixepoch') as started
-           FROM mcp_workflow_runs r JOIN mcp_workflows w ON r.workflow_id = w.id
+          `SELECT w.display_name AS name, r.status, datetime(r.started_at, 'unixepoch') as started
+           FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} r JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON r.workflow_id = w.id
            WHERE r.started_at >= unixepoch(?) ORDER BY r.started_at DESC`
         ).bind(`${today} 00:00:00`).all()
       ),
@@ -21349,9 +23665,21 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
     await rec({ conversationId, toolName: tool_name, toolCategory: 'r2', toolInput: params, result: JSON.stringify(payload), error: null, serviceName: 'builtin' });
     return { result: payload };
   }
+  if (tool_name === 'bridge_key_auth_test') {
+    const bridgeKey = (env.AGENTSAM_BRIDGE_KEY || '').trim();
+    if (!bridgeKey) return { error: 'AGENTSAM_BRIDGE_KEY not set' };
+    const base = (env.TERMINAL_WS_URL || '').replace('wss://', 'https://').replace('ws://', 'http://');
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${base}/api/terminal/session/register`, { method: 'POST', headers: { 'X-Bridge-Key': bridgeKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ probe: true }) });
+      const body = await res.text();
+      return { status: res.status, ok: res.ok, duration_ms: Date.now() - t0, body };
+    } catch (e) { return { error: e.message, duration_ms: Date.now() - t0 }; }
+  }
 
   if (tool_name.startsWith('fs_')) {
     const ptyToken = (env.TERMINAL_SECRET || '').trim();
+    const agentsamBridgeKey = (env.AGENTSAM_BRIDGE_KEY || '').trim();
     if (!ptyToken) {
       await rec({ conversationId, toolName: tool_name, toolCategory: 'fs-mcp', toolInput: params, result: null, error: 'TERMINAL_SECRET not configured', serviceName: 'pty_bridge' });
       return { error: 'TERMINAL_SECRET not configured on worker' };
@@ -21367,6 +23695,7 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
         method: 'POST',
         headers: {
           'x-pty-auth': ptyToken,
+          ...(agentsamBridgeKey ? { 'X-Bridge-Key': agentsamBridgeKey } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -21494,7 +23823,8 @@ Return ONLY the HTML email body (no doctype/html/head tags). Keep it tight — r
       query,
       search_engine: 'perplexity'
     });
-    const tid = (opts.tenantId != null && String(opts.tenantId).trim()) || (env.TENANT_ID && String(env.TENANT_ID).trim()) || 'tenant_default';
+    const tid = opts.tenantId != null && String(opts.tenantId).trim() ? String(opts.tenantId).trim() : null;
+    if (!tid) return { error: 'tenant_id required' };
     
     await env.DB.prepare(`
         INSERT INTO playwright_jobs
@@ -21817,10 +24147,13 @@ async function runWorkflowHttpHealthStep(env, url) {
 async function runWorkflowGithubDiffReviewStep(env, triggerUserId, step) {
   const repo = String(step.github_repo || 'SamPrimeaux/march1st-inneranimalmedia').trim();
   const baseBranch = String(step.compare_base || 'main').trim() || 'main';
-  const uid = String(triggerUserId || '').trim() || 'system';
+  const uid = String(triggerUserId || '').trim();
   const role = step.role === 'tester' ? 'Tester' : 'Architect';
   if (!env.DB) {
     return { ok: false, summary: `${role}: D1 unavailable for GitHub token lookup.` };
+  }
+  if (!uid) {
+    return { ok: true, summary: `${role}: no authenticated workflow user — skipped diff fetch.` };
   }
   const tokenRow = await getIntegrationToken(env.DB, uid, 'github', '');
   if (!tokenRow?.access_token) {
@@ -21941,7 +24274,8 @@ async function agentWorkflowRecordStepSuccess(env, workflowRunId, stepNum, stepN
  * Runs inside ctx.waitUntil only — HTTP response has already returned.
  */
 async function executeAgentWorkflowSteps(env, ctx, workflowRunId, workflowId, workflowName) {
-  const tenantId = tenantIdFromEnv(env) || 'global';
+  // system-only, no user session
+  const tenantId = 'tenant_platform';
   const steps = AGENT_BUILTIN_WORKFLOW_STEPS[workflowName] || [];
   const startedWall = Date.now();
   try {
@@ -21956,7 +24290,7 @@ async function executeAgentWorkflowSteps(env, ctx, workflowRunId, workflowId, wo
   let lastSummary = '';
   let failed = false;
   let failReason = '';
-  let triggerUserId = 'system';
+  let triggerUserId = '';
   try {
     const tr = await env.DB.prepare('SELECT triggered_by FROM workflow_runs WHERE id = ?').bind(workflowRunId).first();
     if (tr?.triggered_by && String(tr.triggered_by).trim()) triggerUserId = String(tr.triggered_by).trim();
@@ -22424,8 +24758,48 @@ async function dispatchMcpTool(env, tool_name, input_template, session_id) {
   return out.result;
 }
 
-async function executeWorkflowSteps(env, workflow, run_id, session_id) {
-  const MCP_WF_TENANT = tenantIdFromEnv(env) || 'global';
+async function executeWorkflowSteps(env, workflow, run_id, session_id, supabaseRunId) {
+  const MCP_WF_TENANT =
+    workflow?.tenant_id != null && String(workflow.tenant_id).trim()
+      ? String(workflow.tenant_id).trim()
+      : null;
+  if (!MCP_WF_TENANT) {
+    const r = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?,
+         completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
+    ).bind('Unauthorized', run_id).run();
+    assertD1Write(r, 'agentsam_workflow_runs unauthorized tenant');
+    void syncWorkflowRunToSupabase(env, {
+      id: run_id,
+      workflow_key: workflow?.workflow_key ?? '',
+      display_name: workflow?.display_name ?? workflow?.name ?? '',
+      tenant_id: MCP_WF_TENANT ?? '',
+      workspace_id: 'ws_inneranimalmedia',
+      status: 'failed',
+      started_at: null,
+      completed_at: Math.floor(Date.now() / 1000),
+      duration_ms: 0,
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      tool_calls_count: 0,
+      error_message: 'Unauthorized',
+      model_used: null,
+    }).catch(() => {});
+    await updateSupabaseWorkflowRun(env, supabaseRunId, {
+      status: 'failed',
+      success: false,
+      error_message: 'Unauthorized',
+      completed_at: new Date().toISOString(),
+    });
+    try {
+      await markWorkflowRunSupabaseSynced(env, run_id, null);
+    } catch (metaErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+      throw metaErr;
+    }
+    return;
+  }
   let lastError = null;
   try {
     let steps = [];
@@ -22433,10 +24807,40 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       steps = typeof workflow.steps_json === 'string' ? JSON.parse(workflow.steps_json || '[]') : (workflow.steps_json || []);
     } catch (parseErr) {
       lastError = String(parseErr?.message || parseErr);
-      await env.DB.prepare(
-        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?, step_results_json = '[]',
+      const pr = await env.DB.prepare(
+        `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?, step_results_json = '[]',
          cost_usd = 0, duration_ms = 0, completed_at = unixepoch() WHERE id = ?`
       ).bind(lastError, run_id).run();
+      assertD1Write(pr, 'agentsam_workflow_runs parse error');
+      void syncWorkflowRunToSupabase(env, {
+        id: run_id,
+        workflow_key: workflow?.workflow_key ?? '',
+        display_name: workflow?.display_name ?? workflow?.name ?? '',
+        tenant_id: MCP_WF_TENANT ?? '',
+        workspace_id: 'ws_inneranimalmedia',
+        status: 'failed',
+        started_at: null,
+        completed_at: Math.floor(Date.now() / 1000),
+        duration_ms: 0,
+        cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        tool_calls_count: 0,
+        error_message: lastError,
+        model_used: null,
+      }).catch(() => {});
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: lastError,
+        completed_at: new Date().toISOString(),
+      });
+      try {
+        await markWorkflowRunSupabaseSynced(env, run_id, null);
+      } catch (metaErr) {
+        await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+        throw metaErr;
+      }
       return;
     }
     if (!Array.isArray(steps)) steps = [];
@@ -22456,6 +24860,46 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       let input_template =
         (step.input_template && typeof step.input_template === 'object' ? step.input_template : null) ||
         (step.params && typeof step.params === 'object' ? step.params : {});
+      try {
+        const toolRow = await env.DB.prepare(
+          `SELECT tool_name, tool_category, handler_config, input_schema, requires_approval, is_degraded, failure_rate
+           FROM mcp_registered_tools
+           WHERE tool_name = ? AND enabled = 1
+           LIMIT 1`
+        ).bind(tool_name).first();
+        if (!toolRow) {
+          failed = true;
+          lastError = `Tool not found: ${tool_name}`;
+          break;
+        }
+        if (Number(toolRow.requires_approval || 0) === 1 || step.requires_approval === true) {
+          failed = true;
+          lastError = `Tool requires approval: ${tool_name}`;
+          break;
+        }
+        if (Number(toolRow.is_degraded || 0) === 1) {
+          failed = true;
+          lastError = `Tool degraded: ${tool_name}`;
+          break;
+        }
+        if (toolRow.handler_config) {
+          try {
+            const handlerConfig = typeof toolRow.handler_config === 'string'
+              ? JSON.parse(toolRow.handler_config)
+              : toolRow.handler_config;
+            if (handlerConfig && typeof handlerConfig === 'object' && !Array.isArray(handlerConfig)) {
+              input_template = { ...handlerConfig, ...input_template };
+            }
+          } catch (_) { }
+        }
+        if (toolRow.tool_category != null && step.tool_category == null) {
+          step.tool_category = String(toolRow.tool_category);
+        }
+      } catch (toolLookupErr) {
+        failed = true;
+        lastError = String(toolLookupErr?.message || toolLookupErr);
+        break;
+      }
       // Inject accumulated step outputs if requested
       if (input_template.inject_step_results === true && stepOutputs.length > 0) {
         input_template = { ...input_template, step_results: JSON.stringify(stepOutputs).slice(0, 8000) };
@@ -22489,39 +24933,36 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       const callStatus = stepStatus === 'completed' ? 'completed' : 'failed';
       const outSlice = output != null ? String(output).slice(0, 50000) : null;
       const stepNow = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      try {
-        await env.DB.prepare(
-          `INSERT INTO mcp_tool_calls
-             (id, tenant_id, session_id, tool_name, tool_category, input_schema,
-              output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workflow_runner', ?, ?, ?, ?, ?)`
-        ).bind(
-          tcId,
-          MCP_WF_TENANT,
-          session_id ?? null,
-          tool_name,
-          step.tool_category != null ? String(step.tool_category) : 'unknown',
-          JSON.stringify(input_template),
-          outSlice,
-          callStatus,
-          stepNow,
-          stepNow,
-          stepNow,
-          stepNow,
-          errorMsg ? String(errorMsg).slice(0, 8000) : null
-        ).run();
-        fireForgetAgentToolChainRow(env, {
-          toolName: tool_name,
-          agentSessionId: session_id ?? null,
-          error: stepStatus === 'completed' ? null : errorMsg,
-          costUsd: 0,
-          mcpToolCallId: tcId,
-          durationMs: 0,
-          terminalSessionId: null,
-        });
-      } catch (dbErr) {
-        console.warn('[executeWorkflowSteps] mcp_tool_calls insert', dbErr?.message ?? dbErr);
-      }
+      const tcIns = await env.DB.prepare(
+        `INSERT INTO mcp_tool_calls
+           (id, tenant_id, session_id, tool_name, tool_category, input_schema,
+            output, status, invoked_by, invoked_at, completed_at, created_at, updated_at, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workflow_runner', ?, ?, ?, ?, ?)`
+      ).bind(
+        tcId,
+        MCP_WF_TENANT,
+        session_id ?? null,
+        tool_name,
+        step.tool_category != null ? String(step.tool_category) : 'unknown',
+        JSON.stringify(input_template),
+        outSlice,
+        callStatus,
+        stepNow,
+        stepNow,
+        stepNow,
+        stepNow,
+        errorMsg ? String(errorMsg).slice(0, 8000) : null
+      ).run();
+      assertD1Write(tcIns, 'mcp_tool_calls workflow step');
+      fireForgetAgentToolChainRow(env, {
+        toolName: tool_name,
+        agentSessionId: session_id ?? null,
+        error: stepStatus === 'completed' ? null : errorMsg,
+        costUsd: 0,
+        mcpToolCallId: tcId,
+        durationMs: 0,
+        terminalSessionId: null,
+      });
 
       stepResults.push({ tool_name, status: callStatus, tool_call_id: tcId });
       if (stepStatus === 'completed' && output && output !== '(no output)') {
@@ -22530,15 +24971,20 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
 
       if (callStatus === 'failed') {
         failed = true;
-        break;
+        if (step.continue_on_error === true) {
+          failed = false;
+        } else {
+          break;
+        }
       }
     }
 
     const duration = Date.now() - startMs;
     const finalStatus = failed ? 'failed' : 'success';
+    const completedIso = new Date().toISOString();
 
-    await env.DB.prepare(
-      `UPDATE mcp_workflow_runs SET
+    const d1Final = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET
          status = ?, step_results_json = ?, cost_usd = ?,
          duration_ms = ?, completed_at = unixepoch(), error_message = ?
        WHERE id = ?`
@@ -22550,21 +24996,92 @@ async function executeWorkflowSteps(env, workflow, run_id, session_id) {
       failed ? (lastError || 'Workflow step failed') : null,
       run_id
     ).run();
+    assertD1Write(d1Final, 'agentsam_workflow_runs finalize');
+
+    try {
+      const runRow = await env.DB.prepare(`SELECT * FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE id = ?`).bind(run_id).first();
+      if (runRow) void syncWorkflowRunToSupabase(env, runRow).catch(() => {});
+    } catch (_) { /* non-fatal RPC sync */ }
 
     if (!failed) {
-      await env.DB.prepare(
-        `UPDATE mcp_workflows SET success_count = success_count + 1,
-         updated_at = unixepoch() WHERE id = ? AND tenant_id = ?`
+      const defUp = await env.DB.prepare(
+        `UPDATE ${AGENTSAM_MCP_WORKFLOWS} SET success_count = success_count + 1,
+         last_run_status = 'success',
+         updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`
       ).bind(workflow.id, MCP_WF_TENANT).run();
+      assertD1Write(defUp, 'agentsam_mcp_workflows success_count');
+    }
+
+    const supPatch = failed
+      ? {
+          status: 'failed',
+          success: false,
+          error_message: lastError || 'Workflow step failed',
+          completed_at: completedIso,
+          duration_ms: duration,
+          cost_usd: totalCost,
+          step_results_json: JSON.stringify(stepResults),
+        }
+      : {
+          status: 'completed',
+          success: true,
+          error_message: null,
+          completed_at: completedIso,
+          duration_ms: duration,
+          cost_usd: totalCost,
+          step_results_json: JSON.stringify(stepResults),
+        };
+    await updateSupabaseWorkflowRun(env, supabaseRunId, supPatch);
+    try {
+      await markWorkflowRunSupabaseSynced(env, run_id, null);
+    } catch (metaErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+      throw metaErr;
+    }
+
+    const wfKeyForAnalytics = String(workflow?.workflow_key ?? '').toLowerCase();
+    if (wfKeyForAnalytics.startsWith('designstudio')) {
+      try {
+        const { syncRunToSupabase } = await import('./src/api/designstudio/sync.js');
+        await syncRunToSupabase(env, run_id, {
+          sessionId: session_id ?? null,
+          r2Prefix: null,
+          assets: [],
+          skipDesignStudioKeyCheck: false,
+        });
+      } catch (dsSyncErr) {
+        console.warn('[designstudio supabase analytics]', dsSyncErr?.message ?? dsSyncErr);
+      }
     }
   } catch (err) {
     const msg = String(err?.message || err);
-    try {
-      await env.DB.prepare(
-        `UPDATE mcp_workflow_runs SET status = 'failed', error_message = ?,
+    const r = await env.DB.prepare(
+      `UPDATE ${AGENTSAM_WORKFLOW_RUNS_TABLE} SET status = 'failed', error_message = ?,
          completed_at = unixepoch(), duration_ms = 0 WHERE id = ?`
-      ).bind(msg, run_id).run();
-    } catch (_) { }
+    ).bind(msg, run_id).run();
+    assertD1Write(r, 'agentsam_workflow_runs outer-catch');
+    try {
+      const runRowCatch = await env.DB.prepare(`SELECT * FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE id = ?`).bind(run_id).first();
+      if (runRowCatch) void syncWorkflowRunToSupabase(env, runRowCatch).catch(() => {});
+    } catch (_) { /* non-fatal RPC sync */ }
+    try {
+      await updateSupabaseWorkflowRun(env, supabaseRunId, {
+        status: 'failed',
+        success: false,
+        error_message: msg,
+        completed_at: new Date().toISOString(),
+      });
+      try {
+        await markWorkflowRunSupabaseSynced(env, run_id, null);
+      } catch (metaErr) {
+        await markWorkflowRunSupabaseFailed(env, run_id, String(metaErr?.message || metaErr));
+        throw metaErr;
+      }
+    } catch (syncErr) {
+      await markWorkflowRunSupabaseFailed(env, run_id, String(syncErr?.message || syncErr));
+      throw syncErr;
+    }
+    throw err;
   }
 }
 
@@ -23039,7 +25556,7 @@ async function uploadImgxToDashboard(env, bytes, contentType, baseName, logCtx =
       responseText: logCtx.responseText ?? `DASHBOARD:${key}`,
       tenantId:
         (logCtx.tenantId != null && String(logCtx.tenantId).trim()) ||
-        (env.TENANT_ID ? String(env.TENANT_ID).trim() : null),
+        null,
       createdBy: logCtx.createdBy || 'worker',
       metadataJson: {
         r2_key: key,
@@ -23526,6 +26043,36 @@ async function runMeshyBuiltinTool(env, toolName, params) {
             },
             relatedIdsJson: [task_id, meshyKey],
           });
+          if (env.DB) {
+            try {
+              const cmsTenantId = params.tenant_id != null && String(params.tenant_id).trim() ? String(params.tenant_id).trim() : null;
+              if (!cmsTenantId) {
+                console.warn('[meshy cms_3d_assets] missing tenant_id; skip');
+                return out;
+              }
+              const assetId = String(params.asset_id || params.cms_asset_id || `asset_${task_id}`).slice(0, 128);
+              await env.DB.prepare(
+                `INSERT INTO cms_3d_assets
+                  (id, asset_id, tenant_id, meshy_task_id, model_type, prompt,
+                   source_image_url, status, glb_url, thumbnail_url, poly_count,
+                   created_at, completed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'succeeded', ?, ?, ?, unixepoch(), unixepoch())`
+              ).bind(
+                `c3d_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`,
+                assetId,
+                cmsTenantId,
+                task_id,
+                params.model_type || (params.image_url ? 'image_to_3d' : 'text_to_3d'),
+                params.prompt || null,
+                params.image_url || d.source_image_url || null,
+                glbUrl,
+                d.thumbnail_url || d.thumbnailUrl || null,
+                Number(d.poly_count ?? d.polyCount ?? 0) || null
+              ).run();
+            } catch (e) {
+              console.warn('[meshy cms_3d_assets]', e?.message ?? e);
+            }
+          }
         }
       }
     }
@@ -23645,8 +26192,12 @@ function enqueueAgentTelemetryFinalLlmCall(env, ctx, {
   agentRunId,
 }) {
   if (!env?.DB) return undefined;
-  const tenantId = tenantIdFromEnv(env) || 'unknown';
-  const workspaceId = tenantIdFromEnv(env) || null;
+  const tenantId = routingOpts?.tenantId != null && String(routingOpts.tenantId).trim() ? String(routingOpts.tenantId).trim() : null;
+  const workspaceId = routingOpts?.workspaceId != null && String(routingOpts.workspaceId).trim() ? String(routingOpts.workspaceId).trim() : null;
+  if (!tenantId || !workspaceId) {
+    console.warn('[agent_telemetry final llm] missing tenant_id/workspace_id; skip');
+    return undefined;
+  }
 
   const run = async () => {
     try {
@@ -23844,7 +26395,7 @@ async function chatWithToolsOpenAI(env, systemWithBlurb, apiMessages, model, con
       try {
         const tenantForIntent =
           (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+          null ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
         const intentForFilter = opts._intent || 'auto';
@@ -24493,7 +27044,7 @@ async function chatWithToolsAnthropic(env, request, provider, modelKey, systemWi
       try {
         const tenantForIntent =
           (opts.routingOpts && opts.routingOpts.tenantId != null && String(opts.routingOpts.tenantId).trim()) ||
-          (env.TENANT_ID ? String(env.TENANT_ID).trim() : null) ||
+          null ||
           null;
         const lastUserForIntent = getLastUserMessageText(apiMessages) || '';
         const intentForFilter = opts._intent || 'auto';
@@ -25193,7 +27744,7 @@ async function runFinancialCommandCron(env, ctx) {
 /**
  * Allowlisted tables for D1 data_retention_policies purge (column + compare mode).
  * compare: datetime | unix | date_col (TEXT YYYY-MM-DD day bucket: date(col) < date('now','-Nd'))
- * Do NOT add config/registry tables here (mcp_registered_tools, mcp_services, mcp_workflows,
+ * Do NOT add config/registry tables here (mcp_registered_tools, mcp_services, agentsam_mcp_workflows,
  * mcp_server_allowlist, mcp_service_credentials, terminal_connections) — policies on those names are skipped.
  */
 const RETENTION_PURGE_TABLE_CONFIG = {
@@ -25210,7 +27761,7 @@ const RETENTION_PURGE_TABLE_CONFIG = {
   mcp_audit_log: { dateColumn: 'created_at', compare: 'unix' },
   mcp_agent_sessions: { dateColumn: 'created_at', compare: 'unix' },
   mcp_tool_call_stats: { dateColumn: 'date', compare: 'date_col' },
-  mcp_workflow_runs: { dateColumn: 'created_at', compare: 'unix' },
+  agentsam_workflow_runs: { dateColumn: 'created_at', compare: 'unix' },
   mcp_command_suggestions: { dateColumn: 'created_at', compare: 'unix' },
   terminal_sessions: { dateColumn: 'updated_at', compare: 'unix' },
   cicd_runs: { dateColumn: 'created_at', compare: 'datetime' },
@@ -25340,7 +27891,11 @@ async function runWebhookEventsMaintenanceCron(env) {
     console.warn('[cron] webhook_events payload compress', e?.message ?? e);
   }
   try {
-    await env.DB.prepare(
+    const _bjId = 'bj_' + Date.now();
+    await env.DB.prepare("INSERT OR IGNORE INTO backfill_jobs (id,job_name,target_table,source_type,status,started_at,created_by) VALUES (?,?,?,'cron','running',unixepoch(),?)")
+      .bind(_bjId, 'webhook_event_stats_rollup', 'webhook_event_stats', 'system')
+      .run().catch(() => { });
+    const _res = await env.DB.prepare(
       `INSERT OR REPLACE INTO webhook_event_stats
         (date, source, event_type, total, succeeded, failed)
        SELECT
@@ -25353,7 +27908,11 @@ async function runWebhookEventsMaintenanceCron(env) {
        FROM webhook_events
        WHERE date(received_at) = date('now', '-1 day')
        GROUP BY date, source, event_type`
-    ).run();
+    ).run().catch(() => null);
+    const inserted = Number(_res?.meta?.changes ?? _res?.changes ?? 0) || 0;
+    await env.DB.prepare("UPDATE backfill_jobs SET status='completed',records_processed=?,records_inserted=?,completed_at=unixepoch() WHERE id=?")
+      .bind(inserted, inserted, _bjId)
+      .run().catch(() => { });
     console.log('[cron] webhook_event_stats rollup completed');
   } catch (e) {
     console.warn('[cron] webhook_event_stats rollup', e?.message ?? e);
@@ -25428,6 +27987,66 @@ async function runSpendLedgerRollup(env) {
   console.log(`[rollup] Completed. ${months.length} provider/month combos rolled up.`);
 }
 
+async function runAgentsamWebhookWeeklyRollup(env) {
+  if (!env?.DB) return;
+  const now = new Date();
+  const thisMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const day = thisMonday.getUTCDay();
+  thisMonday.setUTCDate(thisMonday.getUTCDate() - ((day + 6) % 7));
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+  const weekStart = lastMonday.toISOString().slice(0, 10);
+  const weekEnd = thisMonday.toISOString().slice(0, 10);
+  try {
+    const stats = await env.DB.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='processed' THEN 1 ELSE 0 END) AS processed,
+        SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+    `).bind(weekStart, weekEnd).first().catch(() => null);
+    const bySource = await env.DB.prepare(`
+      SELECT source, COUNT(*) AS c
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+      GROUP BY source
+      ORDER BY c DESC
+      LIMIT 50
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
+    const byType = await env.DB.prepare(`
+      SELECT event_type, COUNT(*) AS c
+      FROM webhook_events
+      WHERE datetime(received_at) >= datetime(?)
+        AND datetime(received_at) < datetime(?)
+      GROUP BY event_type
+      ORDER BY c DESC
+      LIMIT 100
+    `).bind(weekStart, weekEnd).all().catch(() => ({ results: [] }));
+    const perSourceJson = JSON.stringify(Object.fromEntries((bySource.results || []).map(r => [r.source || 'unknown', Number(r.c) || 0])));
+    const perTypeJson = JSON.stringify(Object.fromEntries((byType.results || []).map(r => [r.event_type || 'unknown', Number(r.c) || 0])));
+
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO agentsam_webhook_weekly
+        (tenant_id, week_start, week_end, total_events, processed_count, failed_count,
+         per_source_json, per_event_type_json, rolled_up_at)
+       VALUES ('tenant_sam_primeaux', ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+    ).bind(
+      weekStart,
+      weekEnd,
+      Number(stats?.total) || 0,
+      Number(stats?.processed) || 0,
+      Number(stats?.failed) || 0,
+      perSourceJson,
+      perTypeJson
+    ).run().catch(() => { });
+  } catch (e) {
+    console.warn('[cron] agentsam_webhook_weekly rollup', e?.message ?? e);
+  }
+}
+
 worker.scheduled = async function scheduled(event, env, ctx) {
   if (event.cron === '*/30 * * * *') {
     ctx.waitUntil(processQueues(env));
@@ -25436,6 +28055,13 @@ worker.scheduled = async function scheduled(event, env, ctx) {
   }
   if (event.cron === '0 0 * * *') {
     if (env?.DB) ctx.waitUntil(runRetentionPurge(env));
+    if (env?.DB) {
+      ctx.waitUntil(
+        Promise.allSettled([runMasterDailyRetention(env)]).then((results) => {
+          console.log('[retention] rollup complete', { results });
+        })
+      );
+    }
     if (env?.DB && env?.R2) {
       ctx.waitUntil(
         archiveOldConversations(env).then((r) => {
@@ -25454,6 +28080,10 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(writeDailySnapshot(env, 'cron_midnight').catch(() => { }));
     ctx.waitUntil(sendDailyDigest(env));
     return;
+  }
+  if (event.cron === '10 0 * * *') {
+    if (!env?.DB) return;
+    ctx.waitUntil(writeDailySnapshot(env, 'cron_0010').catch(() => { }));
   }
   if (event.cron === '0 6 * * *') {
     console.log('[cron] Starting daily doc sync (compact -> knowledge sync -> Vectorize index)');
@@ -25484,6 +28114,12 @@ worker.scheduled = async function scheduled(event, env, ctx) {
     ctx.waitUntil(
       runIntegritySnapshot(env, 'cron').catch((e) => console.warn('[cron] runIntegritySnapshot', e?.message ?? e))
     );
+  }
+  if (event.cron === '10 0 * * 1') {
+    if (env?.DB) {
+      ctx.waitUntil(runDeploymentsWeeklyRollup(env));
+      ctx.waitUntil(runAgentsamWebhookWeeklyRollup(env));
+    }
   }
   if (event.cron === '30 13 * * *') {
     ctx.waitUntil(sendDailyPlanEmail(env));
@@ -25611,6 +28247,67 @@ function iamD1QuoteIdent(ident) {
   return `"${String(ident).replace(/"/g, '""')}"`;
 }
 
+function iamPgQuoteIdent(ident) {
+  return `"${String(ident).replace(/"/g, '""')}"`;
+}
+
+function iamSqlStatementKind(sql) {
+  const trimmed = String(sql || '').trim().replace(/^--.*$/gm, '').trim();
+  const first = (trimmed.match(/^[a-z]+/i)?.[0] || '').toUpperCase();
+  if (['CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'REINDEX', 'VACUUM'].includes(first)) return 'ddl';
+  if (['INSERT', 'UPDATE', 'DELETE', 'REPLACE'].includes(first)) return 'dml';
+  return 'read';
+}
+
+function iamParseDatabaseFilters(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function iamBuildD1FilterWhere(filters) {
+  const clauses = [];
+  const values = [];
+  for (const f of filters || []) {
+    const col = String(f?.col || '').trim();
+    const op = String(f?.op || '').trim();
+    if (!col) continue;
+    const qcol = iamD1QuoteIdent(col);
+    if (op === 'is_null') clauses.push(`${qcol} IS NULL`);
+    else if (op === 'not_null') clauses.push(`${qcol} IS NOT NULL`);
+    else if (op === 'eq') { clauses.push(`${qcol} = ?`); values.push(f.val); }
+    else if (op === 'neq') { clauses.push(`${qcol} != ?`); values.push(f.val); }
+    else if (op === 'gt') { clauses.push(`${qcol} > ?`); values.push(f.val); }
+    else if (op === 'lt') { clauses.push(`${qcol} < ?`); values.push(f.val); }
+    else if (op === 'like') { clauses.push(`${qcol} LIKE ?`); values.push(`%${String(f.val ?? '')}%`); }
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values };
+}
+
+function iamBuildPgFilterWhere(filters, startIndex = 1) {
+  const clauses = [];
+  const values = [];
+  let idx = startIndex;
+  for (const f of filters || []) {
+    const col = String(f?.col || '').trim();
+    const op = String(f?.op || '').trim();
+    if (!col) continue;
+    const qcol = iamPgQuoteIdent(col);
+    if (op === 'is_null') clauses.push(`${qcol} IS NULL`);
+    else if (op === 'not_null') clauses.push(`${qcol} IS NOT NULL`);
+    else if (op === 'eq') { clauses.push(`${qcol} = $${idx++}`); values.push(f.val); }
+    else if (op === 'neq') { clauses.push(`${qcol} <> $${idx++}`); values.push(f.val); }
+    else if (op === 'gt') { clauses.push(`${qcol} > $${idx++}`); values.push(f.val); }
+    else if (op === 'lt') { clauses.push(`${qcol} < $${idx++}`); values.push(f.val); }
+    else if (op === 'like') { clauses.push(`${qcol}::text ILIKE $${idx++}`); values.push(`%${String(f.val ?? '')}%`); }
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values, nextIndex: idx };
+}
+
 function iamUnifiedSearchDedupeKey(r) {
   const t = r.type;
   const id = r.id != null ? String(r.id) : '';
@@ -25691,7 +28388,7 @@ async function handleUnifiedSearchDashboard(request, env) {
 
   const conversations = [];
   try {
-    const tenantId = env.TENANT_ID || 'system';
+    const tenantId = 'system';
     const sq = await env.DB.prepare(
       `SELECT s.id,
               COALESCE(s.name, ac.name, ac.title, 'Chat') AS name
@@ -25719,7 +28416,7 @@ async function handleUnifiedSearchDashboard(request, env) {
 
   const convoMessages = [];
   try {
-    const tenantId = env.TENANT_ID || 'system';
+    const tenantId = 'system';
     const mq = await env.DB.prepare(
       `SELECT am.conversation_id AS id, am.content, am.created_at
        FROM agent_messages am
@@ -25945,13 +28642,27 @@ async function handleUnifiedSearchTrack(request, env) {
   if (!qtext) return jsonResponse({ error: 'query required' }, 400);
   const resultKind = (body?.result_kind || body?.kind || '').toString().trim() || 'open';
   const openedId = body?.opened_id != null ? String(body.opened_id).slice(0, 200) : null;
+  const tenantId = authUser.tenant_id || tenantIdFromEnv(env);
+  const workspaceId = authUser.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID;
+  const sessionId = authUser.session_id || null;
   const id = crypto.randomUUID();
   try {
     await env.DB.prepare(
-      `INSERT INTO ai_search_analytics (id, user_id, query, result_kind, opened_id, created_at)
-       VALUES (?, ?, ?, ?, ?, unixepoch())`
+      `INSERT INTO ai_search_analytics
+        (id, tenant_id, workspace_id, user_id, query, results_count, clicked_result_id,
+         search_type, provider, model, latency_ms, session_id, source, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL, 0, ?, 'unified_search', unixepoch())`
     )
-      .bind(id, uid || null, qtext.slice(0, 2000), resultKind.slice(0, 64), openedId)
+      .bind(
+        id,
+        tenantId || null,
+        workspaceId || null,
+        uid || null,
+        qtext.slice(0, 2000),
+        openedId,
+        resultKind.slice(0, 64),
+        sessionId
+      )
       .run();
     return jsonResponse({ ok: true, id });
   } catch (e) {
@@ -26340,7 +29051,7 @@ async function handleAgentDbSnippetsPost(request, env) {
 
 async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, source, payload) {
   if (!env?.DB || !userId) return;
-  const wsId = workspaceId || 'ws_inneranimalmedia';
+  const wsId = workspaceId || IAM_DEFAULT_WORKSPACE_ID;
   const nowIso = new Date().toISOString();
   const sessionId = `wsess_${userId}_${wsId}`;
   const signalId = crypto.randomUUID();
@@ -26356,12 +29067,11 @@ async function ensureWorkSessionAndSignal(env, userId, workspaceId, signalType, 
   ).bind(signalId, sessionId, signalType || 'heartbeat', source || 'dashboard', safePayload).run().catch(() => { });
 }
 
-/** Tenant for worker writes: session row first (from auth_users at login), then wrangler TENANT_ID for local/bootstrap only. Never hardcode a production tenant literal. */
-function resolveTenantIdForWorker(session, env) {
+/** Tenant for anonymous/bootstrap only. If a session has a user_id, never fall back to env.TENANT_ID (cross-tenant leak). */
+function resolveTenantIdForWorker(session, _env) {
   const st = session && session.tenant_id != null && String(session.tenant_id).trim();
   if (st) return String(session.tenant_id).trim();
-  const et = env && env.TENANT_ID != null && String(env.TENANT_ID).trim();
-  if (et) return et;
+  if (session?.user_id != null && String(session.user_id).trim() !== '') return null;
   return null;
 }
 
@@ -26376,6 +29086,29 @@ async function fetchAuthUserTenantId(env, userKey) {
     if (u && u.tenant_id != null && String(u.tenant_id).trim() !== '') return String(u.tenant_id).trim();
   } catch (e) {
     console.warn('[fetchAuthUserTenantId]', e?.message ?? e);
+  }
+  if (k.startsWith('usr_')) {
+    try {
+      const row = await env.DB
+        .prepare(
+          `SELECT au.tenant_id AS tenant_id
+           FROM users u
+           INNER JOIN auth_users au ON au.id = u.auth_id
+           WHERE u.id = ?
+           LIMIT 1`,
+        )
+        .bind(k)
+        .first();
+      if (row?.tenant_id != null && String(row.tenant_id).trim() !== '') return String(row.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId join]', e?.message ?? e);
+    }
+    try {
+      const only = await env.DB.prepare(`SELECT tenant_id FROM users WHERE id = ? LIMIT 1`).bind(k).first();
+      if (only?.tenant_id != null && String(only.tenant_id).trim() !== '') return String(only.tenant_id).trim();
+    } catch (e) {
+      console.warn('[fetchAuthUserTenantId users]', e?.message ?? e);
+    }
   }
   return null;
 }
@@ -26407,7 +29140,7 @@ async function readIamSessionFromKv(env, sessionId) {
 async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIso) {
   if (!env.SESSION_CACHE || !sessionId || !userId) return;
   const tid = tenantId != null && String(tenantId).trim() !== '' ? String(tenantId).trim() : null;
-  const payload = { v: 1, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
+  const payload = { v: 1, session_id: sessionId, user_id: userId, tenant_id: tid, expires_at: expiresAtIso || null };
   try {
     await env.SESSION_CACHE.put(IAM_KV_SESSION_KEY_PREFIX + sessionId, JSON.stringify(payload), {
       expirationTtl: ttlSecondsFromExpiresAtIso(expiresAtIso),
@@ -26418,9 +29151,7 @@ async function writeIamSessionToKv(env, sessionId, userId, tenantId, expiresAtIs
 }
 
 async function resolveTenantAtLogin(env, userId) {
-  const fromUser = await fetchAuthUserTenantId(env, userId);
-  if (fromUser) return fromUser;
-  return resolveTenantIdForWorker(null, env);
+  return await fetchAuthUserTenantId(env, userId);
 }
 
 async function finalizeSessionShape(env, sessionId, userKey, expiresAtIso, tenantResolved) {
@@ -26450,28 +29181,122 @@ async function getSession(env, request) {
 
   const kv = await readIamSessionFromKv(env, sessionId);
   if (kv) {
-    const tenantKv =
-      (kv.tenant_id != null && String(kv.tenant_id).trim()) || resolveTenantIdForWorker(null, env);
+    let tenantKv =
+      kv.tenant_id != null && String(kv.tenant_id).trim() !== '' ? String(kv.tenant_id).trim() : null;
+    if (!tenantKv) tenantKv = await fetchAuthUserTenantId(env, kv.user_id);
     return await finalizeSessionShape(env, sessionId, kv.user_id, kv.expires_at, tenantKv);
   }
 
   const row = await env.DB.prepare(
-    `SELECT id, user_id, expires_at FROM auth_sessions WHERE id = ? AND datetime(expires_at) > datetime('now')`
+    `SELECT id, user_id, expires_at, tenant_id FROM auth_sessions WHERE id = ? AND datetime(expires_at) > datetime('now')`
   ).bind(sessionId).first();
   if (!row) return null;
-  const tenantFromUser = await fetchAuthUserTenantId(env, row.user_id);
-  const tenantResolved = tenantFromUser || resolveTenantIdForWorker(null, env);
+  let tenantResolved =
+    row.tenant_id != null && String(row.tenant_id).trim() !== '' ? String(row.tenant_id).trim() : null;
+  if (!tenantResolved) tenantResolved = await fetchAuthUserTenantId(env, row.user_id);
   void writeIamSessionToKv(env, sessionId, row.user_id, tenantResolved, row.expires_at);
   return await finalizeSessionShape(env, sessionId, row.user_id, row.expires_at, tenantResolved);
 }
 
-/** Returns { id: user_id, email? } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
+/** Returns { id: user_id, email?, tenant_id?, is_superadmin } for auth_sessions user, or null. Use for routes that need current user id. For session list and OAuth tokens use email || id (id is auth_sessions.user_id; for superadmin id is sam_primeaux, email is the login email). */
 async function getAuthUser(request, env) {
   const session = await getSession(env, request);
   if (!session) return null;
   const sessionUserId = session._session_user_id || session.user_id;
-  const tenantId = resolveTenantIdForWorker(session, env);
-  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId };
+  let tenantId =
+    session.tenant_id != null && String(session.tenant_id).trim() !== ''
+      ? String(session.tenant_id).trim()
+      : null;
+  if (!tenantId) tenantId = await fetchAuthUserTenantId(env, session.user_id);
+  if (!tenantId && sessionUserId && sessionUserId !== session.user_id) {
+    tenantId = await fetchAuthUserTenantId(env, sessionUserId);
+  }
+  let superadminIdentity = null;
+  if (env.DB && sessionUserId) {
+    const loginEmail = String(sessionUserId || '').trim().toLowerCase();
+    if (loginEmail.includes('@')) {
+      try {
+        superadminIdentity = await env.DB.prepare(
+          `SELECT id, superadmin_uuid, email, name, tenant_id, permissions_json
+           FROM superadmin_identity
+           WHERE LOWER(email) = ? AND COALESCE(is_enabled, 0) = 1
+           LIMIT 1`
+        ).bind(loginEmail).first();
+        if (superadminIdentity) {
+          await env.DB.prepare(
+            `UPDATE superadmin_identity SET last_login_at = unixepoch() WHERE id = ?`
+          ).bind(superadminIdentity.id).run();
+          tenantId = superadminIdentity.tenant_id || tenantId;
+        }
+      } catch (e) {
+        console.warn('[getAuthUser superadmin_identity]', e?.message ?? e);
+      }
+    }
+  }
+  const sid = session.id || session.session_id;
+  if (sid && tenantId && (session.tenant_id == null || String(session.tenant_id).trim() === '')) {
+    env.DB
+      .prepare(
+        `UPDATE auth_sessions SET tenant_id = ? WHERE id = ? AND (tenant_id IS NULL OR TRIM(COALESCE(tenant_id,'')) = '')`,
+      )
+      .bind(tenantId, sid)
+      .run()
+      .catch((e) => console.warn('[auth_sessions tenant patch]', e?.message ?? e));
+    void writeIamSessionToKv(env, sid, session.user_id, tenantId, session.expires_at);
+  }
+  let is_superadmin = superadminIdentity ? 1 : 0;
+  if (env.DB && session.user_id != null) {
+    const uid = String(session.user_id).trim();
+    try {
+      if (uid.startsWith('usr_')) {
+        const row = await env.DB
+          .prepare(
+            `SELECT COALESCE(au.is_superadmin, 0) AS is_superadmin
+             FROM users u INNER JOIN auth_users au ON au.id = u.auth_id
+             WHERE u.id = ? LIMIT 1`,
+          )
+          .bind(uid)
+          .first();
+        if (row && (Number(row.is_superadmin) === 1 || row.is_superadmin === true)) is_superadmin = 1;
+      } else {
+        let row = await env.DB
+          .prepare(`SELECT COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users WHERE id = ? LIMIT 1`)
+          .bind(uid)
+          .first();
+        if (!row && sessionUserId && String(sessionUserId).includes('@')) {
+          row = await env.DB
+            .prepare(
+              `SELECT COALESCE(is_superadmin, 0) AS is_superadmin FROM auth_users WHERE LOWER(email) = LOWER(?) LIMIT 1`,
+            )
+            .bind(sessionUserId)
+            .first();
+        }
+        if (row && (Number(row.is_superadmin) === 1 || row.is_superadmin === true)) is_superadmin = 1;
+      }
+    } catch (e) {
+      console.warn('[getAuthUser is_superadmin]', e?.message ?? e);
+    }
+  }
+  if (superadminIdentity) {
+    let permissions = {};
+    try {
+      permissions = JSON.parse(superadminIdentity.permissions_json || '{}');
+    } catch (_) {
+      permissions = {};
+    }
+    return {
+      id: superadminIdentity.superadmin_uuid || session.user_id,
+      email: superadminIdentity.email || sessionUserId,
+      tenant_id: tenantId,
+      workspace_id: session.workspace_id || env.WORKSPACE_ID || IAM_DEFAULT_WORKSPACE_ID,
+      is_superadmin: 1,
+      superadmin_uuid: superadminIdentity.superadmin_uuid,
+      permissions,
+      session_id: sid || null,
+      _session_user_id: sessionUserId,
+    };
+  }
+  return { id: session.user_id, email: sessionUserId, tenant_id: tenantId, is_superadmin, session_id: sid || null };
 }
 
 /** IDE workspace API: conversation must belong to this user (agent_conversations.user_id) or tenant (agent_sessions). */
@@ -26502,25 +29327,25 @@ function agentIdeWorkspaceStorageId(authUser, conversationId) {
   return `ws_ide_${u.replace(/[^a-z0-9_]/gi, "_").toLowerCase()}`;
 }
 
-/** Tenant for theme APIs: session user (KV/auth_sessions) then wrangler TENANT_ID. */
+/** Tenant for theme APIs: session user (KV/auth_sessions) then D1 auth_users.tenant_id. */
 async function resolveTenantIdForThemeApi(request, env) {
   const authUser = await getAuthUser(request, env);
   const fromAuth = authUser?.tenant_id != null && String(authUser.tenant_id).trim() !== ''
     ? String(authUser.tenant_id).trim()
     : null;
-  return fromAuth || tenantIdFromEnv(env) || null;
+  if (fromAuth) return fromAuth;
+  if (authUser?.id) {
+    const tid = await fetchAuthUserTenantId(env, authUser.id);
+    if (tid) return tid;
+  }
+  return null;
 }
 
 // ----- API Vault (AES-256-GCM, merge from vault-worker; all routes require auth) -----
 const VAULT_USER_ID = null; // was sam_primeaux — now resolved per-request
 
-async function vaultGetKey(masterKeyB64) {
-  const raw = Uint8Array.from(atob(masterKeyB64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
-
-async function vaultEncrypt(plaintext, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
+async function vaultEncrypt(plaintext, masterKeyMaterial) {
+  const key = await getAESKey({ VAULT_MASTER_KEY: masterKeyMaterial }, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
@@ -26530,8 +29355,8 @@ async function vaultEncrypt(plaintext, masterKeyB64) {
   return btoa(String.fromCharCode(...combined));
 }
 
-async function vaultDecrypt(encryptedB64, masterKeyB64) {
-  const key = await vaultGetKey(masterKeyB64);
+async function vaultDecrypt(encryptedB64, masterKeyMaterial) {
+  const key = await getAESKey({ VAULT_MASTER_KEY: masterKeyMaterial }, ['decrypt']);
   const combined = Uint8Array.from(atob(encryptedB64), (c) => c.charCodeAt(0));
   const iv = combined.slice(0, 12);
   const ciphertext = combined.slice(12);
@@ -26565,16 +29390,27 @@ function vaultErr(message, status = 400) {
   return vaultJson({ error: message }, status);
 }
 
+function vaultMasterKeyOrResponse(env) {
+  const vaultKey = env?.VAULT_MASTER_KEY;
+  if (!vaultKey) {
+    console.warn('[vault] VAULT_MASTER_KEY not configured');
+    return { response: vaultJson({ success: false, error: 'Vault not configured' }, 503) };
+  }
+  return { vaultKey };
+}
+
 async function vaultCreateSecret(request, env) {
   const body = await request.json();
   const { secret_name, secret_value, service_name, description, project_label, project_id, tags, scopes_json, expires_at } = body;
   if (!secret_name || !secret_value) return vaultErr('secret_name and secret_value are required');
-  const encrypted = await vaultEncrypt(secret_value, env.VAULT_MASTER_KEY);
+  const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
+  const encrypted = await vaultEncrypt(secret_value, vaultKey);
   const id = vaultNewId('sec');
   const last4val = vaultLast4(secret_value);
   const metadata = JSON.stringify({ last4: last4val });
   const tid = tenantIdFromEnv(env);
-  if (!tid) return vaultErr('TENANT_ID not configured on worker', 503);
+  if (!tid) return vaultErr('Tenant not configured for this account', 503);
   await env.DB.prepare(
     `INSERT INTO user_secrets (id, user_id, tenant_id, secret_name, secret_value_encrypted, service_name, description, project_label, project_id, tags, scopes_json, metadata_json, expires_at, is_active)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
@@ -26607,7 +29443,9 @@ async function vaultRevealSecret(id, eventType, request, env) {
   if (!row) return vaultErr('Secret not found or inactive', 404);
   let plaintext;
   try {
-    plaintext = await vaultDecrypt(row.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+    if (response) return response;
+    plaintext = await vaultDecrypt(row.secret_value_encrypted, vaultKey);
   } catch {
     return vaultErr('Decryption failed — master key may have changed', 500);
   }
@@ -26635,11 +29473,13 @@ async function vaultRotateSecret(id, request, env) {
   const existing = await env.DB.prepare(`SELECT * FROM user_secrets WHERE id = ? AND user_id = ?`).bind(id, VAULT_USER_ID).first();
   if (!existing) return vaultErr('Secret not found', 404);
   let oldLast4 = '????';
+  const { vaultKey, response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
   try {
-    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, env.VAULT_MASTER_KEY);
+    const oldPlain = await vaultDecrypt(existing.secret_value_encrypted, vaultKey);
     oldLast4 = vaultLast4(oldPlain);
   } catch { }
-  const newEncrypted = await vaultEncrypt(new_value, env.VAULT_MASTER_KEY);
+  const newEncrypted = await vaultEncrypt(new_value, vaultKey);
   const newLast4 = vaultLast4(new_value);
   const newMeta = JSON.stringify({ ...JSON.parse(existing.metadata_json || '{}'), last4: newLast4 });
   await env.DB.prepare(`UPDATE user_secrets SET secret_value_encrypted = ?, metadata_json = ?, updated_at = unixepoch() WHERE id = ?`).bind(newEncrypted, newMeta, id).run();
@@ -26720,7 +29560,6 @@ function vaultRegistry() {
     { name: 'R2_ACCESS_KEY_ID', type: 'secret', description: 'R2 storage' },
     { name: 'R2_SECRET_ACCESS_KEY', type: 'secret', description: 'R2 storage' },
     { name: 'RESEND_API_KEY', type: 'secret', description: 'Transactional email' },
-    { name: 'TENANT_ID', type: 'plaintext', description: 'Tenant identifier' },
     { name: 'TERMINAL_SECRET', type: 'secret', description: 'Terminal auth' },
     { name: 'TERMINAL_WS_URL', type: 'secret', description: 'Terminal WebSocket URL' },
     { name: 'VAULT_MASTER_KEY', type: 'secret', description: 'Vault encryption' },
@@ -26738,7 +29577,8 @@ function vaultRegistry() {
 }
 
 async function handleVaultRequest(request, env) {
-  if (!env.VAULT_MASTER_KEY) return vaultErr('VAULT_MASTER_KEY not configured. Run: wrangler secret put VAULT_MASTER_KEY', 500);
+  const { response } = vaultMasterKeyOrResponse(env);
+  if (response) return response;
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
@@ -26940,6 +29780,85 @@ async function runKnowledgeSearchMerged(env, query, max_results) {
   return { query, merged, answer };
 }
 
+async function knowledgeSearch(env, query, opts = {}) {
+  const topK = opts.topK || 5;
+  const wsId = resolveWorkspaceId(env, opts);
+  const threshold = opts.threshold || 0.5;
+  const q = String(query || '').trim();
+  if (!q) return { source: 'none', workspace_id: wsId, results: [] };
+  if (!env?.DB) return { source: 'none', workspace_id: wsId, results: [] };
+
+  const queryVec = await generateEmbedding(env, q);
+
+  // Primary: CF Vectorize
+  if (env.VECTORIZE_INDEX) {
+    try {
+      const r = await env.VECTORIZE_INDEX.query(queryVec, {
+        topK,
+        returnMetadata: true,
+        namespace: wsId
+      });
+      if (r?.matches?.length > 0) {
+        const ids = r.matches.map(m => m.id);
+        const ph = ids.map(() => '?').join(',');
+        const rows = await env.DB.prepare(
+          `SELECT id, content, knowledge_id, chunk_index, metadata_json
+           FROM ai_knowledge_chunks
+           WHERE workspace_id = ?
+             AND id IN (${ph})`
+        ).bind(wsId, ...ids).all();
+        await env.DB.prepare(
+          `INSERT INTO rag_query_log
+             (id, query_text, workspace_id, results_count, source, created_at)
+           VALUES (?,?,?,?,'vectorize',unixepoch())`
+        ).bind(
+          crypto.randomUUID(), q.slice(0, 500), wsId, r.matches.length
+        ).run().catch(() => { });
+        return {
+          source: 'vectorize',
+          workspace_id: wsId,
+          results: r.matches.map(m => ({
+            score: m.score,
+            chunk: (rows.results || []).find(c => c.id === m.id),
+            metadata: m.metadata
+          })).filter(x => x.chunk && x.score >= threshold)
+        };
+      }
+    } catch (e) {
+      console.warn('[rag] vectorize failed, d1 fallback:', e?.message);
+    }
+  }
+
+  // Fallback: D1 cosine similarity
+  const chunks = await env.DB.prepare(
+    `SELECT id, content, knowledge_id, chunk_index, embedding_vector
+     FROM ai_knowledge_chunks
+     WHERE workspace_id = ?
+       AND embedding_vector IS NOT NULL
+       AND is_indexed = 1
+     LIMIT 500`
+  ).bind(wsId).all();
+  const cos = (a, b) => {
+    let d = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; }
+    return d / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+  };
+  const scored = (chunks.results || []).map(c => {
+    try {
+      return { chunk: c, score: cos(queryVec, JSON.parse(c.embedding_vector)) };
+    } catch { return null; }
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, topK)
+    .filter(x => x.score >= threshold);
+
+  await env.DB.prepare(
+    `INSERT INTO rag_query_log
+       (id, query_text, workspace_id, results_count, source, created_at)
+     VALUES (?,?,?,?,'d1_fallback',unixepoch())`
+  ).bind(crypto.randomUUID(), q.slice(0, 500), wsId, scored.length)
+    .run().catch(() => { });
+  return { source: 'd1_fallback', workspace_id: wsId, results: scored };
+}
+
 async function ensureRagSearchToolRegistered(env) {
   if (_ragSearchToolEnsured || !env.DB) return;
   try {
@@ -26963,54 +29882,57 @@ async function ensureRagSearchToolRegistered(env) {
   _ragSearchToolEnsured = true;
 }
 
-const RAG_MEMORY_EMBED_MODEL = '@cf/baai/bge-large-en-v1.5';
+const RAG_MEMORY_EMBED_MODEL = IAM_EMBED_MODEL;
 const RAG_CHUNK_MAX_CHARS = 600;
 const RAG_CHUNK_OVERLAP = 80;
 const RAG_EMBED_BATCH_SIZE = 32;
 const RAG_COMPACT_MAX_MSG_CHARS = 800;
 const RAG_COMPACT_HOURS = 48;
 
-/** Default for match_documents p_project_id — must match documents.project_id from ingest (e.g. inneranimalmedia). */
-const PGVECTOR_DEFAULT_PROJECT_ID = 'inneranimalmedia';
+async function searchAgentMemory(env, queryVec, opts = {}) {
+  const wsId = resolveWorkspaceId(env, opts);
+  const limit = opts.limit || 10;
+  const threshold = opts.threshold || 0.7;
 
-/**
- * Embed query with Workers AI, then call Supabase match_documents via Hyperdrive (raw pg).
- * Expects DB function: match_documents(vector, float, int, text). Embedding dims must match the DB (bge-large-en-v1.5 = 1024).
- */
-async function pgMatchDocuments(env, queryText, opts = {}) {
-  const fail = (msg) => ({ rows: [], error: msg, embedding: null });
-  if (!env.HYPERDRIVE?.connectionString) return fail('hyperdrive not configured');
-  if (!env.AI) return fail('AI binding missing');
-  const q = String(queryText || '').trim();
-  if (!q) return fail('query required');
-  const threshold = typeof opts.match_threshold === 'number' ? opts.match_threshold : 0.25;
-  const matchCount = typeof opts.match_count === 'number'
-    ? Math.min(Math.max(1, opts.match_count), 50)
-    : 8;
-  const projectId = (typeof opts.project_id === 'string' && opts.project_id.trim())
-    ? opts.project_id.trim()
-    : PGVECTOR_DEFAULT_PROJECT_ID;
-  try {
-    const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [q] });
-    const raw = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(raw) ? raw : raw?.data)?.[0];
-    if (!vector || !Array.isArray(vector)) return fail('embedding failed or empty vector');
-    const { Client } = await import('pg');
-    const vecLiteral = '[' + vector.join(',') + ']';
-    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
-    await client.connect();
+  if (env.HYPERDRIVE?.connectionString) {
     try {
-      const res = await client.query(
-        `SELECT * FROM match_documents($1::vector, $2::float, $3::int, $4::text)`,
-        [vecLiteral, threshold, matchCount, projectId]
-      );
-      return { rows: res.rows || [], error: null, embedding: vector };
-    } finally {
-      await client.end().catch(() => { });
+      const { neon } = await import('@neondatabase/serverless');
+      const sql = neon(env.HYPERDRIVE.connectionString);
+      const rows = await sql`
+        SELECT id, session_id, agent_id, role, content, metadata,
+               1 - (embedding <=> ${JSON.stringify(queryVec)}::vector) AS similarity
+        FROM agent_memory
+        WHERE workspace_id = ${wsId}
+          AND embedding IS NOT NULL
+          AND 1 - (embedding <=> ${JSON.stringify(queryVec)}::vector) > ${threshold}
+        ORDER BY similarity DESC
+        LIMIT ${limit}
+      `;
+      return { source: 'hyperdrive_pgvector', workspace_id: wsId, rows };
+    } catch (e) {
+      console.warn('[rag] hyperdrive pgvector failed:', e?.message);
     }
-  } catch (e) {
-    return { rows: [], error: e?.message || String(e), embedding: null };
   }
+
+  // Fallback: Supabase REST rpc
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/match_agent_memory`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': env.SUPABASE_SERVICE_ROLE_KEY
+      },
+      body: JSON.stringify({
+        query_embedding: queryVec,
+        match_threshold: threshold,
+        match_count: limit,
+        p_workspace_id: wsId
+      })
+    });
+    return { source: 'supabase_rpc', workspace_id: wsId, rows: await res.json().catch(() => []) };
+  }
+  return { source: 'none', workspace_id: wsId, rows: [] };
 }
 
 function formatPgvectorRowsForPrompt(rows) {
@@ -27031,7 +29953,7 @@ function formatPgvectorRowsForPrompt(rows) {
 }
 
 /** Unified RAG: D1 cosine over ai_knowledge_chunks + keyword sources; optional VECTORIZE_INDEX secondary (never AI_SEARCH / VECTORIZE_DOCS). */
-const UNIFIED_RAG_EMBED_MODEL = '@cf/baai/bge-base-en-v1.5';
+const UNIFIED_RAG_EMBED_MODEL = IAM_EMBED_MODEL;
 const VECTORIZE_INDEX_KNOWN_VECTOR_COUNT = 34;
 
 function sanitizeUnifiedRagLike(q) {
@@ -27098,11 +30020,11 @@ async function unifiedRagSearch(env, query, opts = {}) {
   const conversationId = opts.conversation_id ?? null;
   const mode = opts.mode ?? null;
   const intent = opts.intent ?? null;
+  const wsId = resolveWorkspaceId(env, opts);
   const _t0 = Date.now();
   const likePct = `%${sanitizeUnifiedRagLike(q)}%`;
 
-  const emb = await env.AI.run(UNIFIED_RAG_EMBED_MODEL, { text: q });
-  const qVec = emb?.data?.[0] ?? emb?.result?.data?.[0];
+  const qVec = await generateEmbedding(env, q);
   if (!qVec || !Array.isArray(qVec)) {
     return { matches: [], results: [], count: 0, _error: 'embedding_failed' };
   }
@@ -27110,7 +30032,7 @@ async function unifiedRagSearch(env, query, opts = {}) {
   const runVec = async () => {
     if (!env.VECTORIZE_INDEX) return [];
     try {
-      const res = await env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all' });
+      const res = await env.VECTORIZE_INDEX.query(qVec, { topK: 8, returnMetadata: 'all', namespace: wsId });
       return res?.matches ?? res ?? [];
     } catch (e) {
       console.warn('[unifiedRagSearch] VECTORIZE_INDEX', e?.message ?? e);
@@ -27455,9 +30377,7 @@ async function vectorizeRagSearch(env, query, opts = {}) {
   const debug = { indexUsed, hasIndex: !!index, hasAi: !!env.AI, hasR2: !!env.R2, topK };
   if (!index || !env.AI) return { results: [], data: [], _debug: { ...debug, error: 'missing index or AI binding' } };
   try {
-    const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: [query] });
-    const data = modelResp?.data ?? modelResp;
-    const vector = (Array.isArray(data) ? data : data?.data)?.[0];
+    const vector = await generateEmbedding(env, query);
     if (!vector || !Array.isArray(vector)) return { results: [], data: [], _debug: { ...debug, error: 'embedding failed or empty vector' } };
     const vectorMatches = await index.query(vector, { topK, returnMetadata: 'all' });
     const matches = vectorMatches?.matches ?? vectorMatches ?? [];
@@ -27602,15 +30522,14 @@ async function performDocsBucketVectorizeIndex(env, keyFilter) {
       for (let i = 0; i < parts.length; i += RAG_EMBED_BATCH_SIZE) {
         const batchParts = parts.slice(i, i + RAG_EMBED_BATCH_SIZE);
         const texts = batchParts.map((c) => c);
-        let data;
+        let values;
         try {
-          const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-          data = modelResp?.data || modelResp;
+          const vecs = await generateEmbedding(env, texts);
+          values = Array.isArray(vecs) ? vecs : [];
         } catch (e) {
           console.warn('[docs-vector-index] embed batch failed', key, e?.message ?? e);
           continue;
         }
-        const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
         const vectors = [];
         batchParts.forEach((_, j) => {
           const chunkIndex = i + j;
@@ -28091,7 +31010,7 @@ async function archiveOldConversations(env) {
 
 /**
  * Index R2 memory markdown (memory/daily/*.md, memory/schema-and-records.md) into Vectorize.
- * Uses Workers AI @cf/baai/bge-large-en-v1.5 (1024 dims). Requires Vectorize index with dimensions=1024, metric=cosine (matches AI Search iam-docs-search).
+ * Uses Workers AI IAM_EMBED_MODEL (IAM_EMBED_DIMS). Requires Vectorize index with dimensions=IAM_EMBED_DIMS, metric=cosine (matches AI Search iam-docs-search).
  * Returns { indexed: number of keys, chunks: number of vectors upserted, error?: string }.
  */
 async function indexMemoryMarkdownToVectorize(env) {
@@ -28144,14 +31063,13 @@ async function indexMemoryMarkdownToVectorize(env) {
   for (let i = 0; i < allChunks.length; i += RAG_EMBED_BATCH_SIZE) {
     const batch = allChunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
     const texts = batch.map(b => b.text);
-    let data;
+    let values;
     try {
-      const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-      data = modelResp?.data || modelResp;
+      const vecs = await generateEmbedding(env, texts);
+      values = Array.isArray(vecs) ? vecs : [];
     } catch (e) {
       throw new Error(`Embedding batch failed: ${e?.message || e}`);
     }
-    const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
     batch.forEach((b, j) => {
       const vec = values[j];
       if (vec && Array.isArray(vec)) {
@@ -28230,14 +31148,13 @@ async function performCodebaseIndexing(env) {
         for (let i = 0; i < chunks.length; i += RAG_EMBED_BATCH_SIZE) {
           const batch = chunks.slice(i, i + RAG_EMBED_BATCH_SIZE);
           const texts = batch.map((c) => c.text);
-          let data;
+          let values;
           try {
-            const modelResp = await env.AI.run(RAG_MEMORY_EMBED_MODEL, { text: texts });
-            data = modelResp?.data || modelResp;
+            const vecs = await generateEmbedding(env, texts);
+            values = Array.isArray(vecs) ? vecs : [];
           } catch (e) {
             return { success: false, error: `Embedding failed: ${e?.message || e}`, stats };
           }
-          const values = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
           const vectors = [];
           batch.forEach((c, j) => {
             const vec = values[j];
@@ -28597,7 +31514,7 @@ ${hookHtml}
     `Archived convos: ${archiveStatus?.archived_convos}; D1 messages: ${msgTableSize?.total_msgs}`,
   ].join('\n');
 
-  const toEmail = 'meauxbility@gmail.com';
+  const toEmail = env.RESEND_TO || 'support@inneranimalmedia.com';
   if (env.RESEND_API_KEY) {
     try {
       const subject = `IAM Daily Digest -- ${new Date().toISOString().slice(0, 10)}`;
@@ -28609,7 +31526,7 @@ ${hookHtml}
           'Accept': 'application/json, text/event-stream',
         },
         body: JSON.stringify({
-          from: 'sam@inneranimalmedia.com',
+          from: env.RESEND_FROM || 'support@inneranimalmedia.com',
           to: [toEmail],
           subject,
           text: textBody,
@@ -28625,9 +31542,11 @@ ${hookHtml}
         await env.DB.prepare(
           `INSERT INTO email_logs
            (id, to_email, from_email, subject, status, resend_id, created_at, updated_at)
-           VALUES (?, 'meauxbility@gmail.com', 'sam@inneranimalmedia.com', ?, 'sent', ?, datetime('now'), datetime('now'))`
+           VALUES (?, ?, ?, ?, 'sent', ?, datetime('now'), datetime('now'))`
         ).bind(
           crypto.randomUUID(),
+          toEmail,
+          env.RESEND_FROM || 'support@inneranimalmedia.com',
           subject,
           resendResult.id ?? null
         ).run().catch(() => { });
@@ -28889,8 +31808,8 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: 'Agent Sam <agent@inneranimalmedia.com>',
-        to: ['sam@inneranimalmedia.com'],
+        from: env.RESEND_FROM || 'Inner Animal Media <support@inneranimalmedia.com>',
+        to: [env.RESEND_TO || 'support@inneranimalmedia.com'],
         subject,
         text: emailBody,
         html: htmlBody,
@@ -28904,6 +31823,244 @@ Rules: Under 450 words. No fluff. No emojis. Direct and actionable. Treat Sam li
     console.log('[cron] daily-plan email sent');
   } catch (err) {
     console.error('[daily-plan] FATAL:', err?.message, err?.stack);
+  }
+}
+
+const OVERVIEW_AI_PROVIDERS = ['anthropic', 'openai', 'google', 'cursor', 'cloudflare_workers_ai'];
+const OVERVIEW_INFRA_PROVIDERS = ['cloudflare', 'stripe', 'resend', 'supabase', 'vercel'];
+
+function overviewRows(result) {
+  return Array.isArray(result?.results) ? result.results : (Array.isArray(result) ? result : []);
+}
+
+function overviewNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function overviewDayLabels(days) {
+  const now = new Date();
+  const labels = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - i);
+    labels.push(d.toISOString().slice(0, 10));
+  }
+  return labels;
+}
+
+function overviewTrend(rows, labels, dayKey = 'day', valueKey = 'value') {
+  const byDay = new Map(overviewRows(rows).map((r) => [String(r?.[dayKey] || '').slice(0, 10), overviewNumber(r?.[valueKey])]));
+  return labels.map((day) => byDay.get(day) || 0);
+}
+
+async function overviewQuery(env, failed, tableName, sql, binds = [], mode = 'all') {
+  try {
+    const stmt = env.DB.prepare(sql).bind(...binds);
+    return mode === 'first' ? await stmt.first() : overviewRows(await stmt.all());
+  } catch (e) {
+    if (failed && tableName) failed.add(tableName);
+    console.warn(`[overview:${tableName}]`, e?.message ?? e);
+    return mode === 'first' ? null : [];
+  }
+}
+
+async function overviewCachedResponse(request, env, endpointName, producer) {
+  if ((request.method || 'GET').toUpperCase() !== 'GET') return jsonResponse({ error: 'Method not allowed' }, 405);
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+  const cacheKey = `overview:${endpointName}:${tenantId}`;
+  if (env.SESSION_CACHE) {
+    try {
+      const cached = await env.SESSION_CACHE.get(cacheKey, 'json');
+      if (cached) return jsonResponse(cached, 200);
+    } catch (_) { }
+  }
+  const generatedAt = Math.floor(Date.now() / 1000);
+  if (!env.DB) {
+    return jsonResponse({ data: {}, generated_at: generatedAt, error: 'partial', failed: ['DB'] }, 200);
+  }
+  try {
+    const failed = new Set();
+    const data = await producer({ tenantId, session, failed });
+    const payload = {
+      data,
+      generated_at: generatedAt,
+      ...(failed.size ? { error: 'partial', failed: [...failed] } : {}),
+    };
+    if (env.SESSION_CACHE) {
+      env.SESSION_CACHE.put(cacheKey, JSON.stringify(payload), { expirationTtl: 60 }).catch(() => { });
+    }
+    return jsonResponse(payload, 200);
+  } catch (e) {
+    console.warn(`[overview:${endpointName}]`, e?.message ?? e);
+    return jsonResponse({ data: {}, generated_at: generatedAt, error: 'partial', failed: [endpointName] }, 200);
+  }
+}
+
+async function handleOverviewKpiStrip(request, env) {
+  return overviewCachedResponse(request, env, 'kpi-strip', async ({ tenantId, failed }) => {
+    const labels = overviewDayLabels(7);
+    const aiList = OVERVIEW_AI_PROVIDERS.map(() => '?').join(',');
+    const infraList = OVERVIEW_INFRA_PROVIDERS.map(() => '?').join(',');
+    const [
+      burn, burnTrend, ai, aiTrend, infra, infraTrend, agentCalls, agentTrend,
+      hoursWeek, hoursTrend, activeTimer, mcpToday, mcpTrend, taskCounts, providerColors,
+    ] = await Promise.all([
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${aiList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId, ...OVERVIEW_AI_PROVIDERS], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${aiList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId, ...OVERVIEW_AI_PROVIDERS]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(SUM(amount_usd),0) AS total FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${infraList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month')`, [tenantId, ...OVERVIEW_INFRA_PROVIDERS], 'first'),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(SUM(amount_usd),0) AS value FROM spend_ledger WHERE tenant_id = ? AND lower(COALESCE(provider_slug, provider, '')) IN (${infraList}) AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-6 days') GROUP BY day ORDER BY day`, [tenantId, ...OVERVIEW_INFRA_PROVIDERS]),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT COUNT(*) AS total FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','weekday 0','-6 days')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT date(created_at,'unixepoch') AS day, COUNT(*) AS value FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','-6 days') GROUP BY day ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT COALESCE(SUM(duration_seconds),0)/3600.0 AS total FROM project_time_entries WHERE start_time >= date('now','weekday 0','-6 days') AND COALESCE(is_active,0) = 0`, [], 'first'),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT date(start_time) AS day, COALESCE(SUM(duration_seconds),0)/3600.0 AS value FROM project_time_entries WHERE start_time >= date('now','-6 days') AND COALESCE(is_active,0) = 0 GROUP BY day ORDER BY day`, []),
+      overviewQuery(env, failed, 'active_timers', `SELECT id, project_id, started_at AS start_time, status FROM active_timers WHERE tenant_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(SUM(call_count),0) AS total, COALESCE(SUM(success_count),0) AS successes FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT date AS day, COALESCE(SUM(call_count),0) AS value FROM mcp_tool_call_stats WHERE tenant_id = ? AND date >= date('now','-6 days') GROUP BY date ORDER BY date`, [tenantId]),
+      overviewQuery(env, failed, 'tasks', `SELECT status, COUNT(*) AS count FROM tasks WHERE tenant_id = ? AND status IN ('todo','in_progress','blocked') GROUP BY status`, [tenantId]),
+      overviewQuery(env, failed, 'provider_colors', `SELECT slug, css_var, color FROM provider_colors`),
+    ]);
+    const tasks = { todo: 0, in_progress: 0, blocked: 0 };
+    overviewRows(taskCounts).forEach((r) => { tasks[r.status] = overviewNumber(r.count); });
+    const taskTotal = tasks.todo + tasks.in_progress + tasks.blocked;
+    const mcpCalls = overviewNumber(mcpToday?.total);
+    const mcpSuccess = mcpCalls > 0 ? Math.round((overviewNumber(mcpToday?.successes) / mcpCalls) * 100) : 0;
+    return {
+      labels,
+      provider_colors: providerColors,
+      cards: [
+        { key: 'monthly_burn', label: 'Monthly Burn', value: overviewNumber(burn?.total), format: 'currency', threshold: overviewNumber(burn?.total) > 1000 ? 'danger' : overviewNumber(burn?.total) >= 500 ? 'warning' : 'success', subtitle: 'current month', trend: overviewTrend(burnTrend, labels) },
+        { key: 'ai_tooling', label: 'AI Tooling', value: overviewNumber(ai?.total), format: 'currency', subtitle: 'AI providers', trend: overviewTrend(aiTrend, labels) },
+        { key: 'infra_bills', label: 'Infra / Bills', value: overviewNumber(infra?.total), format: 'currency', subtitle: 'infra providers', trend: overviewTrend(infraTrend, labels) },
+        { key: 'agent_calls', label: 'Agent Calls', value: overviewNumber(agentCalls?.total), format: 'number', subtitle: 'this week', trend: overviewTrend(agentTrend, labels) },
+        { key: 'hours_week', label: 'Hours This Week', value: overviewNumber(hoursWeek?.total), format: 'hours', subtitle: activeTimer ? 'timer running' : 'tracked hours', is_running: !!activeTimer, active_timer: activeTimer, trend: overviewTrend(hoursTrend, labels) },
+        { key: 'mcp_today', label: 'MCP Calls Today', value: mcpCalls, format: 'number', subtitle: `${mcpSuccess}% success rate`, trend: overviewTrend(mcpTrend, labels) },
+        { key: 'open_tasks', label: 'Open Tasks', value: taskTotal, format: 'number', subtitle: `${tasks.todo} todo / ${tasks.in_progress} active / ${tasks.blocked} blocked`, href: '/tasks', breakdown: tasks, trend: labels.map(() => 0) },
+      ],
+    };
+  });
+}
+
+async function handleOverviewFinanceCharts(request, env) {
+  return overviewCachedResponse(request, env, 'finance-charts', async ({ tenantId, failed }) => {
+    const [daily, categories, topProviders, colors] = await Promise.all([
+      overviewQuery(env, failed, 'spend_ledger', `SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, CASE WHEN lower(COALESCE(provider_slug, provider, 'other')) IN ('anthropic','openai','cloudflare','cursor') THEN lower(COALESCE(provider_slug, provider, 'other')) ELSE 'other' END AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-29 days') GROUP BY day, provider ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT CASE WHEN lower(COALESCE(category,'')) IN ('ai_tools','usage','ai') THEN 'AI Tools' WHEN lower(COALESCE(category,'')) IN ('infra','infrastructure','hosting') THEN 'Infra' WHEN lower(COALESCE(category,'')) IN ('subscription','subscriptions') THEN 'Subscriptions' ELSE 'Other' END AS category, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month') GROUP BY category ORDER BY total DESC`, [tenantId]),
+      overviewQuery(env, failed, 'spend_ledger', `SELECT COALESCE(provider_slug, provider, 'unknown') AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE tenant_id = ? AND date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','start of month') GROUP BY COALESCE(provider_slug, provider, 'unknown') ORDER BY total DESC LIMIT 3`, [tenantId]),
+      overviewQuery(env, failed, 'provider_colors', `SELECT slug, css_var, color FROM provider_colors`),
+    ]);
+    return { daily_by_provider: daily, category_totals: categories, top_providers: topProviders, provider_colors: colors };
+  });
+}
+
+async function handleOverviewAgentActivity(request, env) {
+  return overviewCachedResponse(request, env, 'agent-activity', async ({ tenantId, failed }) => {
+    const [executions, recent, usage, leaderboard] = await Promise.all([
+      overviewQuery(env, failed, 'agentsam_executions', `SELECT date(created_at,'unixepoch') AS day, execution_type, COUNT(*) AS count FROM agentsam_executions WHERE created_at >= unixepoch('now','-13 days') GROUP BY day, execution_type ORDER BY day`, []),
+      overviewQuery(env, failed, 'agentsam_executions', `SELECT execution_type, command, duration_ms, created_at FROM agentsam_executions ORDER BY created_at DESC LIMIT 5`, []),
+      overviewQuery(env, failed, 'agent_telemetry', `SELECT date(created_at,'unixepoch') AS day, COALESCE(model_used, 'unknown') AS model, COUNT(*) AS calls FROM agent_telemetry WHERE tenant_id = ? AND created_at >= unixepoch('now','-6 days') GROUP BY day, model ORDER BY day`, [tenantId]),
+      overviewQuery(env, failed, 'model_performance_scores', `SELECT model, calls, avg_cost_usd AS avg_cost, total_cost_usd AS total_cost, avg_latency_ms AS avg_latency, is_recommended_for_task FROM model_performance_scores WHERE tenant_id = ? AND period_end >= unixepoch('now','-7 days') ORDER BY total_cost_usd DESC LIMIT 8`, [tenantId]),
+    ]);
+    return { executions_by_day: executions, recent_executions: recent, model_usage: usage, model_leaderboard: leaderboard };
+  });
+}
+
+async function handleOverviewGoalsLaunch(request, env) {
+  return overviewCachedResponse(request, env, 'goals-launch', async ({ tenantId, failed }) => {
+    const [goals, kpis, launches, milestones, launchStats] = await Promise.all([
+      overviewQuery(env, failed, 'goals', `SELECT id, name, status, current_value, target_value, due_date FROM goals WHERE tenant_id = ? AND status IN ('active','blocked') ORDER BY due_date ASC LIMIT 8`, [tenantId]),
+      overviewQuery(env, failed, 'kpi_definitions', `SELECT d.name, d.unit, d.target_value, e.value, e.period_start FROM kpi_definitions d LEFT JOIN kpi_entries e ON e.kpi_id = d.id WHERE d.tenant_id = ? AND COALESCE(d.is_active,1) = 1 GROUP BY d.id ORDER BY e.period_start DESC LIMIT 8`, [tenantId]),
+      overviewQuery(env, failed, 'launch_tracker', `SELECT id, goal_name, confidence_pct, target_date, status FROM launch_tracker WHERE tenant_id = ? AND status = 'in_progress' ORDER BY target_date ASC LIMIT 5`, [tenantId]),
+      overviewQuery(env, failed, 'launch_milestones', `SELECT m.tracker_id, m.name, m.status, m.order_index FROM launch_milestones m INNER JOIN launch_tracker l ON l.id = m.tracker_id WHERE l.tenant_id = ? AND l.status = 'in_progress' ORDER BY l.target_date ASC, m.order_index ASC LIMIT 12`, [tenantId]),
+      overviewQuery(env, failed, 'launch_tracker', `SELECT COUNT(*) AS completed_count, AVG(julianday(completed_at) - julianday(created_at)) AS avg_days_to_launch FROM launch_tracker WHERE tenant_id = ? AND status = 'completed'`, [tenantId], 'first'),
+    ]);
+    return { active_goals: goals, kpi_snapshots: kpis, active_launches: launches, top_launch_milestones: milestones, launch_stats: launchStats || { completed_count: 0, avg_days_to_launch: 0 } };
+  });
+}
+
+async function handleOverviewTimeFounder(request, env) {
+  return overviewCachedResponse(request, env, 'time-founder', async ({ tenantId, failed }) => {
+    const [hours, activeTimer, founder] = await Promise.all([
+      overviewQuery(env, failed, 'project_time_entries', `SELECT COALESCE(p.name, e.project_id, 'Unknown') AS project_name, ROUND(COALESCE(SUM(e.duration_seconds),0)/3600.0,2) AS hours FROM project_time_entries e LEFT JOIN projects p ON p.id = e.project_id WHERE date(e.start_time) >= date('now','start of month') AND COALESCE(e.is_active,0) = 0 GROUP BY COALESCE(p.name, e.project_id, 'Unknown') ORDER BY hours DESC LIMIT 10`, []),
+      overviewQuery(env, failed, 'project_time_entries', `SELECT e.id, e.project_id, e.start_time, p.name AS project_name FROM project_time_entries e LEFT JOIN projects p ON p.id = e.project_id WHERE COALESCE(e.is_active,0) = 1 ORDER BY e.start_time DESC LIMIT 1`, [], 'first'),
+      overviewQuery(env, failed, 'founder_metrics', `SELECT * FROM founder_metrics WHERE tenant_id = ? ORDER BY date DESC LIMIT 7`, [tenantId]),
+    ]);
+    return { hours_by_project: hours, active_timer: activeTimer, founder_recent: founder };
+  });
+}
+
+async function handleOverviewMcpHealth(request, env) {
+  return overviewCachedResponse(request, env, 'mcp-health', async ({ tenantId, failed }) => {
+    const [topTools, categories, totals, degraded] = await Promise.all([
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT s.tool_name, COALESCE(s.tool_category, t.tool_category, 'uncategorized') AS category, s.call_count AS calls_today, CASE WHEN s.call_count > 0 THEN ROUND((s.success_count * 100.0) / s.call_count, 1) ELSE 0 END AS success_rate, COALESCE(t.avg_latency_ms, s.avg_duration_ms, 0) AS avg_latency, s.total_cost_usd AS cost_today, COALESCE(t.is_degraded,0) AS is_degraded, COALESCE(t.failure_rate,0) AS failure_rate FROM mcp_tool_call_stats s LEFT JOIN mcp_registered_tools t ON t.tool_name = s.tool_name WHERE s.tenant_id = ? AND s.date = date('now') ORDER BY s.call_count DESC LIMIT 15`, [tenantId]),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(tool_category, 'uncategorized') AS category, COALESCE(SUM(call_count),0) AS calls FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now') GROUP BY COALESCE(tool_category, 'uncategorized') ORDER BY calls DESC`, [tenantId]),
+      overviewQuery(env, failed, 'mcp_tool_call_stats', `SELECT COALESCE(SUM(call_count),0) AS calls, COALESCE(SUM(total_cost_usd),0) AS cost FROM mcp_tool_call_stats WHERE tenant_id = ? AND date = date('now')`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'mcp_registered_tools', `SELECT COUNT(*) AS count FROM mcp_registered_tools WHERE COALESCE(is_degraded,0) = 1 OR COALESCE(failure_rate,0) > 0.2`, [], 'first'),
+    ]);
+    return { top_tools: topTools, category_breakdown: categories, degraded_count: overviewNumber(degraded?.count), totals: { calls: overviewNumber(totals?.calls), cost: overviewNumber(totals?.cost) } };
+  });
+}
+
+async function handleOverviewCommandsWorkflows(request, env) {
+  return overviewCachedResponse(request, env, 'commands-workflows', async ({ tenantId, failed }) => {
+    const [slash, never, runs, workflows, runDistinct, dependencies] = await Promise.all([
+      overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name, call_count FROM agentsam_slash_commands ORDER BY call_count DESC LIMIT 10`, []),
+      overviewQuery(env, failed, 'agentsam_slash_commands', `SELECT slug, display_name FROM agentsam_slash_commands WHERE COALESCE(call_count,0) = 0 AND COALESCE(is_active,1) = 1 ORDER BY sort_order ASC LIMIT 12`, []),
+      overviewQuery(env, failed, 'agentsam_workflow_runs', `SELECT w.display_name AS workflow_name, r.status, r.started_at, r.completed_at, r.duration_ms, r.step_results_json, r.error_message FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} r LEFT JOIN ${AGENTSAM_MCP_WORKFLOWS} w ON w.id = r.workflow_id WHERE r.tenant_id = ? ORDER BY r.started_at DESC LIMIT 10`, [tenantId]),
+      overviewQuery(env, failed, 'agentsam_mcp_workflows', `SELECT COUNT(*) AS total FROM ${AGENTSAM_MCP_WORKFLOWS} WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'agentsam_workflow_runs', `SELECT COUNT(DISTINCT workflow_id) AS run_once FROM ${AGENTSAM_WORKFLOW_RUNS_TABLE} WHERE tenant_id = ?`, [tenantId], 'first'),
+      overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
+    ]);
+    const total = overviewNumber(workflows?.total);
+    const runOnce = overviewNumber(runDistinct?.run_once);
+    return {
+      slash_by_usage: slash,
+      never_called: never,
+      recent_workflow_runs: runs,
+      workflow_health_summary: { total_workflows: total, run_at_least_once: runOnce, never_run: Math.max(0, total - runOnce) },
+      execution_dependency_graph: dependencies,
+    };
+  });
+}
+
+async function handleOverviewStartTimer(request, env) {
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  const id = crypto.randomUUID();
+  const userId = session.user_id || 'sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
+       VALUES (?, ?, ?, ?, datetime('now'), NULL, 0, 1, ?, datetime('now'))`
+    ).bind(id, userId, PROJECT_ID, session.id || session.session_id || null, 'overview_start').run();
+    return jsonResponse({ success: true, id });
+  } catch (e) {
+    console.warn('[overview start timer]', e?.message ?? e);
+    return jsonResponse({ success: false, error: 'partial', failed: ['project_time_entries'] }, 200);
+  }
+}
+
+async function handleOverviewFounderLog(request, env) {
+  const session = await getSession(env, request);
+  if (!session) return jsonResponse({ error: 'Unauthorized' }, 401);
+  if (!env.DB) return jsonResponse({ error: 'DB unavailable' }, 503);
+  let body = {};
+  try { body = await request.json(); } catch (_) { }
+  const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+  try {
+    await env.DB.prepare(
+      `INSERT INTO founder_metrics (id, tenant_id, date, energy_level, stress_level, sleep_hours, notes, created_at, updated_at)
+       VALUES (?, ?, date('now'), ?, ?, ?, ?, unixepoch(), unixepoch())`
+    ).bind(crypto.randomUUID(), tenantId, overviewNumber(body.energy, 5), overviewNumber(body.stress, 5), overviewNumber(body.sleep, 0), String(body.notes || '').slice(0, 500)).run();
+    return jsonResponse({ success: true });
+  } catch (e) {
+    console.warn('[overview founder log]', e?.message ?? e);
+    return jsonResponse({ success: false, error: 'partial', failed: ['founder_metrics'] }, 200);
   }
 }
 
@@ -28922,6 +32079,8 @@ function overviewStatsPayload(overrides = {}) {
     pipeline_runs: overrides.pipeline_runs ?? 0,
     agent_conversations: overrides.agent_conversations ?? 0,
     agent_last_activity: overrides.agent_last_activity ?? null,
+    mcp_tool_calls_today: overrides.mcp_tool_calls_today ?? 0,
+    mcp_tool_success_rate_today: overrides.mcp_tool_success_rate_today ?? 0,
     latest_migration: overrides.latest_migration ?? null,
   };
 }
@@ -28943,6 +32102,7 @@ async function handleOverviewStats(request, url, env) {
       providersResult,
       totalInRow,
       totalOutRow,
+      mcpTodayRow,
     ] = await Promise.all([
       safe(env.DB.prepare(`SELECT COUNT(*) as c FROM financial_transactions`).first()),
       safe(env.DB.prepare(`SELECT COUNT(*) as entries, COALESCE(SUM(amount_usd), 0) as total FROM spend_ledger`).first()),
@@ -28953,6 +32113,7 @@ async function handleOverviewStats(request, url, env) {
       safe(env.DB.prepare(`SELECT provider, SUM(amount_usd) as total FROM spend_ledger GROUP BY provider ORDER BY total DESC LIMIT 5`).all()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM financial_transactions WHERE amount > 0`).first()),
       safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as total FROM financial_transactions WHERE amount < 0`).first()),
+      safe(env.DB.prepare(`SELECT COALESCE(SUM(call_count),0) AS calls, COALESCE(SUM(success_count),0) AS successes FROM mcp_tool_call_stats WHERE date = date('now')`).first()),
     ]);
 
     const spendTotal = sum(spendRow, 'total');
@@ -28960,6 +32121,7 @@ async function handleOverviewStats(request, url, env) {
     const totalOutAllTime = outTxns + spendTotal;
     const providers = (providersResult?.results || providersResult || []).map((r) => ({ provider: r.provider || 'unknown', total: Number(r.total || 0) }));
     const dbHealth = (num(txCountRow) + num(spendRow, 'entries') + (deployRow ? 1 : 0)) > 0 ? 'ok' : 'no_data';
+    const mcpCalls = sum(mcpTodayRow, 'calls');
 
     return jsonResponse({
       success: true,
@@ -28980,6 +32142,8 @@ async function handleOverviewStats(request, url, env) {
       pipeline_runs: 0,
       agent_conversations: num(agentTelemetryRow),
       agent_last_activity: agentTelemetryRow?.last_at ? String(agentTelemetryRow.last_at).slice(0, 19) : null,
+      mcp_tool_calls_today: mcpCalls,
+      mcp_tool_success_rate_today: mcpCalls > 0 ? Math.round((sum(mcpTodayRow, 'successes') / mcpCalls) * 100) : 0,
       latest_migration: deployRow ? { name: deployRow.deployment_id?.slice(0, 8) || 'deploy', applied_at: deployRow.deployed_at } : null,
     });
   } catch (e) {
@@ -29234,58 +32398,68 @@ async function handleOverviewDeployments(request, url, env) {
       deployment_notes: r.deployment_notes,
     }));
 
-    let cicd_runs = [];
-    try {
-      const cicdRows = await env.DB.prepare(
-        `SELECT p.run_id, p.env AS environment, p.status, p.branch,
-                p.triggered_at AS started_at, p.completed_at, p.notes,
-                g.workflow_name, g.commit_message, g.duration_ms,
-                COUNT(CASE WHEN s.status = 'pass' THEN 1 END) AS steps_passed,
-                COUNT(CASE WHEN s.status = 'fail' THEN 1 END) AS steps_failed,
-                COUNT(s.id) AS steps_total
-         FROM cicd_pipeline_runs p
-         LEFT JOIN cicd_github_runs g ON g.run_id = 'gh_' || substr(p.run_id, 6)
-         LEFT JOIN cicd_run_steps s ON s.run_id = p.run_id
-         GROUP BY p.run_id
-         ORDER BY p.rowid DESC LIMIT 10`
-      ).all();
-      cicd_runs = (cicdRows?.results ?? cicdRows ?? []).map((r) => ({
-        run_id: r.run_id,
-        workflow_name: r.workflow_name || r.run_id,
-        branch: r.branch,
-        environment: r.environment,
-        status: r.status,
-        conclusion: r.status,
-        started_at: r.started_at,
-        completed_at: r.completed_at,
-        duration_ms: r.duration_ms,
-        commit_message: r.commit_message,
-        steps_passed: r.steps_passed,
-        steps_failed: r.steps_failed,
-        steps_total: r.steps_total,
-      }));
-    } catch (_) {
-      // fallback no-op
-      try {
-        const altRows = await env.DB.prepare(
-          `SELECT run_id, workflow_name, branch, status, conclusion, started_at, completed_at FROM cicd_pipeline_runs ORDER BY rowid DESC LIMIT 10`
-        ).all();
-        cicd_runs = (altRows?.results ?? altRows ?? []).map((r) => ({
-          run_id: r.run_id,
-          workflow_name: r.workflow_name,
-          branch: r.branch,
-          status: r.status,
-          conclusion: r.status,
-          started_at: r.started_at,
-          completed_at: r.completed_at,
-        }));
-      } catch (_) { }
-    }
+    const cicdRaw = await fetchCicdPipelineRunsForOverview(env);
+    const cicd_runs = (cicdRaw || []).map((r) => ({
+      run_id: r.id ?? r.run_id,
+      workflow_name: r.workflow_name || r.id,
+      branch: r.branch,
+      environment: r.environment,
+      status: r.status,
+      conclusion: r.status,
+      started_at: r.started_at,
+      completed_at: r.completed_at,
+      duration_ms: r.duration_ms,
+      commit_message: r.commit_message,
+      steps_passed: r.steps_passed,
+      steps_failed: r.steps_failed,
+      steps_total: r.steps_total,
+    }));
 
-    return jsonResponse({ deployments: deploymentRows, cicd_runs });
+    const failed = new Set();
+    const tenantId = session.tenant_id || await fetchAuthUserTenantId(env, session.user_id) || 'tenant_sam_primeaux';
+    const [deployTimelineRows, phaseRows, cicdTableRows, githubRows, dependencyRows] = await Promise.all([
+      overviewQuery(env, failed, 'deployments', `SELECT date(timestamp) AS day, status, COUNT(*) AS count FROM deployments WHERE date(timestamp) >= date('now','-13 days') GROUP BY day, status ORDER BY day`, []),
+      overviewQuery(env, failed, 'cicd_runs', `SELECT phase_sandbox_status, phase_benchmark_status, phase_promote_status, COUNT(*) AS count FROM cicd_runs GROUP BY phase_sandbox_status, phase_benchmark_status, phase_promote_status`, []),
+      overviewQuery(env, failed, 'cicd_runs', `SELECT worker_name AS worker, environment AS env, status, benchmark_score, duration_ms AS duration, triggered_by, created_at FROM cicd_runs ORDER BY created_at DESC LIMIT 5`, []),
+      overviewQuery(env, failed, 'cicd_github_runs', `SELECT workflow_name, status, conclusion, branch, started_at, completed_at, duration_ms FROM cicd_github_runs ORDER BY created_at DESC LIMIT 3`, []),
+      overviewQuery(env, failed, 'execution_dependency_graph', `SELECT execution_id, depends_on_execution_id, dependency_type, condition_expression, compensation_execution_id FROM execution_dependency_graph WHERE tenant_id = ? ORDER BY created_at ASC LIMIT 12`, [tenantId]),
+    ]);
+    const phaseHealth = ['sandbox', 'benchmark', 'promote'].map((phase) => {
+      const col = `phase_${phase}_status`;
+      const counts = { pass: 0, fail: 0, other: 0 };
+      overviewRows(phaseRows).forEach((r) => {
+        const key = String(r[col] || '').toLowerCase();
+        const n = overviewNumber(r.count);
+        if (key === 'pass' || key === 'passed' || key === 'success') counts.pass += n;
+        else if (key === 'fail' || key === 'failed' || key === 'failure') counts.fail += n;
+        else counts.other += n;
+      });
+      const total = counts.pass + counts.fail + counts.other;
+      return { phase, pass_rate: total ? Math.round((counts.pass / total) * 100) : 0, counts };
+    });
+
+    return jsonResponse({
+      deployments: deploymentRows,
+      cicd_runs,
+      deploy_timeline: deployTimelineRows,
+      phase_health: phaseHealth,
+      cicd_runs_table: cicdTableRows,
+      github_runs: githubRows,
+      execution_dependency_graph: dependencyRows,
+      data: {
+        deployments: deploymentRows,
+        cicd_runs,
+        deploy_timeline: deployTimelineRows,
+        phase_health: phaseHealth,
+        cicd_runs_table: cicdTableRows,
+        github_runs: githubRows,
+        execution_dependency_graph: dependencyRows,
+      },
+      ...(failed.size ? { error: 'partial', failed: [...failed] } : {}),
+    });
   } catch (e) {
     console.warn('Overview deployments error:', e?.message);
-    return jsonResponse({ error: String(e?.message), deployments: [], cicd_runs: [] }, 500);
+    return jsonResponse({ error: 'partial', failed: ['deployments'], deployments: [], cicd_runs: [], data: { deployments: [], cicd_runs: [] } }, 200);
   }
 }
 
@@ -29531,7 +32705,7 @@ async function handleTimeTrack(request, url, env) {
         await env.DB.prepare(
           `UPDATE project_time_entries SET duration_seconds = (julianday('now') - julianday(start_time)) * 86400 WHERE id = ?`
         ).bind(active.id).run();
-        await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
+        await ensureWorkSessionAndSignal(env, userId, resolveWorkspaceId(env, {}), 'heartbeat', 'dashboard-time-track', { entry_id: active.id });
         return jsonResponse({ success: true, entry_id: active.id, duration_updated: true });
       }
       const id = crypto.randomUUID();
@@ -29539,7 +32713,7 @@ async function handleTimeTrack(request, url, env) {
         `INSERT INTO project_time_entries (id, user_id, project_id, session_id, start_time, end_time, duration_seconds, is_active, description, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'))`
       ).bind(id, userId, PROJECT_ID, session.id, now, null, 'dashboard_heartbeat').run();
-      await ensureWorkSessionAndSignal(env, userId, 'ws_inneranimalmedia', 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
+      await ensureWorkSessionAndSignal(env, userId, resolveWorkspaceId(env, {}), 'heartbeat', 'dashboard-time-track', { entry_id: id, started: true });
       return jsonResponse({ success: true, entry_id: id, started_at: now });
     }
 
@@ -29640,6 +32814,7 @@ async function handleFinanceSummary(url, env) {
     aiSpendList,
     totalInAllTime,
     totalOutTxns,
+    spendDaily30,
   ] = await Promise.all([
     safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_transactions WHERE transaction_date >= ? AND amount > 0`).bind(monthStart).first()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as v FROM financial_transactions WHERE transaction_date >= ? AND amount < 0`).bind(monthStart).first()),
@@ -29671,6 +32846,7 @@ async function handleFinanceSummary(url, env) {
     safe(env.DB.prepare(`SELECT occurred_at, provider_slug, provider, amount_usd, description, notes FROM spend_ledger WHERE category IN ('ai_tools','usage') OR provider IS NOT NULL ORDER BY occurred_at DESC LIMIT 50`).all()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_transactions WHERE amount > 0`).first()),
     safe(env.DB.prepare(`SELECT COALESCE(SUM(ABS(amount)),0) as v FROM financial_transactions WHERE amount < 0`).first()),
+    safe(env.DB.prepare(`SELECT date(COALESCE(date, datetime(occurred_at,'unixepoch'))) AS day, COALESCE(provider_slug, provider, 'unknown') AS provider, ROUND(SUM(amount_usd),2) AS total FROM spend_ledger WHERE date(COALESCE(date, datetime(occurred_at,'unixepoch'))) >= date('now','-29 days') GROUP BY day, provider ORDER BY day`).all()),
   ]);
 
   const spendTotal = Number(spendLedgerRow?.total ?? 0);
@@ -29710,6 +32886,7 @@ async function handleFinanceSummary(url, env) {
       total: spendTotal,
       entries: spendEntries,
       by_provider: byProvider,
+      daily_30d: (spendDaily30?.results ?? spendDaily30 ?? []),
     },
     ai_spend: {
       total_usd: Number(aiSpendRow?.total ?? 0),
@@ -30253,7 +33430,7 @@ async function handleEmailSignup(request, url, env) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: 'Inner Animal Media <noreply@inneranimalmedia.com>',
+          from: 'Inner Animal Media <support@inneranimalmedia.com>',
           to: [email],
           subject: 'Welcome — verify your email',
           html: `
@@ -30285,11 +33462,13 @@ async function handleEmailSignup(request, url, env) {
     ? (await env.DB.prepare(`SELECT id FROM users WHERE email = ? LIMIT 1`).bind(email).first())?.id || authUserId
     : authUserId;
 
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
-
   const tidSignup = await resolveTenantAtLogin(env, sessionUserId).catch(() => null);
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, sessionUserId, expiresAt, ip, ua, tidSignup).run();
+
+  autoStartWorkSession(env, sessionUserId, tidSignup, url.pathname).catch(() => { });
+
   await writeIamSessionToKv(env, sessionId, sessionUserId, tidSignup, expiresAt);
 
   const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
@@ -30350,14 +33529,23 @@ async function handleEmailPasswordLogin(request, url, env) {
   }
 
   async function finishLogin(userId, redirectPath) {
+    try {
+      const er = await env.DB.prepare(`SELECT email FROM auth_users WHERE id = ? LIMIT 1`).bind(userId).first();
+      await provisionUserWorkspace(env, {
+        userId,
+        email: er?.email || '',
+        planId: 'free',
+      }).catch((err) => console.warn('[login provision]', err?.message ?? err));
+    } catch (_) {}
     const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const ip = request.headers.get('cf-connecting-ip') || '';
     const ua = request.headers.get('user-agent') || '';
-    await env.DB.prepare(
-      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-    ).bind(sessionId, userId, expiresAt, ip, ua).run();
     const tidLogin = await resolveTenantAtLogin(env, userId);
+    await env.DB.prepare(
+      `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+    ).bind(sessionId, userId, expiresAt, ip, ua, tidLogin).run();
+    autoStartWorkSession(env, userId, tidLogin, url.pathname).catch(() => { });
     await writeIamSessionToKv(env, sessionId, userId, tidLogin, expiresAt);
     const cookie = `session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`;
     const next = redirectPath && String(redirectPath).startsWith('/') && !String(redirectPath).startsWith('//')
@@ -30488,10 +33676,10 @@ async function handleBackupCodeLogin(request, url, env) {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
-  await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, email, expiresAt, ip, ua).run();
   const tidMfa = await resolveTenantAtLogin(env, email);
+  await env.DB.prepare(
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, email, expiresAt, ip, ua, tidMfa).run();
   await writeIamSessionToKv(env, sessionId, email, tidMfa, expiresAt);
   const redirectUrl = (body.next && body.next.startsWith('/') && !body.next.startsWith('//')) ? body.next : '/dashboard/overview';
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -30601,7 +33789,13 @@ async function handleOvernightValidate(env, baseUrl) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: '[ok] Overnight setup validated (remote) -- before screenshots captured', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: '[ok] Overnight setup validated (remote) -- before screenshots captured',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch((e) => ({ ok: false, status: 0, error: String(e?.message || e) }));
     if (env.DB && res && !res.ok) {
       const errText = typeof res.text === 'function' ? await res.text().catch(() => '') : (res.error || '');
@@ -30713,7 +33907,13 @@ async function handleOvernightStart(env, baseUrl) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'dark Overnight Pipeline Started (remote) -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: 'dark Overnight Pipeline Started (remote) -- Inner Animal Media',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch((e) => ({ ok: false, status: 0, error: String(e?.message || e) }));
     if (env.DB && res && !res.ok) {
       const errText = typeof res.text === 'function' ? await res.text().catch(() => '') : (res.error || '');
@@ -30789,8 +33989,8 @@ async function runOvernightCronStep(env) {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'sam@inneranimalmedia.com',
-            to: 'meauxbility@gmail.com',
+            from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+            to: env.RESEND_TO || 'support@inneranimalmedia.com',
             subject: '🛑 Overnight Pipeline Cancelled',
             html: `<div style="font-family:monospace;background:#0f172a;color:#e2e8f0;padding:32px"><h1 style="color:#f59e0b">Pipeline cancelled by user</h1><p>${nowIso}</p></div>`,
           }),
@@ -30817,7 +34017,13 @@ async function runOvernightCronStep(env) {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'time Overnight 30min update -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: 'time Overnight 30min update -- Inner Animal Media',
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch(() => { });
     if (_cronPmTid) {
       await env.DB.prepare(
@@ -30840,7 +34046,13 @@ async function runOvernightCronStep(env) {
       await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: 'dawn Overnight morning report -- Inner Animal Media', html, attachments: attachments.length ? attachments : undefined }),
+        body: JSON.stringify({
+          from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+          to: env.RESEND_TO || 'support@inneranimalmedia.com',
+          subject: 'dawn Overnight morning report -- Inner Animal Media',
+          html,
+          attachments: attachments.length ? attachments : undefined
+        }),
       }).catch(() => { });
       if (_cronPmTid) {
         await env.DB.prepare(
@@ -30858,7 +34070,13 @@ async function runOvernightCronStep(env) {
     await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'sam@inneranimalmedia.com', to: 'meauxbility@gmail.com', subject: `alert Overnight Hour ${nextHour} -- Inner Animal Media`, html, attachments: attachments.length ? attachments : undefined }),
+      body: JSON.stringify({
+        from: env.RESEND_FROM || 'support@inneranimalmedia.com',
+        to: env.RESEND_TO || 'support@inneranimalmedia.com',
+        subject: `alert Overnight Hour ${nextHour} -- Inner Animal Media`,
+        html,
+        attachments: attachments.length ? attachments : undefined
+      }),
     }).catch(() => { });
     if (_cronPmTid) {
       await env.DB.prepare(
@@ -30932,6 +34150,12 @@ async function provisionNewUser(env, { email, name, authUserId }) {
          (workspace_id, user_id, role, joined_at)
        VALUES (?, ?, 'owner', unixepoch())`
     ).bind(workspace_id, authUserId || ('usr_' + user_key)).run();
+
+    await provisionUserWorkspace(env, {
+      userId: authUserId || ('usr_' + user_key),
+      email,
+      planId: 'free',
+    }).catch((err) => console.warn('[provisionNewUser] provisionUserWorkspace:', err?.message ?? err));
 
     return { user_key, workspace_id };
   } catch (e) {
@@ -31027,18 +34251,19 @@ async function handleGoogleOAuthCallback(request, url, env) {
     return Response.redirect(`${origin(url)}/auth/login?error=userinfo_failed`, 302);
   }
   const userInfo = await userRes.json();
-  const email = (userInfo.email || '').toLowerCase();
-  const name = userInfo.name || email || 'User';
-  if (!email) {
+  const oauthEmail = String(userInfo.email || '').toLowerCase().trim();
+  const name = userInfo.name || oauthEmail || 'User';
+  if (!oauthEmail) {
     return Response.redirect(`${origin(url)}/auth/login?error=no_email`, 302);
   }
-  let userId = email;
-  try {
-    const urow = await env.DB.prepare(
-      `SELECT id, user_key, default_workspace_id FROM users WHERE email=? LIMIT 1`
-    ).bind(email).first();
-    if (urow?.id) userId = urow.id;
-  } catch (_) { }
+
+  // 1. Find existing auth_users row by email
+  const existing = await env.DB.prepare(
+    `SELECT id, email, name FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+  ).bind(oauthEmail).first();
+
+  // 2. Resolve or generate — NEVER hardcode any ID
+  const authUserId = existing?.id ?? `au_${crypto.randomUUID().replace(/-/g,'').slice(0,16)}`;
 
   if (connectDrive) {
     const sessionUser = await getAuthUser(request, env);
@@ -31054,50 +34279,39 @@ async function handleGoogleOAuthCallback(request, url, env) {
       { headers: { 'Content-Type': 'text/html' } }
     );
   }
-  // login flow: upsert auth_users, provision user if new, create session
-  const oauthPlaceholder = 'oauth';
-  // Use email as auth_users.id for OAuth users (existing behavior preserved)
-  let authUserId = email;
+  // 3. Insert if new, patch only null fields if existing
   try {
-    const existingAuth = await env.DB.prepare(
-      `SELECT id FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
-    ).bind(email).first();
-    if (existingAuth?.id) {
-      authUserId = existingAuth.id;
-      await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, authUserId).run();
-    } else {
+    if (!existing?.id) {
       await env.DB.prepare(
-        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-      ).bind(authUserId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at)
+         VALUES (?, ?, ?, 'oauth', 'oauth', datetime('now'), datetime('now'))`
+      ).bind(authUserId, oauthEmail, name).run();
+    } else {
+      if (!existing.name || !String(existing.name).trim()) {
+        await env.DB.prepare(
+          `UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(name, authUserId).run();
+      }
     }
   } catch (e) {
-    console.warn('[OAuth] auth_users upsert:', e?.message);
+    console.warn('[OAuth] auth_users upsert:', e?.message ?? e);
   }
 
   // Provision user row, workspace, settings on first login
-  await provisionNewUser(env, { email, name, authUserId });
-
-  // Resolve canonical user_id for session (prefer users.id if exists)
-  let sessionUserId = authUserId;
-  try {
-    const usersRow = await env.DB.prepare(
-      `SELECT id FROM users WHERE email = ? OR auth_id = ? LIMIT 1`
-    ).bind(email, authUserId).first();
-    if (usersRow?.id) sessionUserId = usersRow.id;
-  } catch (_) {}
+  await provisionNewUser(env, { email: oauthEmail, name, authUserId });
 
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
+  const tidOauth = await resolveTenantAtLogin(env, authUserId).catch(() => null);
   await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, sessionUserId, expiresAt, ip, ua).run();
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, authUserId, expiresAt, ip, ua, tidOauth).run();
 
   // FIX: writeIamSessionToKv was missing — getSession() reads ONLY from KV,
   // so without this the session cookie was set but never resolvable → redirect loop.
-  const tidOauth = await resolveTenantAtLogin(env, userId).catch(() => null);
-  await writeIamSessionToKv(env, sessionId, userId, tidOauth, expiresAt);
+  await writeIamSessionToKv(env, sessionId, authUserId, tidOauth, expiresAt);
 
   // FIX: Skip globe_exit redirect — oauthPostLoginGlobeRedirectUrl sends to
   // /auth/login?globe_exit=1&next=... which was dropping users on the homepage
@@ -31200,9 +34414,14 @@ async function handleGitHubOAuthCallback(request, url, env) {
       email = primary?.email;
     }
   }
-  email = (email || userInfo.login || 'unknown').toLowerCase();
-  const name = userInfo.name || userInfo.login || email;
-  const userId = email;
+  const oauthEmail = String(email || userInfo.login || 'unknown').toLowerCase().trim();
+  const name = userInfo.name || userInfo.login || oauthEmail;
+
+  const existing = await env.DB.prepare(
+    `SELECT id, email, name FROM auth_users WHERE LOWER(email) = ? LIMIT 1`
+  ).bind(oauthEmail).first();
+
+  const userId = existing?.id ?? `au_${crypto.randomUUID().replace(/-/g,'').slice(0,16)}`;
 
   if (connectGitHub) {
     const sessionUser = await getAuthUser(request, env);
@@ -31228,21 +34447,33 @@ async function handleGitHubOAuthCallback(request, url, env) {
     );
   }
 
-  const oauthPlaceholder = 'oauth';
   try {
-    await env.DB.prepare(
-      `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-    ).bind(userId, email, name, oauthPlaceholder, oauthPlaceholder).run();
+    if (!existing?.id) {
+      await env.DB.prepare(
+        `INSERT INTO auth_users (id, email, name, password_hash, salt, created_at, updated_at)
+         VALUES (?, ?, ?, 'oauth', 'oauth', datetime('now'), datetime('now'))`
+      ).bind(userId, oauthEmail, name).run();
+    } else {
+      if (!existing.name || !String(existing.name).trim()) {
+        await env.DB.prepare(
+          `UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(name, userId).run();
+      }
+    }
   } catch (e) {
-    await env.DB.prepare(`UPDATE auth_users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, userId).run();
+    console.warn('[oauth/github/callback] auth_users upsert failed:', e?.message ?? e);
   }
+  await provisionNewUser(env, { email: oauthEmail, name, authUserId: userId });
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const ip = request.headers.get('cf-connecting-ip') || '';
   const ua = request.headers.get('user-agent') || '';
+  const tidGh = await resolveTenantAtLogin(env, userId).catch(() => null);
   await env.DB.prepare(
-    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent) VALUES (?, ?, ?, datetime('now'), ?, ?)`
-  ).bind(sessionId, userId, expiresAt, ip, ua).run();
+    `INSERT INTO auth_sessions (id, user_id, expires_at, created_at, ip_address, user_agent, tenant_id) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)`
+  ).bind(sessionId, userId, expiresAt, ip, ua, tidGh).run();
+  autoStartWorkSession(env, userId, tidGh, url.pathname).catch(() => { });
+  await writeIamSessionToKv(env, sessionId, userId, tidGh, expiresAt);
   const ghLogin = (userInfo.login || '').toString() || 'github';
   if (tokens.access_token && env.DB) {
     try {

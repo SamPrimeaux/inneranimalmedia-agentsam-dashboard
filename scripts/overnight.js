@@ -12,9 +12,9 @@ const RESEND_KEY = process.env.RESEND_API_KEY;
 const CF_TOKEN   = process.env.CLOUDFLARE_API_TOKEN;
 const ACCOUNT    = 'ede6590ac0d2fb7daf155b35653457b2';
 const DB_ID      = 'cf87b717-d4e2-4cf8-bab0-a81268e32d49';
-const BUCKET     = 'agent-sam';
-const FROM       = 'sam@inneranimalmedia.com';
-const TO         = 'meauxbility@gmail.com';
+const BUCKET     = 'inneranimalmedia';
+const FROM       = process.env.RESEND_FROM || 'support@inneranimalmedia.com';
+const TO         = process.env.RESEND_TO || 'support@inneranimalmedia.com';
 const BASE       = 'https://inneranimalmedia.com';
 const IIFE       = '<script>!function(){try{var css=localStorage.getItem("dashboard-theme-css");if(css){var s=document.createElement("style");s.id="theme-dyn-pre";document.head.appendChild(s);s.textContent=css;}var t=localStorage.getItem("dashboard-theme")||"meaux-storm-gray";document.documentElement.setAttribute("data-theme",t);}catch(e){}}();<\/script>';
 
@@ -382,7 +382,7 @@ async function run() {
       ${screenshotSummary}
       <p style="color:#334155;font-size:11px;border-top:1px solid #1e293b;padding-top:16px;margin-top:20px">
         Raw data: D1 → project_memory → key OVERNIGHT_STATUS<br>
-        Before: R2 agent-sam/reports/screenshots/${beforeDir}/ — After: R2 agent-sam/reports/screenshots/${afterDir}/
+        Before: R2 inneranimalmedia/reports/screenshots/${beforeDir}/ — After: R2 inneranimalmedia/reports/screenshots/${afterDir}/
       </p>
       ${FOOTER_CANCEL}
     `)
@@ -399,8 +399,8 @@ run().catch(async e => {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: 'sam@inneranimalmedia.com',
-      to: 'meauxbility@gmail.com',
+      from: process.env.RESEND_FROM || 'support@inneranimalmedia.com',
+      to: process.env.RESEND_TO || 'support@inneranimalmedia.com',
       subject: '🚨 Overnight Pipeline Crashed',
       html: `<pre style="background:#0f172a;color:#ef4444;padding:20px;font-family:monospace">${e.stack}</pre>`
     })

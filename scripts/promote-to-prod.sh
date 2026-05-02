@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# promote-to-prod.sh — pull sandbox R2 build → push to production R2 → deploy worker
-# Sandbox bucket: agent-sam-sandbox-cicd (canonical CI/CD staging bucket for dashboard assets).
-# Override: SANDBOX_BUCKET=my-bucket ./scripts/promote-to-prod.sh
+# promote-to-prod.sh — pull dashboard assets from a source R2 bucket → push to production R2 → deploy worker
+# Default source bucket: agent-sam-sandbox-cicd (legacy object prefix; not a separate “user environment”).
+# Override: SOURCE_ASSETS_BUCKET=my-bucket ./scripts/promote-to-prod.sh (legacy env: SANDBOX_BUCKET)
 # Usage: ./scripts/promote-to-prod.sh [--worker-only]
 # After deploy: logs cicd_* tables including cicd_runs via scripts/lib/cicd-d1-log.sh; optional
 # ai_workflow_pipelines / ai_workflow_executions rows. Optional: CICD_D1_LOG=0 | CICD_SKIP_HEALTH_CURL=1 | PROD_HEALTH_URL=...
@@ -19,8 +19,8 @@ if [ -f "${REPO_ROOT}/.env.cloudflare" ]; then
     export ${_iam_cf_kv}
   fi
 fi
-RESEND_FROM="${RESEND_FROM:-sam@inneranimalmedia.com}"
-RESEND_TO="${RESEND_TO:-meauxbility@gmail.com}"
+RESEND_FROM="${RESEND_FROM:-support@inneranimalmedia.com}"
+RESEND_TO="${RESEND_TO:-support@inneranimalmedia.com}"
 
 WORKER_ONLY=0
 for arg in "$@"; do
@@ -35,8 +35,8 @@ PROMOTE_GIT_HASH=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unkno
 export WORKER_NAME="${WORKER_NAME:-inneranimalmedia}"
 
 DEPLOY_TS="$(date -u +%Y%m%d%H%M%S)"
-SANDBOX_BUCKET="${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}"
-PROD_BUCKET="agent-sam"
+SOURCE_ASSETS_BUCKET="${SOURCE_ASSETS_BUCKET:-${SANDBOX_BUCKET:-agent-sam-sandbox-cicd}}"
+PROD_BUCKET="inneranimalmedia"
 PROD_CFG="wrangler.production.toml"
 WRANGLER=(./scripts/with-cloudflare-env.sh npx wrangler)
 # shellcheck source=/dev/null
@@ -87,7 +87,7 @@ _send_resend_notification() {
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Branch</td><td style='padding:5px 12px;color:#e2e8f0;'>${git_branch}</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Commit</td><td style='padding:5px 12px;color:#e2e8f0;font-size:11px;'>${git_sha} — ${git_msg}</td></tr>
       <tr><td colspan='2' style='padding:10px 0 3px;color:#475569;font-size:10px;letter-spacing:0.1em;border-bottom:1px solid #2d3148;'>ASSETS + TIMINGS</td></tr>
-      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Files</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_LINE_COUNT} files pushed to agent-sam</td></tr>
+      <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Files</td><td style='padding:5px 12px;color:#e2e8f0;'>${R2_LINE_COUNT} files pushed to inneranimalmedia</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Pull</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_pull}ms</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>R2 Push</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_push}ms</td></tr>
       <tr><td style='padding:5px 12px;color:#94a3b8;font-size:12px;'>Worker</td><td style='padding:5px 12px;color:#e2e8f0;'>${ms_worker}ms</td></tr>
@@ -135,11 +135,11 @@ HTML_PATH="${REPO_ROOT}/dashboard/agent.html"
 MANIFEST_NAME=".deploy-manifest"
 MANIFEST_KEY="static/dashboard/agent/${MANIFEST_NAME}"
 R2_AGENT_PREFIX="static/dashboard/agent"
-# set -u: must always be set; deploy-sandbox injects <!-- dashboard-v:N --> into dist/index.html
+# set -u: must always be set; CI may inject <!-- dashboard-v:N --> into dist/index.html
 # and uploads that file to R2 as static/dashboard/agent.html — parse both after pull.
 CURRENT_V=0
 
-# Parse dashboard bundle version from pulled shell HTML (R2 agent.html == sandbox dist/index.html).
+# Parse dashboard bundle version from pulled shell HTML (R2 agent.html mirrors built dist/index.html).
 _parse_dashboard_v_from_html() {
   local v f
   v=""
@@ -156,17 +156,17 @@ _parse_dashboard_v_from_html() {
   return 0
 }
 
-# ── Step 1: Pull current build from sandbox R2 into local dist ────────────────
+# ── Step 1: Pull current build from source R2 into local dist ────────────────
 if [ "$WORKER_ONLY" -eq 0 ]; then
-  echo "Pulling latest build from sandbox R2 (${SANDBOX_BUCKET})..."
+  echo "Pulling latest build from source R2 (${SOURCE_ASSETS_BUCKET})..."
   CICD_T_PULL_START=$(date +%s)
   mkdir -p "${DIST_DIR}" "${REPO_ROOT}/dashboard"
   rm -f "${DIST_DIR}/${MANIFEST_NAME}"
 
   MANIFEST_LOCAL="${DIST_DIR}/${MANIFEST_NAME}"
-  if ! "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/${MANIFEST_KEY}" \
+  if ! "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/${MANIFEST_KEY}" \
       --file "$MANIFEST_LOCAL" --remote -c "$PROD_CFG"; then
-    echo "ERROR: Could not fetch ${MANIFEST_NAME} from sandbox. Run ./scripts/deploy-sandbox.sh first."
+    echo "ERROR: Could not fetch ${MANIFEST_NAME} from source bucket. Upload a fresh dashboard build to ${SOURCE_ASSETS_BUCKET} first."
     exit 1
   fi
   echo "  Using ${MANIFEST_NAME} for multi-file pull (Vite chunks + assets/)."
@@ -175,25 +175,25 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     echo "  Pulling ${R2_AGENT_PREFIX}/${line}..."
     target="${DIST_DIR}/${line}"
     mkdir -p "$(dirname "$target")"
-    "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/${R2_AGENT_PREFIX}/${line}" \
+    "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/${R2_AGENT_PREFIX}/${line}" \
       --file "$target" --remote -c "$PROD_CFG"
   done < "$MANIFEST_LOCAL" || true
 
-  "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+  "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/static/dashboard/agent.html" \
     --file "$HTML_PATH" --remote -c "$PROD_CFG"
 
   CICD_T_PULL_END=$(date +%s)
 
   if [ ! -f "$HTML_PATH" ]; then
-    echo "ERROR: ${HTML_PATH} missing after sandbox pull. Re-run deploy-sandbox first."
+    echo "ERROR: ${HTML_PATH} missing after source pull. Re-upload dashboard assets to ${SOURCE_ASSETS_BUCKET} first."
     exit 1
   fi
 
   _parse_dashboard_v_from_html
-  echo "  Pulled v=${CURRENT_V:-0} from sandbox."
+  echo "  Pulled v=${CURRENT_V:-0} from source bucket."
   if [ "${CURRENT_V:-0}" = "0" ]; then
     echo "  WARN: Could not read <!-- dashboard-v:N --> from pulled agent.html or dist/index.html."
-    echo "        If sandbox is newer, run ./scripts/deploy-sandbox.sh first, then promote again."
+    echo "        If the source bucket has a newer build, upload it there first, then promote again."
   fi
   echo ""
 
@@ -268,7 +268,7 @@ if [ "$WORKER_ONLY" -eq 0 ]; then
     row_id=$(printf 'prod-%s-v%s-%s' "$pn" "${CURRENT_V:-0}" "$DEPLOY_TS")
     id_esc=$(sql_escape "$row_id")
     r2_esc=$(sql_escape "${R2_AGENT_PREFIX}/${rel}")
-    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V:-0}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from sandbox', 1, 1, unixepoch())"
+    row="('${id_esc}', '${pn_esc}', 'v${CURRENT_V:-0}', '${fh}', ${fs}, '${r2_esc}', 'Promoted from source R2', 1, 1, unixepoch())"
     if [ "$first" -eq 1 ]; then
       D1_VALUES="$row"
       first=0
@@ -281,7 +281,7 @@ EOF
 
   HTML_HASH=$(md5 -q "$HTML_PATH" 2>/dev/null || md5sum "$HTML_PATH" | cut -d' ' -f1)
   HTML_SIZE=$(wc -c < "$HTML_PATH" | tr -d ' ')
-  html_row="('prod-agent-html-v${CURRENT_V:-0}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V:-0}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from sandbox', 1, 1, unixepoch())"
+  html_row="('prod-agent-html-v${CURRENT_V:-0}-${DEPLOY_TS}', 'agent-html', 'v${CURRENT_V:-0}', '${HTML_HASH}', ${HTML_SIZE}, 'static/dashboard/agent.html', 'Promoted from source R2', 1, 1, unixepoch())"
   if [ -n "$D1_VALUES" ]; then
     D1_SQL="INSERT OR REPLACE INTO dashboard_versions (id, page_name, version, file_hash, file_size, r2_path, description, is_production, is_locked, created_at) VALUES ${D1_VALUES}, ${html_row}"
   else
@@ -291,16 +291,20 @@ EOF
   "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
     --remote -c "$PROD_CFG" \
     --command="$D1_SQL"   2>/dev/null || echo "  WARN: dashboard_versions D1 log failed (non-fatal)"
+
+  _PROD_DEP_ID="dep_prod_${DEPLOY_TS}"
+  _PROMOTE_GH_ESC=$(cicd_sql_escape "${PROMOTE_GIT_HASH}")
+  cicd_d1_nf "INSERT OR IGNORE INTO deployments (id, timestamp, version, git_hash, status, deployed_by, environment, worker_name, created_at) VALUES ('${_PROD_DEP_ID}', datetime('now'), 'v${CURRENT_V:-0}', '${_PROMOTE_GH_ESC}', 'pending', 'cursor', 'production', 'inneranimalmedia', unixepoch())"
 fi
 
-# Worker-only: full R2 pull is skipped — still fetch agent shell from sandbox so Resend/CICD see current v.
+# Worker-only: full R2 pull is skipped — still fetch agent shell from source bucket so Resend/CICD see current v.
 if [ "$WORKER_ONLY" -eq 1 ]; then
-  echo "Worker-only: fetching static/dashboard/agent.html from sandbox R2 (${SANDBOX_BUCKET})..."
+  echo "Worker-only: fetching static/dashboard/agent.html from source R2 (${SOURCE_ASSETS_BUCKET})..."
   CICD_T_PULL_START=$(date +%s)
   mkdir -p "$(dirname "$HTML_PATH")"
-  if ! "${WRANGLER[@]}" r2 object get "${SANDBOX_BUCKET}/static/dashboard/agent.html" \
+  if ! "${WRANGLER[@]}" r2 object get "${SOURCE_ASSETS_BUCKET}/static/dashboard/agent.html" \
       --file "$HTML_PATH" --remote -c "$PROD_CFG"; then
-    echo "  WARN: sandbox agent.html fetch failed — dashboard version in email/logs may be stale"
+    echo "  WARN: source agent.html fetch failed — dashboard version in email/logs may be stale"
   fi
   CICD_T_PULL_END=$(date +%s)
   echo ""
@@ -310,7 +314,7 @@ _parse_dashboard_v_from_html
 
 # ── Step 3: Deploy production worker ──────────────────────────────────────────
 echo "Deploying production worker (inneranimalmedia)..."
-NOTES="${DEPLOYMENT_NOTES:-Promoted from sandbox via promote-to-prod.sh}"
+NOTES="${DEPLOYMENT_NOTES:-Promoted via promote-to-prod.sh}"
 TRIGGERED_BY="${TRIGGERED_BY:-promote}"
 
 CICD_T_WORKER_START=$(date +%s)
@@ -394,10 +398,24 @@ if [ "${CICD_SKIP_HEALTH_CURL:-0}" != "1" ]; then
   fi
 fi
 
+if [ -n "${_PROD_DEP_ID:-}" ]; then
+  _SEC=$((CICD_MS_WORKER / 1000))
+  [ "${_SEC:-0}" -lt 0 ] && _SEC=0
+  cicd_d1_nf "UPDATE deployments SET status='success', deploy_time_seconds=${_SEC} WHERE id='${_PROD_DEP_ID}'"
+  _URL_ESC=$(cicd_sql_escape "${PROD_HEALTH_URL}")
+  if [[ "${PROD_HC}" =~ ^2[0-9][0-9]$ ]]; then _HCL=healthy; else _HCL=degraded; fi
+  cicd_d1_nf "INSERT INTO deployment_health_checks (deployment_id, check_type, check_url, status_code, status, response_time_ms, checked_at) VALUES ('${_PROD_DEP_ID}', 'http', '${_URL_ESC}', ${PROD_HC:-0}, '${_HCL}', ${CICD_CF_HEALTH_RESPONSE_MS:-0}, datetime('now'))"
+fi
+
 # ── ai_workflow_* (non-fatal; before cicd_log_prod_promote) ───────────────────
 QUALITY_STATUS="${QUALITY_STATUS:-pass}"
 GITHUB_VULN_HIGH="${GITHUB_VULN_HIGH:-0}"
 GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
+
+# Escape single quotes for SQLite string literals (prevents broken INSERT when TRIGGERED_BY etc. contain ')
+_cicd_sql_escape() {
+  printf '%s' "${1:-}" | sed "s/'/''/g"
+}
 
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
@@ -411,7 +429,7 @@ GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
     'wfpipe_promote_prod',
     'tenant_sam_primeaux',
     'promote-to-prod',
-    'Pull sandbox R2 build, push to prod R2, deploy inneranimalmedia worker, health check, notify via Resend',
+    'Pull source R2 dashboard build, push to prod R2, deploy inneranimalmedia worker, health check, notify via Resend',
     'deployment',
     'manual',
     '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"tool_role\":\"internal\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"tool_role\":\"wrangler_r2\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"tool_role\":\"wrangler_deploy\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"tool_role\":\"curl\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"tool_role\":\"resend\"}]',
@@ -425,25 +443,36 @@ GITHUB_VULN_MODERATE="${GITHUB_VULN_MODERATE:-0}"
   );" \
   2>/dev/null || echo "  WARN: ai_workflow_pipelines template row failed (non-fatal)"
 
-WF_EXEC_ID="wfexec_${DEPLOY_TS}_prod_v${CURRENT_V:-0}"
+WF_RAND="$(openssl rand -hex 6 2>/dev/null || printf '%x' "$$")"
+WF_EXEC_ID="wfexec_${DEPLOY_TS}_${WF_RAND}_v${CURRENT_V:-0}"
 WF_TOTAL_DURATION_S=$(( (CICD_MS_PULL + CICD_MS_PUSH + CICD_MS_WORKER) / 1000 ))
+[ "${WF_TOTAL_DURATION_S:-0}" -lt 0 ] && WF_TOTAL_DURATION_S=0
+
+INPUT_VARS_JSON=$(printf '%s' "{\"dashboard_v\":\"v${CURRENT_V:-0}\",\"environment\":\"production\",\"triggered_by\":\"${TRIGGERED_BY:-promote}\"}")
+OUTPUT_VARS_JSON=$(printf '%s' "{\"worker_version_id\":\"${PROD_VERSION}\",\"health_http\":${PROD_HC:-200},\"r2_files\":${R2_LINE_COUNT:-0},\"quality\":\"${QUALITY_STATUS}\",\"vuln_high\":${GITHUB_VULN_HIGH:-0},\"vuln_moderate\":${GITHUB_VULN_MODERATE:-0}}")
+STAGES_JSON=$(printf '%s' "[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"duration_ms\":${CICD_MS_PULL:-0},\"status\":\"completed\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"status\":\"completed\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"duration_ms\":${CICD_MS_PUSH:-0},\"status\":\"completed\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"duration_ms\":${CICD_MS_WORKER:-0},\"status\":\"completed\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"status\":\"completed\",\"output\":\"${PROD_HC:-200}\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"status\":\"completed\"}]")
+INPUT_VARS_ESC=$(_cicd_sql_escape "$INPUT_VARS_JSON")
+OUTPUT_VARS_ESC=$(_cicd_sql_escape "$OUTPUT_VARS_JSON")
+STAGES_ESC=$(_cicd_sql_escape "$STAGES_JSON")
 
 "${WRANGLER[@]}" d1 execute inneranimalmedia-business \
   --remote -c "$PROD_CFG" \
-  --command="INSERT OR IGNORE INTO ai_workflow_executions (
+  --command="INSERT INTO ai_workflow_executions (
     id, pipeline_id, tenant_id, execution_number,
     status, input_variables_json, output_json,
     stage_results_json, started_at, completed_at, duration_seconds
   ) VALUES (
-    '${WF_EXEC_ID}',
+    '$(_cicd_sql_escape "$WF_EXEC_ID")',
     'wfpipe_promote_prod',
-    'tenant_sam_primeaux',
-    (SELECT COALESCE(MAX(execution_number),0)+1 FROM ai_workflow_executions WHERE pipeline_id='wfpipe_promote_prod'),
+    COALESCE((SELECT tenant_id FROM ai_workflow_pipelines WHERE id='wfpipe_promote_prod' LIMIT 1), 'system'),
+    (SELECT COALESCE(MAX(execution_number), 0) + 1 FROM ai_workflow_executions WHERE pipeline_id = 'wfpipe_promote_prod'),
     'completed',
-    '{\"dashboard_v\":\"v${CURRENT_V:-0}\",\"environment\":\"production\",\"triggered_by\":\"${TRIGGERED_BY:-promote}\"}',
-    '{\"worker_version_id\":\"${PROD_VERSION}\",\"health_http\":${PROD_HC:-200},\"r2_files\":${R2_LINE_COUNT},\"quality\":\"${QUALITY_STATUS}\",\"vuln_high\":${GITHUB_VULN_HIGH},\"vuln_moderate\":${GITHUB_VULN_MODERATE}}',
-    '[{\"stage_number\":1,\"stage_name\":\"r2_pull\",\"duration_ms\":${CICD_MS_PULL},\"status\":\"completed\"},{\"stage_number\":2,\"stage_name\":\"quality_checks\",\"status\":\"completed\"},{\"stage_number\":3,\"stage_name\":\"r2_push\",\"duration_ms\":${CICD_MS_PUSH},\"status\":\"completed\"},{\"stage_number\":4,\"stage_name\":\"worker_deploy\",\"duration_ms\":${CICD_MS_WORKER},\"status\":\"completed\"},{\"stage_number\":5,\"stage_name\":\"health_check\",\"status\":\"completed\",\"output\":\"${PROD_HC:-200}\"},{\"stage_number\":6,\"stage_name\":\"d1_log_notify\",\"status\":\"completed\"}]',
-    unixepoch(), unixepoch(), ${WF_TOTAL_DURATION_S}
+    '${INPUT_VARS_ESC}',
+    '${OUTPUT_VARS_ESC}',
+    '${STAGES_ESC}',
+    unixepoch() - ${WF_TOTAL_DURATION_S},
+    unixepoch(),
+    ${WF_TOTAL_DURATION_S}
   );" \
   2>/dev/null || echo "  WARN: ai_workflow_executions row failed (non-fatal)"
 
@@ -468,15 +497,27 @@ _send_resend_notification "success"
 echo ""
 echo "  Verify: curl -s https://inneranimalmedia.com/dashboard/agent | grep -o 'dashboard-v:[0-9]*'"
 
-# Post-deploy knowledge sync (non-fatal)
+# Post-deploy knowledge sync (non-fatal). Prefer AGENTSAM_BRIDGE_KEY (Bearer); else INTERNAL_API_SECRET.
 echo ""
 echo "  Syncing Agent Sam knowledge base..."
-SYNC_RESP=$(curl -s -X POST \
-  "https://inneranimalmedia.com/api/internal/post-deploy" \
-  -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" \
-  -H "Content-Type: application/json" \
-  --max-time 30 \
-  2>/dev/null || true)
+if [ -n "${AGENTSAM_BRIDGE_KEY:-}" ]; then
+  SYNC_RESP=$(curl -s -X POST \
+    "https://inneranimalmedia.com/api/internal/post-deploy" \
+    -H "Authorization: Bearer ${AGENTSAM_BRIDGE_KEY}" \
+    -H "Content-Type: application/json" \
+    --max-time 30 \
+    2>/dev/null || true)
+elif [ -n "${INTERNAL_API_SECRET:-}" ]; then
+  SYNC_RESP=$(curl -s -X POST \
+    "https://inneranimalmedia.com/api/internal/post-deploy" \
+    -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
+    -H "Content-Type: application/json" \
+    --max-time 30 \
+    2>/dev/null || true)
+else
+  SYNC_RESP=""
+  echo "  WARN: AGENTSAM_BRIDGE_KEY or INTERNAL_API_SECRET not set — knowledge sync skipped"
+fi
 if echo "$SYNC_RESP" | grep -q '"keys_written"'; then
   echo "  OK Knowledge sync complete"
   echo "$SYNC_RESP" | grep -o '"keys_written":[0-9]*' | head -1 || true

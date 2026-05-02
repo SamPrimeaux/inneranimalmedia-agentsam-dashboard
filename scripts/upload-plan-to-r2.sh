@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upload the agent plan to R2 (agent-sam) so other agents can load it. Run from repo root.
+# Upload the agent plan to R2 (inneranimalmedia) so other agents can load it. Run from repo root.
 # Usage: ./scripts/upload-plan-to-r2.sh
 
 set -e
@@ -14,10 +14,10 @@ if [[ ! -f "$PLAN_FILE" ]]; then
 fi
 
 cd "$REPO_ROOT"
-echo "Uploading plan to R2 agent-sam/$KEY ..."
-./scripts/with-cloudflare-env.sh npx wrangler r2 object put "agent-sam/${KEY}" \
+echo "Uploading plan to R2 inneranimalmedia/$KEY ..."
+./scripts/with-cloudflare-env.sh npx wrangler r2 object put "inneranimalmedia/${KEY}" \
   --file="$PLAN_FILE" \
   --content-type=text/markdown \
   --remote \
   -c "$CONFIG"
-echo "Done. Plan is stored at agent-sam/$KEY"
+echo "Done. Plan is stored at inneranimalmedia/$KEY"

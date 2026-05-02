@@ -3,6 +3,7 @@
  * Stores session messages and RAG context cache.
  */
 import { DurableObject } from "cloudflare:workers";
+import { getDefaultTerminalConnection } from "../core/terminal.js";
 
 // ACTIVE PATH: AGENT_SESSION DO terminal coordination for /api/agent/terminal/ws.
 const TERMINAL_WS_TAG = "terminal";
@@ -96,6 +97,11 @@ export class AgentChatSqlV1 extends DurableObject {
       top_score REAL,
       cached_at INTEGER DEFAULT (unixepoch())
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS designstudio_event_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      envelope_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`);
 
     this.ptyWs = null;
     this.ptyConnectPromise = null;
@@ -104,6 +110,89 @@ export class AgentChatSqlV1 extends DurableObject {
     this.workspaceId = "ws_inneranimalmedia";
     this.workspaceSettings = {};
     this.workspaceSettingsPromise = null;
+    this.historySequence = 0;
+    this._ptyOutBuf = "";
+    this._ptyOutFlushTimer = null;
+  }
+
+  closeTerminalSessionInD1() {
+    const sid = this.cachedTerminalSessionId;
+    if (!sid || !this.env?.DB) return;
+    void this.env.DB.prepare(
+      `UPDATE terminal_sessions
+       SET status = 'closed', closed_at = unixepoch(), updated_at = unixepoch()
+       WHERE id = ? AND status != 'closed'`,
+    )
+      .bind(sid)
+      .run()
+      .catch((e) => console.warn("[terminal_session close]", e?.message));
+  }
+
+  async insertTerminalHistoryRow(direction, content, opts = {}) {
+    if (!this.env?.DB || !this.cachedTerminalSessionId) return;
+    const tenantId = String(this.env?.TENANT_ID || "system").trim();
+    const truncated = String(content || "").slice(0, 4000);
+    this.historySequence = (this.historySequence || 0) + 1;
+    const seq = this.historySequence;
+    const id = "th_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    const triggeredBy = opts.triggeredBy || "user";
+    const agentSid = this.ctx?.id?.toString?.() || null;
+    const exitCode = opts.exitCode != null ? opts.exitCode : null;
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      if (exitCode != null && direction === "output") {
+        await this.env.DB.prepare(
+          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, exit_code, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        )
+          .bind(id, this.cachedTerminalSessionId, tenantId, seq, direction, truncated, exitCode, triggeredBy, agentSid, now)
+          .run();
+      } else {
+        await this.env.DB.prepare(
+          `INSERT INTO terminal_history (id, terminal_session_id, tenant_id, sequence, direction, content, triggered_by, agent_session_id, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+        )
+          .bind(id, this.cachedTerminalSessionId, tenantId, seq, direction, truncated, triggeredBy, agentSid, now)
+          .run();
+      }
+    } catch (e) {
+      console.warn("[terminal_history]", e?.message);
+    }
+  }
+
+  async recordExecTerminalHistory(command, outputText, exitCode) {
+    const cmd = String(command || "").slice(0, 4000);
+    const out = String(outputText || "").slice(0, 4000);
+    const ec = exitCode != null && Number.isFinite(Number(exitCode)) ? Number(exitCode) : null;
+    await this.insertTerminalHistoryRow("input", cmd, { triggeredBy: "agent" });
+    await this.insertTerminalHistoryRow("output", out, { triggeredBy: "agent", exitCode: ec });
+  }
+
+  recordPtyOutputChunk(text) {
+    if (!text || !this.env?.DB || !this.cachedTerminalSessionId) return;
+    this._ptyOutBuf = (this._ptyOutBuf || "") + text;
+    if (this._ptyOutFlushTimer) clearTimeout(this._ptyOutFlushTimer);
+    this._ptyOutFlushTimer = setTimeout(() => this.flushPtyOutputBuffer(), 900);
+    if (this._ptyOutBuf.length >= 4000) this.flushPtyOutputBuffer();
+  }
+
+  flushPtyOutputBuffer() {
+    if (this._ptyOutFlushTimer) {
+      clearTimeout(this._ptyOutFlushTimer);
+      this._ptyOutFlushTimer = null;
+    }
+    const buf = (this._ptyOutBuf || "").trim();
+    this._ptyOutBuf = "";
+    if (!buf) return;
+    void this.insertTerminalHistoryRow("output", buf.slice(0, 4000), { triggeredBy: "user" });
+  }
+
+  maybeFinalizeTerminalSession(reason) {
+    const n = this.ctx.getWebSockets(TERMINAL_WS_TAG).length;
+    if (n > 0) return;
+    try {
+      this.flushPtyOutputBuffer();
+    } catch (_) {}
+    void this.insertTerminalHistoryRow("system", reason, { triggeredBy: "system" });
+    this.closeTerminalSessionInD1();
   }
 
   async loadWorkspaceSettings() {
@@ -112,7 +201,7 @@ export class AgentChatSqlV1 extends DurableObject {
       return this.workspaceSettings;
     }
     const row = await this.env.DB.prepare(
-      "SELECT settings_json FROM agentsam_workspace WHERE id = ?"
+      "SELECT settings_json FROM workspace_settings WHERE workspace_id = ?"
     ).bind(this.workspaceId).first();
     try {
       const parsed = row?.settings_json ? JSON.parse(row.settings_json) : {};
@@ -220,7 +309,126 @@ export class AgentChatSqlV1 extends DurableObject {
       return Response.json({ ok: true });
     }
 
+    if (url.pathname === '/designstudio/stream-event' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const envelope = body?.envelope;
+      if (!envelope || typeof envelope !== 'object') {
+        return Response.json({ error: 'envelope required' }, { status: 400 });
+      }
+      const jsonText = JSON.stringify(envelope);
+      this.sql.exec('INSERT INTO designstudio_event_outbox (envelope_json) VALUES (?)', jsonText);
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/designstudio/events' && request.method === 'GET') {
+      return this.handleDesignStudioEventStream(url);
+    }
+
     return new Response('AgentChatSqlV1 DO', { status: 200 });
+  }
+
+  /**
+   * SSE fan-out from DO SQLite outbox (live stream). Filter by workflow run id inside envelope JSON.
+   * @param {URL} url
+   */
+  handleDesignStudioEventStream(url) {
+    const runId = (url.searchParams.get('run_id') || '').trim();
+    if (!runId) {
+      return Response.json({ error: 'run_id required' }, { status: 400 });
+    }
+    let lastId = parseInt(url.searchParams.get('last_id') || '0', 10);
+    if (!Number.isFinite(lastId)) lastId = 0;
+
+    const encoder = new TextEncoder();
+    const sql = this.sql;
+    const startedMs = Date.now();
+    const maxMs = 10 * 60 * 1000;
+    const keepaliveMs = 15000;
+    const pollMs = 100;
+
+    const stream = new ReadableStream({
+      start: (controller) => {
+        let lastKeep = Date.now();
+        const pump = async () => {
+          try {
+            while (Date.now() - startedMs < maxMs) {
+              /** @type {{ id: number, envelope_json: string }[]} */
+              let batch;
+              try {
+                batch = [
+                  ...sql.exec(
+                    `SELECT id, envelope_json FROM designstudio_event_outbox
+                     WHERE id > ?
+                       AND (
+                         COALESCE(json_extract(envelope_json, '$.payload.workflow_run_id'), '') = ?
+                         OR COALESCE(json_extract(envelope_json, '$.workflow_run_id'), '') = ?
+                       )
+                     ORDER BY id ASC LIMIT 50`,
+                    lastId,
+                    runId,
+                    runId,
+                  ),
+                ];
+              } catch (_) {
+                const raw = [
+                  ...sql.exec(
+                    `SELECT id, envelope_json FROM designstudio_event_outbox WHERE id > ? ORDER BY id ASC LIMIT 200`,
+                    lastId,
+                  ),
+                ];
+                batch = raw.filter((row) => {
+                  try {
+                    const o = JSON.parse(row.envelope_json);
+                    return (
+                      String(o?.payload?.workflow_run_id || '') === runId ||
+                      String(o?.workflow_run_id || '') === runId
+                    );
+                  } catch {
+                    return false;
+                  }
+                }).slice(0, 50);
+              }
+
+              for (const row of batch) {
+                const idNum = Number(row.id);
+                const chunk = `id: ${idNum}\nevent: designstudio\ndata: ${row.envelope_json}\n\n`;
+                controller.enqueue(encoder.encode(chunk));
+                lastId = idNum;
+                try {
+                  const parsed = JSON.parse(row.envelope_json);
+                  if (parsed?.event === 'supabase.sync.completed') {
+                    controller.close();
+                    return;
+                  }
+                } catch (_) {}
+              }
+
+              if (Date.now() - lastKeep >= keepaliveMs) {
+                controller.enqueue(encoder.encode(': keepalive\n\n'));
+                lastKeep = Date.now();
+              }
+
+              await new Promise((r) => setTimeout(r, pollMs));
+            }
+            controller.close();
+          } catch (e) {
+            try {
+              controller.error(e);
+            } catch (_) {}
+          }
+        };
+        void pump();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   }
 
   async handleTerminalWebSocket(request, url) {
@@ -257,6 +465,7 @@ export class AgentChatSqlV1 extends DurableObject {
         ).bind(doId).run().catch(() => {});
       }
       this.sendStateToWebSocket(server, "connected");
+      void this.insertTerminalHistoryRow("system", "terminal session opened", { triggeredBy: "system" });
     } catch (e) {
       this.sendStateToWebSocket(server, "backend_unavailable", String(e?.message || e));
     }
@@ -303,8 +512,10 @@ export class AgentChatSqlV1 extends DurableObject {
     const executionMode = normalizeExecutionMode(url.searchParams.get("execution_mode"));
     const sshTargets = parseSshTargets(this.env);
     const mcpToken = String(this.env?.MCP_AUTH_TOKEN || "").trim();
-    const ptyConfigured = !!String(this.env?.TERMINAL_WS_URL || "").trim() &&
-      !!String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
+    const ptyConfigured =
+      !!this.env?.PTY_SERVICE ||
+      (!!String(this.env?.TERMINAL_WS_URL || "").trim() &&
+        !!String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim());
     return {
       ok: true,
       control_plane: "worker_do",
@@ -387,53 +598,84 @@ export class AgentChatSqlV1 extends DurableObject {
   }
 
   async connectPty() {
-    const token = String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
+    let resolvedWsUrl = null;
+    let token = String(this.env?.PTY_AUTH_TOKEN || this.env?.TERMINAL_SECRET || "").trim();
+    if (this.env?.DB) {
+      try {
+        const conn = await getDefaultTerminalConnection(this.env.DB);
+        if (conn?.ws_url?.trim()) resolvedWsUrl = conn.ws_url.trim();
+        const secretName = String(conn?.auth_token_secret_name || "").trim();
+        if (secretName && this.env[secretName] != null) {
+          const t = String(this.env[secretName]).trim();
+          if (t) token = t;
+        }
+      } catch (_) {}
+    }
 
-    // VPC Service path (private — preferred)
+    // VPC Service path (private — `PTY_SERVICE` tunnels to localhost:3099; no worker-side auth headers)
     if (this.env?.PTY_SERVICE) {
-      const resp = await this.env.PTY_SERVICE.fetch(
-        new Request("http://localhost:3099/ws", {
-          headers: {
-            "Upgrade": "websocket",
-            "Connection": "Upgrade",
-            "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
-            "Sec-WebSocket-Version": "13",
-            ...(token ? { "X-PTY-Token": token } : {})
-          }
-        })
-      );
-      if (resp.status !== 101 || !resp.webSocket) {
-        throw new Error(`PTY VPC connect failed: ${resp.status}`);
+      try {
+        const resp = await this.env.PTY_SERVICE.fetch(
+          new Request("http://localhost:3099/terminal", {
+            headers: {
+              Upgrade: "websocket",
+              Connection: "Upgrade",
+              "Sec-WebSocket-Key": btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))),
+              "Sec-WebSocket-Version": "13",
+            },
+          }),
+        );
+        if (resp.status === 101 && resp.webSocket) {
+          const pty = resp.webSocket;
+          pty.accept();
+          this.ptyWs = pty;
+          this.broadcastState("connected");
+          pty.addEventListener("message", (evt) => {
+            try {
+              const t = messageToString(evt.data);
+              if (t) this.recordPtyOutputChunk(t);
+            } catch (_) {}
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                ws.send(evt.data);
+              } catch (_) {}
+            }
+          });
+          pty.addEventListener("close", () => {
+            try {
+              this.flushPtyOutputBuffer();
+            } catch (_) {}
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                this.sendStateToWebSocket(ws, "disconnected");
+              } catch (_) {}
+            }
+            if (this.ptyWs === pty) this.ptyWs = null;
+          });
+          pty.addEventListener("error", () => {
+            for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
+              try {
+                this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error");
+              } catch (_) {}
+            }
+            if (this.ptyWs === pty) this.ptyWs = null;
+          });
+          return;
+        }
+      } catch (_) {
+        /* fall through to public tunnel */
       }
-      const pty = resp.webSocket;
-      pty.accept();
-      this.ptyWs = pty;
-      this.broadcastState("connected");
-      pty.addEventListener("message", (evt) => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { ws.send(evt.data); } catch (_) {}
-        }
-      });
-      pty.addEventListener("close", () => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { this.sendStateToWebSocket(ws, "disconnected"); } catch (_) {}
-        }
-        if (this.ptyWs === pty) this.ptyWs = null;
-      });
-      pty.addEventListener("error", () => {
-        for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
-          try { this.sendStateToWebSocket(ws, "backend_unavailable", "PTY connection error"); } catch (_) {}
-        }
-        if (this.ptyWs === pty) this.ptyWs = null;
-      });
-      return;
     }
 
     // Fallback: public tunnel (TERMINAL_WS_URL secret)
-    // Per-workspace URL takes priority over global secret
+    // Per-workspace URL takes priority over global secret; then D1 default connection
     const workspaceUrl = this.workspaceSettings?.terminal_ws_url;
-    const rawUrl = workspaceUrl || String(this.env?.TERMINAL_WS_URL || "").trim();
-    if (!rawUrl || !token) throw new Error("PTY backend is not configured — set PTY_SERVICE binding or TERMINAL_WS_URL + PTY_AUTH_TOKEN");
+    const rawUrl = workspaceUrl || resolvedWsUrl || String(this.env?.TERMINAL_WS_URL || "").trim();
+    if (!rawUrl || !token) {
+      throw new Error(
+        "PTY backend is not configured — set PTY_SERVICE (vpc_services) or TERMINAL_WS_URL + PTY_AUTH_TOKEN",
+      );
+    }
     let wsUrl = normalizeWebSocketUrl(rawUrl);
     const sep = wsUrl.includes("?") ? "&" : "?";
     wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
@@ -453,11 +695,18 @@ export class AgentChatSqlV1 extends DurableObject {
     this.ptyWs = pty;
     this.broadcastState("connected");
     pty.addEventListener("message", (evt) => {
+      try {
+        const t = messageToString(evt.data);
+        if (t) this.recordPtyOutputChunk(t);
+      } catch (_) {}
       for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
         try { ws.send(evt.data); } catch (_) {}
       }
     });
     pty.addEventListener("close", () => {
+      try {
+        this.flushPtyOutputBuffer();
+      } catch (_) {}
       for (const ws of this.ctx.getWebSockets(TERMINAL_WS_TAG)) {
         try { this.sendStateToWebSocket(ws, "disconnected"); } catch (_) {}
       }
@@ -472,11 +721,45 @@ export class AgentChatSqlV1 extends DurableObject {
   }
 
   async executePtyCommand(command) {
-    const execUrl = normalizeExecHttpUrl(this.env?.TERMINAL_WS_URL || "");
+    if (this.env?.PTY_SERVICE) {
+      try {
+        const res = await this.env.PTY_SERVICE.fetch(
+          new Request("http://localhost:3099/exec", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command }),
+          }),
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return { error: String(data?.error || `PTY command failed (${res.status})`) };
+        }
+        const stdout = typeof data?.stdout === "string" ? data.stdout : "";
+        const stderr = typeof data?.stderr === "string" ? data.stderr : "";
+        const output = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim() || "(no output)";
+        void this.recordExecTerminalHistory(command, output, data?.exit_code ?? 0);
+        return { output, exit_code: data?.exit_code ?? 0 };
+      } catch (e) {
+        return { error: e?.message || "PTY VPC exec failed" };
+      }
+    }
+
+    let execBase = String(this.env?.TERMINAL_WS_URL || "").trim();
+    let dbTok = null;
+    if (this.env?.DB) {
+      try {
+        const conn = await getDefaultTerminalConnection(this.env.DB);
+        if (conn?.ws_url?.trim()) execBase = conn.ws_url.trim();
+        const sn = String(conn?.auth_token_secret_name || "").trim();
+        if (sn && this.env[sn] != null) dbTok = String(this.env[sn]).trim();
+      } catch (_) {}
+    }
+    const execUrl = normalizeExecHttpUrl(execBase);
     if (!execUrl) throw new Error("Terminal /exec endpoint is not configured");
     const tokens = Array.from(new Set([
       String(this.env?.PTY_AUTH_TOKEN || "").trim(),
       String(this.env?.TERMINAL_SECRET || "").trim(),
+      dbTok,
     ].filter(Boolean)));
     if (tokens.length === 0) throw new Error("No terminal auth token configured");
 
@@ -500,6 +783,7 @@ export class AgentChatSqlV1 extends DurableObject {
       const stdout = typeof data?.stdout === "string" ? data.stdout : "";
       const stderr = typeof data?.stderr === "string" ? data.stderr : "";
       const output = `${stdout}${stderr ? `\n${stderr}` : ""}`.trim() || "(no output)";
+      void this.recordExecTerminalHistory(command, output, data?.exit_code ?? 0);
       return { output, exit_code: data?.exit_code ?? 0 };
     }
 
@@ -598,6 +882,18 @@ export class AgentChatSqlV1 extends DurableObject {
         await this.ensurePtyConnected();
         if (!this.ptyWs || this.ptyWs.readyState !== 1) throw new Error("PTY socket not ready");
         const raw = messageToString(message);
+        let recordLine = null;
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed?.type === "input" && typeof parsed?.data === "string" && /[\r\n]/.test(parsed.data)) {
+            recordLine = parsed.data.replace(/[\r\n]+$/, "").trim();
+          }
+        } catch (_) {
+          if (/[\r\n]/.test(raw)) recordLine = raw.replace(/[\r\n]+$/, "").trim();
+        }
+        if (recordLine && recordLine.length > 0) {
+          void this.insertTerminalHistoryRow("input", recordLine.slice(0, 4000), { triggeredBy: "user" });
+        }
         let outbound = raw;
         try {
           const parsed = JSON.parse(raw);
@@ -645,9 +941,11 @@ export class AgentChatSqlV1 extends DurableObject {
 
   async webSocketClose(ws) {
     this.terminalLineBuffers.delete(ws);
+    this.maybeFinalizeTerminalSession("terminal session closed");
   }
 
   async webSocketError(ws) {
     this.terminalLineBuffers.delete(ws);
+    this.maybeFinalizeTerminalSession("terminal websocket error");
   }
 }

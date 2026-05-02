@@ -265,7 +265,7 @@ export async function githubCommitHandshake(env, authUser, repo, opts) {
     tree: treeData.sha,
     parents: [latestSha],
     ...(opts.committer && {
-      committer: { name: opts.committer, email: 'agentsam@inneranimalmedia.com' },
+      committer: { name: opts.committer, email: 'support@inneranimalmedia.com' },
     }),
   });
 

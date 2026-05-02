@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset password | Inner Animal Media</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --auth-bg: #050508;
+            --auth-exit-overlay: #030308;
+            --solar-cyan: #38bdf8;
+        }
+        html {
+            background-color: var(--auth-bg);
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--auth-bg);
+            color: #E2E8F0;
+            font-family: 'Inter', sans-serif;
+            min-height: 100vh;
+        }
+
+        .oauth-btn.oauth-google-btn,
+        .oauth-btn.oauth-github-btn,
+        .oauth-btn.oauth-cloudflare-glass-btn,
+        .oauth-btn.supabase-img-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            min-height: 44px;
+            height: 44px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            box-sizing: border-box;
+            padding: 0 16px;
+            line-height: 1;
+        }
+        .oauth-btn.oauth-google-btn {
+            background: #ffffff;
+            color: #1E293B;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+        }
+        .oauth-btn.oauth-google-btn:hover {
+            background: #f8fafc;
+        }
+        .oauth-btn.oauth-google-btn svg {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+        }
+        .oauth-btn.oauth-github-btn {
+            background: #24292e;
+            color: #ffffff;
+            border: none;
+        }
+        .oauth-btn.oauth-github-btn:hover {
+            background: #2f363d;
+        }
+        .oauth-btn.oauth-github-btn svg {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+        .oauth-btn.supabase-img-btn {
+            background: none;
+            border: none;
+            padding: 0;
+        }
+        .oauth-btn.supabase-img-btn img {
+            height: 44px;
+            width: auto;
+            max-width: 100%;
+            max-height: 44px;
+            display: block;
+            object-fit: contain;
+        }
+        .oauth-btn.oauth-cloudflare-glass-btn {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #fff;
+        }
+        .oauth-btn.oauth-cloudflare-glass-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
+        }
+        .oauth-btn.oauth-cloudflare-glass-btn img {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+        }
+        #globe-canvas {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+        }
+        body.oauth-globe-exit #globe-canvas {
+            z-index: 2;
+        }
+
+        .auth-layout {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            padding: 48px 16px 72px;
+            box-sizing: border-box;
+        }
+        .auth-layout .login-card {
+            pointer-events: auto;
+        }
+
+        .login-card {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 48px 40px;
+            background: rgba(10, 18, 30, 0.45);
+            backdrop-filter: blur(24px) saturate(160%);
+            -webkit-backdrop-filter: blur(24px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 32px;
+            box-shadow: 0 8px 48px rgba(0, 0, 0, 0.45);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .login-card:hover {
+            background: rgba(10, 18, 30, 0.52);
+            border-color: rgba(255, 255, 255, 0.14);
+            box-shadow: 0 8px 52px rgba(0, 0, 0, 0.5);
+        }
+
+        .brand-logo {
+            width: 140px;
+            height: 140px;
+            border-radius: 0;
+            overflow: visible;
+            margin-bottom: 32px;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .brand-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.3));
+        }
+
+        .brand-logo:hover { transform: scale(1.08); }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 4px;
+            letter-spacing: -0.01em;
+        }
+
+        p.subtitle {
+            font-size: 13px;
+            color: #94A3B8;
+            margin-bottom: 32px;
+        }
+
+        .input-group {
+            width: 100%;
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .input-field {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 14px;
+            padding: 14px 16px 14px 44px;
+            color: white;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .input-field:focus {
+            border-color: rgba(0, 122, 255, 0.6);
+            background: rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.2);
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #64748B;
+            pointer-events: none;
+        }
+
+        .input-field:focus + .input-icon { color: #007AFF; }
+
+        .input-wrap {
+            position: relative;
+            width: 100%;
+        }
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #64748B;
+            cursor: pointer;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .password-toggle:hover { color: #94A3B8; }
+        .password-toggle svg { width: 18px; height: 18px; }
+
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            margin-top: 8px;
+            border-radius: 14px;
+            font-weight: 600;
+            color: white;
+            background: #007AFF;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            background: #0062CC;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(0, 122, 255, 0.4);
+        }
+
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
+
+        .error-msg {
+            color: #FF3B30;
+            font-size: 12px;
+            margin-top: 16px;
+            text-align: center;
+            min-height: 20px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            font-weight: 500;
+        }
+
+        .error-msg.visible { opacity: 1; }
+
+        .transition-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: var(--auth-exit-overlay);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.45s ease-out;
+        }
+        .transition-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .transition-overlay.animating {
+            transition: none;
+        }
+        body.oauth-globe-exit .auth-min-footer,
+        body.oauth-globe-exit .auth-layout .login-card {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .auth-min-footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 12px 20px;
+            padding: 10px 20px 14px;
+            font-size: 12px;
+            color: rgba(148, 163, 184, 0.88);
+            background: linear-gradient(to top, rgba(5, 5, 8, 0.92) 0%, rgba(5, 5, 8, 0.55) 55%, transparent 100%);
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            pointer-events: auto;
+        }
+
+        .auth-min-footer a {
+            color: rgba(186, 198, 214, 0.95);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .auth-min-footer a:hover {
+            color: #e2e8f0;
+            text-decoration: underline;
+        }
+
+        .auth-min-footer-sep {
+            opacity: 0.45;
+            user-select: none;
+        }
+        .recovery-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--solar-cyan);
+            margin-bottom: 8px;
+            width: 100%;
+            text-align: center;
+        }
+        .reset-info-box {
+            width: 100%;
+            padding: 14px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #cbd5e1;
+            background: rgba(10, 18, 30, 0.45);
+            backdrop-filter: blur(24px) saturate(160%);
+            -webkit-backdrop-filter: blur(24px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 14px;
+            text-align: center;
+        }
+        .text-link {
+            color: #007AFF;
+            font-weight: 600;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .text-link:hover { text-decoration: underline; }
+    </style>
+</head>
+
+<body>
+<script>
+(function () {
+    var nextParam = new URLSearchParams(window.location.search).get('next');
+    if (nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')) {
+        document.cookie = 'iam_oauth_next=' + encodeURIComponent(nextParam) + '; Path=/; Max-Age=600; Secure; SameSite=Lax';
+    }
+})();
+</script>
+
+<canvas id="globe-canvas"></canvas>
+
+<div id="transitionOverlay" class="transition-overlay" aria-hidden="true"></div>
+
+<div class="auth-layout">
+<div class="login-card">
+    <div class="brand-logo">
+        <img src="https://imagedelivery.net/g7wf09fCONpnidkRnR_5vw/11f6af46-0a3c-482a-abe8-83edc5a8a200/avatar" alt="InnerAnimal Logo">
+    </div>
+
+    <div id="stateRequest" style="width: 100%;">
+        <p class="recovery-label">Account recovery</p>
+        <h1 style="font-size: 22px; margin-bottom: 8px;">Reset password</h1>
+        <div class="reset-info-box">
+            You will receive an email from hey@inneranimalmedia.com.<br>
+            Check your inbox and spam folder.
+        </div>
+        <form id="frmRequest" style="width: 100%;">
+            <div class="input-group">
+                <input type="email" id="reqEmail" class="input-field" placeholder="Email address" required autocomplete="email">
+                <span class="input-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </span>
+            </div>
+            <button type="submit" id="btnSendCode" class="btn-primary">Send reset code</button>
+            <div id="errRequest" class="error-msg" aria-live="polite" style="margin-top: 12px;"></div>
+        </form>
+        <p style="margin-top: 20px; text-align: center;">
+            <a class="text-link" href="/auth/login">Back to login</a>
+        </p>
+    </div>
+
+    <div id="stateVerify" style="display: none; width: 100%;">
+        <p class="recovery-label">Account recovery</p>
+        <h1 style="font-size: 22px; margin-bottom: 4px;">Check your email</h1>
+        <p class="subtitle" style="margin-bottom: 20px;">Enter the verification code we sent you</p>
+        <form id="frmVerify" style="width: 100%;">
+            <div class="input-group">
+                <input type="text" id="vCode" class="input-field" placeholder="Verification code (6 digits)" required autocomplete="one-time-code" inputmode="numeric" maxlength="8" pattern="[0-9]*">
+            </div>
+            <div class="input-group">
+                <div class="input-wrap">
+                    <input type="password" id="vPass" class="input-field" placeholder="New password" required autocomplete="new-password" style="padding-right: 44px;">
+                    <span class="input-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </span>
+                    <button type="button" class="password-toggle" id="vPassToggle" aria-label="Show password">
+                        <svg class="v-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                        <svg class="v-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: none;">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M17.94 17.94A10.07 10.07 0 0112 20c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="input-group">
+                <input type="password" id="vPass2" class="input-field" placeholder="Confirm new password" required autocomplete="new-password">
+            </div>
+            <button type="submit" id="btnResetPwd" class="btn-primary">Reset password</button>
+            <div id="errVerify" class="error-msg" aria-live="polite" style="margin-top: 12px;"></div>
+        </form>
+        <p style="margin-top: 16px; text-align: center; font-size: 14px;">
+            <a href="#" id="resendLink" class="text-link">Resend code</a>
+        </p>
+        <p style="margin-top: 8px; text-align: center;">
+            <a class="text-link" href="/auth/login">Back to login</a>
+        </p>
+    </div>
+
+    <div id="stateDone" style="display: none; width: 100%; text-align: center;">
+        <h1 style="font-size: 22px; margin-bottom: 8px;">Password updated</h1>
+        <p class="subtitle" style="margin-bottom: 24px;">You can now sign in with your new password.</p>
+        <a href="/auth/login" class="btn-primary" style="display: block; text-align: center; text-decoration: none;">Back to login</a>
+    </div>
+</div>
+</div>
+
+<footer class="auth-min-footer" aria-label="Legal">
+    <span>Inner Animal Media</span>
+    <span class="auth-min-footer-sep" aria-hidden="true">|</span>
+    <a href="/privacy">Privacy</a>
+    <span class="auth-min-footer-sep" aria-hidden="true">|</span>
+    <a href="/terms">Terms</a>
+    <span class="auth-min-footer-sep" aria-hidden="true">|</span>
+    <a href="/contact">Contact</a>
+</footer>
+
+<script>
+(function() {
+    var origin = window.location.origin;
+    var resetEmail = '';
+
+    function showErr(el, msg) {
+        if (!el) return;
+        el.textContent = msg || '';
+        if (msg) { el.classList.add('visible'); el.style.color = '#FF3B30'; }
+        else el.classList.remove('visible');
+    }
+
+    var vPassToggle = document.getElementById('vPassToggle');
+    var vPass = document.getElementById('vPass');
+    if (vPassToggle && vPass) {
+        vPassToggle.addEventListener('click', function() {
+            var isP = vPass.type === 'password';
+            vPass.type = isP ? 'text' : 'password';
+            var sh = vPassToggle.querySelector('.v-show');
+            var hi = vPassToggle.querySelector('.v-hide');
+            if (sh) sh.style.display = isP ? 'none' : 'block';
+            if (hi) hi.style.display = isP ? 'block' : 'none';
+        });
+    }
+
+    document.getElementById('frmRequest').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var email = document.getElementById('reqEmail').value.trim();
+        var btn = document.getElementById('btnSendCode');
+        var err = document.getElementById('errRequest');
+        showErr(err, '');
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+        try {
+            var res = await fetch(origin + '/api/auth/password-reset/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email }),
+                credentials: 'same-origin'
+            });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) {
+                showErr(err, data.error || 'Could not send email. Try again.');
+                btn.disabled = false;
+                btn.textContent = 'Send reset code';
+                return;
+            }
+            resetEmail = email;
+            document.getElementById('stateRequest').style.display = 'none';
+            document.getElementById('stateVerify').style.display = 'block';
+        } catch (x) {
+            showErr(err, 'Network error. Try again.');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Send reset code';
+    });
+
+    document.getElementById('frmVerify').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var code = document.getElementById('vCode').value.trim().replace(/\s/g, '');
+        var p1 = document.getElementById('vPass').value;
+        var p2 = document.getElementById('vPass2').value;
+        var btn = document.getElementById('btnResetPwd');
+        var err = document.getElementById('errVerify');
+        showErr(err, '');
+        btn.disabled = true;
+        btn.textContent = 'Updating…';
+        try {
+            var res = await fetch(origin + '/api/auth/password-reset/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: resetEmail,
+                    code: code,
+                    password: p1,
+                    confirm_password: p2
+                }),
+                credentials: 'same-origin'
+            });
+            var data = await res.json().catch(function() { return {}; });
+            if (!res.ok) {
+                showErr(err, data.error || 'Reset failed. Try again.');
+                btn.disabled = false;
+                btn.textContent = 'Reset password';
+                return;
+            }
+            document.getElementById('stateVerify').style.display = 'none';
+            document.getElementById('stateDone').style.display = 'block';
+        } catch (x) {
+            showErr(err, 'Network error. Try again.');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Reset password';
+    });
+
+    var resendLink = document.getElementById('resendLink');
+    if (resendLink) {
+        resendLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (!resetEmail) return;
+            fetch(origin + '/api/auth/password-reset/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: resetEmail }),
+                credentials: 'same-origin'
+            }).catch(function() {});
+        });
+    }
+})();
+</script>
+
+<script>
+(function() {
+    var canvas = document.getElementById('globe-canvas');
+    var transitionOverlay = document.getElementById('transitionOverlay');
+    if (typeof THREE !== 'undefined') {
+        var scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x030308, 0.0012);
+
+        var camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 0, 35);
+
+        var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: false, antialias: true, powerPreference: 'high-performance' });
+        renderer.setClearColor(0x050508, 1);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        var starGeo = new THREE.BufferGeometry();
+        var starCount = 4000;
+        var starPos = new Float32Array(starCount * 3);
+        for (var i = 0; i < starCount; i++) {
+            starPos[i * 3] = (Math.random() - 0.5) * 1200;
+            starPos[i * 3 + 1] = (Math.random() - 0.5) * 1200;
+            starPos[i * 3 + 2] = (Math.random() - 0.5) * 1200;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        var starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.8, transparent: true, opacity: 0.9, sizeAttenuation: true });
+        var stars = new THREE.Points(starGeo, starMat);
+        scene.add(stars);
+
+        var globeGroup = new THREE.Group();
+        globeGroup.position.set(0, 0, 0);
+        scene.add(globeGroup);
+
+        var glowGeo = new THREE.SphereGeometry(8.2, 48, 48);
+        var glowMat = new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.12 });
+        globeGroup.add(new THREE.Mesh(glowGeo, glowMat));
+
+        var wireGeo = new THREE.IcosahedronGeometry(8.5, 3);
+        var wireMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true, transparent: true, opacity: 0.35 });
+        globeGroup.add(new THREE.Mesh(wireGeo, wireMat));
+
+        var pGeo = new THREE.BufferGeometry();
+        var pCount = 1200;
+        var pPos = new Float32Array(pCount * 3);
+        var rad = 9;
+        for (var i = 0; i < pCount; i++) {
+            var phi = Math.acos(-1 + (2 * i) / pCount);
+            var theta = Math.sqrt(pCount * Math.PI) * phi;
+            pPos[i * 3] = rad * Math.cos(theta) * Math.sin(phi);
+            pPos[i * 3 + 1] = rad * Math.sin(theta) * Math.sin(phi);
+            pPos[i * 3 + 2] = rad * Math.cos(phi);
+        }
+        pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+        var pMat = new THREE.PointsMaterial({ color: 0x7dd3fc, size: 0.18, transparent: true, opacity: 0.95 });
+        globeGroup.add(new THREE.Points(pGeo, pMat));
+
+        var ringMat = new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.2, side: THREE.DoubleSide });
+        var ring1 = new THREE.Mesh(new THREE.TorusGeometry(12, 0.03, 8, 80), ringMat);
+        ring1.rotation.x = Math.PI / 2.2;
+        globeGroup.add(ring1);
+        var ring2 = new THREE.Mesh(new THREE.TorusGeometry(15, 0.025, 8, 80), ringMat);
+        ring2.rotation.x = Math.PI / 2.8;
+        ring2.rotation.y = 0.3;
+        globeGroup.add(ring2);
+        var ring3 = new THREE.Mesh(new THREE.TorusGeometry(18, 0.02, 8, 80), ringMat);
+        ring3.rotation.x = Math.PI / 3.5;
+        ring3.rotation.y = -0.4;
+        globeGroup.add(ring3);
+
+        var animating = false;
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!animating) {
+                globeGroup.rotation.y += 0.002;
+                ring1.rotation.z -= 0.003;
+                ring2.rotation.z += 0.002;
+                ring3.rotation.z -= 0.0015;
+                stars.rotation.y += 0.0001;
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.runGlobeExitTransition = function(redirectUrl) {
+            if (animating || !redirectUrl) return;
+            animating = true;
+            var start = performance.now();
+            var duration = 2200;
+            var camZ0 = 35;
+            var camZ1 = -15;
+            var globeScale0 = 1;
+            var globeScale1 = 4.5;
+            var fogDensity0 = 0.0012;
+            var fogDensity1 = 0.028;
+            if (transitionOverlay) {
+                transitionOverlay.classList.add('animating');
+                transitionOverlay.style.opacity = '0';
+            }
+
+            function tick(now) {
+                var t = (now - start) / duration;
+                if (t >= 1) {
+                    if (transitionOverlay) {
+                        transitionOverlay.style.opacity = '1';
+                        transitionOverlay.classList.add('visible');
+                    }
+                    setTimeout(function() {
+                        window.location.href = redirectUrl;
+                    }, 260);
+                    return;
+                }
+                var ease = 1 - Math.pow(1 - t, 1.6);
+                camera.position.z = camZ0 + (camZ1 - camZ0) * ease;
+                globeGroup.scale.setScalar(globeScale0 + (globeScale1 - globeScale0) * ease);
+                globeGroup.rotation.y += 0.02;
+                ring1.rotation.z -= 0.04;
+                ring2.rotation.z += 0.03;
+                ring3.rotation.z -= 0.025;
+                stars.rotation.y += 0.002;
+                stars.material.opacity = Math.max(0, 0.9 - t * 1.2);
+                scene.fog.density = fogDensity0 + (fogDensity1 - fogDensity0) * ease;
+                if (t > 0.7 && transitionOverlay) {
+                    transitionOverlay.style.opacity = ((t - 0.7) / 0.3).toString();
+                    transitionOverlay.classList.add('visible');
+                }
+                requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        };
+
+        window.addEventListener('resize', function() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    } else {
+        window.runGlobeExitTransition = function(url) { window.location.href = url; };
+    }
+})();
+</script>
+<script>
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('globe_exit') !== '1') return;
+    var next = params.get('next') || '/dashboard/overview';
+    if (!next.startsWith('/') || next.startsWith('//')) next = '/dashboard/overview';
+    document.body.classList.add('oauth-globe-exit');
+    var tries = 0;
+    var maxFrames = 180;
+    function run() {
+        if (typeof window.runGlobeExitTransition === 'function') {
+            window.runGlobeExitTransition(next);
+            return;
+        }
+        if (tries++ < maxFrames) {
+            requestAnimationFrame(run);
+            return;
+        }
+        window.location.href = next;
+    }
+    requestAnimationFrame(function() {
+        requestAnimationFrame(run);
+    });
+})();
+</script>
+</body>
+</html>
